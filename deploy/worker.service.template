@@ -1,0 +1,44 @@
+[Unit]
+# **인스턴스 유닛이다** — `@@APP_SLUG@@-worker@1` · `@2` … 로 여럿 띄운다.
+# 워커 하나가 한 번에 작업 하나를 돌린다. **개수 = Mechanical 라이선스 수**(지금은 fake
+# 실행기라 상관없지만, 1.5단계에서 진짜 실행기가 오면 그 수를 넘긴 워커는 라이선스 오류로
+# 실패한다). DB 를 큐로 쓰므로 워커끼리 조율할 것은 없다(FOR UPDATE SKIP LOCKED).
+Description=@@APP_NAME@@ 해석 작업 워커 %i
+After=network-online.target @@APP_SLUG@@.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@INSTALL_DIR@@
+
+# 앱과 **같은 이미지**를 쓴다 — 코드가 한 벌이어야 「API 는 새 버전인데 워커는 옛 코드」 가
+# 안 생긴다. 다른 것은 실행하는 명령뿐이다.
+#
+# **Ansys 는 이미지에 굽지 않는다**(수십 GB · 버전을 올릴 때마다 다시 굽는다). 호스트나 공용
+# 스토리지의 설치본을 `--bind` 로 건다 — `ANSYS_HOST_DIR` 를 주면 deploy.sh 가 아래 줄을
+# 채우고, 안 주면 그 줄을 지운다(그 서버에서는 fake 실행기로만 돈다).
+ExecStart=/usr/bin/apptainer exec \
+    --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
+    --bind @@FILESTORE_DIR@@:/data/filestore \
+    --bind @@LOG_DIR@@:/data/logs \
+@@ANSYS_BIND@@
+@@BACKUP_BIND@@
+    @@INSTALL_DIR@@/app.sif \
+    /opt/app/venv/bin/python -m app.worker
+
+# **작업 중간에 죽어도 그 작업은 되살아난다**(heartbeat 가 멈추면 다른 워커가 다시 건다).
+# 그래서 여기서는 그냥 다시 띄우면 된다.
+Restart=on-failure
+RestartSec=10
+# 돌던 작업을 마치고 나가게 둔다 — SIGTERM 을 받으면 루프가 그 작업까지만 하고 멈춘다.
+TimeoutStopSec=300
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+# 해석 워커의 파이썬 환경 — **API 서버에는 없어도 된다.**
+#
+# 이것을 requirements.txt 에 섞지 않는 이유: API 이미지가 수백 MB 커지고, Ansys 가 없는
+# 기계(프론트 개발 · CI)에서 설치가 실패한다. 워커만 이것을 받는다.
+#
+#   개발 PC(Windows 쪽 Ansys) — WSL 의 워커가 이 파이썬을 부른다(windows-bridge):
+#     C:\Python312\python.exe -m venv C:\simengbay\venv
+#     C:\simengbay\venv\Scripts\python.exe -m pip install -r requirements-worker.txt
+#
+#   리눅스 워커(local) — Apptainer 이미지 안, 호스트의 /ansys_inc 를 bind 해서 쓴다.
+#
+# **버전은 Ansys 설치본과 짝이다.** 2025 R2(v252)로 확인했다(2026-09-20).
+
+# 임베디드 Mechanical — 형상 임포트 · 물성 · 메시 · .dat 쓰기
+ansys-mechanical-core==0.13.3
+
+# 결과 읽기 — .rst 에서 고유진동수 · 메시 · 모드 형상. Mechanical 라이선스도 필요 없다.
+ansys-dpf-core==0.16.1
+
+# 모드 형상 — 표면 메시를 VTP 로 쓰고 썸네일 PNG 를 그린다(화면이 그것을 읽는다).
+# **리눅스 워커에서는 화면이 없으므로 OSMesa 빌드가 필요하다**(vtk-osmesa). 없으면 PNG 만
+# 못 만들고 VTP · 고유진동수는 그대로 나온다 — 썸네일은 곁들이라 실패해도 작업은 끝난다.
+pyvista==0.49.0
+
+# 스펙을 읽는다(app/core/spec.py). 코어가 쓰는 유일한 서버 쪽 의존성이다.
+pydantic==2.13.5

@@ -341,3 +341,70 @@ def test_영역_지문이_CAD_가_낸_것이_아니면_거절한다(
     )
     assert response.status_code == 400
     assert "regions" in response.json()["error"]["message"]
+
+
+DOE_FOLDER = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "브래킷_두께훑기-3f9a2177"
+)
+
+
+def test_DOE_폴더를_걸기_전에_보여_준다(client: TestClient, member: Signed) -> None:
+    """**먼저 보여 주고 나서 건다** — 200개를 잘못 걸면 되돌리기 어렵다."""
+    got = client.get(f"/api/simulations/doe/preview?path={DOE_FOLDER}", headers=member.headers)
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["name"] == "브래킷_두께훑기"
+    assert body["factors"] == ["두께"]
+    assert body["usable"] == 3
+    assert body["skipped"] == 1
+    # 건너뛰는 줄은 **이유**를 달고 온다.
+    skipped = next(one for one in body["points"] if not one["usable"])
+    assert "벽이 판을 넘습니다" in skipped["skip_reason"]
+
+
+def test_폴더가_아니면_무엇이_없는지_말한다(client: TestClient, member: Signed) -> None:
+    got = client.get("/api/simulations/doe/preview?path=/tmp", headers=member.headers)
+    assert got.status_code == 400
+    assert "manifest.csv" in got.json()["error"]["message"]
+
+
+def test_DOE_를_가져오면_설계점마다_작업이_생긴다(client: TestClient, member: Signed) -> None:
+    """**CAD 로 되돌려 보내지 않으므로** 「이 결과가 두께 몇짜리인가」 를 이 플랫폼이 들고
+    있어야 한다 — 작업마다 스터디 · 점 번호 · 바꾼 변수가 붙는다."""
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(DOE_FOLDER),
+            "spec": {**MODAL, "constraints": [{"region": "bolt_holes", "kind": "fixed"}]},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert len(body["created"]) == 3
+    assert len(body["skipped"]) == 1
+
+    one = client.get(f"/api/simulations/{body['created'][0]}", headers=member.headers).json()
+    assert one["source_kind"] == "doe_point"
+    assert one["source_meta"]["study_name"] == "브래킷_두께훑기"
+    assert one["source_meta"]["params"] == {"두께": 6.0}
+    assert one["source_meta"]["recipe_digest"].startswith("sha256:")
+    # 점마다의 영역 지문이 함께 실린다 — 구속을 걸 수 있다.
+    assert "topology" in {artifact["kind"] for artifact in one["artifacts"]}
+    assert "두께 6" in one["name"]
+
+
+def test_고른_점만_가져올_수_있다(client: TestClient, member: Signed) -> None:
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(DOE_FOLDER),
+            "spec": MODAL,
+            "workspace_slug": member.workspace,
+            "numbers": [2],
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    assert len(created.json()["created"]) == 1

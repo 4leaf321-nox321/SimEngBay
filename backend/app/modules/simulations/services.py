@@ -30,6 +30,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core import executors
+from app.core.doe import DoeFolder, DoePoint, read_folder
+from app.core.doe.folder import FolderProblem
 from app.core.spec import RUNNABLE_RECIPES, ModalSpec, StaticSpec, parse_spec
 from app.core.stages import STAGES, ArtifactSpec, StageContext, StageFailure
 from app.modules.accounts.models import User
@@ -41,6 +43,9 @@ from app.modules.simulations.models import (
 )
 from app.modules.simulations.schemas import (
     ArtifactOut,
+    DoeImportOut,
+    DoePointPreview,
+    DoePreviewOut,
     RecipeOut,
     SimulationOut,
     SimulationSummaryOut,
@@ -150,6 +155,7 @@ def to_summary(db: Session, simulation: Simulation) -> SimulationSummaryOut:
         status=simulation.status,
         source_kind=simulation.source_kind,
         source_ref=simulation.source_ref,
+        source_meta=simulation.source_meta,
         owner_workspace_id=simulation.owner_workspace_id,
         owner_workspace_name=workspace_name,
         requested_by_id=simulation.requested_by_id,
@@ -352,6 +358,9 @@ def create(
     filename: str,
     stream: BinaryIO,
     topology: bytes | None = None,
+    source_kind: str = "upload",
+    source_ref: str | None = None,
+    source_meta: dict[str, Any] | None = None,
 ) -> Simulation:
     """작업을 건다.
 
@@ -424,8 +433,9 @@ def create(
         recipe=spec.recipe,
         status="queued",
         spec=spec.model_dump(),
-        source_kind="upload",
-        source_ref=clean(filename)[:300],
+        source_kind=source_kind,
+        source_ref=clean(source_ref or filename)[:300],
+        source_meta=source_meta or {},
         input_sha256="",
         owner_workspace_id=owner_workspace_id,
         requested_by_id=user.id,
@@ -471,6 +481,99 @@ def create(
     if get_settings().jobs_inline:
         execute(db, simulation, worker_id="inline")
     return simulation
+
+
+# --- DOE 폴더 --------------------------------------------------------------------
+
+
+def _preview_point(point: DoePoint) -> DoePointPreview:
+    return DoePointPreview(
+        number=point.number,
+        params=point.params,
+        usable=point.usable,
+        skip_reason=point.skip_reason,
+    )
+
+
+def _read_doe(path_text: str) -> DoeFolder:
+    """폴더를 읽는다. **경로가 틀린 것과 폴더가 DOE 가 아닌 것을 같은 말로 답하지 않는다.**"""
+    try:
+        return read_folder(Path(path_text).expanduser())
+    except FolderProblem as failure:
+        raise AppError(code("SIMULATIONS", 14), str(failure), status=400) from failure
+
+
+def preview_doe(path_text: str) -> DoePreviewOut:
+    """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유."""
+    doe = _read_doe(path_text)
+    return DoePreviewOut(
+        path=str(doe.path),
+        study_id=doe.study_id,
+        name=doe.name,
+        factors=doe.factors,
+        method=doe.method,
+        seed=doe.seed,
+        points=[_preview_point(one) for one in doe.points],
+        usable=len(doe.usable),
+        skipped=len(doe.skipped),
+    )
+
+
+def import_doe(
+    db: Session,
+    *,
+    user: User,
+    path_text: str,
+    spec_raw: dict[str, Any],
+    workspace_slug: str | None,
+    numbers: list[int] | None = None,
+) -> DoeImportOut:
+    """폴더 한 벌 → 해석 작업 N 개.
+
+    **모든 점에 같은 스펙을 쓴다.** 점마다 다른 것은 형상과 영역 지문이고, 물성 · 모드 수 ·
+    구속 영역 이름은 스터디 전체에 같다 — 그래야 결과를 견줄 수 있다(그러려고 DOE 를 돌린다).
+
+    걸 수 없는 점은 **걸지 않고 이유를 돌려준다.** 200개를 보내 놓고 「왜 절반이 실패했지」 를
+    로그에서 찾게 하지 않는다.
+    """
+    doe = _read_doe(path_text)
+    wanted = set(numbers) if numbers else None
+    chosen = [one for one in doe.points if wanted is None or one.number in wanted]
+    if not chosen:
+        raise AppError(code("SIMULATIONS", 15), "고른 설계점이 폴더에 없습니다.", status=400)
+
+    created: list[uuid.UUID] = []
+    skipped: list[DoePointPreview] = []
+    for point in chosen:
+        if not point.usable:
+            skipped.append(_preview_point(point))
+            continue
+        assert point.step is not None  # usable 이 보장한다
+        meta = {
+            "study_id": doe.study_id,
+            "study_name": doe.name,
+            "point": point.number,
+            "params": point.params,
+            "recipe_digest": point.recipe_digest,
+            "folder": str(doe.path),
+        }
+        label = " · ".join(f"{name} {value:g}" for name, value in point.params.items())
+        with point.step.open("rb") as stream:
+            simulation = create(
+                db,
+                user=user,
+                spec_raw=spec_raw,
+                workspace_slug=workspace_slug,
+                name=f"{doe.name} p{point.number:04d}" + (f" ({label})" if label else ""),
+                filename=point.step.name,
+                stream=stream,
+                topology=point.topology.read_bytes() if point.topology else None,
+                source_kind="doe_point",
+                source_ref=f"{doe.name}/p{point.number:04d}",
+                source_meta=meta,
+            )
+        created.append(simulation.id)
+    return DoeImportOut(study_id=doe.study_id, name=doe.name, created=created, skipped=skipped)
 
 
 def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:

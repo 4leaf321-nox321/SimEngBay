@@ -143,7 +143,7 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
   **프론트 타입을 손으로 적지 않는다** — 어긋난 날 화면은 아무 말도 안 하고 undefined 를 그린다.
 - **폴링 경로를 만들면 `shared/access_log.py` 의 `_SKIP` 에 더한다.** 작업 상태 폴링이
   곧 생긴다 — 안 더하면 접근 로그가 그 한 줄로 가득 찬다.
-- **기계가 쓰는 경로는 `scopes.register_write_scope` 로 연다.** 오케스트레이터는 PAT 로
+- **기계가 쓰는 경로는 `scopes.register_write_scope` 로 연다.** 스크립트 · AI 도구가 PAT 로
   붙는다. 안 열면 PAT 로는 못 고친다 — 「모르는 것은 막는다」 가 맞는 기본값이다.
 
 ## 프론트

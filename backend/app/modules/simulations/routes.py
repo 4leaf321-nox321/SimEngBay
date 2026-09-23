@@ -21,7 +21,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.simulations import services
-from app.modules.simulations.schemas import RecipeOut, SimulationOut, SimulationSummaryOut
+from app.modules.simulations.schemas import (
+    DoeImportOut,
+    DoeImportRequest,
+    DoePreviewOut,
+    RecipeOut,
+    SimulationOut,
+    SimulationSummaryOut,
+)
 from app.shared.auth import current_user
 from app.shared.errors import AppError, code
 from app.shared.pagination import Page, clamp_limit
@@ -65,6 +72,37 @@ def create(
         topology=topology_file.file.read() if topology_file is not None else None,
     )
     return services.to_out(db, simulation)
+
+
+@router.get("/doe/preview", response_model=DoePreviewOut)
+def preview_doe(
+    path: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DoePreviewOut:
+    """DOE 폴더를 훑어 본다 — **걸기 전에** 점 몇 개, 변수 무엇, 건너뛸 것 몇 개인지.
+
+    폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 파일을 올리는 것이 아니다 —
+    설계점 200개면 STEP 만 수십 MB 다.
+    """
+    return services.preview_doe(path)
+
+
+@router.post("/doe/import", response_model=DoeImportOut, status_code=201)
+def import_doe(
+    body: DoeImportRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DoeImportOut:
+    """폴더 한 벌을 해석 작업 N 개로. 걸 수 없는 점은 **이유와 함께** 돌려준다."""
+    return services.import_doe(
+        db,
+        user=user,
+        path_text=body.path,
+        spec_raw=body.spec,
+        workspace_slug=body.workspace_slug,
+        numbers=body.numbers,
+    )
 
 
 @router.get("", response_model=Page[SimulationSummaryOut])

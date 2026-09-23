@@ -8,10 +8,12 @@
  */
 
 import { useState } from 'react'
-import { Plus, RefreshCw } from 'lucide-react'
+import { FolderInput, Plus, RefreshCw } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
+import type { DoeImport } from '@/modules/simulations/api'
+import { DoeImportDialog } from '@/modules/simulations/DoeImportDialog'
 import { RECIPE_LABELS, shownDuration } from '@/modules/simulations/labels'
 import { NewSimulationDialog } from '@/modules/simulations/NewSimulationDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -19,6 +21,7 @@ import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Pagination } from '@/shared/components/Pagination'
 import { StatusBadge } from '@/shared/components/StatusBadge'
+import { Alert, AlertDescription, AlertTitle } from '@/shared/components/ui/alert'
 import { Button } from '@/shared/components/ui/button'
 import {
   Select,
@@ -59,6 +62,8 @@ export default function SimulationsPage() {
   const status = params.get('status') ?? ''
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [imported, setImported] = useState<DoeImport | null>(null)
 
   const page = useResource(
     () => simulationApi.list({ status: status || undefined, limit: PER_PAGE, offset }),
@@ -81,6 +86,10 @@ export default function SimulationsPage() {
               <RefreshCw className="size-4" />
               새로 고침
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
+              <FolderInput className="size-4" />
+              DOE 가져오기
+            </Button>
             <Button size="sm" onClick={() => setCreating(true)}>
               <Plus className="size-4" />새 해석 작업
             </Button>
@@ -102,6 +111,39 @@ export default function SimulationsPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {imported && (
+        <Alert>
+          <AlertTitle>
+            {imported.name} — {imported.created.length}건을 걸었습니다
+          </AlertTitle>
+          <AlertDescription>
+            {imported.skipped.length === 0 ? (
+              <p>설계점 전부를 걸었습니다. 차례로 돌며 목록의 상태가 바뀝니다.</p>
+            ) : (
+              <>
+                <p>{imported.skipped.length}건은 걸지 않았습니다:</p>
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {imported.skipped.map((one) => (
+                    <li key={one.number}>
+                      <span className="font-mono">p{String(one.number).padStart(4, '0')}</span> —{' '}
+                      {one.skip_reason}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2 -ml-2"
+              onClick={() => setImported(null)}
+            >
+              닫기
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <ErrorNotice error={page.error} />
 
@@ -177,6 +219,19 @@ export default function SimulationsPage() {
           onChange={setOffset}
         />
       )}
+
+      <DoeImportDialog
+        open={importing}
+        onClose={() => setImporting(false)}
+        onImported={(result) => {
+          setImporting(false)
+          // 걸린 것을 바로 보여 준다 — N 개가 큐에 들어가 차례로 돈다.
+          setOffset(0)
+          page.reload()
+          // **건너뛴 점은 목록에 안 생긴다** — 여기서 말하지 않으면 사라진다.
+          setImported(result)
+        }}
+      />
 
       <NewSimulationDialog
         open={creating}

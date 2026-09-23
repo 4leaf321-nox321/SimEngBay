@@ -54,7 +54,16 @@ class Simulation(Base):
     )
     """입력 형상이 어디서 왔나 — upload · part_version · doe_point (뒤 둘은 5단계)."""
     source_ref: Mapped[str] = mapped_column(String(300), default="", server_default="")
-    """업로드면 원본 파일 이름, CAD 플랫폼이면 그쪽 식별자."""
+    """업로드면 원본 파일 이름, DOE 면 `<스터디 이름>/pNNNN`."""
+    source_meta: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """이 작업이 **무엇의 결과인가**.
+
+    DOE 면 스터디 id · 이름 · 점 번호 · 그 점에서 바꾼 변수(`params`) · `recipe_digest`.
+
+    **CAD 로 되돌려 보내지 않기로 했으므로**(CompCore 0장) 「이 결과가 두께 8 짜리」 라는 것을
+    이 플랫폼이 스스로 들고 있어야 한다. 설계점 비교 화면이 이 칸으로 묶는다."""
     input_sha256: Mapped[str] = mapped_column(String(64), index=True)
     """입력 형상의 해시. 같은 형상 + 같은 스펙이면 다시 안 돌리는 멱등성(5단계)의 열쇠."""
 

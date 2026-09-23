@@ -2406,6 +2406,91 @@
         }
       }
     },
+    "/api/simulations/doe/preview": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Preview Doe",
+        "description": "DOE 폴더를 훑어 본다 — **걸기 전에** 점 몇 개, 변수 무엇, 건너뛸 것 몇 개인지.\n\n폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 파일을 올리는 것이 아니다 —\n설계점 200개면 STEP 만 수십 MB 다.",
+        "operationId": "preview_doe_api_simulations_doe_preview_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoePreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/doe/import": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Import Doe",
+        "description": "폴더 한 벌을 해석 작업 N 개로. 걸 수 없는 점은 **이유와 함께** 돌려준다.",
+        "operationId": "import_doe_api_simulations_doe_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoeImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoeImportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/{simulation_id}": {
       "get": {
         "tags": [
@@ -3281,6 +3366,184 @@
         ],
         "title": "DiskOut"
       },
+      "DoeImportOut": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Created"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/DoePointPreview"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id",
+          "name",
+          "created",
+          "skipped"
+        ],
+        "title": "DoeImportOut"
+      },
+      "DoeImportRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Path"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "numbers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numbers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "spec"
+        ],
+        "title": "DoeImportRequest"
+      },
+      "DoePointPreview": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "usable": {
+            "type": "boolean",
+            "title": "Usable"
+          },
+          "skip_reason": {
+            "type": "string",
+            "title": "Skip Reason",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "params",
+          "usable"
+        ],
+        "title": "DoePointPreview",
+        "description": "가져오기 전에 보여 줄 한 줄 — **걸 수 있나, 아니면 왜 못 거나.**"
+      },
+      "DoePreviewOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method",
+            "default": ""
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/DoePointPreview"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "usable": {
+            "type": "integer",
+            "title": "Usable"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "study_id",
+          "name",
+          "factors",
+          "points",
+          "usable",
+          "skipped"
+        ],
+        "title": "DoePreviewOut",
+        "description": "폴더를 훑어 본 결과.\n\n**먼저 보여 주고 나서 건다** — 200개를 잘못 걸면 되돌리기 어렵다."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4107,6 +4370,11 @@
             "type": "string",
             "title": "Source Ref"
           },
+          "source_meta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Meta"
+          },
           "owner_workspace_id": {
             "anyOf": [
               {
@@ -4259,6 +4527,7 @@
           "status",
           "source_kind",
           "source_ref",
+          "source_meta",
           "owner_workspace_id",
           "owner_workspace_name",
           "requested_by_id",
@@ -4303,6 +4572,11 @@
           "source_ref": {
             "type": "string",
             "title": "Source Ref"
+          },
+          "source_meta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Meta"
           },
           "owner_workspace_id": {
             "anyOf": [
@@ -4411,6 +4685,7 @@
           "status",
           "source_kind",
           "source_ref",
+          "source_meta",
           "owner_workspace_id",
           "owner_workspace_name",
           "requested_by_id",

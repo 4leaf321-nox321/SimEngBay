@@ -1,0 +1,5 @@
+﻿point,status,두께,step_file,topology,unresolved,interference,error
+1,ok,6.0,points/p0001.step,points/p0001.topology.json,,,
+2,ok,12.0,points/p0002.step,points/p0002.topology.json,,,
+3,ok,20.0,points/p0003.step,points/p0003.topology.json,,,
+4,failed,26.0,,,,,형상 평가 실패: 벽이 판을 넘습니다

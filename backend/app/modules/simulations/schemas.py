@@ -44,6 +44,8 @@ class SimulationSummaryOut(BaseModel):
     status: str
     source_kind: str
     source_ref: str
+    source_meta: dict[str, Any]
+    """DOE 면 스터디 · 점 번호 · 바꾼 변수. 비교 화면이 이것으로 묶는다."""
     owner_workspace_id: uuid.UUID | None
     owner_workspace_name: str | None
     requested_by_id: uuid.UUID | None
@@ -71,6 +73,50 @@ class SimulationCreateForm(BaseModel):
     """`app/core/spec.py` 의 JobSpec — 라우트가 JSON 문자열로 받아 여기 넣는다."""
     workspace_slug: str | None = None
     name: str | None = Field(default=None, max_length=120)
+
+
+class DoePointPreview(BaseModel):
+    """가져오기 전에 보여 줄 한 줄 — **걸 수 있나, 아니면 왜 못 거나.**"""
+
+    number: int
+    params: dict[str, float]
+    usable: bool
+    skip_reason: str = ""
+
+
+class DoePreviewOut(BaseModel):
+    """폴더를 훑어 본 결과.
+
+    **먼저 보여 주고 나서 건다** — 200개를 잘못 걸면 되돌리기 어렵다.
+    """
+
+    path: str
+    study_id: str
+    name: str
+    factors: list[str]
+    method: str = ""
+    seed: int | None = None
+    points: list[DoePointPreview]
+    usable: int
+    skipped: int
+
+
+class DoeImportRequest(BaseModel):
+    path: str = Field(min_length=1)
+    """서버가 볼 수 있는 폴더 경로. **브라우저가 파일을 올리는 것이 아니다** — 설계점 200개면
+    STEP 만 수십 MB 이고, 그 폴더는 대개 공유 스토리지에 있다."""
+    spec: dict[str, Any]
+    """모든 점에 같은 스펙을 쓴다. 물성 · 모드 수 · 구속 영역 이름이 여기 들어간다."""
+    workspace_slug: str | None = None
+    numbers: list[int] | None = None
+    """고른 점만. 비우면 걸 수 있는 전부."""
+
+
+class DoeImportOut(BaseModel):
+    study_id: str
+    name: str
+    created: list[uuid.UUID]
+    skipped: list[DoePointPreview]
 
 
 class RecipeOut(BaseModel):

@@ -14,6 +14,9 @@ export type SimulationSummary = components['schemas']['SimulationSummaryOut']
 export type Stage = components['schemas']['StageOut']
 export type Artifact = components['schemas']['ArtifactOut']
 export type Recipe = components['schemas']['RecipeOut']
+export type DoePreview = components['schemas']['DoePreviewOut']
+export type DoePointPreview = components['schemas']['DoePointPreview']
+export type DoeImport = components['schemas']['DoeImportOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -130,6 +133,20 @@ export const simulationApi = {
     return api.postForm<Simulation>('/simulations', form)
   },
   retry: (id: string) => api.post<Simulation>(`/simulations/${id}/retry`),
+  /**
+   * DOE 폴더 훑어 보기 — **걸기 전에** 점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개인지.
+   *
+   * 폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 올리는 것이 아니다 — 설계점
+   * 200개면 STEP 만 수십 MB 다.
+   */
+  previewDoe: (path: string) =>
+    api.get<DoePreview>(`/simulations/doe/preview?path=${encodeURIComponent(path)}`),
+  importDoe: (body: {
+    path: string
+    spec: Record<string, unknown>
+    workspace_slug?: string | null
+    numbers?: number[] | null
+  }) => api.post<DoeImport>('/simulations/doe/import', body),
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
   result: (id: string) => api.get<SimulationResult>(`/simulations/${id}/result`),
   /** 썸네일 — `<img src>` 로는 안 된다(토큰이 메모리에만 있다). blob 으로 받아 그린다. */

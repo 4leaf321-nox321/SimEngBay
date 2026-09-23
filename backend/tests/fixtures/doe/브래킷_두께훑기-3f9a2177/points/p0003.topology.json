@@ -1,0 +1,118 @@
+{
+  "units": "mm",
+  "bodies": [
+    {
+      "name": "전체",
+      "step_product": "body_1",
+      "volume": 225860.399,
+      "centroid": [
+        -0.0,
+        0.0,
+        6.801
+      ],
+      "bbox": [
+        [
+          -60.0,
+          -40.0,
+          -10.0
+        ],
+        [
+          60.0,
+          40.0,
+          70.0
+        ]
+      ]
+    }
+  ],
+  "regions": {
+    "fixed_base": [
+      {
+        "centroid": [
+          -0.0,
+          0.0,
+          -10.0
+        ],
+        "area": 9373.02,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      }
+    ],
+    "bolt_holes": [
+      {
+        "centroid": [
+          -45.0,
+          -27.5,
+          0.0
+        ],
+        "area": 534.07,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          -45.0,
+          27.5,
+          0.0
+        ],
+        "area": 534.07,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          45.0,
+          -27.5,
+          0.0
+        ],
+        "area": 534.07,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          45.0,
+          27.5,
+          0.0
+        ],
+        "area": 534.07,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      }
+    ]
+  },
+  "unresolved": [],
+  "point": {
+    "number": 3,
+    "study": {
+      "id": "3f9a2177c0b84e9d8f0a1b2c3d4e5f60",
+      "name": "브래킷_두께훑기",
+      "seed": 1,
+      "method": "full"
+    },
+    "params": {
+      "두께": 20.0
+    },
+    "recipe_digest": "sha256:6fea451e90db5366bbde9a65b83f8f64",
+    "step_file": "points/p0003.step",
+    "created_at": "2026-09-23T10:00:00+09:00"
+  }
+}

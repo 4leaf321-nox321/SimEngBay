@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +60,13 @@ class SubprocessOptions:
     ansys_version: int = 252
     ansys_root: Path | None = None
     solver_processes: int = 2
+    wrapper: tuple[str, ...] = ()
+    """자식 파이썬을 **감싸서** 띄울 명령.
+
+    리눅스의 임베디드 Mechanical 은 `LD_LIBRARY_PATH` 같은 것이 맞아야 뜨고, 그것을 맞춰 주는
+    것이 Ansys 가 함께 깔아 주는 `mechanical-env` 다(리눅스 전용). 비우면 맨 파이썬을 띄운다 —
+    **Windows 는 그 스크립트가 없고 필요도 없다.**
+    """
     visual_modes: int = 6
     """모드 형상(VTP · PNG)을 만들 **탄성 모드 수.** 모드마다 파일 둘이 생긴다."""
     timeouts: dict[str, int] | None = None
@@ -115,6 +123,7 @@ class SubprocessExecutor:
         """띄울 명령. **시험이 이것만 본다** — Ansys 없이 확인할 수 있는 부분이다."""
         workdir, backend = self._paths(ctx.workdir)
         command = [
+            *self.options.wrapper,
             self._python(),
             # **자식의 stdout 을 UTF-8 로 고정한다.** 한국어 Windows 의 파이썬은 콘솔
             # 코드페이지(cp949)로 찍는데, 그것을 UTF-8 로 읽으면 부르는 쪽이
@@ -147,6 +156,21 @@ class SubprocessExecutor:
 
     # --- 돌리기 -------------------------------------------------------------
 
+    def child_env(self) -> dict[str, str]:
+        """자식이 물려받을 환경.
+
+        **임베디드 Mechanical 은 우리 명령줄 인자를 안 본다** — `App(version=…)` 은 스스로
+        `AWP_ROOT<버전>` 을 찾는다. 그래서 설정에 적힌 설치 경로를 그 이름으로 심어 준다.
+        안 그러면 `.env` 에 경로를 적어도 모델링 단계만 「Ansys 를 못 찾겠다」 고 한다.
+
+        Windows 로 건너가는 다리에서는 **환경이 건너가지 않으므로**(WSLENV) 여기서 심은 값이
+        무시된다 — 그쪽은 설치 프로그램이 이미 같은 이름으로 심어 두었다.
+        """
+        env = dict(os.environ)
+        if self.options.ansys_root is not None and not self.windows:
+            env[f"AWP_ROOT{self.options.ansys_version}"] = str(self.options.ansys_root)
+        return env
+
     def run(self, ctx: StageContext) -> StageResult:
         command = self.command(ctx)
         timeout = self.options.timeout_for(ctx.stage)
@@ -154,6 +178,7 @@ class SubprocessExecutor:
             finished = subprocess.run(
                 command,
                 cwd=str(ctx.workdir),
+                env=self.child_env(),
                 capture_output=True,
                 text=True,
                 # 자식이 UTF-8 로 못 찍는 경우에도 **부르는 쪽은 죽지 않는다.** 로그가 조금

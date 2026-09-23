@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     ansys_root: Path | None = None
     """Ansys 설치 폴더. 비우면 `AWP_ROOT<버전>` 환경변수 — 경로를 두 곳에 적으면 버전을 올린
     날 한쪽만 바뀐다."""
+    mechanical_env: str = ""
+    """리눅스에서 임베디드 Mechanical 을 띄울 때 **감싸는 명령**(공백으로 나눈다).
+
+    리눅스는 `LD_LIBRARY_PATH` 등이 맞아야 임베디드가 뜨고, Ansys 가 함께 깔아 주는
+    `mechanical-env` 가 그것을 맞춘다 — 예: `/ansys_inc/v252/aisol/.workbench_lite`.
+    **Windows 에는 없고 필요도 없다**(비워 둔다). 값이 비면 맨 파이썬을 띄운다."""
+
     solver_processes: int = 2
     """솔버 한 건이 쓸 코어 수(`-np`).
 

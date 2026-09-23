@@ -35,6 +35,7 @@ def resolve(
     ansys_version: int = 252,
     ansys_root: Path | None = None,
     solver_processes: int = 2,
+    wrapper: tuple[str, ...] = (),
     visual_modes: int = 6,
 ) -> Executor:
     """이름 → 실행기.
@@ -53,6 +54,7 @@ def resolve(
         ansys_version=ansys_version,
         ansys_root=ansys_root,
         solver_processes=solver_processes,
+        wrapper=wrapper,
         visual_modes=visual_modes,
     )
     if name == "local":

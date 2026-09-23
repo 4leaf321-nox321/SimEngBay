@@ -539,6 +539,7 @@ def default_executor() -> executors.Executor:
         ansys_version=settings.ansys_version,
         ansys_root=settings.ansys_root,
         solver_processes=settings.solver_processes,
+        wrapper=tuple(settings.mechanical_env.split()),
         visual_modes=settings.visual_modes,
     )
 

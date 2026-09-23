@@ -19,6 +19,15 @@ import os
 
 os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
 
+# **시험은 실행기를 고르지 않는다 — 언제나 `fake` 다.**
+#
+# 개발 `.env` 에 `SIMULATION_EXECUTOR=windows-bridge` 를 적어 두면(진짜 Ansys 로 돌리려고
+# 그렇게 한다) 시험도 그것을 따라가서, **작업 하나에 1분씩 걸리거나 Ansys 가 없는 기계에서
+# 통째로 빨개진다.** 실측으로 겪었다. DB 를 `<이름>_test` 로 파생하는 것과 같은 규칙이다 —
+# 시험이 도는 조건은 그 기계의 설정이 아니라 여기서 정한다.
+os.environ["SIMULATION_EXECUTOR"] = "fake"
+os.environ["FAKE_STAGE_SECONDS"] = "0"
+
 
 def _test_database_url() -> str:
     """개발 접속 정보에서 시험 DB 주소를 만든다.

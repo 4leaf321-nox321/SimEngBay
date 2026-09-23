@@ -152,6 +152,8 @@ WORKER_COUNT="${WORKER_COUNT:-1}"
 #: 호스트(또는 공용 스토리지)의 Ansys 설치 폴더. 주면 워커 유닛이 /ansys_inc 에 건다.
 #: **이미지에 굽지 않는다** — 수십 GB 이고 버전을 올릴 때마다 다시 구워야 한다.
 ANSYS_HOST_DIR="${ANSYS_HOST_DIR:-}"
+#: Ansys 버전 번호(252 = 2025 R2). 임베디드가 찾는 환경변수 이름(AWP_ROOT252)에 들어간다.
+ANSYS_VERSION="${ANSYS_VERSION:-252}"
 MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
 # 설치된 systemd 유닛에서 Environment=KEY=VALUE 값을 읽는다(없으면 빈 문자열).
 # → 한 번 배포한 MCP 설정을 다음 배포가 자동으로 기억하게 하는 장치.
@@ -370,10 +372,14 @@ render_unit_paths() {  # $1=template
         backup_sed='/^@@BACKUP_BIND@@/d'
     fi
     # 해석 워커만 쓰는 자리 — Ansys 설치본. 앱 유닛 템플릿에는 이 표식이 없어 아무 일도 안 한다.
+    local ansys_env_sed
     if [[ -n "$ANSYS_HOST_DIR" ]]; then
         ansys_sed="s|^@@ANSYS_BIND@@.*|    --bind $ANSYS_HOST_DIR:/ansys_inc \\\\|"
+        # 컨테이너 안에서 보는 경로다. 호스트 경로를 심으면 그 경로는 컨테이너에 없다.
+        ansys_env_sed="s|^@@ANSYS_ENV@@.*|Environment=AWP_ROOT${ANSYS_VERSION}=/ansys_inc/v${ANSYS_VERSION}|"
     else
         ansys_sed='/^@@ANSYS_BIND@@/d'
+        ansys_env_sed='/^@@ANSYS_ENV@@/d'
     fi
     sed -e "s|@@USER@@|$OPERATOR|g" \
         -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
@@ -385,6 +391,7 @@ render_unit_paths() {  # $1=template
         -e "s|@@BACKUP_DIR@@|${BACKUP_HOST_DIR:-}|g" \
         -e "$backup_sed" \
         -e "$ansys_sed" \
+        -e "$ansys_env_sed" \
         "$1"
 }
 

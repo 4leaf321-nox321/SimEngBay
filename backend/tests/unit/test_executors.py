@@ -139,3 +139,34 @@ def test_입력이_없으면_자식이_사람이_읽는_실패를_남긴다(tmp_
     with pytest.raises(StageFailure) as caught:
         executors.resolve("local").run(_ctx("fetching", tmp_path))
     assert caught.value.code == "geometry_import"
+
+
+def test_리눅스는_감싸는_명령으로_띄울_수_있다(tmp_path: Path) -> None:
+    """리눅스의 임베디드 Mechanical 은 `LD_LIBRARY_PATH` 등이 맞아야 뜬다.
+
+    그것을 맞추는 것이 Ansys 가 함께 깔아 주는 `mechanical-env` 다. **비우면 맨 파이썬** —
+    Windows 는 그 스크립트가 없고 필요도 없다.
+    """
+    plain = executors.resolve("local")
+    assert plain.command(_ctx("modeling", tmp_path))[0] == sys.executable  # type: ignore[attr-defined]
+
+    wrapped = executors.resolve("local", wrapper=("/ansys_inc/v252/mechanical-env",))
+    command = wrapped.command(_ctx("modeling", tmp_path))  # type: ignore[attr-defined]
+    assert command[0] == "/ansys_inc/v252/mechanical-env"
+    assert command[1] == sys.executable
+
+
+def test_설치_경로를_자식_환경에_심어_준다(tmp_path: Path) -> None:
+    """**임베디드는 우리 명령줄 인자를 안 본다** — `App(version=…)` 은 스스로 `AWP_ROOT<버전>`
+    을 찾는다. 안 심어 주면 `.env` 에 경로를 적어도 모델링 단계만 Ansys 를 못 찾는다."""
+    runner = executors.resolve("local", ansys_root=Path("/ansys_inc/v252"), ansys_version=252)
+    env = runner.child_env()  # type: ignore[attr-defined]
+    assert env["AWP_ROOT252"] == "/ansys_inc/v252"
+
+    # 다리 너머(Windows)로는 환경이 안 건너간다(WSLENV) — 거기는 설치 프로그램이 심어 두었다.
+    bridge = executors.resolve(
+        "windows-bridge",
+        python=Path("/mnt/c/py/python.exe"),
+        ansys_root=Path("/mnt/c/Program Files/ANSYS Inc/v252"),
+    )
+    assert "AWP_ROOT252" not in bridge.child_env()  # type: ignore[attr-defined]

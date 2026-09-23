@@ -2735,6 +2735,141 @@
           }
         }
       }
+    },
+    "/api/simulations/studies/{study_id}/tidy": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Tidy Study",
+        "description": "DOE 한 벌의 중간 파일을 통째로 정리한다 — 설계점 200개면 이것이 유일한 길이다.",
+        "operationId": "tidy_study_api_simulations_studies__study_id__tidy_post",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Tidy Study Api Simulations Studies  Study Id  Tidy Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/{simulation_id}/tidy": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Tidy",
+        "description": "중간 파일(`.mechdb` · `.rst` · 솔버 scratch)을 지운다. **결과는 남는다.**",
+        "operationId": "tidy_api_simulations__simulation_id__tidy_post",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Tidy Api Simulations  Simulation Id  Tidy Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/{simulation_id}/cancel": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Cancel",
+        "description": "작업을 멈춘다. **대기 중이면 곧바로, 돌고 있으면 곧**(워커가 몇 초 안에 본다).",
+        "operationId": "cancel_api_simulations__simulation_id__cancel_post",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulationOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3800,6 +3935,36 @@
         ],
         "title": "MemberRoleRequest"
       },
+      "ModeTrackOut": {
+        "properties": {
+          "reference": {
+            "type": "integer",
+            "title": "Reference"
+          },
+          "numbers": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Numbers"
+          },
+          "confidence": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Confidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reference",
+          "numbers",
+          "confidence"
+        ],
+        "title": "ModeTrackOut",
+        "description": "기준 설계점의 모드 하나가 다른 점들에서 몇 번 모드인가.\n\n**순번으로 견주지 않는다.** 치수가 바뀌면 모드 순서가 뒤바뀌고(mode crossing), 그때\n「2차 대 두께」 는 서로 다른 모드를 이은 선이 된다."
+      },
       "NoticeOut": {
         "properties": {
           "id": {
@@ -4860,6 +5025,24 @@
             },
             "type": "array",
             "title": "Points"
+          },
+          "reference_point": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Point"
+          },
+          "tracks": {
+            "items": {
+              "$ref": "#/components/schemas/ModeTrackOut"
+            },
+            "type": "array",
+            "title": "Tracks"
           }
         },
         "type": "object",

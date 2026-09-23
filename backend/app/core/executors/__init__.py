@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.executors.subprocess_executor import SubprocessExecutor, SubprocessOptions
-from app.core.stages import StageContext, StageResult
+from app.core.stages import CancelCheck, StageContext, StageResult
 
 #: 이 저장소가 아는 실행기 이름. 목록에 없는 이름은 오타다.
 NAMES = ("fake", "local", "windows-bridge")
@@ -22,8 +22,12 @@ NAMES = ("fake", "local", "windows-bridge")
 class Executor(Protocol):
     name: str
 
-    def run(self, ctx: StageContext) -> StageResult:
-        """한 단계를 돌린다. 실패는 `StageFailure` 로 — 다른 예외는 코어의 버그로 본다."""
+    def run(self, ctx: StageContext, should_cancel: CancelCheck | None = None) -> StageResult:
+        """한 단계를 돌린다.
+
+        실패는 `StageFailure` 로 — 다른 예외는 코어의 버그로 본다. `should_cancel` 이 참을
+        내면 **돌던 것을 멈추고** `StageCanceled` 를 던진다.
+        """
         ...
 
 

@@ -18,7 +18,7 @@ import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
-import type { StudyPoint } from '@/modules/simulations/api'
+import type { ModeTrack, StudyPoint } from '@/modules/simulations/api'
 import { Spectrum } from '@/shared/charts'
 import type { SpectrumPoint } from '@/shared/charts'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -45,9 +45,20 @@ import { useResource } from '@/shared/hooks/useResource'
 /** 세로축 후보 — 결과 쪽. `mode:k` 는 k 차 탄성 모드. */
 const MASS = '__mass__'
 
-function valueOf(point: StudyPoint, key: string): number | null {
+/**
+ * 그 설계점에서 이 값이 얼마인가.
+ *
+ * **모드는 순번이 아니라 추적으로 찾는다.** 치수가 바뀌면 모드 순서가 뒤바뀌므로(mode
+ * crossing), 순번으로 이으면 「2차 대 두께」 가 서로 다른 모드를 이은 선이 된다. 추적이
+ * 없으면(옛 작업 · 모의 실행기) 순번으로 떨어지되 화면이 그 사실을 말한다.
+ */
+function valueOf(point: StudyPoint, key: string, tracks: ModeTrack[]): number | null {
   if (key === MASS) return point.mass_kg ?? null
-  const index = Number(key.replace('mode:', ''))
+  const reference = Number(key.replace('mode:', ''))
+  const track = tracks.find((one) => one.reference === reference)
+  const number = track?.numbers[point.number]
+  const index = number ?? (tracks.length > 0 ? null : reference)
+  if (index == null) return null
   return point.frequencies?.[index - 1] ?? null
 }
 
@@ -63,13 +74,14 @@ export default function StudyDetailPage() {
 
   const points = study.data?.points ?? []
   const factors = study.data?.factors ?? []
+  const tracks = study.data?.tracks ?? []
   const x = xKey ?? factors[0] ?? ''
 
   /** 결과가 있는 점만 그린다 — 아직 안 끝난 점은 표에서 상태로 보인다. */
   const drawn = useMemo<SpectrumPoint[]>(() => {
     const made: SpectrumPoint[] = []
     for (const one of points) {
-      const value = valueOf(one, yKey)
+      const value = valueOf(one, yKey, tracks)
       const across = one.params[x]
       if (value == null || across == null) continue
       made.push({
@@ -80,9 +92,21 @@ export default function StudyDetailPage() {
       })
     }
     return made.sort((first, second) => first.x - second.x)
-  }, [points, x, yKey])
+  }, [points, x, yKey, tracks])
 
-  const modeCount = Math.max(0, ...points.map((one) => one.frequencies?.length ?? 0))
+  const modeCount =
+    tracks.length > 0
+      ? tracks.length
+      : Math.max(0, ...points.map((one) => one.frequencies?.length ?? 0))
+
+  /** 이 모드를 몇 개 설계점에서 못 이었나 — 그래프가 얼마나 믿을 만한지. */
+  const missing = useMemo(() => {
+    const track = tracks.find((one) => `mode:${one.reference}` === yKey)
+    if (!track) return 0
+    return points.filter(
+      (one) => one.status === 'done' && track.numbers[one.number] == null,
+    ).length
+  }, [tracks, yKey, points])
   const yOptions = [
     ...Array.from({ length: Math.min(modeCount, 5) }, (_, index) => `mode:${index + 1}`),
     ...(points.some((one) => one.mass_kg != null) ? [MASS] : []),
@@ -140,6 +164,26 @@ export default function StudyDetailPage() {
               </SelectContent>
             </Select>
           </div>
+
+          {tracks.length === 0 ? (
+            // **추적이 없으면 그렇다고 말한다.** 순번으로 이은 선은 모드가 뒤바뀌는 순간
+            // 서로 다른 모드를 잇는다.
+            <p className="text-muted-foreground text-xs">
+              모드 지문이 없어 <b>순번으로</b> 견줍니다 — 치수가 크게 바뀌면 같은 차수가 다른
+              모드일 수 있습니다. 다시 걸면 지문이 생깁니다.
+            </p>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              모드 형상으로 이어 견줍니다(기준 p
+              {String(study.data.reference_point ?? 0).padStart(4, '0')}).
+              {missing > 0 && (
+                <span className="text-amber-700 dark:text-amber-400">
+                  {' '}
+                  {missing}개 설계점에서는 같은 모드를 찾지 못해 그래프에서 빠졌습니다.
+                </span>
+              )}
+            </p>
+          )}
 
           <Spectrum
             points={drawn}

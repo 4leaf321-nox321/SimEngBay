@@ -26,6 +26,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core.dpf import fields
+
 logger = logging.getLogger(__name__)
 
 #: 이보다 면이 많으면 솎는다. 작은 모델을 줄이면 모양이 사라지고, 큰 모델을 안 줄이면
@@ -89,19 +91,8 @@ def _surface_with_displacement(model: Any, skin_mesh: Any, mode: int) -> Any:
     import numpy as np
 
     displacement = model.results.displacement.on_time_scoping([mode]).eval()[0]
-
-    # **절점 번호로 맞춘다.** 변위 필드의 순서는 메시의 절점 순서와 다르다(실측: 메시는
-    # 1·2·3…, 필드는 1·137·129…). 순서대로 붙이면 모양이 뒤죽박죽인 그림이 나오는데,
-    # 그것은 「이상한 모드 형상」 처럼 보일 뿐 오류로 드러나지 않는다.
-    node_ids = np.asarray(skin_mesh.nodes.scoping.ids)
-    field_ids = np.asarray(displacement.scoping.ids)
-    values = np.asarray(displacement.data)
-    lookup = np.full(int(max(field_ids.max(), node_ids.max())) + 1, -1, dtype=np.int64)
-    lookup[field_ids] = np.arange(len(field_ids))
-    picked = lookup[node_ids]
-    vectors = np.zeros((len(node_ids), 3), dtype=float)
-    found = picked >= 0
-    vectors[found] = values[picked[found]]
+    # **절점 번호로 맞춘다**(`fields.py` — 그 규칙은 한 곳에만 적는다).
+    vectors = fields.ordered_by(skin_mesh.nodes.scoping.ids, displacement)
 
     grid = skin_mesh.grid
     grid.point_data["displacement"] = vectors

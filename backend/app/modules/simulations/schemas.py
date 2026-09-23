@@ -149,11 +149,29 @@ class StudyPointOut(BaseModel):
     """탄성 모드 주파수(앞에서부터). `k` 차 모드로 견주려면 이것이 있어야 한다."""
 
 
+class ModeTrackOut(BaseModel):
+    """기준 설계점의 모드 하나가 다른 점들에서 몇 번 모드인가.
+
+    **순번으로 견주지 않는다.** 치수가 바뀌면 모드 순서가 뒤바뀌고(mode crossing), 그때
+    「2차 대 두께」 는 서로 다른 모드를 이은 선이 된다.
+    """
+
+    reference: int
+    """기준 설계점에서의 탄성 모드 번호(1차 · 2차 …)."""
+    numbers: dict[int, int]
+    """설계점 번호 → 그 점에서의 모드 번호. 못 이은 점은 빠진다."""
+    confidence: dict[int, float]
+    """설계점 번호 → MAC(0~1). 못 이었으면 가장 높았던 값."""
+
+
 class StudyOut(BaseModel):
     study_id: str
     name: str
     factors: list[str]
     points: list[StudyPointOut]
+    reference_point: int | None = None
+    """모드를 잇는 기준이 된 설계점. 지문이 있는 첫 점이다."""
+    tracks: list[ModeTrackOut] = Field(default_factory=list)
 
 
 class RecipeOut(BaseModel):

@@ -29,11 +29,18 @@ from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core import executors
+from app.core import cleanup, executors
 from app.core.doe import DoeFolder, DoePoint, read_folder
 from app.core.doe.folder import FolderProblem
+from app.core.modes import track_modes
 from app.core.spec import RUNNABLE_RECIPES, ModalSpec, StaticSpec, parse_spec
-from app.core.stages import STAGES, ArtifactSpec, StageContext, StageFailure
+from app.core.stages import (
+    STAGES,
+    ArtifactSpec,
+    StageCanceled,
+    StageContext,
+    StageFailure,
+)
 from app.modules.accounts.models import User
 from app.modules.simulations.models import (
     FINAL_STATUSES,
@@ -46,6 +53,7 @@ from app.modules.simulations.schemas import (
     DoeImportOut,
     DoePointPreview,
     DoePreviewOut,
+    ModeTrackOut,
     RecipeOut,
     SimulationOut,
     SimulationSummaryOut,
@@ -669,8 +677,8 @@ def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
     return out
 
 
-def _frequencies(simulation: Simulation) -> list[float]:
-    """그 점의 탄성 모드 주파수. **결과 파일이 정본이다**(요약에는 1차만 있다)."""
+def _elastic_modes(simulation: Simulation) -> list[dict[str, Any]]:
+    """그 점의 탄성 모드들. **결과 파일이 정본이다**(요약에는 1차만 있다)."""
     if simulation.status != "done" or simulation.work_dir is None:
         return []
     artifact = db_result_path(simulation)
@@ -680,12 +688,41 @@ def _frequencies(simulation: Simulation) -> list[float]:
         loaded = json.loads(artifact.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
-    elastic = [
-        float(one["frequency_hz"])
-        for one in loaded.get("modes", [])
-        if not one.get("rigid_body")
-    ]
+    elastic = [one for one in loaded.get("modes", []) if not one.get("rigid_body")]
     return elastic[:COMPARE_MODES]
+
+
+def _tracks(
+    points: list[Simulation], modes_by_point: dict[int, list[dict[str, Any]]]
+) -> tuple[int | None, list[ModeTrackOut]]:
+    """설계점 사이에서 **같은 모드를 잇는다.**
+
+    기준은 지문이 있는 첫 점이다. 기준이 없으면(옛 작업 · fake 실행기) 잇지 않는다 — 억지로
+    순번으로 이으면 그 선이 거짓말을 한다.
+    """
+
+    def signatures(number: int) -> list[list[float]]:
+        return [one.get("signature") or [] for one in modes_by_point.get(number, [])]
+
+    numbers = [int(one.source_meta.get("point") or 0) for one in points]
+    reference = next((number for number in numbers if any(signatures(number))), None)
+    if reference is None:
+        return None, []
+
+    base = signatures(reference)
+    tracks = [
+        ModeTrackOut(reference=index + 1, numbers={reference: index + 1}, confidence={})
+        for index in range(len(base))
+    ]
+    for number in numbers:
+        if number == reference:
+            continue
+        links = track_modes(base, signatures(number))
+        for track, link in zip(tracks, links, strict=True):
+            track.confidence[number] = link.confidence
+            if link.number is not None:
+                track.numbers[number] = link.number
+    return reference, tracks
 
 
 def db_result_path(simulation: Simulation) -> Path | None:
@@ -703,10 +740,17 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
         for name in point.source_meta.get("params") or {}:
             if name not in factors:
                 factors.append(name)
+
+    modes_by_point = {
+        int(one.source_meta.get("point") or 0): _elastic_modes(one) for one in points
+    }
+    reference, tracks = _tracks(points, modes_by_point)
     return StudyOut(
         study_id=study_id,
         name=str(points[0].source_meta.get("study_name") or study_id),
         factors=factors,
+        reference_point=reference,
+        tracks=tracks,
         points=[
             StudyPointOut(
                 simulation_id=one.id,
@@ -720,7 +764,10 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
                 first_elastic_hz=(one.summary or {}).get("first_elastic_hz"),
                 mass_kg=(one.summary or {}).get("mass_kg"),
                 nodes=(one.summary or {}).get("nodes"),
-                frequencies=_frequencies(one),
+                frequencies=[
+                    float(mode["frequency_hz"])
+                    for mode in modes_by_point[int(one.source_meta.get("point") or 0)]
+                ],
             )
             for one in points
         ],
@@ -738,10 +785,10 @@ def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
             what="해석 작업",
             code_value=code("SIMULATIONS", 8),
         )
-    if simulation.status != "failed":
+    if simulation.status not in ("failed", "canceled"):
         raise AppError(
             code("SIMULATIONS", 9),
-            "실패한 작업만 재시도할 수 있습니다.",
+            "실패했거나 취소한 작업만 다시 걸 수 있습니다.",
             status=409,
             details={"status": simulation.status},
         )
@@ -754,6 +801,8 @@ def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
     simulation.started_at = None
     simulation.finished_at = None
     simulation.heartbeat_at = None
+    # **취소 표시를 지운다.** 안 지우면 다시 건 작업이 첫 확인에서 곧바로 멈춘다.
+    simulation.cancel_requested_at = None
     # 지난 시도의 산출물 행은 뺀다 — 같은 이름으로 다시 쓰이므로 남기면 목록에 두 벌이 선다.
     # 파일은 그대로다(덮어써진다). 입력(형상 · 스펙)은 남긴다.
     for artifact in _artifacts_of(db, simulation.id):
@@ -767,6 +816,53 @@ def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
 
 
 # --- 집기 ------------------------------------------------------------------------
+
+
+def _cancel_requested(db: Session, simulation_id: uuid.UUID) -> bool:
+    """**다른 프로세스가 누른 것을 본다.** 워커는 사람의 화면을 모르고, DB 가 유일한 통로다.
+
+    돌고 있는 행만 다시 읽는다 — 한 단계에 몇 초마다 한 번이라 값싸다.
+    """
+    db.expire_all()
+    found = db.get(Simulation, simulation_id)
+    return found is not None and found.cancel_requested_at is not None
+
+
+def cancel(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
+    """작업을 멈춘다.
+
+    **대기 중이면 곧바로, 돌고 있으면 곧 멈춘다** — 워커가 다음 확인 지점(몇 초)에서 보고
+    자식 프로세스를 내린다. 끝난 작업은 되돌릴 것이 없다.
+    """
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    if simulation.requested_by_id != user.id:
+        require_owner_edit(
+            db,
+            user,
+            simulation.owner_workspace_id,
+            what="해석 작업",
+            code_value=code("SIMULATIONS", 8),
+        )
+    if is_final(simulation.status):
+        raise AppError(
+            code("SIMULATIONS", 17),
+            "이미 끝난 작업입니다.",
+            status=409,
+            details={"status": simulation.status},
+        )
+
+    simulation.cancel_requested_at = _now()
+    if simulation.status == "queued":
+        # 아직 아무도 안 집었다 — 여기서 끝낸다. 워커를 기다릴 이유가 없다.
+        simulation.status = "canceled"
+        simulation.finished_at = _now()
+        simulation.stages = [
+            {**one, "status": "canceled" if one["status"] == "pending" else one["status"]}
+            for one in simulation.stages
+        ]
+    db.commit()
+    db.refresh(simulation)
+    return simulation
 
 
 def claim_next(db: Session, worker_id: str) -> Simulation | None:
@@ -889,7 +985,19 @@ def execute(
             stage=stage, spec=simulation.spec, workdir=workdir, input_name=INPUT_NAME
         )
         try:
-            result = runner.run(ctx)
+            result = runner.run(
+                ctx, should_cancel=lambda: _cancel_requested(db, simulation.id)
+            )
+        except StageCanceled:
+            # **실패가 아니다.** 사람이 멈춘 것이라 「남은 일」 에 안 올리고 실패로
+            # 세지도 않는다.
+            _set_stage(simulation, stage, status="canceled", finished_at=_iso(_now()))
+            simulation.status = "canceled"
+            simulation.finished_at = _now()
+            db.commit()
+            logger.info("해석 작업 %s 를 %s 단계에서 취소했습니다", simulation.id, stage)
+            db.refresh(simulation)
+            return simulation
         except StageFailure as failure:
             failed_at = stage
             simulation.error_code = failure.code
@@ -943,6 +1051,72 @@ def execute(
     return simulation
 
 
+# --- 정리 -----------------------------------------------------------------------
+
+
+def _work_dir_of(simulation: Simulation) -> Path | None:
+    if simulation.work_dir is None:
+        return None
+    path = (work_root() / simulation.work_dir).resolve()
+    return path if path.is_dir() and work_root().resolve() in path.parents else None
+
+
+def tidy(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, Any]:
+    """중간 파일을 지운다 — **결과는 남는다**(`core/cleanup.py` 의 표).
+
+    **끝난 작업만.** 도는 중에 지우면 그 단계가 읽으려던 파일이 사라진다.
+    """
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    if simulation.requested_by_id != user.id:
+        require_owner_edit(
+            db,
+            user,
+            simulation.owner_workspace_id,
+            what="해석 작업",
+            code_value=code("SIMULATIONS", 8),
+        )
+    if not is_final(simulation.status):
+        raise AppError(
+            code("SIMULATIONS", 18),
+            "끝난 작업만 정리할 수 있습니다.",
+            status=409,
+            details={"status": simulation.status},
+        )
+
+    workdir = _work_dir_of(simulation)
+    if workdir is None:
+        return {"bytes_freed": 0, "files": 0}
+
+    done = cleanup.run(workdir)
+    removed = {path.name for path in done.files}
+    # **사라진 파일의 행을 남기지 않는다.** 「DB 에는 있는데 파일이 없는」 상태는 내려받기에서
+    # 403 으로 나타나고, 그것은 백업이 잘못된 것과 구별되지 않는다.
+    for artifact in _artifacts_of(db, simulation.id):
+        if artifact.filename in removed:
+            db.delete(artifact)
+    simulation.summary = {
+        **(simulation.summary or {}),
+        "tidied_bytes": int((simulation.summary or {}).get("tidied_bytes") or 0)
+        + done.bytes_freed,
+    }
+    db.commit()
+    return {"bytes_freed": done.bytes_freed, "files": len(done.files)}
+
+
+def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
+    """스터디 하나를 통째로 정리한다. **설계점 200개면 이것이 유일하게 할 만한 길이다.**"""
+    points = _study_points(db, user, study_id)
+    freed = 0
+    files = 0
+    for point in points:
+        if not is_final(point.status):
+            continue
+        done = tidy(db, user=user, simulation_id=point.id)
+        freed += int(done["bytes_freed"])
+        files += int(done["files"])
+    return {"bytes_freed": freed, "files": files, "points": len(points)}
+
+
 # --- 공통 화면에 등록하는 것 ----------------------------------------------------
 
 
@@ -950,7 +1124,13 @@ def stats(db: Session) -> list[extensions.StatItem]:
     total = db.scalar(
         select(func.count()).select_from(Simulation).where(Simulation.deleted_at.is_(None))
     )
-    return [extensions.StatItem(label="해석 작업", count=int(total or 0))]
+    # **작업 폴더가 얼마나 찼는지 보이게 한다.** 한 건이 수십 MB 라 DOE 몇 벌이면 GB 가 된다 —
+    # 디스크가 차면 앱만이 아니라 DB 도 함께 멈춘다.
+    megabytes = cleanup.folder_bytes(work_root()) // (1024 * 1024)
+    return [
+        extensions.StatItem(label="해석 작업", count=int(total or 0)),
+        extensions.StatItem(label="작업 폴더(MB)", count=int(megabytes)),
+    ]
 
 
 def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:

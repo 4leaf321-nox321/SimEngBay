@@ -11,11 +11,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 Stage = Literal["fetching", "modeling", "solving", "extracting"]
+
+#: 「지금 취소됐나」 를 묻는 함수. **워커가 DB 를 본다** — 코어는 그 사정을 모른다.
+CancelCheck = Callable[[], bool]
 
 #: 지나는 순서. 워커는 이 순서대로 돌리고, 하나가 실패하면 뒤는 안 돈다.
 STAGES: tuple[Stage, ...] = ("fetching", "modeling", "solving", "extracting")
@@ -82,6 +86,10 @@ class StageResult:
     """이 단계가 알아낸 것 — 바디 수 · 절점 수 · 고유진동수. 작업의 `summary` 에 합쳐진다."""
     detail: str = ""
     """한 줄. 화면의 타임라인에 그 단계 옆에 선다."""
+
+
+class StageCanceled(Exception):
+    """사람이 취소했다. **실패가 아니다** — 세지도, 「남은 일」 에 올리지도 않는다."""
 
 
 class StageFailure(Exception):

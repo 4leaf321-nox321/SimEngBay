@@ -19,6 +19,8 @@ from typing import Any
 from app.core.spec import RIGID_BODY_MODES, ModalSpec, parse_spec
 from app.core.stages import (
     ArtifactSpec,
+    CancelCheck,
+    StageCanceled,
     StageContext,
     StageFailure,
     StageResult,
@@ -31,9 +33,16 @@ class FakeExecutor:
     def __init__(self, *, stage_seconds: float = 0.0) -> None:
         self.stage_seconds = stage_seconds
 
-    def run(self, ctx: StageContext) -> StageResult:
-        if self.stage_seconds > 0:
-            time.sleep(self.stage_seconds)
+    def run(self, ctx: StageContext, should_cancel: CancelCheck | None = None) -> StageResult:
+        # 쉬는 동안에도 취소를 본다 — 진짜 실행기와 같은 규약이라야 시험이 뜻을 갖는다.
+        waited = 0.0
+        while waited < self.stage_seconds:
+            if should_cancel is not None and should_cancel():
+                raise StageCanceled(f"{ctx.stage} 단계에서 취소했습니다.")
+            time.sleep(min(0.2, self.stage_seconds - waited))
+            waited += 0.2
+        if should_cancel is not None and should_cancel():
+            raise StageCanceled(f"{ctx.stage} 단계에서 취소했습니다.")
         spec = parse_spec(ctx.spec)
         if not isinstance(spec, ModalSpec):
             raise StageFailure("internal", f"가짜 실행기는 {spec.recipe} 를 모릅니다.")

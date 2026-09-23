@@ -57,6 +57,8 @@ const SIMULATION: Record<string, { label: string; tone: Tone }> = {
   extracting: { label: '추출', tone: 'neutral' },
   done: { label: '완료', tone: 'good' },
   failed: { label: '실패', tone: 'bad' },
+  // **취소는 실패가 아니다.** 사람이 멈춘 것이라 빨강으로 두면 사고처럼 읽힌다.
+  canceled: { label: '취소됨', tone: 'neutral' },
 }
 
 /** 해석 작업의 단계 하나. 타임라인에서 쓴다. */
@@ -67,6 +69,7 @@ const STAGE: Record<string, { label: string; tone: Tone }> = {
   failed: { label: '실패', tone: 'bad' },
   // **건너뜀은 나쁨이 아니다** — 앞 단계가 실패해서 오지 않은 것이고, 원인은 그 앞에 있다.
   skipped: { label: '건너뜀', tone: 'neutral' },
+  canceled: { label: '취소됨', tone: 'neutral' },
 }
 
 const TABLES = {

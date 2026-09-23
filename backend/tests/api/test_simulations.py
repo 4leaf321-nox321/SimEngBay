@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import json
+import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -158,11 +160,17 @@ def test_남의_닫힌_부서_작업은_보이지_않는다(
 
 
 class _FailingExecutor:
-    """솔버에서 라이선스를 못 받는 실행기."""
+    """솔버에서 라이선스를 못 받는 실행기.
+
+    **규약을 진짜 실행기와 같게 둔다**(`should_cancel`) — 다르면 부르는 쪽이 바뀔 때 이 대역만
+    조용히 터지고, 그 실패는 「라이선스」 가 아니라 「internal」 로 나타난다(실측).
+    """
 
     name = "failing"
 
-    def run(self, ctx: StageContext) -> StageResult:
+    def run(
+        self, ctx: StageContext, should_cancel: Callable[[], bool] | None = None
+    ) -> StageResult:
         if ctx.stage == "solving":
             raise StageFailure("license", "솔버 라이선스를 받지 못했습니다.")
         return StageResult(detail="ok")
@@ -460,3 +468,99 @@ def test_가져온_DOE_가_비교_목록에_뜬다(client: TestClient, member: S
     assert all(one["mass_kg"] for one in points)
     # k 차 모드로 견주려면 주파수 목록이 있어야 한다.
     assert len(points[0]["frequencies"]) >= 5
+
+
+def test_대기_중인_작업은_곧바로_취소된다(
+    client: TestClient, member: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """아직 아무도 안 집었다 — 워커를 기다릴 이유가 없다."""
+    monkeypatch.setattr(get_settings(), "jobs_inline", False)
+    created = _create(client, member, workspace=member.workspace)
+    canceled = client.post(
+        f"/api/simulations/{created.json()['id']}/cancel", headers=member.headers
+    )
+    assert canceled.status_code == 200, canceled.text
+    assert canceled.json()["status"] == "canceled"
+
+
+def test_끝난_작업은_취소할_것이_없다(client: TestClient, member: Signed) -> None:
+    created = _create(client, member, workspace=member.workspace)
+    response = client.post(
+        f"/api/simulations/{created.json()['id']}/cancel", headers=member.headers
+    )
+    assert response.status_code == 409
+    assert "이미 끝난" in response.json()["error"]["message"]
+
+
+def test_돌던_작업은_워커가_보고_멈춘다(
+    client: TestClient, db: Session, member: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**워커는 다른 프로세스라** DB 칸으로만 알 수 있다 — 단계 사이와 자식을 기다리는 동안
+    그 칸을 본다."""
+    monkeypatch.setattr(get_settings(), "jobs_inline", False)
+    created = _create(client, member, workspace=member.workspace)
+    simulation_id = created.json()["id"]
+    client.post(f"/api/simulations/{simulation_id}/cancel", headers=member.headers)
+
+    # **그 작업을 콕 집어 돌린다.** `claim_next` 는 가장 오래된 대기 작업을 가져가므로,
+    # 스위트를 함께 도는 시험에서는 남이 남긴 작업을 집을 수 있다.
+    from app.modules.simulations.models import Simulation
+
+    claimed = db.get(Simulation, uuid.UUID(simulation_id))
+    assert claimed is not None
+    done = services.execute(db, claimed, worker_id="test-worker")
+    assert done.status == "canceled"
+    # 실패가 아니므로 「남은 일」 에 안 오른다.
+    assert done.error_code is None
+
+
+def test_취소한_작업은_다시_걸_수_있다(
+    client: TestClient, db: Session, member: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """취소 표시를 안 지우면 다시 건 작업이 첫 확인에서 곧바로 멈춘다."""
+    monkeypatch.setattr(get_settings(), "jobs_inline", False)
+    created = _create(client, member, workspace=member.workspace)
+    simulation_id = created.json()["id"]
+    client.post(f"/api/simulations/{simulation_id}/cancel", headers=member.headers)
+
+    monkeypatch.setattr(get_settings(), "jobs_inline", True)
+    again = client.post(f"/api/simulations/{simulation_id}/retry", headers=member.headers)
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "done"
+
+
+def test_정리하면_중간_파일이_사라지고_결과는_남는다(
+    client: TestClient, db: Session, member: Signed
+) -> None:
+    """**결과는 남는다.**
+
+    사람이 보는 것(고유진동수 · 모드 그림)은 수십 KB 고, 지우는 것은 `.mechdb` · `.rst` 처럼
+    다시 만들 수 있거나 이미 다 읽은 것이다.
+    """
+    created = _create(client, member, workspace=member.workspace)
+    body = created.json()
+    kinds_before = {one["kind"] for one in body["artifacts"]}
+    assert {"mechdb", "rst", "result_json"} <= kinds_before
+
+    tidied = client.post(f"/api/simulations/{body['id']}/tidy", headers=member.headers)
+    assert tidied.status_code == 200, tidied.text
+    assert tidied.json()["files"] >= 2
+
+    after = client.get(f"/api/simulations/{body['id']}", headers=member.headers).json()
+    kinds_after = {one["kind"] for one in after["artifacts"]}
+    # 중간 파일은 행까지 사라진다 — 「DB 에는 있는데 파일이 없는」 상태를 만들지 않는다.
+    assert "mechdb" not in kinds_after
+    assert "rst" not in kinds_after
+    assert {"result_json", "input_step", "spec", "dat", "solve_out"} <= kinds_after
+
+
+def test_도는_중에는_정리하지_않는다(
+    client: TestClient, member: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """그 단계가 읽으려던 파일이 사라진다."""
+    monkeypatch.setattr(get_settings(), "jobs_inline", False)
+    created = _create(client, member, workspace=member.workspace)
+    response = client.post(
+        f"/api/simulations/{created.json()['id']}/tidy", headers=member.headers
+    )
+    assert response.status_code == 409

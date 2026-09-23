@@ -19,11 +19,18 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.core import run as stage_run
-from app.core.stages import StageContext, StageFailure, StageResult
+from app.core.stages import (
+    CancelCheck,
+    StageCanceled,
+    StageContext,
+    StageFailure,
+    StageResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,11 @@ _BOOTSTRAP = (
     "import sys; sys.path.insert(0, {backend!r}); "
     "from app.core.run import main; sys.exit(main(sys.argv[1:]))"
 )
+
+#: 자식을 기다리는 동안 취소를 얼마나 자주 보나(초). 촘촘히 볼수록 DB 를 자주 읽는다.
+CANCEL_POLL_SECONDS = 2.0
+#: 멈추라고 한 뒤 기다리는 시간(초). 이 안에 안 죽으면 강제로 끝낸다.
+STOP_GRACE_SECONDS = 15.0
 
 #: 단계마다 다른 상한. 솔브만 유난히 길다 — 한 값으로 묶으면 모델링이 하루 종일 매달린다.
 DEFAULT_TIMEOUTS: dict[str, int] = {
@@ -171,22 +183,21 @@ class SubprocessExecutor:
             env[f"AWP_ROOT{self.options.ansys_version}"] = str(self.options.ansys_root)
         return env
 
-    def run(self, ctx: StageContext) -> StageResult:
+    def run(self, ctx: StageContext, should_cancel: CancelCheck | None = None) -> StageResult:
         command = self.command(ctx)
         timeout = self.options.timeout_for(ctx.stage)
         try:
-            finished = subprocess.run(
+            child = subprocess.Popen(
                 command,
                 cwd=str(ctx.workdir),
                 env=self.child_env(),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 # 자식이 UTF-8 로 못 찍는 경우에도 **부르는 쪽은 죽지 않는다.** 로그가 조금
                 # 깨지는 것과 작업이 실패하는 것은 다른 값이다.
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
-                check=False,
             )
         except FileNotFoundError as failure:
             raise StageFailure(
@@ -194,21 +205,45 @@ class SubprocessExecutor:
                 f"실행기 파이썬을 찾지 못했습니다: {command[0]}. "
                 f"SIMULATION_EXECUTOR 와 WINDOWS_PYTHON 을 확인하세요.",
             ) from failure
-        except subprocess.TimeoutExpired as failure:
-            raise StageFailure(
-                "timeout", f"{ctx.stage} 단계가 {timeout // 60}분 안에 끝나지 않았습니다."
-            ) from failure
 
-        if finished.returncode != 0:
+        # **기다리면서 취소를 본다.** 그냥 `run()` 으로 막아 두면 솔브 세 시간 동안 취소를
+        # 누를 수는 있어도 아무 일도 안 일어난다 — 그때 사람은 취소가 고장 났다고 읽는다.
+        started = time.monotonic()
+        while True:
+            try:
+                _, stderr = child.communicate(timeout=CANCEL_POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                if should_cancel is not None and should_cancel():
+                    _stop(child)
+                    raise StageCanceled(f"{ctx.stage} 단계에서 취소했습니다.") from None
+                if time.monotonic() - started > timeout:
+                    _stop(child)
+                    raise StageFailure(
+                        "timeout",
+                        f"{ctx.stage} 단계가 {timeout // 60}분 안에 끝나지 않았습니다.",
+                    ) from None
+
+        if child.returncode != 0:
             logger.warning(
                 "%s 단계 실행기가 %d 로 끝났습니다\n--- stderr ---\n%s",
                 ctx.stage,
-                finished.returncode,
-                _tail(finished.stderr),
+                child.returncode,
+                _tail(stderr or ""),
             )
         # **종료 코드가 아니라 결과 파일을 믿는다.** 자식이 왜 죽었는지는 그 파일에만 있고,
         # 없으면 read_result 가 「도중에 죽었다」 고 말한다.
         return stage_run.read_result(ctx.workdir, ctx.stage)
+
+
+def _stop(child: subprocess.Popen[str]) -> None:
+    """자식을 멈춘다. **먼저 곱게, 안 되면 세게.** Mechanical 은 곧바로 안 죽는다."""
+    child.terminate()
+    try:
+        child.wait(timeout=STOP_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait(timeout=STOP_GRACE_SECONDS)
 
 
 def _tail(text: str, lines: int = 40) -> str:

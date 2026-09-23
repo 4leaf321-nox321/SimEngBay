@@ -25,11 +25,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 #: 단계 이름이 곧 「지금 무엇을 하고 있나」 다. 상태와 단계를 따로 두면 언젠가 어긋난다.
-STATUSES = ("queued", "fetching", "modeling", "solving", "extracting", "done", "failed")
+STATUSES = (
+    "queued",
+    "fetching",
+    "modeling",
+    "solving",
+    "extracting",
+    "done",
+    "failed",
+    "canceled",
+)
 #: 워커가 붙잡고 있는 상태. 이 상태로 오래 멈춰 있으면 워커가 죽은 것이다(requeue_stale).
 RUNNING_STATUSES = ("fetching", "modeling", "solving", "extracting")
 #: 끝난 상태. 여기서는 더 안 움직인다.
-FINAL_STATUSES = ("done", "failed")
+FINAL_STATUSES = ("done", "failed", "canceled")
 
 
 class Simulation(Base):
@@ -97,6 +106,12 @@ class Simulation(Base):
     """실패 원인 코드(`app/core/stages.py` FailureCode). 코드여야 「라이선스로 몇 건」 을
     센다."""
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """사람이 취소를 누른 시각. **워커는 다른 프로세스라** 이 칸으로만 알 수 있다 — 단계
+    사이와 자식 프로세스를 기다리는 동안 이것을 본다. 눌렀다고 곧바로 멈추지는 않는다."""
 
     worker_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

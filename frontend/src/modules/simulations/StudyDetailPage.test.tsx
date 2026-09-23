@@ -21,6 +21,7 @@ vi.mock('recharts', async () => {
 })
 
 import { simulationApi } from '@/modules/simulations/api'
+import type { Study } from '@/modules/simulations/api'
 import StudyDetailPage from '@/modules/simulations/StudyDetailPage'
 
 vi.mock('@/modules/simulations/api', async (importOriginal) => {
@@ -28,10 +29,17 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
   return { ...actual, simulationApi: { ...actual.simulationApi, study: vi.fn() } }
 })
 
-const STUDY = {
+const STUDY: Study = {
   study_id: '3f9a21',
   name: '브래킷_두께훑기',
   factors: ['두께'],
+  reference_point: 1,
+  // 두께가 커지며 2차와 3차가 자리를 바꾼 경우 — **순번으로 이으면 다른 모드를 잇는다.**
+  tracks: [
+    // 1차는 p0002 에서 닮은 모드를 못 찾았다 — **억지로 잇지 않는다.**
+    { reference: 1, numbers: { 1: 1 }, confidence: { 2: 0.41 } },
+    { reference: 2, numbers: { 1: 2, 2: 1 }, confidence: { 2: 0.96 } },
+  ],
   points: [
     {
       simulation_id: '11111111-1111-1111-1111-111111111111',
@@ -103,5 +111,34 @@ describe('설계점 비교', () => {
     show()
     await waitFor(() => expect(screen.getByRole('img', { name: /두께 대/ })).toBeDefined())
     expect(screen.getByRole('img', { name: /1차 모드/ })).toBeDefined()
+  })
+})
+
+describe('모드 추적', () => {
+  beforeEach(() => {
+    vi.mocked(simulationApi.study).mockReset().mockResolvedValue(STUDY)
+  })
+
+  it('형상으로 이어 견준다고 말한다', async () => {
+    show()
+    await waitFor(() => expect(screen.getByText(/모드 형상으로 이어 견줍니다/)).toBeDefined())
+  })
+
+  it('못 이은 설계점이 있으면 몇 개인지 말한다', async () => {
+    // **억지로 잇지 않는다** — 대신 빠졌다는 사실이 보여야 그래프를 믿을지 정할 수 있다.
+    show()
+    await waitFor(() =>
+      expect(screen.getByText(/1개 설계점에서는 같은 모드를 찾지 못해/)).toBeDefined(),
+    )
+  })
+
+  it('지문이 없으면 순번으로 견준다고 밝힌다', async () => {
+    vi.mocked(simulationApi.study).mockResolvedValue({
+      ...STUDY,
+      reference_point: null,
+      tracks: [],
+    })
+    show()
+    await waitFor(() => expect(screen.getByText(/순번으로/)).toBeDefined())
   })
 })

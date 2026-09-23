@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.dpf import metrics, participation, shapes
+from app.core.dpf import fields, metrics, participation, shapes, signature
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -137,13 +137,15 @@ def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:
         from ansys.dpf import core as dpf
 
         model = dpf.Model(str(rst))
+        mesh = model.metadata.meshed_region
         for one in modes:
             if one["rigid_body"]:
                 # 강체 모드는 「통째로 움직이는 것」 이라 국부성이 뜻을 갖지 않는다. 표에서도
                 # 접혀 있으므로 설명을 붙이지 않는다.
                 continue
             field = model.results.displacement.on_time_scoping([int(one["number"])]).eval()[0]
-            vectors = field.data
+            # **메시 절점 순서로 맞춘다**(`fields.py`) — 필드의 순서는 메시와 다르다.
+            vectors = fields.ordered_by(mesh.nodes.scoping.ids, field)
             share = metrics.direction_share(vectors)
             one["direction_share"] = share
             axis = metrics.dominant_axis(share)
@@ -152,6 +154,12 @@ def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:
             value = metrics.localization(vectors)
             one["localization"] = value
             one["local_mode"] = metrics.is_local(value)
+            # **설계점 사이에서 같은 모드를 잇는 열쇠**(core/modes). 만드는 데 메시가
+            # 필요하고 그것은 여기에만 있다 — 잇는 계산은 서버가 지문만으로 한다.
+            try:
+                one["signature"] = signature.sample(mesh, vectors)
+            except Exception:
+                logger.warning("모드 %s 의 지문을 못 뽑았습니다", one["number"], exc_info=True)
     except Exception:
         logger.warning("모드 지표 계산 실패 — 주파수만 남깁니다", exc_info=True)
 

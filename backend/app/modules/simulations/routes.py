@@ -198,6 +198,36 @@ def retry(
     return services.to_out(db, services.retry(db, user=user, simulation_id=simulation_id))
 
 
+@router.post("/studies/{study_id}/tidy")
+def tidy_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """DOE 한 벌의 중간 파일을 통째로 정리한다 — 설계점 200개면 이것이 유일한 길이다."""
+    return services.tidy_study(db, user=user, study_id=study_id)
+
+
+@router.post("/{simulation_id}/tidy")
+def tidy(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """중간 파일(`.mechdb` · `.rst` · 솔버 scratch)을 지운다. **결과는 남는다.**"""
+    return services.tidy(db, user=user, simulation_id=simulation_id)
+
+
+@router.post("/{simulation_id}/cancel", response_model=SimulationOut)
+def cancel(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SimulationOut:
+    """작업을 멈춘다. **대기 중이면 곧바로, 돌고 있으면 곧**(워커가 몇 초 안에 본다)."""
+    return services.to_out(db, services.cancel(db, user=user, simulation_id=simulation_id))
+
+
 @router.get("/{simulation_id}/artifacts/{artifact_id}/content", include_in_schema=False)
 def download_artifact(
     simulation_id: uuid.UUID,

@@ -20,6 +20,7 @@ export type DoeImport = components['schemas']['DoeImportOut']
 export type StudySummary = components['schemas']['StudySummaryOut']
 export type Study = components['schemas']['StudyOut']
 export type StudyPoint = components['schemas']['StudyPointOut']
+export type ModeTrack = components['schemas']['ModeTrackOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -67,7 +68,7 @@ export interface SimulationResult {
 }
 
 /** 끝난 상태 — 여기서는 더 안 움직이므로 폴링을 멈춘다. */
-export const FINAL_STATUSES = new Set(['done', 'failed'])
+export const FINAL_STATUSES = new Set(['done', 'failed', 'canceled'])
 
 /** 상태 기계의 순서. 화면의 타임라인이 이 순서로 선다. */
 export const STAGE_NAMES = ['fetching', 'modeling', 'solving', 'extracting'] as const
@@ -136,6 +137,15 @@ export const simulationApi = {
     return api.postForm<Simulation>('/simulations', form)
   },
   retry: (id: string) => api.post<Simulation>(`/simulations/${id}/retry`),
+  /** 멈춘다 — 대기 중이면 곧바로, 돌고 있으면 워커가 몇 초 안에 본다. */
+  cancel: (id: string) => api.post<Simulation>(`/simulations/${id}/cancel`),
+  /** 중간 파일(.mechdb · .rst · 솔버 scratch)을 지운다. **결과는 남는다.** */
+  tidy: (id: string) =>
+    api.post<{ bytes_freed: number; files: number }>(`/simulations/${id}/tidy`),
+  tidyStudy: (studyId: string) =>
+    api.post<{ bytes_freed: number; files: number; points: number }>(
+      `/simulations/studies/${studyId}/tidy`,
+    ),
   /**
    * DOE 폴더 훑어 보기 — **걸기 전에** 점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개인지.
    *

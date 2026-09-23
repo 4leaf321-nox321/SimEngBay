@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Download, RotateCcw } from 'lucide-react'
+import { Download, Eraser, RotateCcw, Square } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
@@ -102,6 +102,36 @@ export default function SimulationDetailPage() {
     }
   }, [id, finished])
 
+  async function cancel() {
+    setBusy(true)
+    setError(null)
+    try {
+      setLive(await simulationApi.cancel(id))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const [tidied, setTidied] = useState<string | null>(null)
+
+  async function tidy() {
+    setBusy(true)
+    setError(null)
+    try {
+      const done = await simulationApi.tidy(id)
+      setTidied(
+        `중간 파일 ${done.files}개 · ${(done.bytes_freed / 1024 / 1024).toFixed(1)}MB 를 정리했습니다.`,
+      )
+      setLive(await simulationApi.get(id))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function retry() {
     setBusy(true)
     setError(null)
@@ -155,16 +185,41 @@ export default function SimulationDetailPage() {
         }
         back={{ to: '/simulations', label: '해석 작업' }}
         actions={
-          simulation.status === 'failed' ? (
-            <Button size="sm" onClick={retry} disabled={busy}>
-              <RotateCcw className="size-4" />
-              재시도
-            </Button>
-          ) : undefined
+          <>
+            {/* **끝나지 않은 작업만 멈출 수 있다** — 끝난 것은 되돌릴 것이 없다. */}
+            {!finished && (
+              <Button variant="outline" size="sm" onClick={cancel} disabled={busy}>
+                <Square className="size-4" />
+                취소
+              </Button>
+            )}
+            {(simulation.status === 'failed' || simulation.status === 'canceled') && (
+              <Button size="sm" onClick={retry} disabled={busy}>
+                <RotateCcw className="size-4" />
+                다시 걸기
+              </Button>
+            )}
+            {finished && (
+              <Button variant="outline" size="sm" onClick={tidy} disabled={busy}>
+                <Eraser className="size-4" />
+                중간 파일 정리
+              </Button>
+            )}
+          </>
         }
       />
 
       <ErrorNotice error={error} />
+
+      {tidied && (
+        <Alert>
+          <AlertTitle>정리했습니다</AlertTitle>
+          <AlertDescription>
+            {tidied} 결과(고유진동수 · 모드 형상)와 입력은 그대로 남습니다. 지운 것을 되살리려면
+            다시 걸어야 합니다.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {simulation.status === 'failed' && (
         <Alert variant="destructive">

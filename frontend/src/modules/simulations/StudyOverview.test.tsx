@@ -111,3 +111,42 @@ describe('DOE 개요', () => {
     expect(screen.getByRole('img', { name: /질량 대 주파수/ })).toBeDefined()
   })
 })
+
+describe('숫자가 아닌 변수', () => {
+  /** 재료처럼 **고르는 인자** — CompCore 가 물성 DOE 를 붙이면서 들어온다. */
+  const BY_MATERIAL: Study = {
+    ...STUDY,
+    name: '재료훑기',
+    factors: ['재료'],
+    points: [
+      { ...STUDY.points[0], number: 1, params: { 재료: 'SS400' }, mass_kg: 1.42 },
+      { ...STUDY.points[1], number: 2, params: { 재료: 'AL6061' }, mass_kg: 0.49 },
+    ],
+  }
+
+  it('값 사이를 잇지 않는다', () => {
+    // 선은 「그 중간이 있다」 는 말인데 재료에는 중간이 없다 — 막대로 그린다.
+    show(BY_MATERIAL)
+    expect(screen.getByRole('img', { name: /값별 모드 고유진동수/ })).toBeDefined()
+    expect(screen.queryByRole('img', { name: /설계 변수에 따른/ })).toBeNull()
+    expect(screen.getByText(/그 중간이 없기 때문/)).toBeDefined()
+  })
+
+  it('요약은 범위가 아니라 목록으로 적는다', () => {
+    show(BY_MATERIAL)
+    expect(screen.getByText('SS400 · AL6061')).toBeDefined()
+  })
+
+  it('표에는 고른 값이 그대로 보인다', () => {
+    // **버리면 두 설계점이 똑같아 보인다** — 왜 결과가 다른지 알 방법이 없어진다.
+    const { container } = show(BY_MATERIAL)
+    expect(container.textContent).toContain('SS400')
+    expect(container.textContent).toContain('AL6061')
+  })
+
+  it('질량 대 주파수는 그대로 읽힌다', () => {
+    // 고르는 인자든 숫자든 트레이드오프의 두 축은 늘 숫자다.
+    show(BY_MATERIAL)
+    expect(screen.getByRole('img', { name: /질량 대 주파수/ })).toBeDefined()
+  })
+})

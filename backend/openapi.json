@@ -3658,7 +3658,14 @@
           },
           "params": {
             "additionalProperties": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             },
             "type": "object",
             "title": "Params"
@@ -5067,7 +5074,14 @@
           },
           "params": {
             "additionalProperties": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             },
             "type": "object",
             "title": "Params"

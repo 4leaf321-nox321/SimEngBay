@@ -37,12 +37,18 @@ FIXED_COLUMNS = frozenset(
 )
 
 
+#: 설계점에서 바꾼 값 하나. **숫자만이 아니다** — 재료처럼 고르는 인자가 온다(CompCore 가
+#: 물성 DOE 를 붙이면서 들어온다). 숫자로 안 읽히면 **글자 그대로 들고 간다**: 버리면 두
+#: 설계점이 화면에서 똑같아 보이고, 사람은 왜 결과가 다른지 알 방법이 없다.
+ParamValue = float | str
+
+
 @dataclass
 class DoePoint:
     """설계점 하나 — 걸 수 있는 것과, 걸 수 없다면 그 이유."""
 
     number: int
-    params: dict[str, float]
+    params: dict[str, ParamValue]
     step: Path | None = None
     topology: Path | None = None
     status: str = "ok"
@@ -81,11 +87,17 @@ class FolderProblem(Exception):
     """폴더를 아예 읽을 수 없다 — 경로가 틀렸거나 DOE 폴더가 아니다."""
 
 
-def _number(value: str) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+def _value(raw: str | None) -> ParamValue | None:
+    """표의 칸 하나. 숫자로 읽히면 숫자, 아니면 **글자 그대로**. 빈 칸은 없는 값이다."""
+    if raw is None:
         return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return text
 
 
 def read_folder(path: Path) -> DoeFolder:
@@ -129,9 +141,7 @@ def read_folder(path: Path) -> DoeFolder:
 
 def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
     number = int(row.get("point") or 0)
-    params = {
-        name: value for name in factors if (value := _number(row.get(name, ""))) is not None
-    }
+    params = {name: value for name in factors if (value := _value(row.get(name))) is not None}
     status = (row.get("status") or "").strip()
     unresolved = [one for one in (row.get("unresolved") or "").split() if one]
     error = (row.get("error") or "").strip()

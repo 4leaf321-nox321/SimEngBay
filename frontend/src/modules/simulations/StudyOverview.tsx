@@ -11,13 +11,19 @@
  *
  * **모드는 형상으로 이어져 있다**(`core/modes` 의 MAC). 순번으로 이으면 치수가 바뀌는 순간
  * 다른 모드를 잇는다 — 실측으로 2차와 4차가 자리를 바꿨다.
+ *
+ * ## 숫자가 아닌 변수
+ *
+ * 재료처럼 **고르는 인자**가 온다(CompCore 가 물성 DOE 를 붙이면서). 「SS400」 을 가로축의
+ * 좌표로 놓을 수는 없으므로, 그때는 선이 아니라 **막대**로 그린다 — 사이를 잇는 선은 「그
+ * 중간」 이 있다는 말이고 재료에는 중간이 없다.
  */
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { ModeTrack, Study, StudyPoint } from '@/modules/simulations/api'
-import { Spectrum } from '@/shared/charts'
+import { Chart, Spectrum } from '@/shared/charts'
 import type { SpectrumLine, SpectrumPoint } from '@/shared/charts'
 import { colorAt } from '@/shared/charts'
 import { StatusBadge } from '@/shared/components/StatusBadge'
@@ -86,12 +92,40 @@ export function StudyOverview({ study }: { study: Study }) {
   const [factor, setFactor] = useState<string | null>(null)
   const x = factor ?? factors[0] ?? ''
 
-  const points = useMemo(
-    () => [...study.points].sort((first, second) => (first.params[x] ?? 0) - (second.params[x] ?? 0)),
-    [study.points, x],
-  )
+  const points = useMemo(() => {
+    const rows = [...study.points]
+    // 숫자면 값 순서, 글자면 **가져온 순서**(설계점 번호) — 재료 이름을 사전순으로 늘어놓으면
+    // DOE 표와 순서가 달라져 대조하기 어렵다.
+    return rows.sort((first, second) => {
+      const a = first.params[x]
+      const b = second.params[x]
+      if (typeof a === 'number' && typeof b === 'number') return a - b
+      return first.number - second.number
+    })
+  }, [study.points, x])
   const done = points.filter((one) => one.status === 'done')
   const tracks = (study.tracks ?? []).slice(0, MAX_LINES)
+
+  /**
+   * 이 변수가 숫자인가. **하나라도 글자면 범주로 본다** — 섞여 있으면 좌표를 못 매긴다.
+   */
+  const numeric = useMemo(
+    () => points.every((one) => typeof one.params[x] !== 'string'),
+    [points, x],
+  )
+
+  /** 범주 변수일 때 — 가로는 값(재료 이름), 계열은 모드. **잇지 않는다.** */
+  const bars = useMemo(() => {
+    if (numeric) return []
+    return points.map((point) => {
+      const row: Record<string, unknown> = { name: String(point.params[x] ?? '—') }
+      for (const track of tracks) {
+        const hz = frequency(point, track)
+        if (hz != null) row[`${track.reference}차`] = hz
+      }
+      return row
+    })
+  }, [numeric, points, tracks, x])
 
   /** 모드 지도 — 선 하나가 **추적된 모드 하나**다. */
   const lines = useMemo<SpectrumLine[]>(
@@ -171,7 +205,11 @@ export function StudyOverview({ study }: { study: Study }) {
         <div>
           <dt className="text-muted-foreground text-xs">{x}</dt>
           <dd className="font-medium">
-            {first?.params[x] ?? '—'} → {last?.params[x] ?? '—'}
+            {/* 숫자면 범위(6 → 20), 고르는 값이면 목록(SS400 · AL6061) — 「→」 는 사이가
+                있다는 말이고 재료에는 사이가 없다. */}
+            {numeric
+              ? `${first?.params[x] ?? '—'} → ${last?.params[x] ?? '—'}`
+              : [...new Set(points.map((one) => String(one.params[x] ?? '—')))].join(' · ')}
           </dd>
         </div>
         <div>
@@ -200,18 +238,32 @@ export function StudyOverview({ study }: { study: Study }) {
             <h2 className="text-sm font-medium">모드 지도</h2>
             <p className="text-muted-foreground text-xs">선 하나가 모드 하나</p>
           </div>
-          <Spectrum
-            lines={lines}
-            stems={false}
-            xLabel={x}
-            yLabel="주파수 (Hz)"
-            height={320}
-            title="설계 변수에 따른 모드별 고유진동수"
-            emptyText="아직 그릴 결과가 없습니다. 설계점이 차례로 돕니다."
-          />
+          {numeric ? (
+            <Spectrum
+              lines={lines}
+              stems={false}
+              xLabel={x}
+              yLabel="주파수 (Hz)"
+              height={320}
+              title="설계 변수에 따른 모드별 고유진동수"
+              emptyText="아직 그릴 결과가 없습니다. 설계점이 차례로 돕니다."
+            />
+          ) : (
+            // **잇지 않는다.** 선은 「그 중간이 있다」 는 말인데 재료에는 중간이 없다.
+            <Chart
+              kind="bar"
+              data={bars}
+              x="name"
+              series={tracks.map((one) => ({ key: `${one.reference}차` }))}
+              height={320}
+              title="값별 모드 고유진동수"
+              emptyText="아직 그릴 결과가 없습니다. 설계점이 차례로 돕니다."
+            />
+          )}
           <p className="text-muted-foreground text-xs">
             모드는 <b>형상으로 이어</b> 견줍니다 — 순번으로 이으면 치수가 바뀌는 순간 다른
             모드를 잇습니다.
+            {!numeric && ' 값 사이를 잇지 않는 이유는 그 중간이 없기 때문입니다.'}
           </p>
         </section>
 

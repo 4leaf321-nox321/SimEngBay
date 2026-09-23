@@ -594,7 +594,10 @@ def import_doe(
             "recipe_digest": point.recipe_digest,
             "folder": str(doe.path),
         }
-        label = " · ".join(f"{name} {value:g}" for name, value in point.params.items())
+        label = " · ".join(
+            f"{name} {value:g}" if isinstance(value, float) else f"{name} {value}"
+            for name, value in point.params.items()
+        )
         with point.step.open("rb") as stream:
             simulation = create(
                 db,
@@ -755,10 +758,9 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
             StudyPointOut(
                 simulation_id=one.id,
                 number=int(one.source_meta.get("point") or 0),
-                params={
-                    name: float(value)
-                    for name, value in (one.source_meta.get("params") or {}).items()
-                },
+                # **숫자로 못 읽는 값도 그대로 낸다**(재료 이름 같은 것). 버리면 두 설계점이
+                # 화면에서 똑같아 보이고, 사람은 왜 결과가 다른지 알 수 없다.
+                params=dict(one.source_meta.get("params") or {}),
                 status=one.status,
                 error_code=one.error_code,
                 first_elastic_hz=(one.summary or {}).get("first_elastic_hz"),

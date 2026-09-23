@@ -79,7 +79,7 @@ class DoePointPreview(BaseModel):
     """가져오기 전에 보여 줄 한 줄 — **걸 수 있나, 아니면 왜 못 거나.**"""
 
     number: int
-    params: dict[str, float]
+    params: dict[str, float | str]
     usable: bool
     skip_reason: str = ""
 
@@ -139,7 +139,8 @@ class StudyPointOut(BaseModel):
 
     simulation_id: uuid.UUID
     number: int
-    params: dict[str, float]
+    params: dict[str, float | str]
+    """바꾼 값. **숫자만이 아니다** — 재료처럼 고르는 인자가 온다."""
     status: str
     error_code: str | None = None
     first_elastic_hz: float | None = None

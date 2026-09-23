@@ -1,0 +1,11 @@
+{
+  "id": "7c1d3a4409f24b6d8e2a5f7b1c3d9e08",
+  "name": "재료훑기",
+  "method": "full",
+  "seed": 1,
+  "factors": [
+    { "name": "재료", "kind": "list", "values": ["SS400", "AL6061"] },
+    { "name": "두께", "kind": "list", "values": [6] }
+  ],
+  "created_at": "2026-09-24T10:00:00+09:00"
+}

@@ -15,7 +15,8 @@ import pytest
 from app.core.doe import read_folder
 from app.core.doe.folder import FolderProblem
 
-FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "브래킷_두께훑기-3f9a2177"
+FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "doe"
+FOLDER = FIXTURES_ROOT / "브래킷_두께훑기-3f9a2177"
 
 
 def test_스터디와_설계점을_읽는다() -> None:
@@ -94,3 +95,25 @@ def test_표가_폴더_밖을_가리키면_없는_것으로_본다(tmp_path: Pat
     first = next(one for one in read_folder(copy).points if one.number == 1)
     assert first.step is None
     assert not first.usable
+
+
+CATEGORY_FOLDER = FIXTURES_ROOT / "재료훑기-7c1d3a44"
+
+
+def test_숫자가_아닌_인자를_버리지_않는다() -> None:
+    """**재료처럼 고르는 인자가 온다**(CompCore 가 물성 DOE 를 붙이면서).
+
+    숫자로 못 읽는다고 버리면 두 설계점이 화면에서 **똑같아 보이고**, 사람은 왜 결과가 다른지
+    알 방법이 없다 — 실측으로 그 상태를 만들어 봤다(`재료` 칸이 통째로 사라졌다).
+    """
+    doe = read_folder(CATEGORY_FOLDER)
+    assert doe.factors == ["재료", "두께"]
+    assert [one.params["재료"] for one in doe.usable] == ["SS400", "AL6061"]
+    # 숫자는 숫자로 — 글자로 바꾸지 않는다(그림의 가로축이 되어야 한다).
+    assert doe.usable[0].params["두께"] == 6.0
+
+
+def test_빈_칸은_없는_값이다() -> None:
+    doe = read_folder(FOLDER)
+    # 두께만 있는 스터디에 `재료` 칸은 아예 없다.
+    assert all("재료" not in one.params for one in doe.points)

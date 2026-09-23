@@ -192,31 +192,32 @@ export function StudyOverview({ study }: { study: Study }) {
         </div>
       </dl>
 
-      {/* 2. 모드 지도 — 하나씩 눌러 보지 않아도 전체가 보인다. */}
-      <section className="space-y-2">
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-sm font-medium">모드 지도</h2>
+      {/* 2 · 3. 두 그림을 **나란히** — 가로로 긴 그림 하나는 축이 멀어 값을 못 읽는다.
+          좁은 화면에서는 위아래로 쌓인다(그때는 폭이 곧 높이 대비 과하지 않다). */}
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="space-y-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium">모드 지도</h2>
+            <p className="text-muted-foreground text-xs">선 하나가 모드 하나</p>
+          </div>
+          <Spectrum
+            lines={lines}
+            stems={false}
+            xLabel={x}
+            yLabel="주파수 (Hz)"
+            height={320}
+            title="설계 변수에 따른 모드별 고유진동수"
+            emptyText="아직 그릴 결과가 없습니다. 설계점이 차례로 돕니다."
+          />
           <p className="text-muted-foreground text-xs">
-            선 하나가 모드 하나입니다. 모드는 <b>형상으로 이어</b> 견줍니다 — 순번으로 이으면
-            치수가 바뀌는 순간 다른 모드를 잇습니다.
+            모드는 <b>형상으로 이어</b> 견줍니다 — 순번으로 이으면 치수가 바뀌는 순간 다른
+            모드를 잇습니다.
           </p>
-        </div>
-        <Spectrum
-          lines={lines}
-          stems={false}
-          xLabel={x}
-          yLabel="주파수 (Hz)"
-          height={300}
-          title="설계 변수에 따른 모드별 고유진동수"
-          emptyText="아직 그릴 결과가 없습니다. 설계점이 차례로 돕니다."
-        />
-      </section>
+        </section>
 
-      {/* 3. 트레이드오프 — 고르는 일은 결국 두 축 사이의 흥정이다. */}
-      <section className="space-y-2">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h2 className="text-sm font-medium">질량 대 주파수</h2>
-          <div className="flex items-center gap-2">
+        <section className="space-y-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-medium">질량 대 주파수</h2>
             <Select value={tradeMode} onValueChange={setTradeMode}>
               <SelectTrigger className="h-7 w-24">
                 <SelectValue />
@@ -229,21 +230,22 @@ export function StudyOverview({ study }: { study: Study }) {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-muted-foreground text-xs">
-              오른쪽 아래일수록 무겁고 무르다 — <b>왼쪽 위</b>가 좋다
-            </p>
           </div>
-        </div>
-        <Spectrum
-          points={tradePoints}
-          stems={false}
-          xLabel="질량 (kg)"
-          yLabel="주파수 (Hz)"
-          height={260}
-          title="질량 대 주파수"
-          emptyText="질량이 없는 작업입니다(옛 작업은 질량을 안 냅니다)."
-        />
-      </section>
+          <Spectrum
+            points={tradePoints}
+            stems={false}
+            xLabel="질량 (kg)"
+            yLabel="주파수 (Hz)"
+            height={320}
+            title="질량 대 주파수"
+            emptyText="질량이 없는 작업입니다(옛 작업은 질량을 안 냅니다)."
+          />
+          <p className="text-muted-foreground text-xs">
+            오른쪽 아래일수록 무겁고 무릅니다 — <b>왼쪽 위</b>가 좋고, 아래 표의 「후보」 가
+            그중 고를 만한 점입니다.
+          </p>
+        </section>
+      </div>
 
       {/* 4. 행렬 — 눈으로 훑고 값을 집어 가는 자리. */}
       <section className="space-y-2">

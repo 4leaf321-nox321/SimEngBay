@@ -21,6 +21,7 @@
 
 import {
   CartesianGrid,
+  Legend,
   ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
@@ -51,7 +52,12 @@ export interface SpectrumLine {
 export interface SpectrumProps {
   /** 줄기 하나 = 모드 하나. */
   points?: SpectrumPoint[]
-  /** 겹쳐 그릴 곡선들(누적 유효질량 같은 것). */
+  /**
+   * 겹쳐 그릴 곡선들(누적 유효질량 · 모드별 추이).
+   *
+   * **둘 이상이면 범례를 단다.** 선이 여럿인데 이름이 없으면 어느 선이 무엇인지 못 읽고,
+   * 그때 그림은 「대충 이렇게 생겼다」 밖에 말하지 못한다.
+   */
   lines?: SpectrumLine[]
   xLabel: string
   yLabel: string
@@ -160,10 +166,16 @@ export function Spectrum({
                 key={one.key}
                 name={one.label}
                 data={one.points}
-                line={{ stroke: one.color ?? colorAt(index + 1), strokeWidth: 2 }}
-                shape={() => <g />}
+                fill={one.color ?? colorAt(index)}
+                line={{ stroke: one.color ?? colorAt(index), strokeWidth: 2 }}
+                // 선이 여럿이면 점을 함께 찍는다 — 설계점이 셋뿐일 때 선만 있으면 어디가
+                // 실제로 잰 자리인지 알 수 없다.
+                shape={lines.length > 1 ? undefined : () => <g />}
               />
             ))}
+            {lines.length > 1 && (
+              <Legend height={28} wrapperStyle={{ fontSize: 12 }} />
+            )}
             {drawn.length > 0 && (
               <Scatter
                 name={yLabel}

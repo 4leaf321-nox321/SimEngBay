@@ -77,8 +77,8 @@ describe('모드 그림 고르기', () => {
     render(<ModeCharts result={constrained()} />)
     await userEvent.click(screen.getByRole('button', { name: '누적 유효질량' }))
     expect(screen.getByRole('img', { name: /누적 유효질량/ })).toBeDefined()
-    // 방향 이름을 사람의 말로 적어 준다.
-    expect(screen.getByText(/Y 이동/)).toBeDefined()
+    // 방향 이름을 사람의 말로 적어 준다 — 범례와 아래 설명 둘 다에 나온다.
+    expect(screen.getAllByText(/Y 이동/).length).toBeGreaterThan(0)
   })
 
   it('모드별 막대도 고를 수 있다', async () => {

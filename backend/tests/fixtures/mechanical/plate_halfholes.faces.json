@@ -1,0 +1,181 @@
+[
+  {
+    "id": 42,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 140.0,
+    "centroid": [
+      -40.0,
+      -13.0,
+      0.0
+    ],
+    "normal": [
+      -1.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "id": 43,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 3030.4305,
+    "centroid": [
+      -0.0,
+      -0.0,
+      5.0
+    ],
+    "normal": [
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
+  {
+    "id": 44,
+    "body": 1,
+    "surface": "GeoSurfaceCylinder",
+    "area": 188.4199,
+    "centroid": [
+      -36.1833,
+      -0.0,
+      0.0
+    ],
+    "radius": 6.0,
+    "normal": [
+      -0.1469,
+      -0.9892,
+      0.0
+    ]
+  },
+  {
+    "id": 45,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 3030.4305,
+    "centroid": [
+      -0.0,
+      -0.0,
+      -5.0
+    ],
+    "normal": [
+      0.0,
+      0.0,
+      -1.0
+    ]
+  },
+  {
+    "id": 46,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 800.0,
+    "centroid": [
+      0.0,
+      -20.0,
+      0.0
+    ],
+    "normal": [
+      0.0,
+      -1.0,
+      0.0
+    ]
+  },
+  {
+    "id": 47,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 140.0,
+    "centroid": [
+      40.0,
+      -13.0,
+      0.0
+    ],
+    "normal": [
+      1.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "id": 48,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 140.0,
+    "centroid": [
+      -40.0,
+      13.0,
+      0.0
+    ],
+    "normal": [
+      -1.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "id": 49,
+    "body": 1,
+    "surface": "GeoSurfaceCylinder",
+    "area": 188.4199,
+    "centroid": [
+      36.1833,
+      0.0,
+      0.0
+    ],
+    "radius": 6.0,
+    "normal": [
+      0.9894,
+      -0.1454,
+      0.0
+    ]
+  },
+  {
+    "id": 50,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 800.0,
+    "centroid": [
+      0.0,
+      20.0,
+      0.0
+    ],
+    "normal": [
+      0.0,
+      1.0,
+      0.0
+    ]
+  },
+  {
+    "id": 51,
+    "body": 1,
+    "surface": "GeoSurfacePlane",
+    "area": 140.0,
+    "centroid": [
+      40.0,
+      13.0,
+      0.0
+    ],
+    "normal": [
+      1.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "id": 52,
+    "body": 1,
+    "surface": "GeoSurfaceCylinder",
+    "area": 266.9281,
+    "centroid": [
+      0.0,
+      -0.0,
+      0.0
+    ],
+    "radius": 4.25,
+    "normal": [
+      0.9894,
+      -0.1454,
+      0.0
+    ]
+  }
+]

@@ -62,6 +62,10 @@ logger = logging.getLogger(__name__)
 #: 입력 형상 상한. STEP 은 조립체면 수백 MB 다 — 첨부(50MB)보다 크게 둔다. 서버가 강제한다.
 MAX_INPUT_BYTES = 500 * 1024 * 1024
 INPUT_NAME = "input.step"
+#: CAD 가 보낸 영역 지문. 구속이 있는 스펙은 이것이 있어야 돈다(`core/regions`).
+TOPOLOGY_NAME = "topology.json"
+#: 지문 파일의 상한. 면 수천 장이어도 몇 MB 다 — 이보다 크면 다른 것을 올린 것이다.
+MAX_TOPOLOGY_BYTES = 20 * 1024 * 1024
 CHUNK = 1024 * 1024
 
 #: 워커의 마지막 손길이 이보다 오래됐으면 죽은 것으로 보고 다시 건다. 솔브가 몇 시간이라 해도
@@ -347,9 +351,14 @@ def create(
     name: str | None,
     filename: str,
     stream: BinaryIO,
+    topology: bytes | None = None,
 ) -> Simulation:
-    """작업을 건다. **스펙 검증은 여기서** — 워커가 집어 들고 나서 실패하면 사람은 「왜」 를
-    목록에서 찾아야 한다."""
+    """작업을 건다.
+
+    **스펙 검증은 여기서** — 워커가 집어 들고 나서 실패하면 사람은 「왜」 를 목록에서 찾아야
+    한다. 구속이 있는데 영역 지문이 없는 것도 같은 부류라 여기서 막는다: 그대로 보내면
+    1분 뒤 모델링 단계에서 같은 말을 듣는다.
+    """
     try:
         spec = parse_spec(spec_raw)
     except ValidationError as failure:
@@ -367,6 +376,37 @@ def create(
             status=400,
         )
 
+    # **레시피부터 본다.** `static` 은 구속을 필수로 받는 스펙이라 순서가 거꾸로면 「실행기가
+    # 없다」 대신 「지문이 없다」 고 답하고, 사람은 지문을 만들어 다시 왔다가 또 거절당한다.
+    if getattr(spec, "constraints", None) and topology is None:
+        raise AppError(
+            code("SIMULATIONS", 11),
+            f"구속 조건이 있는 해석은 CAD 가 보낸 {TOPOLOGY_NAME} 이 함께 필요합니다.",
+            status=400,
+            details={"regions": [one.region for one in spec.constraints]},
+        )
+    if topology is not None:
+        if len(topology) > MAX_TOPOLOGY_BYTES:
+            raise AppError(
+                code("SIMULATIONS", 12),
+                f"영역 지문 파일이 너무 큽니다 (최대 {MAX_TOPOLOGY_BYTES // 1024 // 1024}MB).",
+                status=413,
+            )
+        try:
+            parsed = json.loads(topology.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as failure:
+            raise AppError(
+                code("SIMULATIONS", 13),
+                f"영역 지문이 JSON 이 아닙니다: {failure}",
+                status=400,
+            ) from failure
+        if not isinstance(parsed, dict) or "regions" not in parsed:
+            raise AppError(
+                code("SIMULATIONS", 13),
+                "영역 지문에 regions 가 없습니다 — "
+                f"CAD 가 낸 {TOPOLOGY_NAME} 인지 확인하세요.",
+                status=400,
+            )
     if workspace_slug is None:
         if not user.is_system_admin:
             raise Forbidden(
@@ -411,6 +451,9 @@ def create(
         )
     spec_path = workdir / "spec.json"
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    topology_path = workdir / TOPOLOGY_NAME
+    if topology is not None:
+        topology_path.write_bytes(topology)
 
     simulation.input_sha256 = sha256
     simulation.work_dir = relative_to_root(workdir)
@@ -418,6 +461,10 @@ def create(
         db, simulation, stage="input", spec=ArtifactSpec("input_step", input_path)
     )
     _register_artifact(db, simulation, stage="input", spec=ArtifactSpec("spec", spec_path))
+    if topology is not None:
+        _register_artifact(
+            db, simulation, stage="input", spec=ArtifactSpec("topology", topology_path)
+        )
     db.commit()
     db.refresh(simulation)
 

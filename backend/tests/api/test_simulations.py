@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -284,3 +285,59 @@ def test_아직_안_끝난_작업은_결과가_없다고_말한다(
     got = client.get(f"/api/simulations/{created.json()['id']}/result", headers=member.headers)
     assert got.status_code == 404
     assert got.json()["error"]["details"]["status"] == "queued"
+
+
+def _topology_bytes() -> bytes:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "topology"
+        / "plate_holes.topology.json"
+    )
+    return path.read_bytes()
+
+
+FIXED = {**MODAL, "constraints": [{"region": "fixed_base", "kind": "fixed"}]}
+
+
+def test_구속이_있는데_영역_지문이_없으면_걸기_전에_막는다(
+    client: TestClient, member: Signed
+) -> None:
+    """그대로 보내면 1분 뒤 모델링 단계에서 같은 말을 듣는다.
+
+    그 1분 동안 Mechanical 라이선스도 함께 물고 있다.
+    """
+    response = _create(client, member, spec=FIXED, workspace=member.workspace)
+    assert response.status_code == 400, response.text
+    assert "topology.json" in response.json()["error"]["message"]
+
+
+def test_영역_지문을_함께_올리면_산출물로_남는다(client: TestClient, member: Signed) -> None:
+    created = client.post(
+        "/api/simulations",
+        data={"spec": json.dumps(FIXED), "workspace_slug": member.workspace},
+        files={
+            "file": ("bracket.step", io.BytesIO(STEP), "model/step"),
+            "topology": ("topology.json", io.BytesIO(_topology_bytes()), "application/json"),
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    kinds = {one["kind"] for one in created.json()["artifacts"]}
+    assert "topology" in kinds
+
+
+def test_영역_지문이_CAD_가_낸_것이_아니면_거절한다(
+    client: TestClient, member: Signed
+) -> None:
+    response = client.post(
+        "/api/simulations",
+        data={"spec": json.dumps(FIXED), "workspace_slug": member.workspace},
+        files={
+            "file": ("bracket.step", io.BytesIO(STEP), "model/step"),
+            "topology": ("topology.json", io.BytesIO(b'{"hello": 1}'), "application/json"),
+        },
+        headers=member.headers,
+    )
+    assert response.status_code == 400
+    assert "regions" in response.json()["error"]["message"]

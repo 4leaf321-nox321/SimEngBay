@@ -41,9 +41,11 @@ def create(
     workspace_slug: str | None = Form(default=None),
     name: str | None = Form(default=None, max_length=120),
     upload_file: UploadFile = File(alias="file"),
+    topology_file: UploadFile | None = File(default=None, alias="topology"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SimulationOut:
+    """형상(STEP)과, 구속을 걸 거라면 CAD 가 보낸 `topology.json` 을 함께 받는다."""
     try:
         spec_raw: Any = json.loads(spec)
     except json.JSONDecodeError as failure:
@@ -60,6 +62,7 @@ def create(
         name=name,
         filename=upload_file.filename or "input.step",
         stream=upload_file.file,
+        topology=topology_file.file.read() if topology_file is not None else None,
     )
     return services.to_out(db, simulation)
 

@@ -1,14 +1,17 @@
 /**
  * 새 해석 작업 — 형상 파일 하나 + 물성 + 모드 수.
  *
- * 지금은 레시피가 `modal` 하나고 구속이 없다(자유-자유). 앞 6개 모드는 강체(≈0 Hz)로 나온다는
- * 것을 여기서 말해 둔다 — 결과 표에서 0 Hz 를 보고 「고장났다」 고 읽지 않게.
+ * 구속을 걸려면 CAD 가 함께 낸 **영역 지문(`topology.json`)** 이 있어야 한다. STEP 이 이름표를
+ * 못 나르기 때문에 CAD 는 영역을 좌표로 적어 보내고, 해석이 그 좌표로 형상에서 다시 찾는다.
+ *
+ * 지문을 안 올리면 **자유-자유**다 — 앞 6개 모드가 강체(≈0 Hz)로 나온다는 것을 여기서 말해
+ * 둔다. 결과 표에서 0 Hz 를 보고 「고장났다」 고 읽지 않게.
  */
 
 import { useState } from 'react'
 
-import { simulationApi } from '@/modules/simulations/api'
-import type { Simulation } from '@/modules/simulations/api'
+import { readTopology, simulationApi } from '@/modules/simulations/api'
+import type { Simulation, TopologyPreview } from '@/modules/simulations/api'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
@@ -47,6 +50,9 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
   const memberships = user?.memberships ?? []
 
   const [file, setFile] = useState<File | null>(null)
+  const [topology, setTopology] = useState<File | null>(null)
+  const [preview, setPreview] = useState<TopologyPreview | null>(null)
+  const [regions, setRegions] = useState<string[]>([])
   const [name, setName] = useState('')
   const [workspace, setWorkspace] = useState<string>(
     user?.home_workspace_slug ?? memberships[0]?.slug ?? GLOBAL,
@@ -62,6 +68,24 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
 
   const ready = file !== null && material.trim() !== '' && !busy
 
+  async function pickTopology(next: File | null) {
+    setTopology(next)
+    setPreview(null)
+    setRegions([])
+    setError(null)
+    if (!next) return
+    try {
+      const read = await readTopology(next)
+      setPreview(read)
+      // **CAD 가 못 푼 이름은 고를 수 없다.** 그대로 걸면 해석이 1분 뒤에 같은 말을 한다.
+      const usable = read.regions.map((one) => one.name)
+      setRegions(usable.includes('fixed_base') ? ['fixed_base'] : [])
+    } catch (caught) {
+      setTopology(null)
+      setError(caught instanceof Error ? caught : new Error('영역 지문을 읽지 못했습니다.'))
+    }
+  }
+
   async function submit() {
     if (!file) return
     setBusy(true)
@@ -69,6 +93,7 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
     try {
       const created = await simulationApi.create({
         file,
+        topology,
         name: name.trim() || undefined,
         workspaceSlug: workspace === GLOBAL ? null : workspace,
         spec: {
@@ -81,7 +106,7 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
           },
           mesh: elementSize.trim() ? { element_size_mm: Number(elementSize) } : {},
           modes: Number(modes),
-          constraints: [],
+          constraints: regions.map((region) => ({ region, kind: 'fixed' })),
         },
       })
       onCreated(created)
@@ -185,6 +210,57 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
                 />
               </div>
             </div>
+          </fieldset>
+
+          <fieldset className="space-y-3 rounded-md border p-3">
+            <legend className="px-1 text-sm font-medium">구속 (선택)</legend>
+            <div className="space-y-1.5">
+              <Label htmlFor="sim-topology">영역 지문 (topology.json)</Label>
+              <Input
+                id="sim-topology"
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => void pickTopology(event.target.files?.[0] ?? null)}
+              />
+              <p className="text-muted-foreground text-xs">
+                CAD 가 형상과 함께 낸 파일입니다. 없으면 구속 없는 자유-자유 해석으로 돌고, 앞 6개
+                모드가 강체(≈0 Hz)로 나옵니다.
+              </p>
+            </div>
+
+            {preview && (
+              <div className="space-y-2">
+                <p className="text-muted-foreground text-xs">
+                  바디 {preview.bodies}개 · 영역 {preview.regions.length}개
+                </p>
+                <div className="space-y-1">
+                  {preview.regions.map((one) => (
+                    <label key={one.name} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={regions.includes(one.name)}
+                        onChange={(event) =>
+                          setRegions((current) =>
+                            event.target.checked
+                              ? [...current, one.name]
+                              : current.filter((name) => name !== one.name),
+                          )
+                        }
+                      />
+                      <span className="font-mono">{one.name}</span>
+                      <span className="text-muted-foreground text-xs">면 {one.faces}장</span>
+                      <span className="text-muted-foreground text-xs">완전 고정</span>
+                    </label>
+                  ))}
+                </div>
+                {preview.unresolved.length > 0 && (
+                  // **CAD 가 못 푼 이름을 감추지 않는다.** 그 이름으로는 형상에 자리가 없다.
+                  <p className="text-amber-700 text-xs dark:text-amber-400">
+                    CAD 가 풀지 못한 영역: {preview.unresolved.join(' · ')}
+                  </p>
+                )}
+              </div>
+            )}
           </fieldset>
 
           <div className="grid grid-cols-2 gap-3">

@@ -15,6 +15,7 @@ export const RECIPE_LABELS: Record<string, string> = {
 export const ARTIFACT_LABELS: Record<string, string> = {
   input_step: '입력 형상',
   spec: '스펙',
+  topology: '영역 지문(CAD)',
   mechdb: 'Mechanical DB',
   dat: '솔버 입력(.dat)',
   solve_out: '솔버 로그',

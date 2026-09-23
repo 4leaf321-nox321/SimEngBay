@@ -1,8 +1,13 @@
 """**진짜 Ansys 로 도는 시험.** 기본으로는 안 돈다(`-m ansys`).
 
-    SIMENGBAY_ANSYS=1 SIMULATION_EXECUTOR=windows-bridge \
-      WINDOWS_PYTHON=/mnt/c/simengbay/venv/Scripts/python.exe \
+    ANSYS_TEST_EXECUTOR=windows-bridge \
+      ANSYS_TEST_PYTHON=/mnt/c/simengbay/venv/Scripts/python.exe \
+      ANSYS_TEST_WORK_DIR=/mnt/c/simengbay/pytest \
       .venv/bin/python -m pytest -m ansys
+
+**`SIMULATION_EXECUTOR` 이 아니라 전용 이름을 쓴다.** `tests/conftest.py` 가 그 값을 `fake` 로
+못 박기 때문이다(시험이 개발 `.env` 를 따라가면 안 된다) — 같은 이름을 쓰면 이 시험들이
+조용히 가짜 실행기로 돌고, **가짜 결과를 진짜로 읽어** 통과하거나 엉뚱하게 실패한다(실측).
 
 여기서 보는 것은 **로드맵의 리스크 1 · 3**이다 — CAD 플랫폼(build123d/OpenCascade)이 낸 STEP 이
 임포트되고 면 순회 · 메시 · `.dat` 까지 가는가, 그리고 그 결과를 솔버와 DPF 가 받아 주는가.
@@ -24,11 +29,13 @@ import pytest
 
 from app.core import executors
 from app.core.spec import RIGID_BODY_MODES, parse_spec
-from app.core.stages import STAGES, StageContext
+from app.core.stages import STAGES, StageContext, StageFailure
 
 pytestmark = pytest.mark.ansys
 
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "step"
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+STEPS = FIXTURES / "step"
+TOPOLOGY = FIXTURES / "topology"
 SPEC = {
     "recipe": "modal",
     "material": {
@@ -43,9 +50,9 @@ SPEC = {
 
 
 def _executor() -> executors.Executor:
-    """`.env` 가 아니라 **환경변수로** 고른다 — 시험이 개발 설정을 건드리지 않는다."""
-    name = os.environ.get("SIMULATION_EXECUTOR", "local")
-    python = os.environ.get("WINDOWS_PYTHON")
+    """이 시험들만의 실행기 — **`SIMULATION_EXECUTOR` 과 다른 이름을 본다**(머리말 참고)."""
+    name = os.environ.get("ANSYS_TEST_EXECUTOR", "local")
+    python = os.environ.get("ANSYS_TEST_PYTHON")
     return executors.resolve(name, python=Path(python) if python else None)
 
 
@@ -63,7 +70,7 @@ def workdir(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("name", ["plate.step", "bracket.step"])
 def test_CAD_가_낸_STEP_이_끝까지_간다(name: str, workdir: Path) -> None:
-    shutil.copy(FIXTURES / name, workdir / "input.step")
+    shutil.copy(STEPS / name, workdir / "input.step")
     spec = parse_spec(SPEC)
     (workdir / "spec.json").write_text(spec.model_dump_json(indent=2), encoding="utf-8")
 
@@ -105,3 +112,49 @@ def test_CAD_가_낸_STEP_이_끝까지_간다(name: str, workdir: Path) -> None
 
     # 참여계수 — 자유-자유는 강체 모드가 유효질량을 전부 가져간다.
     assert sorted(result["participation"]) == ["ROTX", "ROTY", "ROTZ", "X", "Y", "Z"]
+
+
+def test_볼트_구멍을_고정하면_강체_모드가_사라진다(workdir: Path) -> None:
+    """**4단계의 완료 기준.** CAD 가 보낸 영역 지문으로 볼트 구멍을 찾아 고정한다.
+
+    자유-자유와 갈리는 것은 두 가지다 — 0 Hz 여섯 개가 없어지고, **유효질량비가 살아난다**
+    (구속이 없으면 강체 모드가 전부 가져가서 탄성 모드는 0 이다).
+
+    실측(2026-09-23, L 브래킷 120x80 · 벽 60 · 볼트 4): 1차 1,519 Hz · ROTY 유효질량 0.40.
+    """
+    shutil.copy(STEPS / "bracket_bolted.step", workdir / "input.step")
+    shutil.copy(TOPOLOGY / "bracket_bolted.topology.json", workdir / "topology.json")
+    spec = dict(SPEC)
+    spec["mesh"] = {"element_size_mm": 6}
+    spec["constraints"] = [{"region": "bolt_holes", "kind": "fixed"}]
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    for stage in STAGES:
+        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+        if stage == "modeling":
+            assert result.summary["constrained_regions"] == ["bolt_holes"]
+
+    result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    assert result["boundary"] == "constrained"
+    assert result["rigid_body_modes"] == 0
+    assert all(one["frequency_hz"] > 1.0 for one in result["modes"])
+    # 유효질량비가 실값을 갖는다 — 이것이 구속 해석의 값이다.
+    assert any((one.get("effective_mass_ratio") or 0) > 0.1 for one in result["modes"])
+
+
+def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:
+    """**조용히 자유-자유로 풀지 않는다.** 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을
+    「해석이 됐다」 로 읽는다."""
+    shutil.copy(STEPS / "bracket_bolted.step", workdir / "input.step")
+    shutil.copy(TOPOLOGY / "bracket_bolted.topology.json", workdir / "topology.json")
+    spec = dict(SPEC)
+    spec["constraints"] = [{"region": "load_face", "kind": "fixed"}]
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    runner.run(StageContext(stage="fetching", spec=spec, workdir=workdir))
+    with pytest.raises(StageFailure) as caught:
+        runner.run(StageContext(stage="modeling", spec=spec, workdir=workdir))
+    assert caught.value.code == "region_unresolved"

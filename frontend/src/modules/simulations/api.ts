@@ -68,9 +68,42 @@ export const STAGE_NAMES = ['fetching', 'modeling', 'solving', 'extracting'] as 
 
 export interface NewSimulation {
   file: File
+  /** CAD 가 보낸 영역 지문. **구속을 걸려면 있어야 한다** — 서버가 걸기 전에 막는다. */
+  topology?: File | null
   spec: Record<string, unknown>
   workspaceSlug: string | null
   name?: string
+}
+
+/** `topology.json` 에서 화면이 읽는 것 — 고를 수 있는 영역 이름과 CAD 가 못 푼 이름. */
+export interface TopologyPreview {
+  regions: { name: string; faces: number }[]
+  unresolved: string[]
+  bodies: number
+}
+
+/**
+ * 올린 지문을 **브라우저에서 읽어** 고를 목록을 만든다. 서버에 먼저 보내고 물어보면, 영역을
+ * 고르기도 전에 작업이 하나 생긴다.
+ */
+export async function readTopology(file: File): Promise<TopologyPreview> {
+  const parsed: unknown = JSON.parse(await file.text())
+  const document = parsed as {
+    regions?: Record<string, unknown[]>
+    unresolved?: string[]
+    bodies?: unknown[]
+  }
+  if (!document.regions || typeof document.regions !== 'object') {
+    throw new Error('영역 지문이 아닙니다 — regions 가 없습니다.')
+  }
+  return {
+    regions: Object.entries(document.regions).map(([name, faces]) => ({
+      name,
+      faces: Array.isArray(faces) ? faces.length : 0,
+    })),
+    unresolved: document.unresolved ?? [],
+    bodies: document.bodies?.length ?? 0,
+  }
 }
 
 export const simulationApi = {
@@ -90,6 +123,7 @@ export const simulationApi = {
   create: (input: NewSimulation) => {
     const form = new FormData()
     form.append('file', input.file)
+    if (input.topology) form.append('topology', input.topology)
     form.append('spec', JSON.stringify(input.spec))
     if (input.workspaceSlug) form.append('workspace_slug', input.workspaceSlug)
     if (input.name) form.append('name', input.name)

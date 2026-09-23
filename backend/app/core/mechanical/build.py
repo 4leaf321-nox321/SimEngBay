@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
+from app.core.regions import FaceRecord, match_regions
 from app.core.spec import ModalSpec
 from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
 
@@ -36,6 +38,10 @@ _LICENSE_WORDS = ("license", "licence", "라이선스")
 def _is_license_problem(failure: Exception) -> bool:
     text = str(failure).lower()
     return any(word in text for word in _LICENSE_WORDS)
+
+
+#: CAD 플랫폼이 보낸 영역 지문. 구속이 있는 스펙은 이것이 있어야 돈다.
+TOPOLOGY_NAME = "topology.json"
 
 
 def build(
@@ -59,6 +65,7 @@ def build(
         bodies = _import_geometry(app, step)
         _apply_material(spec, bodies)
         analysis = _add_modal(app, spec)
+        regions = _apply_constraints(app, spec, workdir, bodies, analysis)
         nodes, elements = _mesh(app, spec)
 
         dat = workdir / "model.dat"
@@ -91,8 +98,12 @@ def build(
                 "elements": elements,
                 "modes_requested": spec.modes_to_find,
                 "ansys_version": version,
+                "constrained_regions": regions,
             },
-            detail=f"바디 {len(bodies)} · 절점 {nodes:,} · 요소 {elements:,}",
+            detail=(
+                f"바디 {len(bodies)} · 절점 {nodes:,} · 요소 {elements:,}"
+                + (f" · 구속 {' · '.join(regions)}" if regions else " · 자유-자유")
+            ),
         )
     finally:
         _close(app)
@@ -211,16 +222,98 @@ def _apply_material(spec: ModalSpec, bodies: list[Any]) -> None:
 def _add_modal(app: Any, spec: ModalSpec) -> Any:
     analysis = app.Model.AddModalAnalysis()
     analysis.AnalysisSettings.MaximumModesToFind = spec.modes_to_find
-    if spec.constraints:
-        # 4단계(영역 매칭)가 오기 전까지는 구속을 걸 방법이 없다. **조용히 자유-자유로 풀지
-        # 않는다** — 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을 해석 실패로 읽는다.
+    return analysis
+
+
+def _face_records(bodies: list[Any]) -> list[FaceRecord]:
+    """Mechanical 의 면들을 **코어가 아는 모양**으로 옮긴다(`app/core/regions`).
+
+    법선은 `Normals` 의 첫 셋을 쓴다 — 평면이면 어디서 재도 같고, 굽은 면은 한 값으로 말할
+    수 없어 매칭이 반지름 · 중심으로 간다.
+    """
+    found: list[FaceRecord] = []
+    for body in bodies:
+        geo = body.GetGeoBody()
+        for face in geo.Faces:
+            radius = float(face.Radius)
+            normal: tuple[float, float, float] | None = None
+            try:
+                values = [float(one) for one in list(face.Normals)[:3]]
+                if len(values) == 3:
+                    normal = (values[0], values[1], values[2])
+            except Exception:  # pragma: no cover - 면에 따라 못 낼 수 있다
+                normal = None
+            centroid = [float(one) for one in face.Centroid]
+            found.append(
+                FaceRecord(
+                    id=int(face.Id),
+                    centroid=(centroid[0], centroid[1], centroid[2]),
+                    area=float(face.Area),
+                    surface=str(face.SurfaceType),
+                    normal=normal,
+                    radius=radius if radius > 0 else None,
+                )
+            )
+    return found
+
+
+def _apply_constraints(
+    app: Any, spec: ModalSpec, workdir: Path, bodies: list[Any], analysis: Any
+) -> list[str]:
+    """구속을 건다.
+
+    구속이 없으면 자유-자유 그대로 둔다. **이름이 안 풀리면 즉시 실패한다** — 조용히 빼면
+    구속 없는 해석이 끝까지 돌고, 그 결과는 0 Hz 여섯 개를 달고 나온다.
+    """
+    if not spec.constraints:
+        return []
+
+    path = workdir / TOPOLOGY_NAME
+    if not path.is_file():
         raise StageFailure(
             "region_unresolved",
-            "구속 영역을 형상에서 찾는 기능이 아직 없습니다(4단계). 지금은 구속 없는 "
-            "자유-자유 해석만 실행할 수 있습니다.",
+            f"구속을 걸려면 CAD 가 보낸 {TOPOLOGY_NAME} 이 필요합니다. 형상과 함께 올리세요.",
             details={"regions": [one.region for one in spec.constraints]},
         )
-    return analysis
+    topology = json.loads(path.read_text(encoding="utf-8"))
+    wanted = [one.region for one in spec.constraints]
+    matched = match_regions(topology, _face_records(bodies), wanted_regions=wanted)
+    if not matched.ok:
+        raise StageFailure(
+            "region_unresolved",
+            "구속 영역을 형상에서 찾지 못했습니다: "
+            + " · ".join(
+                f"{one.region}[{one.index}] {one.reason}" for one in matched.failures
+            ),
+            details={
+                "failures": [
+                    {
+                        "region": one.region,
+                        "index": one.index,
+                        "reason": one.reason,
+                        "wanted": one.wanted,
+                        "nearest": one.nearest,
+                    }
+                    for one in matched.failures
+                ]
+            },
+        )
+
+    selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
+    applied: list[str] = []
+    for constraint in spec.constraints:
+        ids = matched.faces[constraint.region]
+        named = app.Model.AddNamedSelection()
+        named.Name = constraint.region
+        info = app.ExtAPI.SelectionManager.CreateSelectionInfo(selection_type.GeometryEntities)
+        info.Ids = ids
+        named.Location = info
+        # 지금 거는 것은 완전 고정 하나다. 원통 구속 · 볼트 예압은 조건 모델이 오면 붙는다.
+        support = analysis.AddFixedSupport()
+        support.Location = named
+        applied.append(constraint.region)
+        logger.info("구속 %s ← 면 %s", constraint.region, ids)
+    return applied
 
 
 def _mesh(app: Any, spec: ModalSpec) -> tuple[int, int]:

@@ -2281,6 +2281,7 @@
           "simulations"
         ],
         "summary": "Create",
+        "description": "형상(STEP)과, 구속을 걸 거라면 CAD 가 보낸 `topology.json` 을 함께 받는다.",
         "operationId": "create_api_simulations_post",
         "requestBody": {
           "required": true,
@@ -3120,6 +3121,18 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "topology": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topology"
           }
         },
         "type": "object",

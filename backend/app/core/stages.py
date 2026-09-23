@@ -37,6 +37,7 @@ FailureCode = Literal[
 ArtifactKind = Literal[
     "input_step",
     "spec",
+    "topology",
     "mechdb",
     "dat",
     "solve_out",
@@ -50,6 +51,7 @@ ArtifactKind = Literal[
 CONTENT_TYPES: dict[str, str] = {
     "input_step": "model/step",
     "spec": "application/json",
+    "topology": "application/json",
     "mechdb": "application/octet-stream",
     "dat": "text/plain",
     "solve_out": "text/plain",

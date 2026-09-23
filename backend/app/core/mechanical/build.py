@@ -66,6 +66,7 @@ def build(
         _apply_material(spec, bodies)
         analysis = _add_modal(app, spec)
         regions = _apply_constraints(app, spec, workdir, bodies, analysis)
+        mass = _mass_kg(spec, bodies)
         nodes, elements = _mesh(app, spec)
 
         dat = workdir / "model.dat"
@@ -99,6 +100,7 @@ def build(
                 "modes_requested": spec.modes_to_find,
                 "ansys_version": version,
                 "constrained_regions": regions,
+                "mass_kg": mass,
             },
             detail=(
                 f"바디 {len(bodies)} · 절점 {nodes:,} · 요소 {elements:,}"
@@ -223,6 +225,22 @@ def _add_modal(app: Any, spec: ModalSpec) -> Any:
     analysis = app.Model.AddModalAnalysis()
     analysis.AnalysisSettings.MaximumModesToFind = spec.modes_to_find
     return analysis
+
+
+def _mass_kg(spec: ModalSpec, bodies: list[Any]) -> float | None:
+    """부피 x 밀도. **설계점 비교의 두 번째 축이다** — 지그는 가볍고 단단해야 한다.
+
+    부피는 활성 단위계(MKS)에서 m³ 로 온다(`_guard_unit_system` 이 그것을 보장한다). 못 읽으면
+    `None` — **틀린 질량은 맞는 침묵보다 나쁘다.**
+    """
+    try:
+        volume = sum(float(body.Volume.Value) for body in bodies)
+    except Exception:  # pragma: no cover - 형상에 따라 못 읽을 수 있다
+        logger.warning("부피를 읽지 못했습니다 — 질량을 내지 않습니다", exc_info=True)
+        return None
+    if volume <= 0:
+        return None
+    return round(volume * spec.material.density_kg_m3, 4)
 
 
 def _face_records(bodies: list[Any]) -> list[FaceRecord]:

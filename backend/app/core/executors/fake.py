@@ -67,7 +67,13 @@ class FakeExecutor:
         nodes = 12_345
         return StageResult(
             artifacts=[ArtifactSpec("dat", dat), ArtifactSpec("mechdb", mechdb)],
-            summary={"bodies": 1, "nodes": nodes, "elements": 6_789},
+            summary={
+                "bodies": 1,
+                "nodes": nodes,
+                "elements": 6_789,
+                # 지어낸 부피 x 진짜 밀도 — 화면이 「질량 칸이 있다」 를 보고 만들어진다.
+                "mass_kg": round(1.2e-4 * spec.material.density_kg_m3, 4),
+            },
             detail=f"바디 1 · 절점 {nodes:,}",
         )
 

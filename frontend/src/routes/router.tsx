@@ -46,6 +46,10 @@ const SimulationsPage = lazy(
 const SimulationDetailPage = lazy(
   () => import("@/modules/simulations/SimulationDetailPage"),
 );
+const StudiesPage = lazy(() => import("@/modules/simulations/StudiesPage"));
+const StudyDetailPage = lazy(
+  () => import("@/modules/simulations/StudyDetailPage"),
+);
 // 차트 층 자신의 문서다 — 도메인 모듈이 아니라 `shared/charts` 에 산다.
 const ChartGalleryPage = lazy(() => import("@/shared/charts/GalleryPage"));
 const SignupPage = lazy(() => import("@/modules/auth/SignupPage"));
@@ -109,6 +113,9 @@ export const router = createBrowserRouter(
             // 사이드바에 `pending: true` 로 적어 두면 아래 stubs 가 자리를 만든다.
             // 실제 화면이 생기면 그 표시를 지우고 여기에 한 줄을 적는다.
             { path: "simulations", element: <SimulationsPage /> },
+            // **`:id` 보다 먼저 온다.** 뒤에 두면 「studies」 가 작업 id 로 잡힌다.
+            { path: "simulations/studies", element: <StudiesPage /> },
+            { path: "simulations/studies/:id", element: <StudyDetailPage /> },
             { path: "simulations/:id", element: <SimulationDetailPage /> },
             ...stubs,
 

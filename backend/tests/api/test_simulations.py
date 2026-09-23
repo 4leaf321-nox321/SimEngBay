@@ -407,4 +407,56 @@ def test_고른_점만_가져올_수_있다(client: TestClient, member: Signed) 
         headers=member.headers,
     )
     assert created.status_code == 201, created.text
-    assert len(created.json()["created"]) == 1
+    # 앞 시험이 이미 같은 폴더를 가져왔다 — **두 번째는 걸지 않고 그 사실을 말한다.**
+    body = created.json()
+    assert len(body["created"]) + len(body["skipped"]) == 1
+
+
+def test_같은_DOE_를_두_번_가져와도_두_벌이_안_생긴다(
+    client: TestClient, member: Signed
+) -> None:
+    """폴더 경로를 다시 붙여넣는 일은 흔하다.
+
+    그때 조용히 두 벌이 돌면 **Mechanical 라이선스를 두 번 태운다.**
+    """
+    again = client.post(
+        "/api/simulations/doe/import",
+        json={"path": str(DOE_FOLDER), "spec": MODAL, "workspace_slug": member.workspace},
+        headers=member.headers,
+    )
+    assert again.status_code == 201, again.text
+    body = again.json()
+    assert body["created"] == []
+    assert any("이미 가져온 점" in one["skip_reason"] for one in body["skipped"])
+
+
+def test_가져온_DOE_가_비교_목록에_뜬다(client: TestClient, member: Signed) -> None:
+    """**스터디를 따로 저장하지 않는다** — 작업 표에서 모은다.
+
+    따로 두면 작업을 지웠을 때 둘이 어긋나고, 그때 어느 쪽이 맞는지 알 수 없다.
+    """
+    client.post(
+        "/api/simulations/doe/import",
+        json={"path": str(DOE_FOLDER), "spec": MODAL, "workspace_slug": member.workspace},
+        headers=member.headers,
+    )
+    listed = client.get("/api/simulations/studies", headers=member.headers)
+    assert listed.status_code == 200, listed.text
+    study = next(one for one in listed.json() if one["name"] == "브래킷_두께훑기")
+    assert study["factors"] == ["두께"]
+    # 앞 시험들이 같은 폴더를 여러 번 가져왔지만 **점은 세 개뿐이다**(중복을 막는다).
+    assert study["points"] == 3
+    assert study["done"] == 3  # 인라인 실행기가 끝까지 돌렸다
+
+    detail = client.get(
+        f"/api/simulations/studies/{study['study_id']}", headers=member.headers
+    )
+    assert detail.status_code == 200, detail.text
+    points = detail.json()["points"]
+    assert [one["params"]["두께"] for one in points] == [6.0, 12.0, 20.0]
+    # 비교의 두 축 — 바꾼 값과 그 결과.
+    assert all(one["first_elastic_hz"] for one in points)
+    # 질량은 **두 번째 축**이다. 지그는 가볍고 단단해야 한다.
+    assert all(one["mass_kg"] for one in points)
+    # k 차 모드로 견주려면 주파수 목록이 있어야 한다.
+    assert len(points[0]["frequencies"]) >= 5

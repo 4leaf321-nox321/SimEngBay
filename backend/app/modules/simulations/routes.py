@@ -28,6 +28,8 @@ from app.modules.simulations.schemas import (
     RecipeOut,
     SimulationOut,
     SimulationSummaryOut,
+    StudyOut,
+    StudySummaryOut,
 )
 from app.shared.auth import current_user
 from app.shared.errors import AppError, code
@@ -72,6 +74,25 @@ def create(
         topology=topology_file.file.read() if topology_file is not None else None,
     )
     return services.to_out(db, simulation)
+
+
+@router.get("/studies", response_model=list[StudySummaryOut])
+def list_studies(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[StudySummaryOut]:
+    """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다."""
+    return services.list_studies(db, user=user)
+
+
+@router.get("/studies/{study_id}", response_model=StudyOut)
+def get_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StudyOut:
+    """설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다."""
+    return services.get_study(db, user=user, study_id=study_id)
 
 
 @router.get("/doe/preview", response_model=DoePreviewOut)

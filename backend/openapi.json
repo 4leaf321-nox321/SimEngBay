@@ -2406,6 +2406,75 @@
         }
       }
     },
+    "/api/simulations/studies": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "List Studies",
+        "description": "가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다.",
+        "operationId": "list_studies_api_simulations_studies_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StudySummaryOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Studies Api Simulations Studies Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/{study_id}": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Get Study",
+        "description": "설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다.",
+        "operationId": "get_study_api_simulations_studies__study_id__get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/doe/preview": {
       "get": {
         "tags": [
@@ -4767,6 +4836,200 @@
           "status"
         ],
         "title": "StageOut"
+      },
+      "StudyOut": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/StudyPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id",
+          "name",
+          "factors",
+          "points"
+        ],
+        "title": "StudyOut"
+      },
+      "StudyPointOut": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "first_elastic_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Elastic Hz"
+          },
+          "mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mass Kg"
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodes"
+          },
+          "frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Frequencies"
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_id",
+          "number",
+          "params",
+          "status"
+        ],
+        "title": "StudyPointOut",
+        "description": "설계점 하나 — **바꾼 값과 그 결과를 한 줄에.** 비교는 이 줄들을 견주는 일이다."
+      },
+      "StudySummaryOut": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "points": {
+            "type": "integer",
+            "title": "Points"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running"
+          },
+          "workspace_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id",
+          "name",
+          "factors",
+          "points",
+          "done",
+          "failed",
+          "running",
+          "created_at"
+        ],
+        "title": "StudySummaryOut",
+        "description": "DOE 한 벌 — 목록 한 줄."
       },
       "SystemAdminRequest": {
         "properties": {

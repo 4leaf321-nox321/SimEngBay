@@ -16,6 +16,7 @@ import {
   Bell,
   Building2,
   ChartColumn,
+  GitCompare,
   Home,
   LayoutGrid,
   Megaphone,
@@ -82,6 +83,13 @@ export const NAV_GROUPS: NavGroup[] = [
     // 무엇으로 바뀌어야 하는지 stub 화면이 말한다.
     title: "해석",
     items: [
+      {
+        label: "DOE 비교",
+        icon: GitCompare,
+        to: "/simulations/studies",
+        summary:
+          "CAD 가 내보낸 설계점 묶음과 그 결과. 바꾼 변수 대 고유진동수 · 질량을 견준다.",
+      },
       {
         label: "해석 작업",
         icon: LayoutGrid,

@@ -119,6 +119,43 @@ class DoeImportOut(BaseModel):
     skipped: list[DoePointPreview]
 
 
+class StudySummaryOut(BaseModel):
+    """DOE 한 벌 — 목록 한 줄."""
+
+    study_id: str
+    name: str
+    factors: list[str]
+    points: int
+    done: int
+    failed: int
+    running: int
+    workspace_name: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class StudyPointOut(BaseModel):
+    """설계점 하나 — **바꾼 값과 그 결과를 한 줄에.** 비교는 이 줄들을 견주는 일이다."""
+
+    simulation_id: uuid.UUID
+    number: int
+    params: dict[str, float]
+    status: str
+    error_code: str | None = None
+    first_elastic_hz: float | None = None
+    mass_kg: float | None = None
+    nodes: int | None = None
+    frequencies: list[float] = Field(default_factory=list)
+    """탄성 모드 주파수(앞에서부터). `k` 차 모드로 견주려면 이것이 있어야 한다."""
+
+
+class StudyOut(BaseModel):
+    study_id: str
+    name: str
+    factors: list[str]
+    points: list[StudyPointOut]
+
+
 class RecipeOut(BaseModel):
     """화면이 새 작업 폼을 그리는 데 쓰는 레시피 목록과 JSON 스키마."""
 

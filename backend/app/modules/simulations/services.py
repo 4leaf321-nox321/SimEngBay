@@ -50,6 +50,9 @@ from app.modules.simulations.schemas import (
     SimulationOut,
     SimulationSummaryOut,
     StageOut,
+    StudyOut,
+    StudyPointOut,
+    StudySummaryOut,
 )
 from app.modules.workspaces.models import Workspace
 from app.shared import extensions
@@ -542,11 +545,37 @@ def import_doe(
     if not chosen:
         raise AppError(code("SIMULATIONS", 15), "고른 설계점이 폴더에 없습니다.", status=400)
 
+    # **이미 가져온 점은 다시 걸지 않는다.** 폴더를 두 번 가리키는 일은 흔하고(경로를 다시
+    # 붙여넣기), 그때 조용히 두 벌이 돌면 Mechanical 라이선스를 두 번 태운다. 다시 돌리려면
+    # 그 작업에서 재시도한다.
+    already = {
+        int(one.source_meta.get("point") or 0)
+        for one in db.scalars(
+            select(Simulation).where(
+                Simulation.deleted_at.is_(None),
+                Simulation.source_kind == "doe_point",
+                Simulation.source_meta["study_id"].astext == doe.study_id,
+            )
+        )
+    }
+
     created: list[uuid.UUID] = []
     skipped: list[DoePointPreview] = []
     for point in chosen:
         if not point.usable:
             skipped.append(_preview_point(point))
+            continue
+        if point.number in already:
+            skipped.append(
+                DoePointPreview(
+                    number=point.number,
+                    params=point.params,
+                    usable=False,
+                    skip_reason=(
+                        "이미 가져온 점입니다. 다시 돌리려면 그 작업에서 재시도하세요."
+                    ),
+                )
+            )
             continue
         assert point.step is not None  # usable 이 보장한다
         meta = {
@@ -574,6 +603,128 @@ def import_doe(
             )
         created.append(simulation.id)
     return DoeImportOut(study_id=doe.study_id, name=doe.name, created=created, skipped=skipped)
+
+
+# --- 설계점 비교 -----------------------------------------------------------------
+
+#: 비교에 실어 보낼 탄성 모드 수. 전부 실으면 점 200개 x 모드 40개가 한 응답에 들어간다.
+COMPARE_MODES = 10
+
+
+def _study_points(db: Session, user: User, study_id: str) -> list[Simulation]:
+    return list(
+        db.scalars(
+            _visible(user)
+            .where(Simulation.source_meta["study_id"].astext == study_id)
+            .order_by(Simulation.created_at)
+        )
+    )
+
+
+def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
+    """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다.
+
+    스터디 표를 따로 두면 작업을 지웠을 때 둘이 어긋나고, 그때 어느 쪽이 맞는지 알 수 없다.
+    """
+    rows = list(
+        db.scalars(
+            _visible(user)
+            .where(Simulation.source_kind == "doe_point")
+            .order_by(Simulation.created_at)
+        )
+    )
+    grouped: dict[str, list[Simulation]] = {}
+    for one in rows:
+        key = str(one.source_meta.get("study_id") or one.source_meta.get("study_name") or "")
+        if key:
+            grouped.setdefault(key, []).append(one)
+
+    out: list[StudySummaryOut] = []
+    for study_id, points in grouped.items():
+        first = points[0]
+        factors: list[str] = []
+        for point in points:
+            for name in point.source_meta.get("params") or {}:
+                if name not in factors:
+                    factors.append(name)
+        finished = [one.finished_at for one in points if one.finished_at]
+        workspace = (
+            db.get(Workspace, first.owner_workspace_id) if first.owner_workspace_id else None
+        )
+        out.append(
+            StudySummaryOut(
+                study_id=study_id,
+                name=str(first.source_meta.get("study_name") or study_id),
+                factors=factors,
+                points=len(points),
+                done=sum(1 for one in points if one.status == "done"),
+                failed=sum(1 for one in points if one.status == "failed"),
+                running=sum(1 for one in points if one.status in RUNNING_STATUSES),
+                workspace_name=workspace.name if workspace else None,
+                created_at=first.created_at,
+                finished_at=max(finished) if len(finished) == len(points) else None,
+            )
+        )
+    out.sort(key=lambda one: one.created_at, reverse=True)
+    return out
+
+
+def _frequencies(simulation: Simulation) -> list[float]:
+    """그 점의 탄성 모드 주파수. **결과 파일이 정본이다**(요약에는 1차만 있다)."""
+    if simulation.status != "done" or simulation.work_dir is None:
+        return []
+    artifact = db_result_path(simulation)
+    if artifact is None:
+        return []
+    try:
+        loaded = json.loads(artifact.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    elastic = [
+        float(one["frequency_hz"])
+        for one in loaded.get("modes", [])
+        if not one.get("rigid_body")
+    ]
+    return elastic[:COMPARE_MODES]
+
+
+def db_result_path(simulation: Simulation) -> Path | None:
+    if simulation.work_dir is None:
+        return None
+    return resolve_work_path(f"{simulation.work_dir}/result.json")
+
+
+def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    factors: list[str] = []
+    for point in points:
+        for name in point.source_meta.get("params") or {}:
+            if name not in factors:
+                factors.append(name)
+    return StudyOut(
+        study_id=study_id,
+        name=str(points[0].source_meta.get("study_name") or study_id),
+        factors=factors,
+        points=[
+            StudyPointOut(
+                simulation_id=one.id,
+                number=int(one.source_meta.get("point") or 0),
+                params={
+                    name: float(value)
+                    for name, value in (one.source_meta.get("params") or {}).items()
+                },
+                status=one.status,
+                error_code=one.error_code,
+                first_elastic_hz=(one.summary or {}).get("first_elastic_hz"),
+                mass_kg=(one.summary or {}).get("mass_kg"),
+                nodes=(one.summary or {}).get("nodes"),
+                frequencies=_frequencies(one),
+            )
+            for one in points
+        ],
+    )
 
 
 def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:

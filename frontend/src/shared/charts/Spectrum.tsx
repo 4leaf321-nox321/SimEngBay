@@ -60,6 +60,11 @@ export interface SpectrumProps {
   height?: number
   /** 값이 전부 0 일 때 균일 높이로 세우고 여기 적은 말을 함께 보여 준다. */
   flatNote?: string
+  /**
+   * 줄기를 그릴지. **설계점 산점도에서는 끈다** — 거기서 y 는 「0 에서 얼마나 올라왔나」 가
+   * 아니라 그냥 결과값이라, 0 까지 내려가는 줄기가 없는 뜻을 만든다.
+   */
+  stems?: boolean
   emptyText?: string
   title?: string
   onPick?: (point: SpectrumPoint) => void
@@ -78,6 +83,7 @@ export function Spectrum({
   band,
   height = 260,
   flatNote,
+  stems: withStems = true,
   emptyText = '그릴 것이 없습니다.',
   title,
   onPick,
@@ -96,7 +102,7 @@ export function Spectrum({
   const flat = points.length > 0 && peak === 0
   const drawn = flat ? points.map((one) => ({ ...one, y: 1 })) : points
   const top = flat ? 1 : peak
-  const stems = drawn.length <= MAX_STEMS ? drawn : []
+  const stems = withStems && drawn.length <= MAX_STEMS ? drawn : []
 
   return (
     <div className={className}>
@@ -123,7 +129,7 @@ export function Spectrum({
               name={yLabel}
               stroke={AXIS_COLOR}
               fontSize={12}
-              domain={[0, top * 1.1]}
+              domain={withStems ? [0, top * 1.1] : ['auto', 'auto']}
               tickFormatter={flat ? () => '' : shownNumber}
               label={{ value: flat ? '' : yLabel, angle: -90, position: 'insideLeft', fontSize: 12 }}
             />
@@ -187,7 +193,7 @@ export function Spectrum({
         </ResponsiveContainer>
       </div>
       {flat && flatNote && <p className="text-muted-foreground mt-1 text-xs">{flatNote}</p>}
-      {drawn.length > MAX_STEMS && (
+      {withStems && drawn.length > MAX_STEMS && (
         <p className="text-muted-foreground mt-1 text-xs">
           모드가 {drawn.length.toLocaleString()}개라 줄기는 생략하고 점만 표시합니다.
         </p>

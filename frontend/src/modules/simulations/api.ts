@@ -17,6 +17,9 @@ export type Recipe = components['schemas']['RecipeOut']
 export type DoePreview = components['schemas']['DoePreviewOut']
 export type DoePointPreview = components['schemas']['DoePointPreview']
 export type DoeImport = components['schemas']['DoeImportOut']
+export type StudySummary = components['schemas']['StudySummaryOut']
+export type Study = components['schemas']['StudyOut']
+export type StudyPoint = components['schemas']['StudyPointOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -139,6 +142,9 @@ export const simulationApi = {
    * 폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 올리는 것이 아니다 — 설계점
    * 200개면 STEP 만 수십 MB 다.
    */
+  /** 가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. */
+  studies: () => api.get<StudySummary[]>('/simulations/studies'),
+  study: (studyId: string) => api.get<Study>(`/simulations/studies/${studyId}`),
   previewDoe: (path: string) =>
     api.get<DoePreview>(`/simulations/doe/preview?path=${encodeURIComponent(path)}`),
   importDoe: (body: {

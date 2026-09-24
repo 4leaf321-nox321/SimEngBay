@@ -1,0 +1,173 @@
+{
+  "units": "mm",
+  "bodies": [
+    {
+      "name": "전체",
+      "step_product": "body_1",
+      "volume": 113384.159,
+      "centroid": [
+        -0.0,
+        0.0,
+        11.515
+      ],
+      "bbox": [
+        [
+          -60.0,
+          -40.0,
+          -4.0
+        ],
+        [
+          60.0,
+          40.0,
+          64.0
+        ]
+      ]
+    }
+  ],
+  "regions": {
+    "fixed_base": [
+      {
+        "centroid": [
+          -0.0,
+          0.0,
+          -4.0
+        ],
+        "area": 9373.02,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      }
+    ],
+    "bolt_holes": [
+      {
+        "centroid": [
+          -45.0,
+          -27.5,
+          0.0
+        ],
+        "area": 213.63,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          -45.0,
+          27.5,
+          0.0
+        ],
+        "area": 213.63,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          45.0,
+          -27.5,
+          0.0
+        ],
+        "area": 213.63,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          45.0,
+          27.5,
+          0.0
+        ],
+        "area": 213.63,
+        "radius": 4.25,
+        "axis": [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      }
+    ]
+  },
+  "unresolved": [],
+  "point": {
+    "number": 1,
+    "study": {
+      "id": "7c1d3a44",
+      "name": "재료훑기",
+      "method": "full",
+      "seed": 1
+    },
+    "params": {
+      "재료": "SS400"
+    },
+    "step_file": "shapes/8f3a1c92.step"
+  },
+  "conditions": {
+    "schema_version": 1,
+    "units": {
+      "system": "mm_n_tonne",
+      "length": "mm",
+      "mass": "tonne",
+      "force": "N",
+      "stress": "MPa",
+      "density": "tonne/mm3"
+    },
+    "materials": [
+      {
+        "apply_to": "전체",
+        "ref": {
+          "source": "matnexus",
+          "code": "M-000241",
+          "name": "SS400"
+        },
+        "payload": {
+          "record_name": "SS400",
+          "density": 7.849999999999999e-09,
+          "density_unit": "tonne/mm3",
+          "density_si": 7850.0,
+          "poisson_ratio": 0.3,
+          "declared_properties": [
+            {
+              "item": "탄성계수",
+              "si_unit": "Pa",
+              "points": [
+                {
+                  "temperature_C": 22,
+                  "value_si": 206000000000.0
+                }
+              ]
+            }
+          ]
+        },
+        "converted": {
+          "density": 7.849999999999999e-09,
+          "poisson_ratio": 0.3,
+          "youngs_modulus": 206000.0,
+          "unconverted": []
+        }
+      }
+    ],
+    "constraints": [
+      {
+        "name": "볼트고정",
+        "type": "fixed_support",
+        "on": "bolt_holes"
+      }
+    ],
+    "analysis": {
+      "type": "modal",
+      "modes": 6
+    }
+  }
+}

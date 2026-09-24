@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -45,12 +46,28 @@ def test_못_쓰는_점은_이유와_함께_건너뛴다() -> None:
     assert "벽이 판을 넘습니다" in skipped[0].skip_reason
 
 
-def test_형상과_지문_파일을_찾아_준다() -> None:
+def test_형상과_점_파일을_찾아_준다() -> None:
     first = read_folder(FOLDER).usable[0]
     assert first.step is not None and first.step.is_file()
-    assert first.topology is not None and first.topology.is_file()
-    # 같은 형상인지 되짚는 열쇠 — 조건만 훑는 DOE 에서 메시를 다시 만들지 않는 길이다.
-    assert first.recipe_digest.startswith("sha256:")
+    assert first.point_file is not None and first.point_file.is_file()
+    # 점 파일 하나에 영역 · 바디 · 설계점 메타가 다 있다(2026-09-24 계약).
+    loaded = json.loads(first.point_file.read_text(encoding="utf-8"))
+    assert {"regions", "bodies", "point"} <= set(loaded)
+    assert loaded["point"]["params"] == {"두께": 6.0}
+
+
+def test_나눠_쓰는_형상은_같은_열쇠를_갖는다() -> None:
+    """**파일 이름을 짐작하지 않는다.** 조건만 훑으면 CAD 가 형상 한 벌만 두고 `shapes/` 를
+    가리킨다 — 점 번호로 이름을 지으면 그 폴더에서 파일을 못 찾는다.
+
+    같은 경로를 가리키는 점들은 같은 형상이므로 **모델링 · 메시도 한 번만** 하면 된다.
+    """
+    doe = read_folder(CATEGORY_FOLDER)
+    keys = {one.shape_key for one in doe.usable}
+    assert keys == {"shapes/8f3a1c92.step"}
+    assert all(one.step is not None and one.step.is_file() for one in doe.usable)
+    # 조건이 점 파일에 실려 온다(CompCore 해석 조건 단계가 끝났다).
+    assert all(one.has_conditions for one in doe.usable)
 
 
 def test_영역을_못_푼_점은_걸지_않는다(tmp_path: Path) -> None:
@@ -62,8 +79,8 @@ def test_영역을_못_푼_점은_걸지_않는다(tmp_path: Path) -> None:
     manifest = copy / "manifest.csv"
     text = manifest.read_text(encoding="utf-8-sig")
     text = text.replace(
-        "1,ok,6.0,points/p0001.step,points/p0001.topology.json,,,",
-        "1,ok,6.0,points/p0001.step,points/p0001.topology.json,fixed_base,,",
+        "1,ok,6.0,points/p0001.step,points/p0001.json,,,",
+        "1,ok,6.0,points/p0001.step,points/p0001.json,fixed_base,,",
     )
     manifest.write_text("﻿" + text, encoding="utf-8")
 
@@ -107,10 +124,11 @@ def test_숫자가_아닌_인자를_버리지_않는다() -> None:
     알 방법이 없다 — 실측으로 그 상태를 만들어 봤다(`재료` 칸이 통째로 사라졌다).
     """
     doe = read_folder(CATEGORY_FOLDER)
-    assert doe.factors == ["재료", "두께"]
+    assert doe.factors == ["재료"]
     assert [one.params["재료"] for one in doe.usable] == ["SS400", "AL6061"]
-    # 숫자는 숫자로 — 글자로 바꾸지 않는다(그림의 가로축이 되어야 한다).
-    assert doe.usable[0].params["두께"] == 6.0
+    # 숫자 인자는 숫자로 읽는다(그림의 가로축이 되어야 한다).
+    numbers = read_folder(FOLDER)
+    assert numbers.usable[0].params["두께"] == 6.0
 
 
 def test_빈_칸은_없는_값이다() -> None:

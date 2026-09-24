@@ -1,3 +1,3 @@
-﻿point,status,재료,두께,step_file,topology,unresolved,interference,error
-1,ok,SS400,6.0,points/p0001.step,points/p0001.topology.json,,,
-2,ok,AL6061,6.0,points/p0002.step,points/p0002.topology.json,,,
+﻿point,status,재료,step_file,point_file,unresolved,interference,error
+1,ok,SS400,shapes/8f3a1c92.step,points/p0001.json,,,
+2,ok,AL6061,shapes/8f3a1c92.step,points/p0002.json,,,

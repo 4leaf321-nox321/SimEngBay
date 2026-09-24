@@ -445,10 +445,51 @@ def test_DOE_를_가져오면_설계점마다_작업이_생긴다(client: TestCl
     assert one["source_kind"] == "doe_point"
     assert one["source_meta"]["study_name"] == "브래킷_두께훑기"
     assert one["source_meta"]["params"] == {"두께": 6.0}
-    assert one["source_meta"]["recipe_digest"].startswith("sha256:")
+    # **같은 STEP 을 가리키는 점들은 같은 형상이다** — 그 열쇠가 경로 그 자체다.
+    assert one["source_meta"]["shape_key"] == "points/p0001.step"
     # 점마다의 영역 지문이 함께 실린다 — 구속을 걸 수 있다.
     assert "topology" in {artifact["kind"] for artifact in one["artifacts"]}
     assert "두께 6" in one["name"]
+
+
+SHARED_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "재료훑기-7c1d3a44"
+
+
+def test_형상을_나눠_쓰는_DOE_도_가져온다(client: TestClient, member: Signed) -> None:
+    """**조건만 훑는 DOE 는 STEP 한 벌을 여러 점이 나눠 쓴다**(CompCore 2026-09-24 계약).
+
+    그때 파일은 `points/pNNNN.step` 이 아니라 `shapes/<지문>.step` 에 있다 — 이름을 짐작하고
+    찾으면 폴더 전체가 「형상 없음」 으로 건너뛰어지고, 사람은 CompCore 를 의심한다.
+    """
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(SHARED_FOLDER),
+            "spec": MODAL,
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["skipped"] == []
+    assert len(body["created"]) == 2
+
+    jobs = [
+        client.get(f"/api/simulations/{one}", headers=member.headers).json()
+        for one in body["created"]
+    ]
+    # 두 점은 **같은 형상**이다 — 그래서 모델링 · 메시를 다시 할 이유가 없다(열쇠가 같다).
+    assert {one["source_meta"]["shape_key"] for one in jobs} == {"shapes/8f3a1c92.step"}
+    assert all(one["source_meta"]["has_conditions"] for one in jobs)
+    # 숫자가 아닌 인자도 이름에 남는다 — 표에서 둘을 구별할 수 있어야 한다.
+    assert {one["source_meta"]["params"]["재료"] for one in jobs} == {"SS400", "AL6061"}
+    assert any("SS400" in one["name"] for one in jobs)
+    # 나눠 쓰는 형상도 **작업마다 한 벌씩** 들어온다 — 폴더가 사라져도 돌 수 있어야 한다.
+    for one in jobs:
+        steps = [art for art in one["artifacts"] if art["kind"] == "input_step"]
+        assert len(steps) == 1
+        assert steps[0]["size_bytes"] > 0
 
 
 def test_고른_점만_가져올_수_있다(client: TestClient, member: Signed) -> None:

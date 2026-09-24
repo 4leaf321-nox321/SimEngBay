@@ -4,8 +4,14 @@
   "method": "full",
   "seed": 1,
   "factors": [
-    { "name": "재료", "kind": "list", "values": ["SS400", "AL6061"] },
-    { "name": "두께", "kind": "list", "values": [6] }
+    {
+      "name": "재료",
+      "kind": "list",
+      "values": [
+        "SS400",
+        "AL6061"
+      ]
+    }
   ],
   "created_at": "2026-09-24T10:00:00+09:00"
 }

@@ -1,9 +1,20 @@
 """`<이름>-<id8>/` 한 벌을 읽는다.
 
     study.json                    기준 레시피 · 인자 정의 · 시드
-    manifest.csv                  점 · 상태 · 바꾼 변수 · step_file · topology · unresolved
-    points/pNNNN.step             형상
-    points/pNNNN.topology.json    영역 · 바디 지문 (+ 설계점 메타 `point` 블록)
+    manifest.csv                  점 · 상태 · 바꾼 변수 · 파일 둘 · 못 푼 영역
+    conditions.json               조건(중립 표현, 식이 있는 그대로 — 사람이 읽는 정본)
+    points/pNNNN.json             **이 점의 모든 것** — point · bodies · regions · conditions
+    points/pNNNN.step             그 점만 쓰는 형상
+    shapes/<지문>.step             **여러 점이 나눠 쓰는 형상**(조건만 훑었을 때)
+
+## 파일 이름을 짐작하지 않는다
+
+어느 점이 어느 STEP 을 쓰는지는 **표의 `step_file`** 이 말한다. 조건만 훑으면 형상이 전부
+같아서 CAD 가 한 벌만 두고 `shapes/` 를 가리킨다 — 「점 번호로 이름을 지으면 된다」 고 믿으면
+그 폴더에서 파일을 못 찾는다(CompCore 가 2026-09-24 에 계약을 그렇게 바꿨다).
+
+**같은 경로를 가리키는 점들은 같은 형상이다.** 그래서 모델링 · 메시도 한 번만 하면 된다 —
+`recipe_digest` 를 따로 볼 필요가 없다.
 
 ## CSV 가 정본이다
 
@@ -32,8 +43,19 @@ MANIFEST = "manifest.csv"
 STUDY = "study.json"
 
 #: 표의 고정 열. 이것 말고는 전부 **바꾼 변수**다(인자 이름은 스터디마다 다르다).
+#: `topology` 는 옛 이름이다 — 계약이 `point_file` 로 바뀌었지만, 이미 내보낸 폴더가 디스크에
+#: 남아 있을 수 있어 열 이름으로는 둘 다 안다.
 FIXED_COLUMNS = frozenset(
-    {"point", "status", "step_file", "topology", "unresolved", "interference", "error"}
+    {
+        "point",
+        "status",
+        "step_file",
+        "point_file",
+        "topology",
+        "unresolved",
+        "interference",
+        "error",
+    }
 )
 
 
@@ -50,12 +72,16 @@ class DoePoint:
     number: int
     params: dict[str, ParamValue]
     step: Path | None = None
-    topology: Path | None = None
+    point_file: Path | None = None
+    """`pNNNN.json` — 영역 · 바디 · 설계점 메타 · 조건이 한 파일에 있다."""
     status: str = "ok"
     unresolved: list[str] = field(default_factory=list)
     error: str = ""
-    #: 같은 형상인지 되짚는 열쇠(CompCore 의 설계점 메타). 없을 수도 있다.
-    recipe_digest: str = ""
+    #: 같은 형상인지 되짚는 열쇠 — **STEP 경로 그 자체다.** 나눠 쓰는 형상은 여러 점이 같은
+    #: `shapes/<지문>.step` 을 가리키므로, 경로가 같으면 형상도 같다.
+    shape_key: str = ""
+    #: 이 점에 조건(`conditions`)이 실려 있나. 없으면 사람이 화면에서 채워야 한다.
+    has_conditions: bool = False
     #: 걸 수 없는 이유. 비어 있으면 걸 수 있다.
     skip_reason: str = ""
 
@@ -147,24 +173,29 @@ def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
     error = (row.get("error") or "").strip()
 
     step = _resolve(folder, row.get("step_file"))
-    topology = _resolve(folder, row.get("topology"))
-    digest = ""
-    if topology is not None:
+    # `topology` 는 옛 이름 — 이미 내보낸 폴더를 위해 함께 본다.
+    point_file = _resolve(folder, row.get("point_file") or row.get("topology"))
+
+    has_conditions = False
+    if point_file is not None:
         try:
-            meta = json.loads(topology.read_text(encoding="utf-8")).get("point") or {}
-            digest = str(meta.get("recipe_digest") or "")
+            loaded = json.loads(point_file.read_text(encoding="utf-8"))
+            has_conditions = bool(loaded.get("conditions"))
         except (OSError, json.JSONDecodeError):
-            digest = ""
+            has_conditions = False
 
     point = DoePoint(
         number=number,
         params=params,
         step=step,
-        topology=topology,
+        point_file=point_file,
         status=status or "ok",
         unresolved=unresolved,
         error=error,
-        recipe_digest=digest,
+        # **경로가 곧 형상의 열쇠다**(모듈 머리말). 표의 값을 그대로 쓴다 — 우리가 다시
+        # 지으면 나눠 쓰는 형상에서 어긋난다.
+        shape_key=(row.get("step_file") or "").strip(),
+        has_conditions=has_conditions,
     )
     point.skip_reason = _skip_reason(point, row)
     return point

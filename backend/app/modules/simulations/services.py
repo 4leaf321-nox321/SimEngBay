@@ -650,7 +650,11 @@ def import_doe(
             "study_name": doe.name,
             "point": point.number,
             "params": point.params,
-            "recipe_digest": point.recipe_digest,
+            # **같은 STEP 을 가리키는 점들은 같은 형상이다**(CompCore 2026-09-24 계약).
+            # 조건만 훑는 DOE 는 형상 한 벌을 나눠 쓰므로, 이 값이 같으면 모델링 · 메시를
+            # 다시 할 이유가 없다.
+            "shape_key": point.shape_key,
+            "has_conditions": point.has_conditions,
             "folder": str(doe.path),
         }
         label = " · ".join(
@@ -666,7 +670,9 @@ def import_doe(
                 name=f"{doe.name} p{point.number:04d}" + (f" ({label})" if label else ""),
                 filename=point.step.name,
                 stream=stream,
-                topology=point.topology.read_bytes() if point.topology else None,
+                # 점 파일 하나에 영역 · 바디 · 조건이 다 있다. 작업 폴더에는 지금 이름
+                # (`topology.json`)으로 둔다 — 모델링이 `regions` 를 읽는 자리라 그대로 맞는다.
+                topology=point.point_file.read_bytes() if point.point_file else None,
                 source_kind="doe_point",
                 source_ref=f"{doe.name}/p{point.number:04d}",
                 source_meta=meta,

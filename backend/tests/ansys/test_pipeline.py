@@ -36,6 +36,8 @@ pytestmark = pytest.mark.ansys
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 STEPS = FIXTURES / "step"
 TOPOLOGY = FIXTURES / "topology"
+#: CompCore 가 낸 DOE 폴더 한 벌 — 형상을 **나눠 쓰는** 쪽(`shapes/`)을 일부러 고른다.
+SHARED_DOE = FIXTURES / "doe" / "재료훑기-7c1d3a44"
 SPEC = {
     "recipe": "modal",
     "material": {
@@ -142,6 +144,37 @@ def test_볼트_구멍을_고정하면_강체_모드가_사라진다(workdir: Pa
     assert all(one["frequency_hz"] > 1.0 for one in result["modes"])
     # 유효질량비가 실값을 갖는다 — 이것이 구속 해석의 값이다.
     assert any((one.get("effective_mass_ratio") or 0) > 0.1 for one in result["modes"])
+
+
+def test_DOE_점_파일_한_장으로_구속까지_간다(workdir: Path) -> None:
+    """**CompCore 2026-09-24 계약**을 진짜 Ansys 로 받아 본다.
+
+    바뀐 것은 두 가지다 — 점마다의 정보가 `pNNNN.json` 한 장으로 합쳐졌고(영역 · 바디 · 조건),
+    형상은 여러 점이 나눠 쓰면 `shapes/<지문>.step` 에 있다. 폴더 읽기만 시험하면 「합친 파일을
+    Mechanical 이 받아 주는가」 는 아무도 안 본 채로 남는다 — 조건 뭉치가 늘어난 파일을
+    모델링이 그대로 읽는지 여기서 본다.
+
+    실측(2026-09-24, 2025 R2 Student · Windows): 1차 1,519 Hz · 강체 모드 0.
+    """
+    shutil.copy(SHARED_DOE / "shapes" / "8f3a1c92.step", workdir / "input.step")
+    # **점 파일을 그대로 `topology.json` 자리에 둔다** — 가져오기가 하는 일과 같다.
+    shutil.copy(SHARED_DOE / "points" / "p0001.json", workdir / "topology.json")
+    spec = dict(SPEC)
+    spec["mesh"] = {"element_size_mm": 6}
+    spec["constraints"] = [{"region": "bolt_holes", "kind": "fixed"}]
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    for stage in STAGES:
+        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+        if stage == "modeling":
+            assert result.summary["constrained_regions"] == ["bolt_holes"]
+
+    result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    assert result["boundary"] == "constrained"
+    assert result["rigid_body_modes"] == 0
+    assert all(one["frequency_hz"] > 1.0 for one in result["modes"])
 
 
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:

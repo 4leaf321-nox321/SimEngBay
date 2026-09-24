@@ -370,10 +370,58 @@ def test_DOE_폴더를_걸기_전에_보여_준다(client: TestClient, member: S
     assert "벽이 판을 넘습니다" in skipped["skip_reason"]
 
 
-def test_폴더가_아니면_무엇이_없는지_말한다(client: TestClient, member: Signed) -> None:
+def test_공용_폴더_밖은_아예_못_본다(client: TestClient, member: Signed) -> None:
+    """**아무 경로나 받으면 그 칸이 서버의 모든 폴더를 여는 문이 된다** — 데이터 소스 폴더에
+    이미 적혀 있는 규칙이다. 설정이 비어 있는 것과 밖을 가리킨 것은 다른 말로 답한다."""
     got = client.get("/api/simulations/doe/preview?path=/tmp", headers=member.headers)
     assert got.status_code == 400
+    assert "공용 폴더 밖" in got.json()["error"]["message"]
+    # 어디가 뿌리인지 함께 준다 — 사람이 다른 폴더를 고를 수 있어야 한다.
+    assert got.json()["error"]["details"]["roots"]
+
+
+def test_뿌리_안이라도_DOE_가_아니면_무엇이_없는지_말한다(
+    client: TestClient, member: Signed
+) -> None:
+    got = client.get(
+        f"/api/simulations/doe/preview?path={DOE_FOLDER.parent}", headers=member.headers
+    )
+    assert got.status_code == 400
     assert "manifest.csv" in got.json()["error"]["message"]
+
+
+def test_공용_폴더를_탐색기처럼_훑는다(client: TestClient, member: Signed) -> None:
+    """경로를 외워서 치게 하지 않는다 — 뿌리부터 폴더를 눌러 들어간다."""
+    got = client.get("/api/simulations/doe/browse", headers=member.headers)
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["roots"]
+    names = {one["name"]: one for one in body["entries"]}
+    assert "브래킷_두께훑기-3f9a2177" in names
+    # **가져올 수 있는 폴더인지 표시한다**(manifest.csv 가 있나) — 눌러 보고 알게 하지 않는다.
+    assert names["브래킷_두께훑기-3f9a2177"]["is_study"] is True
+
+
+def test_뿌리_위로는_못_올라간다(client: TestClient, member: Signed) -> None:
+    got = client.get("/api/simulations/doe/browse", headers=member.headers)
+    assert got.json()["parent"] is None
+
+    inside = client.get(
+        f"/api/simulations/doe/browse?path={DOE_FOLDER}", headers=member.headers
+    )
+    assert inside.status_code == 200
+    # 한 칸 위(뿌리)로는 올라갈 수 있다.
+    assert inside.json()["parent"] == str(DOE_FOLDER.parent)
+    assert inside.json()["is_study"] is True
+
+
+def test_점_찍고_올라가는_길도_막는다(client: TestClient, member: Signed) -> None:
+    """`..` 이나 심볼릭 링크로 밖을 가리키는 길 — **푼 다음에** 견줘야 막힌다."""
+    got = client.get(
+        f"/api/simulations/doe/browse?path={DOE_FOLDER}/../../../..", headers=member.headers
+    )
+    assert got.status_code == 400
+    assert "공용 폴더 밖" in got.json()["error"]["message"]
 
 
 def test_DOE_를_가져오면_설계점마다_작업이_생긴다(client: TestClient, member: Signed) -> None:

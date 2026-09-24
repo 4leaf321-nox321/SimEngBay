@@ -2475,6 +2475,56 @@
         }
       }
     },
+    "/api/simulations/doe/browse": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Browse Doe",
+        "description": "공용 폴더를 훑는다 — **설정된 뿌리 아래만.** 경로를 안 주면 첫 뿌리부터.",
+        "operationId": "browse_doe_api_simulations_doe_browse_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoeListingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/doe/preview": {
       "get": {
         "tags": [
@@ -3570,6 +3620,42 @@
         ],
         "title": "DiskOut"
       },
+      "DoeEntryOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "is_study": {
+            "type": "boolean",
+            "title": "Is Study"
+          },
+          "modified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modified At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "is_study"
+        ],
+        "title": "DoeEntryOut",
+        "description": "탐색기의 한 줄."
+      },
       "DoeImportOut": {
         "properties": {
           "study_id": {
@@ -3649,6 +3735,55 @@
           "spec"
         ],
         "title": "DoeImportRequest"
+      },
+      "DoeListingOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/DoeEntryOut"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "is_study": {
+            "type": "boolean",
+            "title": "Is Study",
+            "default": false
+          },
+          "roots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roots"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "entries"
+        ],
+        "title": "DoeListingOut"
       },
       "DoePointPreview": {
         "properties": {

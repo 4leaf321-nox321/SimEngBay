@@ -101,10 +101,33 @@ class DoePreviewOut(BaseModel):
     skipped: int
 
 
+class DoeEntryOut(BaseModel):
+    """탐색기의 한 줄."""
+
+    name: str
+    path: str
+    is_study: bool
+    """`manifest.csv` 가 있나 — **가져올 수 있는 폴더인가.**"""
+    modified_at: datetime | None = None
+
+
+class DoeListingOut(BaseModel):
+    path: str
+    parent: str | None = None
+    """한 칸 위. **뿌리 밖으로는 못 올라간다** — 그때는 없다."""
+    entries: list[DoeEntryOut]
+    truncated: bool = False
+    is_study: bool = False
+    roots: list[str] = Field(default_factory=list)
+    """설정된 공용 폴더들. 화면이 뿌리를 고르는 데 쓴다."""
+
+
 class DoeImportRequest(BaseModel):
     path: str = Field(min_length=1)
-    """서버가 볼 수 있는 폴더 경로. **브라우저가 파일을 올리는 것이 아니다** — 설계점 200개면
-    STEP 만 수십 MB 이고, 그 폴더는 대개 공유 스토리지에 있다."""
+    """가져올 폴더. **공용 폴더(DOE_ROOTS) 아래여야 한다.**
+
+    브라우저가 파일을 올리는 것이 아니다 — 설계점 200개면 STEP 만 수십 MB 이고, 그 폴더는
+    대개 공유 스토리지에 있다. 사람은 화면의 탐색기에서 고른다."""
     spec: dict[str, Any]
     """모든 점에 같은 스펙을 쓴다. 물성 · 모드 수 · 구속 영역 이름이 여기 들어간다."""
     workspace_slug: str | None = None

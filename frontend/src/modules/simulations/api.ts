@@ -17,6 +17,8 @@ export type Recipe = components['schemas']['RecipeOut']
 export type DoePreview = components['schemas']['DoePreviewOut']
 export type DoePointPreview = components['schemas']['DoePointPreview']
 export type DoeImport = components['schemas']['DoeImportOut']
+export type DoeListing = components['schemas']['DoeListingOut']
+export type DoeEntry = components['schemas']['DoeEntryOut']
 export type StudySummary = components['schemas']['StudySummaryOut']
 export type Study = components['schemas']['StudyOut']
 export type StudyPoint = components['schemas']['StudyPointOut']
@@ -155,6 +157,15 @@ export const simulationApi = {
   /** 가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. */
   studies: () => api.get<StudySummary[]>('/simulations/studies'),
   study: (studyId: string) => api.get<Study>(`/simulations/studies/${studyId}`),
+  /**
+   * 공용 폴더 훑기 — **설정된 뿌리 아래만.** 경로를 안 주면 첫 뿌리부터.
+   *
+   * 아무 경로나 받으면 그 칸이 서버의 모든 폴더를 여는 문이 된다(서버가 막는다).
+   */
+  browseDoe: (path?: string) =>
+    api.get<DoeListing>(
+      `/simulations/doe/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+    ),
   previewDoe: (path: string) =>
     api.get<DoePreview>(`/simulations/doe/preview?path=${encodeURIComponent(path)}`),
   importDoe: (body: {

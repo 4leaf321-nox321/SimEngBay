@@ -5,16 +5,22 @@
  * 결과도 되돌려 보내지 않으므로, 「이 결과가 두께 몇짜리인가」 를 이 플랫폼이 들고 있어야 한다 —
  * 가져올 때 스터디 · 점 번호 · 바꾼 변수를 작업에 함께 적는다.
  *
+ * ## 경로를 외워서 치게 하지 않는다
+ *
+ * 공유 스토리지의 자리는 `/mnt/f/data/0_Program/73_CompCore/브래킷_튜닝-3f9a21` 같은 것이라
+ * 사람이 외울 수 없다. 그렇다고 **아무 경로나 받으면** 그 칸이 서버의 모든 폴더를 여는 문이
+ * 된다(서버가 막는다 — `DOE_ROOTS`). 그래서 **설정된 공용 폴더 아래를 탐색기처럼 고른다.**
+ *
  * ## 먼저 보여 주고 나서 건다
  *
- * 200개를 잘못 걸면 되돌리기 어렵고, 그 사이 Mechanical 라이선스를 계속 문다. 그래서 경로를
- * 주면 **훑어 본 결과**(점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개와 그 이유)를 먼저 보인다.
+ * 200개를 잘못 걸면 되돌리기 어렵고, 그 사이 Mechanical 라이선스를 계속 문다. 그래서 폴더를
+ * 고르면 **훑어 본 결과**(점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개와 그 이유)를 먼저 보인다.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { simulationApi } from '@/modules/simulations/api'
-import type { DoeImport, DoePreview } from '@/modules/simulations/api'
+import type { DoeImport, DoeListing, DoePreview } from '@/modules/simulations/api'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -29,6 +35,7 @@ import {
 } from '@/shared/components/ui/dialog'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
+import { Folder, FolderOpen, ChevronUp } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -46,7 +53,7 @@ interface Props {
 
 export function DoeImportDialog({ open, onClose, onImported }: Props) {
   const { user } = useAuth()
-  const [path, setPath] = useState('')
+  const [listing, setListing] = useState<DoeListing | null>(null)
   const [preview, setPreview] = useState<DoePreview | null>(null)
   const [material, setMaterial] = useState('SS400')
   const [modes, setModes] = useState('10')
@@ -56,12 +63,24 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
 
   const workspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
 
-  async function look() {
+  // 창을 열면 첫 뿌리부터 보여 준다 — 사람이 아무것도 안 쳐도 고를 것이 있어야 한다.
+  useEffect(() => {
+    if (!open) return
+    setPreview(null)
+    setError(null)
+    void browse()
+    // 창이 열릴 때 한 번. 그 뒤로는 사람이 폴더를 누를 때만 움직인다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  async function browse(path?: string) {
     setBusy(true)
     setError(null)
-    setPreview(null)
     try {
-      setPreview(await simulationApi.previewDoe(path.trim()))
+      const next = await simulationApi.browseDoe(path)
+      setListing(next)
+      // **DOE 폴더로 들어갔으면 곧바로 훑어 본다** — 한 번 더 누르게 하지 않는다.
+      setPreview(next.is_study ? await simulationApi.previewDoe(next.path) : null)
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('폴더를 읽지 못했습니다.'))
     } finally {
@@ -104,26 +123,84 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
         <DialogHeader>
           <DialogTitle>DOE 가져오기</DialogTitle>
           <DialogDescription>
-            CAD 플랫폼이 내보낸 폴더를 읽어 설계점마다 해석 작업을 만듭니다. 폴더는 <b>서버가
-            보는 경로</b>입니다 — 공유 스토리지의 자리를 적으세요.
+            CAD 플랫폼이 내보낸 폴더를 읽어 설계점마다 해석 작업을 만듭니다. <b>공용 폴더</b>
+            아래만 보입니다(관리자가 <span className="font-mono">DOE_ROOTS</span> 로 정합니다).
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* 탐색기 — 뿌리 아래를 눌러 들어간다. 「고를 수 있는 폴더」 는 표시가 다르다. */}
           <div className="space-y-1.5">
-            <Label htmlFor="doe-path">폴더 경로</Label>
-            <div className="flex gap-2">
-              <Input
-                id="doe-path"
-                value={path}
-                onChange={(event) => setPath(event.target.value)}
-                placeholder="/data/doe/브래킷_튜닝-3f9a21"
-                className="font-mono"
-              />
-              <Button variant="outline" onClick={look} disabled={!path.trim() || busy}>
-                훑어 보기
-              </Button>
+            <div className="flex items-center justify-between gap-2">
+              <Label>공용 폴더</Label>
+              {(listing?.roots?.length ?? 0) > 1 && (
+                <div className="flex gap-1">
+                  {(listing?.roots ?? []).map((root) => (
+                    <Button
+                      key={root}
+                      variant={listing?.path.startsWith(root) ? 'secondary' : 'ghost'}
+                      size="sm"
+                      onClick={() => void browse(root)}
+                      className="font-mono text-xs"
+                    >
+                      {root}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-8 shrink-0"
+                disabled={!listing?.parent || busy}
+                onClick={() => listing?.parent && void browse(listing.parent)}
+                aria-label="한 칸 위"
+              >
+                <ChevronUp className="size-4" />
+              </Button>
+              <p className="text-muted-foreground truncate font-mono text-xs" title={listing?.path}>
+                {listing?.path ?? '…'}
+              </p>
+            </div>
+            <div className="max-h-48 overflow-y-auto rounded-md border">
+              {listing && listing.entries.length === 0 ? (
+                <p className="text-muted-foreground p-3 text-sm">
+                  {listing.is_study
+                    ? '이 폴더가 DOE 입니다. 아래에서 확인하고 실행하세요.'
+                    : '하위 폴더가 없습니다.'}
+                </p>
+              ) : (
+                <ul className="divide-y">
+                  {(listing?.entries ?? []).map((entry) => (
+                    <li key={entry.path}>
+                      <button
+                        type="button"
+                        onClick={() => void browse(entry.path)}
+                        className="hover:bg-muted/50 flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm"
+                      >
+                        {entry.is_study ? (
+                          <FolderOpen className="size-4 shrink-0 text-emerald-600" />
+                        ) : (
+                          <Folder className="text-muted-foreground size-4 shrink-0" />
+                        )}
+                        <span className="truncate">{entry.name}</span>
+                        {/* **눌러 보고 알게 하지 않는다** — 가져올 수 있는 폴더를 미리 표시한다. */}
+                        {entry.is_study && (
+                          <span className="text-muted-foreground ml-auto text-xs">DOE</span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {listing?.truncated && (
+              <p className="text-muted-foreground text-xs">
+                폴더가 너무 많아 일부만 보여 줍니다. 하위 폴더로 들어가 좁히세요.
+              </p>
+            )}
           </div>
 
           <ErrorNotice error={error} />

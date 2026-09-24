@@ -9,6 +9,16 @@ CAD 플랫폼(CompCore)은 설계점 N 벌을 폴더 하나로 내놓고, 그 �
 그래서 이 모듈이 하는 일은 하나다: **폴더를 읽어 「무엇을 몇 건 걸 수 있나」 를 말한다.**
 """
 
+from app.core.doe.browse import Entry, Listing, OutsideRoots, listing, resolve_inside
 from app.core.doe.folder import DoeFolder, DoePoint, read_folder
 
-__all__ = ["DoeFolder", "DoePoint", "read_folder"]
+__all__ = [
+    "DoeFolder",
+    "DoePoint",
+    "Entry",
+    "Listing",
+    "OutsideRoots",
+    "listing",
+    "read_folder",
+    "resolve_inside",
+]

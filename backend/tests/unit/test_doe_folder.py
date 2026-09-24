@@ -117,3 +117,25 @@ def test_빈_칸은_없는_값이다() -> None:
     doe = read_folder(FOLDER)
     # 두께만 있는 스터디에 `재료` 칸은 아예 없다.
     assert all("재료" not in one.params for one in doe.points)
+
+
+def test_없는_뿌리는_건너뛰고_있는_것부터_연다(tmp_path: Path) -> None:
+    """공유 스토리지가 아직 안 마운트된 서버에서 첫 뿌리를 고집하면 창을 열자마자 오류가 뜨고,
+    **다른 뿌리에 있는 것도 못 고른다.**"""
+    from app.core.doe import resolve_inside
+
+    missing = tmp_path / "없는곳"
+    assert resolve_inside([missing, FIXTURES_ROOT], None) == FIXTURES_ROOT
+    # 전부 없으면 첫 뿌리를 돌려준다 — 그때는 「그 경로가 없다」 가 정확한 진단이다.
+    assert resolve_inside([missing], None) == missing
+
+
+def test_뿌리_밖은_거절한다(tmp_path: Path) -> None:
+    from app.core.doe import resolve_inside
+    from app.core.doe.browse import OutsideRoots
+
+    with pytest.raises(OutsideRoots):
+        resolve_inside([FIXTURES_ROOT], "/etc")
+    # `..` 으로 빠져나가는 길도 — **푼 다음에** 견줘야 막힌다.
+    with pytest.raises(OutsideRoots):
+        resolve_inside([FIXTURES_ROOT], str(FIXTURES_ROOT / ".." / ".." / ".."))

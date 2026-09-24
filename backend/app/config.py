@@ -144,6 +144,16 @@ class Settings(BaseSettings):
 
     **워커 수 x 이 값이 기계의 코어를 넘지 않게 한다** — 넘으면 서로를 느리게 만들 뿐이다."""
 
+    doe_roots: str = ""
+    """CAD 가 DOE 를 내보내는 **공용 폴더들**, 쉼표로. 가져오기는 이 아래만 볼 수 있다.
+
+    **아무 경로나 받으면 그 칸이 서버의 모든 폴더를 여는 문이 된다** — 데이터 소스 폴더
+    (`datasource_dir`)에 이미 같은 규칙이 적혀 있다. 비워 두면 가져오기가 막히고, 화면이
+    무엇을 설정해야 하는지 말한다.
+
+    CompCore 의 `DOE_EXPORT_ROOT` 와 **같은 곳을 가리켜야 한다**(그쪽이 쓰고 이쪽이 읽는다).
+    운영에서는 bind-mount 된 경로여야 한다."""
+
     visual_modes: int = 6
     """모드 형상(VTP · PNG)을 만들 **탄성 모드 수.** 모드마다 파일 둘이 생기므로 전부 그리면
     작업 폴더가 그만큼 커진다. 화면은 여기 있는 것만 그린다."""
@@ -204,6 +214,19 @@ class Settings(BaseSettings):
         if self.work_dir is None:
             self.work_dir = self.filestore_dir / "simulations"
         return self
+
+    @property
+    def doe_root_paths(self) -> tuple[Path, ...]:
+        """설정된 공용 폴더들. 빈 것과 중복은 뺀다."""
+        seen: list[Path] = []
+        for raw in self.doe_roots.split(","):
+            cleaned = raw.strip()
+            if not cleaned:
+                continue
+            path = Path(cleaned).expanduser()
+            if path not in seen:
+                seen.append(path)
+        return tuple(seen)
 
     @property
     def extension_names(self) -> tuple[str, ...]:

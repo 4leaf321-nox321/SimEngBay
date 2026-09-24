@@ -16,7 +16,12 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/modules/simulations/api')>()
   return {
     ...actual,
-    simulationApi: { ...actual.simulationApi, previewDoe: vi.fn(), importDoe: vi.fn() },
+    simulationApi: {
+      ...actual.simulationApi,
+      browseDoe: vi.fn(),
+      previewDoe: vi.fn(),
+      importDoe: vi.fn(),
+    },
   }
 })
 
@@ -41,21 +46,59 @@ const PREVIEW = {
   ],
 }
 
+/** 뿌리를 열었을 때 — 폴더 둘, 그중 하나가 DOE. */
+const ROOT_LISTING = {
+  path: '/data/doe',
+  parent: null,
+  roots: ['/data/doe'],
+  truncated: false,
+  is_study: false,
+  entries: [
+    { name: '브래킷_튜닝-3f9a21', path: '/data/doe/브래킷_튜닝-3f9a21', is_study: true },
+    { name: '옛자료', path: '/data/doe/옛자료', is_study: false },
+  ],
+}
+
+/** 그 DOE 폴더로 들어갔을 때. */
+const STUDY_LISTING = {
+  ...ROOT_LISTING,
+  path: '/data/doe/브래킷_튜닝-3f9a21',
+  parent: '/data/doe',
+  is_study: true,
+  entries: [{ name: 'points', path: '/data/doe/브래킷_튜닝-3f9a21/points', is_study: false }],
+}
+
 describe('DOE 가져오기', () => {
   beforeEach(() => {
+    vi.mocked(simulationApi.browseDoe).mockReset().mockResolvedValue(ROOT_LISTING)
     vi.mocked(simulationApi.previewDoe).mockReset().mockResolvedValue(PREVIEW)
     vi.mocked(simulationApi.importDoe).mockReset()
   })
 
-  it('훑어 보기 전에는 실행할 수 없다', () => {
+  it('창을 열면 공용 폴더부터 보여 준다', async () => {
+    // **경로를 외워서 치게 하지 않는다** — 아무것도 안 쳐도 고를 것이 있어야 한다.
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(simulationApi.browseDoe).toHaveBeenCalled())
+    expect(screen.getByText('브래킷_튜닝-3f9a21')).toBeDefined()
+    expect(screen.getByText('옛자료')).toBeDefined()
+    // 가져올 수 있는 폴더는 미리 표시한다 — 눌러 보고 알게 하지 않는다.
+    expect(screen.getByText('DOE')).toBeDefined()
+  })
+
+  it('고르기 전에는 실행할 수 없다', async () => {
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(simulationApi.browseDoe).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: /0건 실행/ })).toBeDisabled()
   })
 
-  it('훑어 보면 점과 변수와 건너뛸 이유를 보여 준다', async () => {
+  it('DOE 폴더로 들어가면 곧바로 훑어 본다', async () => {
+    // 한 번 더 누르게 하지 않는다.
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(ROOT_LISTING)
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
-    await userEvent.type(screen.getByLabelText('폴더 경로'), '/data/doe/x')
-    await userEvent.click(screen.getByRole('button', { name: '훑어 보기' }))
+    await waitFor(() => expect(screen.getByText('브래킷_튜닝-3f9a21')).toBeDefined())
+
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    await userEvent.click(screen.getByText('브래킷_튜닝-3f9a21'))
 
     await waitFor(() => expect(screen.getByText('브래킷_두께훑기')).toBeDefined())
     expect(screen.getByText(/벽이 판을 넘습니다/)).toBeDefined()
@@ -70,9 +113,8 @@ describe('DOE 가져오기', () => {
       created: ['a', 'b', 'c'],
       skipped: [],
     })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
-    await userEvent.type(screen.getByLabelText('폴더 경로'), '/data/doe/x')
-    await userEvent.click(screen.getByRole('button', { name: '훑어 보기' }))
     await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
     await userEvent.click(screen.getByRole('button', { name: /3건 실행/ }))
 

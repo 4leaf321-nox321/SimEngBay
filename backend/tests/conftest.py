@@ -16,6 +16,7 @@ bcrypt 라운드를 낮춘다. 시험 하나가 계정을 만들고(해시) 로�
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
 
@@ -27,6 +28,10 @@ os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
 # 시험이 도는 조건은 그 기계의 설정이 아니라 여기서 정한다.
 os.environ["SIMULATION_EXECUTOR"] = "fake"
 os.environ["FAKE_STAGE_SECONDS"] = "0"
+
+# **DOE 공용 폴더도 시험이 정한다.** 가져오기는 이 아래만 볼 수 있으므로(서버의 모든 폴더를
+# 여는 문이 되지 않게), 붙박이 폴더가 있는 자리를 뿌리로 준다.
+os.environ["DOE_ROOTS"] = str(Path(__file__).resolve().parent / "fixtures" / "doe")
 
 
 def _test_database_url() -> str:

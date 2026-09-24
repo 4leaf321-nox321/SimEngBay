@@ -30,7 +30,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core import cleanup, executors
-from app.core.doe import DoeFolder, DoePoint, read_folder
+from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_inside
+from app.core.doe.browse import OutsideRoots
 from app.core.doe.folder import FolderProblem
 from app.core.modes import track_modes
 from app.core.spec import RUNNABLE_RECIPES, ModalSpec, StaticSpec, parse_spec
@@ -50,7 +51,9 @@ from app.modules.simulations.models import (
 )
 from app.modules.simulations.schemas import (
     ArtifactOut,
+    DoeEntryOut,
     DoeImportOut,
+    DoeListingOut,
     DoePointPreview,
     DoePreviewOut,
     ModeTrackOut,
@@ -506,10 +509,66 @@ def _preview_point(point: DoePoint) -> DoePointPreview:
     )
 
 
+def doe_roots() -> list[Path]:
+    return list(get_settings().doe_root_paths)
+
+
+def _inside_roots(path_text: str | None) -> Path:
+    """공용 폴더 안의 경로로 푼다.
+
+    **아무 경로나 받지 않는다** — 그 칸이 서버의 모든 폴더를 여는 문이 된다(`datasource_dir`
+    와 같은 규칙). 설정이 비어 있는 것과 밖을 가리킨 것을 **다른 말로** 답한다: 앞은 관리자가
+    `.env` 를 고칠 일이고, 뒤는 사람이 다른 폴더를 고를 일이다.
+    """
+    roots = doe_roots()
+    if not roots:
+        raise AppError(
+            code("SIMULATIONS", 19),
+            "DOE 공용 폴더가 설정돼 있지 않습니다. "
+            "관리자가 .env 의 DOE_ROOTS 를 정해야 합니다.",
+            status=409,
+        )
+    try:
+        return resolve_inside(roots, path_text)
+    except OutsideRoots as failure:
+        raise AppError(
+            code("SIMULATIONS", 20),
+            str(failure),
+            status=400,
+            details={"roots": [str(one) for one in roots]},
+        ) from failure
+
+
+def browse_doe(path_text: str | None) -> DoeListingOut:
+    """공용 폴더를 훑는다 — **탐색기처럼.** 경로를 외워서 치게 하지 않는다."""
+    target = _inside_roots(path_text)
+    try:
+        found = listing(doe_roots(), str(target))
+    except FileNotFoundError as failure:
+        raise AppError(code("SIMULATIONS", 21), str(failure), status=404) from failure
+    return DoeListingOut(
+        path=found.path,
+        parent=found.parent,
+        entries=[
+            DoeEntryOut(
+                name=one.name,
+                path=one.path,
+                is_study=one.is_study,
+                modified_at=one.modified_at,
+            )
+            for one in found.entries
+        ],
+        truncated=found.truncated,
+        is_study=found.is_study,
+        roots=[str(one) for one in doe_roots()],
+    )
+
+
 def _read_doe(path_text: str) -> DoeFolder:
     """폴더를 읽는다. **경로가 틀린 것과 폴더가 DOE 가 아닌 것을 같은 말로 답하지 않는다.**"""
+    target = _inside_roots(path_text)
     try:
-        return read_folder(Path(path_text).expanduser())
+        return read_folder(target)
     except FolderProblem as failure:
         raise AppError(code("SIMULATIONS", 14), str(failure), status=400) from failure
 

@@ -24,6 +24,7 @@ from app.modules.simulations import services
 from app.modules.simulations.schemas import (
     DoeImportOut,
     DoeImportRequest,
+    DoeListingOut,
     DoePreviewOut,
     RecipeOut,
     SimulationOut,
@@ -93,6 +94,16 @@ def get_study(
 ) -> StudyOut:
     """설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다."""
     return services.get_study(db, user=user, study_id=study_id)
+
+
+@router.get("/doe/browse", response_model=DoeListingOut)
+def browse_doe(
+    path: str | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DoeListingOut:
+    """공용 폴더를 훑는다 — **설정된 뿌리 아래만.** 경로를 안 주면 첫 뿌리부터."""
+    return services.browse_doe(path)
 
 
 @router.get("/doe/preview", response_model=DoePreviewOut)

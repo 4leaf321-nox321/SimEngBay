@@ -655,6 +655,9 @@ def import_doe(
             # 다시 할 이유가 없다.
             "shape_key": point.shape_key,
             "has_conditions": point.has_conditions,
+            # **CAD 가 선언한 계**. 모델링이 이 계로 세션을 세운다(2026-09-24 결정) — 비어
+            # 있으면 선언이 없었고, 그때는 SI 다.
+            "unit_system": point.unit_system,
             "folder": str(doe.path),
         }
         label = " · ".join(

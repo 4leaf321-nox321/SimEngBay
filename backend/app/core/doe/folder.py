@@ -25,6 +25,13 @@
 **BOM 을 달고 온다.** 엑셀이 한글을 깨지 않게 CompCore 가 붙인다 — `utf-8-sig` 로 읽지 않으면
 첫 열 이름이 `﻿point` 가 되고, 그러면 점 번호를 못 찾는다(조용히 0건이 된다).
 
+## 단위 선언을 함께 읽는다
+
+점 파일에 `conditions.units.system` 이 온다 — 그 값을 읽지 않으면 mm 계로 온 숫자를 MKS
+세션에 넣고도 **아무 오류가 안 난다**(고유진동수만 10³ 배 틀린다). 그래서 여기서 읽어 두고,
+**모르는 계면 그 점을 걸 수 없는 것으로 본다** — 모델링까지 가서 실패하면 200점이 같은 실패를
+한 번씩 하고, 사람은 그걸 로그에서 센다. 세우는 일은 `app/core/units.py` 가 한다.
+
 ## 못 쓰는 점을 걸지 않는다 — 대신 **몇 개를 왜 건너뛰는지 말한다**
 
 설계점 200개를 보내 놓고 「왜 절반이 실패했지」 를 로그에서 찾게 하지 않는다. CompCore 가
@@ -38,6 +45,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from app.core import units
 
 MANIFEST = "manifest.csv"
 STUDY = "study.json"
@@ -82,6 +91,9 @@ class DoePoint:
     shape_key: str = ""
     #: 이 점에 조건(`conditions`)이 실려 있나. 없으면 사람이 화면에서 채워야 한다.
     has_conditions: bool = False
+    #: CAD 가 선언한 단위계 이름 그대로(`conditions.units.system`). 비어 있으면 선언이 없다 —
+    #: 그때는 SI 로 본다(`app/core/units.py`).
+    unit_system: str = ""
     #: 걸 수 없는 이유. 비어 있으면 걸 수 있다.
     skip_reason: str = ""
 
@@ -177,10 +189,15 @@ def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
     point_file = _resolve(folder, row.get("point_file") or row.get("topology"))
 
     has_conditions = False
+    unit_system = ""
     if point_file is not None:
         try:
             loaded = json.loads(point_file.read_text(encoding="utf-8"))
-            has_conditions = bool(loaded.get("conditions"))
+            conditions = loaded.get("conditions")
+            has_conditions = bool(conditions)
+            if isinstance(conditions, dict):
+                declared = (conditions.get("units") or {}).get("system")
+                unit_system = str(declared or "").strip()
         except (OSError, json.JSONDecodeError):
             has_conditions = False
 
@@ -196,6 +213,7 @@ def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
         # 지으면 나눠 쓰는 형상에서 어긋난다.
         shape_key=(row.get("step_file") or "").strip(),
         has_conditions=has_conditions,
+        unit_system=unit_system,
     )
     point.skip_reason = _skip_reason(point, row)
     return point
@@ -220,4 +238,11 @@ def _skip_reason(point: DoePoint, row: dict[str, str]) -> str:
     if point.unresolved:
         # 영역을 못 풀었으면 경계조건을 붙일 자리가 없다. 그대로 걸면 구속 없는 해석이 돈다.
         return f"CAD 가 풀지 못한 영역이 있습니다: {' · '.join(point.unresolved)}"
+    if point.unit_system and point.unit_system not in units.KNOWN:
+        # **모르는 계로 온 값은 아무 계에도 넣지 않는다.** 여기서 막아야 200점을 걸어 놓고
+        # 모델링마다 같은 실패를 보는 일이 없다 — 미리보기에서 이 줄을 읽는다.
+        return (
+            f"이 플랫폼이 모르는 단위계입니다: {point.unit_system} "
+            f"(아는 것: {' · '.join(sorted(units.KNOWN))})"
+        )
     return ""

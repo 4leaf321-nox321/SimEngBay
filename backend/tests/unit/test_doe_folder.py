@@ -131,6 +131,36 @@ def test_숫자가_아닌_인자를_버리지_않는다() -> None:
     assert numbers.usable[0].params["두께"] == 6.0
 
 
+def test_선언한_단위계를_들고_온다() -> None:
+    """**CAD 는 어느 계로 보냈는지 선언한다**(`conditions.units.system`).
+
+    그 값을 읽지 않으면 mm 계로 온 숫자를 MKS 세션에 넣고도 아무 오류가 안 난다 — 고유진동수만
+    10³ 배 틀린다(2026-09-24 결정 1+3).
+    """
+    doe = read_folder(CATEGORY_FOLDER)
+    assert [one.unit_system for one in doe.usable] == ["mm_n_tonne", "mm_n_tonne"]
+    # 조건이 없는 폴더는 선언도 없다 — 그때는 SI 로 본다(스펙이 사람 손에서 온다).
+    assert all(one.unit_system == "" for one in read_folder(FOLDER).points)
+
+
+def test_모르는_단위계는_걸지_않고_말한다(tmp_path: Path) -> None:
+    """**200점을 걸어 놓고 모델링마다 같은 실패를 보게 하지 않는다.** 미리보기에서 읽힌다."""
+    import shutil
+
+    copy = tmp_path / CATEGORY_FOLDER.name
+    shutil.copytree(CATEGORY_FOLDER, copy)
+    point = copy / "points" / "p0001.json"
+    payload = json.loads(point.read_text(encoding="utf-8"))
+    payload["conditions"]["units"]["system"] = "cgs_dyne"
+    point.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    first = next(one for one in read_folder(copy).points if one.number == 1)
+    assert not first.usable
+    assert "모르는 단위계" in first.skip_reason and "cgs_dyne" in first.skip_reason
+    # 나머지 점은 그대로 걸 수 있다 — 한 점의 선언이 폴더 전체를 막지 않는다.
+    assert [one.number for one in read_folder(copy).usable] == [2]
+
+
 def test_빈_칸은_없는_값이다() -> None:
     doe = read_folder(FOLDER)
     # 두께만 있는 스터디에 `재료` 칸은 아예 없다.

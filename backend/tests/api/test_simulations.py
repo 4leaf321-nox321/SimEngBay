@@ -482,6 +482,8 @@ def test_형상을_나눠_쓰는_DOE_도_가져온다(client: TestClient, member
     # 두 점은 **같은 형상**이다 — 그래서 모델링 · 메시를 다시 할 이유가 없다(열쇠가 같다).
     assert {one["source_meta"]["shape_key"] for one in jobs} == {"shapes/8f3a1c92.step"}
     assert all(one["source_meta"]["has_conditions"] for one in jobs)
+    # **어느 계로 온 값인가** — 모델링이 이 선언대로 세션을 세운다(2026-09-24 결정 1+3).
+    assert {one["source_meta"]["unit_system"] for one in jobs} == {"mm_n_tonne"}
     # 숫자가 아닌 인자도 이름에 남는다 — 표에서 둘을 구별할 수 있어야 한다.
     assert {one["source_meta"]["params"]["재료"] for one in jobs} == {"SS400", "AL6061"}
     assert any("SS400" in one["name"] for one in jobs)

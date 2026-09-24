@@ -54,6 +54,10 @@ const SUMMARY_LABELS: Record<string, string> = {
   first_elastic_hz: '1차 탄성 모드',
   solver_seconds: '솔버 시간',
   ansys_version: 'Ansys 버전',
+  // **CAD 가 선언한 계**로 세션을 세운다(2026-09-24). 숫자가 어느 계로 들어갔는지는 값을
+  // 보고 알 수 없어서 — 틀리면 그럴듯한 값이 나온다 — 여기에 적어 둔다.
+  unit_system: '단위계',
+  solver_unit_system: '솔버 단위계',
 }
 
 function shownSummary(key: string, value: unknown): string {

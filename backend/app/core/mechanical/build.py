@@ -8,9 +8,10 @@
   넣는 길도 있지만, 그 형식은 길고 한 칸이 틀려도 「임포트는 됐는데 값이 안 들어간」 상태가
   된다 — 그 상태는 고유진동수가 틀린 뒤에야 드러난다. 바디에 붙인 명령 조각은 `/PREP7` 의
   기본 물성(Structural Steel) **뒤에** 들어가 덮어쓴다(실측: `MP,EX,1,…` 다음 줄에 우리 것).
-- **단위계는 확인하고 쓴다.** 명령 조각의 숫자에는 단위가 없다 — 활성 단위계가 MKS(m·kg·N·s)
-  여야 `MP,EX,matid,2e11` 이 200 GPa 다. 아니면 **세우지 않는다**: 1000배 틀린 값은 아무 오류도
-  내지 않고 고유진동수만 31.6배 어긋난다.
+- **단위계는 CAD 의 선언을 읽고 거기에 맞춰 세운다**(2026-09-24). 명령 조각의 숫자에는
+  단위가 없어서, 어느 계로 세웠는지 모르면 `MP,EX,matid,206000` 이 206 GPa 인지 206 kPa 인지
+  알 수 없다 — 그 차이는 아무 오류도 내지 않고 고유진동수만 10³ 배 어긋나게 한다. 계를
+  **세운 뒤 솔버 단위계를 읽어 확인한다**(`app/core/units.py` 에 그 자리와 실측이 있다).
 - **구속이 없으면 자유-자유**다. 강체 모드 6개가 0 Hz 로 나오므로 찾을 모드 수에 6을 더한다
   (`spec.modes_to_find`).
 """
@@ -22,14 +23,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core import units
 from app.core.regions import FaceRecord, match_regions
-from app.core.spec import ModalSpec
+from app.core.spec import MaterialSpec, ModalSpec
 from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
 
-#: 이 단위계일 때만 명령 조각의 숫자가 Pa · kg/m³ 로 읽힌다.
-EXPECTED_UNIT_SYSTEM = "StandardMKS"
 
 #: 라이선스 실패로 볼 말. Mechanical 은 이것을 예외 메시지에 실어 준다.
 _LICENSE_WORDS = ("license", "licence", "라이선스")
@@ -59,14 +59,19 @@ def build(
     if not step.is_file() or step.stat().st_size == 0:
         raise StageFailure("geometry_import", f"입력 형상이 없습니다: {input_name}")
 
+    # **CAD 의 선언을 먼저 읽는다** — 세션을 그 계로 세우기 때문에 형상을 넣기 전에 알아야
+    # 한다. 선언이 모르는 이름이면 여기서 멈춘다(Mechanical 을 띄우기 전에).
+    system = _declared_system(workdir)
+
     app = _start_app(version)
     try:
-        _guard_unit_system(app)
+        _use_unit_system(app, system)
         bodies = _import_geometry(app, step)
-        _apply_material(spec, bodies)
+        _apply_material(spec, bodies, system)
         analysis = _add_modal(app, spec)
+        _guard_solver_units(analysis, system)
         regions = _apply_constraints(app, spec, workdir, bodies, analysis)
-        mass = _mass_kg(spec, bodies)
+        mass = _mass_kg(spec, bodies, system)
         nodes, elements = _mesh(app, spec)
 
         dat = workdir / "model.dat"
@@ -101,9 +106,12 @@ def build(
                 "ansys_version": version,
                 "constrained_regions": regions,
                 "mass_kg": mass,
+                "unit_system": system.key,
+                "solver_unit_system": system.solver,
             },
             detail=(
                 f"바디 {len(bodies)} · 절점 {nodes:,} · 요소 {elements:,}"
+                f" · 단위계 {system.key}"
                 + (f" · 구속 {' · '.join(regions)}" if regions else " · 자유-자유")
             ),
         )
@@ -159,22 +167,76 @@ def _global(name: str) -> Any:
     return value
 
 
-def _guard_unit_system(app: Any) -> None:
-    """활성 단위계가 MKS 인가.
+def _declared_system(workdir: Path) -> units.UnitSystem:
+    """CAD 가 선언한 단위계. 점 파일이 없으면 기본(SI)이다.
 
-    **아니면 세우지 않는다** — 명령 조각의 숫자에는 단위가 없다.
+    **모르는 이름이면 여기서 멈춘다.** 「아마 SI 겠지」 로 돌리면 틀렸을 때 나오는 것은 오류가
+    아니라 그럴듯한 값이다(`app/core/units.py` 머리말).
     """
+    path = workdir / TOPOLOGY_NAME
+    if not path.is_file():
+        return units.DEFAULT
     try:
-        active = str(app.ExtAPI.Application.ActiveUnitSystem)
-    except Exception:  # pragma: no cover - 읽을 수 없으면 넘어간다(값 자체는 기본이 MKS)
-        logger.warning("활성 단위계를 읽지 못했습니다 — MKS 로 가정합니다", exc_info=True)
-        return
-    if EXPECTED_UNIT_SYSTEM not in active:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as failure:
+        raise StageFailure(
+            "internal", f"{TOPOLOGY_NAME} 을 읽지 못했습니다: {failure}"
+        ) from failure
+    try:
+        return units.declared_in(payload)
+    except units.UnknownUnitSystem as failure:
         raise StageFailure(
             "internal",
-            f"활성 단위계가 {active} 입니다. 물성 명령이 Pa · kg/m³ 로 읽히려면 "
-            f"{EXPECTED_UNIT_SYSTEM}(m · kg · N · s)여야 합니다.",
-            details={"unit_system": active},
+            f"{failure} — CAD 가 보낸 계를 세울 수 없으면 값을 넣지 않습니다.",
+            details={"declared": failure.declared, "known": sorted(units.KNOWN)},
+        ) from failure
+
+
+def _use_unit_system(app: Any, system: units.UnitSystem) -> None:
+    """**선언한 계로 세션을 세운다** — 검사만 하지 않는다.
+
+    mm 로 만든 형상에 mm 계가 맞고, CAD 의 기본이 그것이다. 세우지 못하면 세션은 MKS 인데
+    값은 mm 계라는 **가장 나쁜 짝**이 되므로 거기서 멈춘다.
+    """
+    try:
+        enum = _global("MechanicalUnitSystem")
+        wanted = getattr(enum, system.mechanical)
+        app.ExtAPI.Application.ActiveUnitSystem = wanted
+        active = str(app.ExtAPI.Application.ActiveUnitSystem)
+    except Exception as failure:
+        raise StageFailure(
+            "internal",
+            f"활성 단위계를 {system.mechanical} 로 세우지 못했습니다: {failure}",
+            details={"unit_system": system.key},
+        ) from failure
+    if system.mechanical not in active:
+        raise StageFailure(
+            "internal",
+            f"활성 단위계가 {active} 입니다 — {system.mechanical} 로 세웠는데 "
+            "안 바뀌었습니다.",
+            details={"unit_system": system.key, "active": active},
+        )
+    logger.info("단위계 %s ← 선언 %s", active, system.key)
+
+
+def _guard_solver_units(analysis: Any, system: units.UnitSystem) -> None:
+    """**`.dat` 의 숫자가 읽히는 계**를 확인한다 — 표시계가 아니라 이쪽이다.
+
+    실측(2026-09-24): `SolverUnits` 기본값이 `ActiveSystem` 이고 그때 `SolverUnitSystem` 은
+    표시계를 따라간다(`StandardNMMton` → `ConsistentNMM`). 누군가 그 자리를 손으로 바꿔 두면
+    명령 조각의 숫자만 조용히 다른 계로 읽히므로 여기서 본다.
+    """
+    try:
+        solver = str(analysis.AnalysisSettings.SolverUnitSystem)
+    except Exception:  # pragma: no cover - 판에 따라 없을 수 있다
+        logger.warning("솔버 단위계를 읽지 못했습니다 — 표시계를 믿습니다", exc_info=True)
+        return
+    if system.solver not in solver:
+        raise StageFailure(
+            "internal",
+            f"솔버 단위계가 {solver} 입니다. 물성 명령의 숫자는 이 계로 읽히므로 "
+            f"{system.solver} 여야 합니다(선언 {system.key}).",
+            details={"unit_system": system.key, "solver_unit_system": solver},
         )
 
 
@@ -204,18 +266,30 @@ def _import_geometry(app: Any, step: Path) -> list[Any]:
     return bodies
 
 
-def _apply_material(spec: ModalSpec, bodies: list[Any]) -> None:
+def material_commands(material: MaterialSpec, system: units.UnitSystem) -> str:
+    """물성 명령 조각의 글. **숫자를 세션의 계로 환산해서 적는다.**
+
+    스펙은 사람이 읽는 단위로 들어온다(`youngs_modulus_gpa` · `density_kg_m3`). 세션이 mm 계면
+    그 값을 MPa · t/mm³ 로 적어야 하고, 그러지 않으면 10⁶ 배 틀린 값이 **오류 없이** 들어간다.
+    """
+    modulus = system.stress(material.youngs_modulus_gpa * 1e9)
+    density = system.density(material.density_kg_m3)
+    # 머리글은 **ASCII 로 적는다** — Mechanical 이 `.dat` 를 쓸 때 한글 주석이 깨져 나온다
+    # (실측: 「?????」). 솔버는 주석을 읽지 않지만, 덱을 여는 사람은 읽는다.
+    return (
+        f"! SimEngBay material override: {material.name} [{system.key}]\n"
+        f"MP,EX,matid,{modulus:.6g}\n"
+        f"MP,PRXY,matid,{material.poisson_ratio:.6g}\n"
+        f"MP,DENS,matid,{density:.6g}\n"
+    )
+
+
+def _apply_material(spec: ModalSpec, bodies: list[Any], system: units.UnitSystem) -> None:
     """바디마다 명령 조각으로 물성을 덮어쓴다.
 
     `matid` 는 Mechanical 이 조각에 심어 주는 값이다 — 바디마다 재료 번호가 다를 수 있다.
     """
-    material = spec.material
-    text = (
-        f"! SimEngBay — 스펙의 물성으로 덮어쓴다 ({material.name})\n"
-        f"MP,EX,matid,{material.youngs_modulus_gpa * 1e9:.6g}\n"
-        f"MP,PRXY,matid,{material.poisson_ratio:.6g}\n"
-        f"MP,DENS,matid,{material.density_kg_m3:.6g}\n"
-    )
+    text = material_commands(spec.material, system)
     for body in bodies:
         snippet = body.AddCommandSnippet()
         snippet.AppendText(text)
@@ -227,11 +301,12 @@ def _add_modal(app: Any, spec: ModalSpec) -> Any:
     return analysis
 
 
-def _mass_kg(spec: ModalSpec, bodies: list[Any]) -> float | None:
+def _mass_kg(spec: ModalSpec, bodies: list[Any], system: units.UnitSystem) -> float | None:
     """부피 x 밀도. **설계점 비교의 두 번째 축이다** — 지그는 가볍고 단단해야 한다.
 
-    부피는 활성 단위계(MKS)에서 m³ 로 온다(`_guard_unit_system` 이 그것을 보장한다). 못 읽으면
-    `None` — **틀린 질량은 맞는 침묵보다 나쁘다.**
+    부피는 **활성계의 길이³** 로 온다(실측: mm 계에서 113,395 mm³, MKS 로 같은 형상이
+    1.134e-4 m³). 그래서 계를 알아야 kg 이 나온다 — 못 읽으면 `None` 이다:
+    **틀린 질량은 맞는 침묵보다 나쁘다.**
     """
     try:
         volume = sum(float(body.Volume.Value) for body in bodies)
@@ -240,7 +315,7 @@ def _mass_kg(spec: ModalSpec, bodies: list[Any]) -> float | None:
         return None
     if volume <= 0:
         return None
-    return round(volume * spec.material.density_kg_m3, 4)
+    return round(system.volume_m3(volume) * spec.material.density_kg_m3, 4)
 
 
 def _face_records(bodies: list[Any]) -> list[FaceRecord]:

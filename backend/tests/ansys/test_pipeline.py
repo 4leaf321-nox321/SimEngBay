@@ -154,7 +154,12 @@ def test_DOE_점_파일_한_장으로_구속까지_간다(workdir: Path) -> None
     Mechanical 이 받아 주는가」 는 아무도 안 본 채로 남는다 — 조건 뭉치가 늘어난 파일을
     모델링이 그대로 읽는지 여기서 본다.
 
-    실측(2026-09-24, 2025 R2 Student · Windows): 1차 1,519 Hz · 강체 모드 0.
+    **그리고 단위계다.** 이 폴더는 `conditions.units.system = mm_n_tonne` 을 선언한다 — 세션을
+    그 계로 세우고 물성 숫자도 그 계로 적는다(2026-09-24 결정 1+3). 환산이 틀리면 나오는 것은
+    오류가 아니라 **그럴듯한 값**이다: 탄성계수를 Pa 로 적으면 10⁶ 배 작아져 1차가 1.5 Hz 로
+    내려간다. 그래서 MKS 로 돌린 같은 형상의 값과 견준다.
+
+    실측(2026-09-24, 2025 R2 Student · Windows): mm 계로 세워도 1차 1,519 Hz — MKS 와 같다.
     """
     shutil.copy(SHARED_DOE / "shapes" / "8f3a1c92.step", workdir / "input.step")
     # **점 파일을 그대로 `topology.json` 자리에 둔다** — 가져오기가 하는 일과 같다.
@@ -170,11 +175,18 @@ def test_DOE_점_파일_한_장으로_구속까지_간다(workdir: Path) -> None
         result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
         if stage == "modeling":
             assert result.summary["constrained_regions"] == ["bolt_holes"]
+            # 선언대로 세웠는가 — `.dat` 의 숫자가 읽히는 계까지 함께 남긴다.
+            assert result.summary["unit_system"] == "mm_n_tonne"
+            assert result.summary["solver_unit_system"] == "ConsistentNMM"
+            # 질량은 계와 상관없이 kg 이다 — 부피를 mm³ 로 받고 안 고치면 10⁹ 배 커진다.
+            assert 0.5 < float(result.summary["mass_kg"]) < 1.5
 
     result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
     assert result["boundary"] == "constrained"
     assert result["rigid_body_modes"] == 0
     assert all(one["frequency_hz"] > 1.0 for one in result["modes"])
+    # **MKS 로 돌린 같은 형상과 같은 값**(1,519 Hz). 단위가 어긋나면 여기서 자릿수가 갈린다.
+    assert 1500 < result["modes"][0]["frequency_hz"] < 1540
 
 
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:

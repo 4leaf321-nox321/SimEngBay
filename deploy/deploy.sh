@@ -154,6 +154,12 @@ WORKER_COUNT="${WORKER_COUNT:-1}"
 ANSYS_HOST_DIR="${ANSYS_HOST_DIR:-}"
 #: Ansys 버전 번호(252 = 2025 R2). 임베디드가 찾는 환경변수 이름(AWP_ROOT252)에 들어간다.
 ANSYS_VERSION="${ANSYS_VERSION:-252}"
+#: CAD(CompCore)가 DOE 를 내보내는 공용 폴더. 주면 컨테이너의 /data/doe 에 **읽기 전용**으로
+#: 걸고 .env 의 DOE_ROOTS 를 그 경로로 채운다. 안 주면 DOE 가져오기가 막힌다(그것이 기본값 —
+#: 아무 경로나 읽게 두면 그 화면이 서버의 모든 폴더를 여는 문이 된다).
+DOE_ROOT_HOST_DIR="${DOE_ROOT_HOST_DIR:-}"
+#: 컨테이너 안에서 그 폴더가 보이는 이름. 앱의 DOE_ROOTS 가 이 값이다.
+DOE_ROOT_IN_CONTAINER="/data/doe"
 MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
 # 설치된 systemd 유닛에서 Environment=KEY=VALUE 값을 읽는다(없으면 빈 문자열).
 # → 한 번 배포한 MCP 설정을 다음 배포가 자동으로 기억하게 하는 장치.
@@ -292,6 +298,11 @@ SQL
         # 컨테이너 안에서 보이는 경로다 — 유닛이 $BACKUP_HOST_DIR 를 /data/backup 에 건다.
         sed -i -e "s|^# BACKUP_DIR=.*|BACKUP_DIR=/data/backup|" "$ENV_FILE"
     fi
+    if [[ -n "$DOE_ROOT_HOST_DIR" ]]; then
+        # 여기도 **컨테이너 안에서 보이는 경로**다. 호스트 경로를 적으면 앱이 없는 폴더를
+        # 열려다 「폴더가 없습니다」 만 말한다 — 그때 사람은 마운트를 의심하지 않는다.
+        sed -i -e "s|^# DOE_ROOTS=.*|DOE_ROOTS=$DOE_ROOT_IN_CONTAINER|" "$ENV_FILE"
+    fi
     if [[ -n "$HA_ROLE" ]]; then
         # 프록시 뒤 · 경로 접두어. nginx 가 /<slug>/ 를 떼고 넘기고, 앱은 화면 · 쿠키 · API 주소를
         # 이 접두어 아래로 맞춘다. 쿠키의 Secure 는 요청이 https 인지 보고 앱이 스스로 붙인다 —
@@ -372,6 +383,13 @@ render_unit_paths() {  # $1=template
         backup_sed='/^@@BACKUP_BIND@@/d'
     fi
     # 해석 워커만 쓰는 자리 — Ansys 설치본. 앱 유닛 템플릿에는 이 표식이 없어 아무 일도 안 한다.
+    # CAD 가 내보내는 공용 폴더 — 앱(탐색 · 가져오기)과 워커 유닛이 같은 것을 본다.
+    local doe_sed
+    if [[ -n "$DOE_ROOT_HOST_DIR" ]]; then
+        doe_sed="s|^@@DOE_BIND@@.*|    --bind $DOE_ROOT_HOST_DIR:$DOE_ROOT_IN_CONTAINER:ro \\\\|"
+    else
+        doe_sed='/^@@DOE_BIND@@/d'
+    fi
     local ansys_env_sed
     if [[ -n "$ANSYS_HOST_DIR" ]]; then
         ansys_sed="s|^@@ANSYS_BIND@@.*|    --bind $ANSYS_HOST_DIR:/ansys_inc \\\\|"
@@ -390,6 +408,7 @@ render_unit_paths() {  # $1=template
         -e "s|@@LOG_DIR@@|$LOG_HOST_DIR|g" \
         -e "s|@@BACKUP_DIR@@|${BACKUP_HOST_DIR:-}|g" \
         -e "$backup_sed" \
+        -e "$doe_sed" \
         -e "$ansys_sed" \
         -e "$ansys_env_sed" \
         "$1"
@@ -641,6 +660,7 @@ cmd_install() {
   접속   : $( [[ -n "$HA_ROLE" ]] && echo "https://$PUBLIC_HOST/$APP_SLUG/  (직접: http://$SELF_IP:$APP_PORT/)" || echo "http://<서버주소>:$APP_PORT/" )
   자료   : 첨부 $FILESTORE_HOST_DIR · 설정 $ENV_FILE · 로그 $LOG_HOST_DIR$( [[ -n "$BACKUP_HOST_DIR" ]] && echo " · 백업 $BACKUP_HOST_DIR" )
   워커   : sudo systemctl status ${WORKER_SERVICE_NAME}@1   (해석 작업 $WORKER_COUNT 개)
+  DOE    : $( [[ -n "$DOE_ROOT_HOST_DIR" ]] && echo "$DOE_ROOT_HOST_DIR → $DOE_ROOT_IN_CONTAINER (읽기 전용)" || echo "안 걸림 — DOE_ROOT_HOST_DIR 를 주면 가져오기 화면이 열립니다" )
   MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)
 
   위에 찍힌 관리자 임시 비밀번호는 **다시 표시되지 않습니다.**

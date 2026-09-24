@@ -29,6 +29,7 @@ ExecStart=/usr/bin/apptainer exec \
     --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
     --bind @@FILESTORE_DIR@@:/data/filestore \
     --bind @@LOG_DIR@@:/data/logs \
+@@DOE_BIND@@
 @@ANSYS_BIND@@
 @@BACKUP_BIND@@
     @@INSTALL_DIR@@/app.sif \

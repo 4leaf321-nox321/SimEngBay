@@ -395,3 +395,19 @@ def test_우분투가_아니면_PPA_를_쓰지_않고_설치_안내를_준다(tm
     assert done.returncode != 0
     assert "apptainer.org" in done.stderr
     assert not any(one.startswith("add-apt-repository") for one in calls)
+
+
+def test_유닛_템플릿의_자리표시를_전부_채운다() -> None:
+    """**안 채워진 자리표시는 systemd 유닛에 그대로 남는다.**
+
+    `@@DOE_BIND@@` 같은 줄이 남으면 유닛이 아예 안 뜨고, journal 에는 「그런 명령이 없다」 만
+    찍힌다 — 템플릿에 자리를 더하고 `deploy.sh` 를 안 고쳤다는 사실은 거기 안 적힌다.
+    """
+    script = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    for template in sorted(DEPLOY.glob("*.template")):
+        for marker in set(re.findall(r"@@[A-Z_0-9]+@@", template.read_text(encoding="utf-8"))):
+            name = marker.strip("@")
+            assert name in script, (
+                f"{template.name} 의 {marker} 를 deploy.sh 가 채우지 않습니다 — "
+                f"그 줄이 유닛에 그대로 남아 서비스가 안 뜹니다"
+            )

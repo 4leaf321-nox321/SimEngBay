@@ -23,10 +23,15 @@ WorkingDirectory=@@INSTALL_DIR@@
 # **SIF 루트는 읽기 전용이다.** 여기 안 걸린 경로에 쓰려 하면 그 순간
 # `[Errno 30] Read-only file system` 이 나고, 그 오류는 그 기능을 쓰는
 # 사람에게만 보인다.
+#   /data/doe       읽기 전용. **CAD(CompCore)가 DOE 를 내보내는 공용 폴더** — 가져오기
+#                   화면이 이 아래를 탐색한다. `DOE_ROOT_HOST_DIR` 를 줬을 때만 걸린다.
+#                   **읽기만 한다**: 가져올 때 STEP 을 작업 폴더로 복사하므로 원본은 손대지
+#                   않는다. 읽기 전용이면 실수로 지울 수도 없다.
 ExecStart=/usr/bin/apptainer run \
     --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
     --bind @@FILESTORE_DIR@@:/data/filestore \
     --bind @@LOG_DIR@@:/data/logs \
+@@DOE_BIND@@
 @@BACKUP_BIND@@
     @@INSTALL_DIR@@/app.sif
 

@@ -153,6 +153,26 @@ sudo journalctl -u <slug> -f
 systemctl status '<slug>-worker@1'
 ```
 
+### DOE 공용 폴더 — CAD 가 내보낸 것을 읽으려면
+
+CAD 플랫폼(CompCore)이 설계점 묶음을 폴더로 내보내고, 이 서버가 **그 폴더를 읽어** 해석을
+건다. 컨테이너는 걸어 준 폴더만 보므로 설치할 때 알려 준다:
+
+```bash
+DOE_ROOT_HOST_DIR=/shared/doe sudo ./deploy.sh install
+```
+
+| | |
+| --- | --- |
+| 무엇을 거나 | 호스트의 그 폴더 → 컨테이너의 `/data/doe`, **읽기 전용** |
+| `.env` | `DOE_ROOTS=/data/doe` 를 자동으로 채운다(컨테이너 안에서 보는 경로) |
+| 안 주면 | DOE 가져오기 화면이 「공용 폴더가 설정돼 있지 않습니다」 라고 말한다. 단건 업로드는 그대로 된다 |
+| 권한 | **읽기만 하면 된다.** 가져올 때 STEP 을 작업 폴더로 복사하므로 원본은 손대지 않는다 |
+| CAD 쪽과의 관계 | CompCore 의 `DOE_EXPORT_ROOT` 와 **같은 실제 폴더**여야 한다. 두 서버가 다른 기계면 공유 스토리지(NFS · SMB)를 양쪽에 마운트한다 — 경로 이름은 서로 달라도 된다 |
+
+> **공유 스토리지가 없는 배치라면** 폴더로는 주고받을 수 없다. 그때는 CAD 쪽에 번들 내려받기
+> API 를 두고 이 서버가 받아 오는 방식이 필요하다 — 아직 없다(정해지면 이 자리에 설정이 는다).
+
 > **워커 수는 설치할 때 정한다** — `WORKER_COUNT=4 sudo ./deploy.sh install`(기본 1).
 > 워커 하나가 한 번에 작업 하나를 돌린다. 1.5단계에서 진짜 Mechanical 이 붙으면
 > **라이선스 수를 넘기지 않는다** — 넘긴 워커는 라이선스 오류로 실패한다.
@@ -265,6 +285,9 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | 화면이 500, 로그에 "없는 컬럼" | 마이그레이션이 안 돌았다. `sudo ./deploy.sh update` |
 | **해석 작업이 「대기」 에서 안 움직인다** | 워커가 안 돈다. `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
 | 해석 작업이 `license` 로 실패한다 | 워커 수가 Mechanical 라이선스 수보다 많다. `WORKER_COUNT` 를 줄여 다시 설치한다 |
+| **DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 없이 설치했다. 그 값을 주고 `sudo ./deploy.sh update` |
+| DOE 화면에 「폴더가 없습니다」 | `.env` 의 `DOE_ROOTS` 가 **호스트 경로**를 가리킨다. 컨테이너 안에서 보이는 이름(`/data/doe`)이어야 한다 |
+| 폴더는 보이는데 DOE 표시가 안 붙는다 | 그 폴더에 `manifest.csv` 가 없다 — CAD 가 내보내기를 끝내지 않았거나 상위 폴더를 보고 있다 |
 | 포트가 이미 쓰인다 | 같은 서버의 다른 플랫폼과 겹쳤다. `ss -ltnp 'sport = :<포트>'` |
 | 업로드 파일에 `Permission denied` | `sudo chown -R <계정>:<계정> ~/apps/<slug>/filestore` |
 | **`bad interpreter: /usr/bin/env bash^M`** | 스크립트가 Windows 를 거치며 CRLF 가 됐다. 번들에서 푼 것을 그대로 쓴다(리눅스에서 만들어진다). 이미 섞였으면 `sed -i 's/\r$//' *.sh` |

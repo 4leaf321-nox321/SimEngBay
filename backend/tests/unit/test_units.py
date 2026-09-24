@@ -62,9 +62,8 @@ def test_CAD_가_환산한_값과_숫자까지_맞는다() -> None:
     """**남의 환산과 우리 환산이 같은가.** CompCore 는 `payload`(SI) 옆에 그 계로 환산한
     `converted` 를 함께 보낸다 — 우리 계수가 틀리면 여기서 갈린다.
 
-    `payload.density` 는 MatNexus 화면 표시값이라 단위가 `density_unit` 에 따로 있다.
-    **SI 로 읽을 칸은 `density_si` 다** — 「전부 SI」 로 가정하면 밀도는 맞고 탄성계수가
-    10⁶ 배 틀린다(그쪽이 겪은 사고).
+    밀도는 **값과 단위를 짝으로** 읽는다(`density_from`). 이 픽스처는 `tonne/mm3` 로 온 옛
+    응답이고, 지금 MatNexus 는 `kg/m3` 로 준다 — 칸 이름은 같고 값만 10¹² 배 다르다.
     """
     for number in (1, 2):
         payload = _point(WITH_CONDITIONS, number)
@@ -72,13 +71,49 @@ def test_CAD_가_환산한_값과_숫자까지_맞는다() -> None:
         material = payload["conditions"]["materials"][0]
         source, converted = material["payload"], material["converted"]
         modulus_pa = source["declared_properties"][0]["points"][0]["value_si"]
+        density_kg_m3 = units.density_from(source["density"], source["density_unit"])
 
         assert math.isclose(
             system.stress(modulus_pa), converted["youngs_modulus"], rel_tol=1e-9
         )
-        assert math.isclose(
-            system.density(source["density_si"]), converted["density"], rel_tol=1e-9
-        )
+        assert math.isclose(system.density(density_kg_m3), converted["density"], rel_tol=1e-9)
+        # 이 픽스처에는 옛 `density_si` 칸도 있다 — 있을 때는 같은 값이어야 한다.
+        assert math.isclose(density_kg_m3, source["density_si"], rel_tol=1e-9)
+
+
+def test_MatNexus_가_SI_로_주기_시작해도_같은_값이_된다() -> None:
+    """**MatNexus 응답이 바뀌었다 (2026-09-25)** — `density` 가 kg/m³ 로 오고 `density_unit`
+    이 `kg/m3` 이며 `density_si` 칸은 없어졌다.
+
+    칸 이름으로 단위를 가정하면 여기서 갈린다: 옛 응답의 7.85e-9(t/mm³)와 새 응답의
+    7850(kg/m³)이 **같은 재료**인데, 어느 한쪽을 SI 로 단정하면 10¹² 배 틀린다.
+    """
+    old_shape: dict[str, Any] = {
+        "density": 7.85e-9,
+        "density_unit": "tonne/mm3",
+        "density_si": 7850.0,
+    }
+    new_shape: dict[str, Any] = {"density": 7850.0, "density_unit": "kg/m3"}
+
+    assert math.isclose(
+        units.density_from(old_shape["density"], old_shape["density_unit"]),
+        units.density_from(new_shape["density"], new_shape["density_unit"]),
+        rel_tol=1e-9,
+    )
+    # 새 응답에는 `density_si` 가 없다 — 그 칸을 찾는 코드는 여기서 걸린다.
+    assert "density_si" not in new_shape
+
+    # 표기가 흔들려도 같게 읽는다(`kg/m^3` · `KG/M3`).
+    assert units.density_from(7850.0, "kg/m^3") == 7850.0
+    assert units.density_from(2.7, "g/cm3") == 2700.0
+
+
+def test_단위가_없거나_모르면_밀도를_읽지_않는다() -> None:
+    """**단위가 빈 값을 SI 로 가정하는 것**이 MatNexus 가 겪은 사고다 — 그러면 밀도만 맞고
+    나머지가 틀린 채로 해석이 돈다."""
+    for unit in (None, "", "lb/in3", "kg"):
+        with pytest.raises(units.UnknownDensityUnit):
+            units.density_from(7850.0, unit)
 
 
 def test_환산은_되돌릴_수_있다() -> None:

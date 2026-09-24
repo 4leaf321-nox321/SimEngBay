@@ -17,6 +17,16 @@ MatNexus `/api/fitting/unit-systems` 와 같다). 그쪽 기본은 `mm_n_tonne` 
 **모르는 선언은 거절한다.** 「아마 SI 겠지」 로 돌리면 그 추측이 틀렸을 때 나오는 것은 오류가
 아니라 **그럴듯한 값**이다.
 
+## 물성 원본에서 직접 읽을 때 (2026-09-25)
+
+MatNexus 응답이 바뀌었다 — `density` 가 SI(kg/m³)로 오고 `density_unit` 이 `kg/m3` 이며,
+전에 있던 `density_si` 칸은 **없어졌다**. 그러니 원본에서 값을 꺼낼 때 칸 이름으로 SI 를
+가정하면 안 된다: **값과 단위를 짝으로 읽는다**(`density_from`). 옛 응답은 `tonne/mm3` 로
+오고 그 차이는 10¹² 배다 — 값만 보고는 어느 쪽인지 알 수 없다.
+
+가장 안전한 길은 여전히 CompCore 의 `converted` 를 쓰는 것이다. 이 함수는 그것이 없을 때의
+대비 경로다.
+
 ## 실측 (2026-09-24, 2025 R2 · Windows)
 
 - `MechanicalUnitSystem` 에 `StandardNMMton`(mm · t · N) 이 있다. `StandardNMM` 은
@@ -102,6 +112,17 @@ KNOWN: dict[str, UnitSystem] = {one.key: one for one in (SI, MM_N_TONNE)}
 DEFAULT = SI
 
 
+#: 밀도 단위 이름 → kg/m³ 로 가는 곱수. **정의된 것만** 둔다 — 짐작해서 더하면 10³ 배
+#: 틀린 값이 조용히 들어온다. 이름은 MatNexus 가 쓰는 표기(`kg/m3` · `tonne/mm3`)를 따른다.
+DENSITY_UNITS: dict[str, float] = {
+    "kg/m3": 1.0,
+    "g/cm3": 1e3,
+    "kg/mm3": 1e9,
+    "tonne/mm3": 1e12,
+    "t/mm3": 1e12,
+}
+
+
 class UnknownUnitSystem(ValueError):
     """모르는 단위계 선언. **추측하지 않는다** — 틀린 추측은 그럴듯한 값을 낸다."""
 
@@ -139,3 +160,28 @@ def declared_in(payload: Any) -> UnitSystem:
     if not isinstance(units, dict):
         return DEFAULT
     return resolve(units.get("system"))
+
+
+class UnknownDensityUnit(ValueError):
+    """모르는 밀도 단위. 값만 보고는 어느 계인지 알 수 없다 — 그래서 거절한다."""
+
+    def __init__(self, declared: str) -> None:
+        self.declared = declared
+        super().__init__(
+            f"모르는 밀도 단위입니다: {declared!r} "
+            f"(아는 것: {' · '.join(sorted(DENSITY_UNITS))})"
+        )
+
+
+def density_from(value: float, unit: str | None) -> float:
+    """**값과 단위를 짝으로** 읽어 kg/m³ 로. 물성 원본(`payload`)에서 꺼낼 때 쓴다.
+
+    `2026-09-25` 이후 MatNexus 는 `density` 를 SI 로 주고 `density_unit` 이 `kg/m3` 다. 그전에
+    고른 재료는 `tonne/mm3` 로 온다 — 10¹² 배 차이인데 **칸 이름은 같다.** 단위가 비어 있으면
+    거절한다: 그때 SI 로 가정하는 것이 바로 그쪽이 겪은 사고다.
+    """
+    key = (unit or "").strip().lower().replace("^3", "3").replace("³", "3")
+    factor = DENSITY_UNITS.get(key)
+    if factor is None:
+        raise UnknownDensityUnit(unit or "")
+    return float(value) * factor

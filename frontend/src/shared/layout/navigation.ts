@@ -83,13 +83,8 @@ export const NAV_GROUPS: NavGroup[] = [
     // 무엇으로 바뀌어야 하는지 stub 화면이 말한다.
     title: "해석",
     items: [
-      {
-        label: "DOE 비교",
-        icon: GitCompare,
-        to: "/simulations/studies",
-        summary:
-          "CAD 가 내보낸 설계점 묶음과 그 결과. 바꾼 변수 대 고유진동수 · 질량을 견준다.",
-      },
+      // **동선이 곧 순서다.** 작업을 걸고(해석 작업) → 하나를 들여다보고 → 여러 설계점을
+      // 견준다(DOE 비교). 견주기를 앞에 두면 아직 아무것도 없는 화면이 첫 자리에 선다.
       {
         label: "해석 작업",
         icon: LayoutGrid,
@@ -97,6 +92,13 @@ export const NAV_GROUPS: NavGroup[] = [
         summary:
           "CAD 형상 · 물성 · 경계조건을 받아 Ansys Mechanical 모델을 만들고, 솔버에 넘긴 뒤 " +
           "결과를 추출하는 작업(job)의 목록.",
+      },
+      {
+        label: "DOE 비교",
+        icon: GitCompare,
+        to: "/simulations/studies",
+        summary:
+          "CAD 가 내보낸 설계점 묶음과 그 결과. 바꾼 변수 대 고유진동수 · 질량을 견준다.",
       },
     ],
   },

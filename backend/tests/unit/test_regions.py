@@ -118,3 +118,22 @@ def test_없는_영역을_달라고_하면_실패한다() -> None:
     )
     assert not found.ok
     assert "없는 영역" in found.failures[0].reason
+
+
+def test_면이_아닌_선택_그룹은_그렇다고_말한다() -> None:
+    """CAD 의 선택 그룹은 **면 · 엣지 · 점 · 바디**를 담을 수 있다(CompCore 3장). 지문의 모양이
+    종류마다 달라서, 엣지 그룹은 `midpoint` · `length` 로 온다.
+
+    그대로 면 매칭에 넣으면 「중심 좌표가 없습니다」 가 나가고 **사람은 CAD 가 면을 잘못 냈다고
+    읽는다.** 무엇이 왔는지를 말해야 다음에 할 일을 안다(그쪽에서 면 그룹으로 다시 고르는 것).
+    """
+    topology = _topology("plate_holes")
+    topology["regions"]["윗면_모서리"] = [{"midpoint": [0, 0, 5], "length": 60.0}]
+    found = match_regions(topology, _faces("plate_holes"), wanted_regions=["윗면_모서리"])
+    assert not found.ok
+    assert "엣지" in found.failures[0].reason and "면 그룹만" in found.failures[0].reason
+
+    topology["regions"]["측정점"] = [{"point": [60, 0, 12], "edges": 3}]
+    found = match_regions(topology, _faces("plate_holes"), wanted_regions=["측정점"])
+    assert not found.ok
+    assert "점(vertex)" in found.failures[0].reason

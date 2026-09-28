@@ -168,6 +168,22 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
     return True, distance, ""
 
 
+def _not_a_face(rows: list[Any]) -> str:
+    """면이 아닌 지문이면 그 종류 이름. 면이면 빈 글자.
+
+    CAD 의 선택 그룹은 면 · 엣지 · 점 · 바디를 담을 수 있고(CompCore 3장), 지문의 모양이 종류
+    마다 다르다 — 엣지는 `midpoint` · `length`, 점은 `point` 다. 우리 매처는 면만 안다.
+    """
+    first = rows[0] if rows and isinstance(rows[0], dict) else {}
+    if "centroid" in first:
+        return ""
+    if "midpoint" in first:
+        return "엣지(edge)"
+    if "point" in first:
+        return "점(vertex)"
+    return ""
+
+
 def match_regions(
     topology: dict[str, Any],
     faces: list[FaceRecord],
@@ -196,6 +212,20 @@ def match_regions(
         if not wanted_faces:
             result.failures.append(
                 MatchFailure(name, 0, "topology.json 에 없는 영역입니다", {})
+            )
+            continue
+
+        kind = _not_a_face(wanted_faces)
+        if kind:
+            # **면 아닌 그룹은 짝짓지 않는다 — 그리고 그 이유를 그대로 말한다.** 그냥 두면
+            # 「중심 좌표가 없습니다」 가 나가고, 사람은 CAD 가 면을 잘못 냈다고 읽는다.
+            result.failures.append(
+                MatchFailure(
+                    name,
+                    0,
+                    f"{kind} 그룹입니다 — 지금은 면 그룹만 걸 수 있습니다",
+                    {},
+                )
             )
             continue
 

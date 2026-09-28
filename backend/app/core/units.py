@@ -1,8 +1,16 @@
 """단위계 — **선언을 읽고 거기에 맞춰 세션을 세운다.**
 
 CAD(CompCore)는 점 파일에 `conditions.units` 로 **어느 계로 보냈는지 선언한다**(열쇠 이름은
-MatNexus `/api/fitting/unit-systems` 와 같다). 그쪽 기본은 `mm_n_tonne` 이다 — mm 로 만든
-형상에 mm 계가 맞으니 바꾸라고 할 이유가 없다.
+MatNexus `/api/fitting/unit-systems` 와 같다). 기본은 `mm_n_tonne` 이다 — mm 로 만든 형상에
+mm 계가 맞다.
+
+**점 파일의 값은 늘 이 선언대로다.** 그쪽은 2026-09-28 부터 값을 **늘 mm · N · MPa · tonne 로
+적고**(한 화면에 mm 와 m 가 섞이던 것을 없앴다) 내보낼 때 이 계로 옮긴다 — 그러니 선언은
+「내보내기 계」이고, 받는 쪽이 할 일은 전과 같다: 선언을 읽고 그 계로 세션을 세운다.
+
+형상(STEP)과 `regions` 지문은 **선언과 무관하게 늘 mm 다**(`length_units`). Mechanical 의
+`GetGeoBody()` 면 값도 활성계와 상관없이 mm 라서(실측 2026-09-28) 둘이 그대로 짝지어진다 —
+활성계를 따르는 것은 `body.Volume` 쪽이다(`volume_m3`).
 
 ## 왜 검사만으로는 안 되는가 (2026-09-24 결정)
 

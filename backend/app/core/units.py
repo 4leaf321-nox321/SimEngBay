@@ -131,6 +131,18 @@ DENSITY_UNITS: dict[str, float] = {
 }
 
 
+#: 응력 단위 이름 → Pa 로 가는 곱수. **정의된 것만** 둔다(밀도와 같은 규칙). 물성의
+#: `converted` 는 단위 이름을 값과 함께 주므로, 계를 믿기보다 이름을 읽는 편이 안전하다.
+STRESS_UNITS: dict[str, float] = {
+    "pa": 1.0,
+    "kpa": 1e3,
+    "mpa": 1e6,
+    "gpa": 1e9,
+    "n/mm2": 1e6,
+    "n/m2": 1.0,
+}
+
+
 class UnknownUnitSystem(ValueError):
     """모르는 단위계 선언. **추측하지 않는다** — 틀린 추측은 그럴듯한 값을 낸다."""
 
@@ -192,4 +204,28 @@ def density_from(value: float, unit: str | None) -> float:
     factor = DENSITY_UNITS.get(key)
     if factor is None:
         raise UnknownDensityUnit(unit or "")
+    return float(value) * factor
+
+
+class UnknownStressUnit(ValueError):
+    """모르는 응력 단위. 물성에서 이것을 짐작하면 10⁶ 배 틀린 탄성계수가 들어온다."""
+
+    def __init__(self, declared: str) -> None:
+        self.declared = declared
+        super().__init__(
+            f"모르는 응력 단위입니다: {declared!r} "
+            f"(아는 것: {' · '.join(sorted(STRESS_UNITS))})"
+        )
+
+
+def stress_from(value: float, unit: str | None) -> float:
+    """**값과 단위를 짝으로** 읽어 Pa 로. 물성의 `converted` 가 `unit` 을 함께 준다.
+
+    선언된 계를 믿고 「mm 계니까 MPa 겠지」 로 읽지 않는다 — 같은 파일 안에 계가 둘인 자리가
+    이미 있었고(좌표계 원점), 이름이 곁에 있는데 굳이 추측할 이유가 없다.
+    """
+    key = (unit or "").strip().lower().replace("^2", "2")
+    factor = STRESS_UNITS.get(key)
+    if factor is None:
+        raise UnknownStressUnit(unit or "")
     return float(value) * factor

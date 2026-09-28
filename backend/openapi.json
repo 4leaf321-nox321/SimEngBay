@@ -3875,6 +3875,14 @@
           "skipped": {
             "type": "integer",
             "title": "Skipped"
+          },
+          "materials": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Materials",
+            "default": []
           }
         },
         "type": "object",

@@ -58,6 +58,12 @@ const SUMMARY_LABELS: Record<string, string> = {
   // 보고 알 수 없어서 — 틀리면 그럴듯한 값이 나온다 — 여기에 적어 둔다.
   unit_system: '단위계',
   solver_unit_system: '솔버 단위계',
+  // **무슨 물성으로 돌았나.** 재료를 훑는 DOE 에서는 이것이 결과의 절반이다 — 「CAD 가 보낸
+  // 값으로 돈 것인지」 를 값만 보고는 알 수 없다.
+  material: '물성',
+  material_from: '물성 출처',
+  youngs_modulus_gpa: '탄성계수',
+  density_kg_m3: '밀도',
 }
 
 function shownSummary(key: string, value: unknown): string {
@@ -65,6 +71,10 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'input_bytes' && typeof value === 'number') return shownSize(value)
   if (key === 'first_elastic_hz' && typeof value === 'number') return `${value.toFixed(2)} Hz`
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
+  if (key === 'material_from') return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
+  if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
+  if (key === 'density_kg_m3' && typeof value === 'number')
+    return `${value.toLocaleString()} kg/m³`
   // 버전 번호는 자릿수를 구분하지 않는다 — 252 가 「252」 여야지 「252」 에 쉼표가 붙으면 안 된다.
   if (key === 'ansys_version') return String(value)
   if (typeof value === 'number') return value.toLocaleString()

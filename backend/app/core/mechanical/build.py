@@ -23,7 +23,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core import units
+from app.core import materials, units
 from app.core.regions import FaceRecord, match_regions
 from app.core.spec import MaterialSpec, ModalSpec
 from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
@@ -62,16 +62,19 @@ def build(
     # **CAD 의 선언을 먼저 읽는다** — 세션을 그 계로 세우기 때문에 형상을 넣기 전에 알아야
     # 한다. 선언이 모르는 이름이면 여기서 멈춘다(Mechanical 을 띄우기 전에).
     system = _declared_system(workdir)
+    # **CAD 가 보낸 물성**. 읽을 수 없으면 여기서 멈춘다 — 빠진 물성은 Mechanical 이 기본값
+    # (구조용 강)으로 풀고, 그 사실은 고유진동수가 틀린 뒤에야 드러난다.
+    given = _declared_materials(spec, workdir, system)
 
     app = _start_app(version)
     try:
         _use_unit_system(app, system)
         bodies = _import_geometry(app, step)
-        _apply_material(spec, bodies, system)
+        used = _apply_material(spec, bodies, system, given)
         analysis = _add_modal(app, spec)
         _guard_solver_units(analysis, system)
         regions = _apply_constraints(app, spec, workdir, bodies, analysis)
-        mass = _mass_kg(spec, bodies, system)
+        mass = _mass_kg(used, bodies, system)
         nodes, elements = _mesh(app, spec)
 
         dat = workdir / "model.dat"
@@ -108,6 +111,12 @@ def build(
                 "mass_kg": mass,
                 "unit_system": system.key,
                 "solver_unit_system": system.solver,
+                # **무슨 물성으로 돌았나.** 적지 않으면 「CAD 가 보낸 재료로 돈 것인지」 를
+                # 나중에 알 방법이 없다 — 재료를 훑는 DOE 에서 그것이 결과의 절반이다.
+                "material": used.name,
+                "material_from": "cad" if given else "spec",
+                "youngs_modulus_gpa": round(used.youngs_modulus_gpa, 4),
+                "density_kg_m3": round(used.density_kg_m3, 4),
             },
             detail=(
                 f"바디 {len(bodies)} · 절점 {nodes:,} · 요소 {elements:,}"
@@ -167,21 +176,57 @@ def _global(name: str) -> Any:
     return value
 
 
+def _topology(workdir: Path) -> dict[str, Any] | None:
+    """CAD 가 보낸 점 파일 한 장(`topology.json`). 없으면 `None` — 오류가 아니다.
+
+    단위 선언 · 물성 · 영역 지문이 다 이 안에 있다(CompCore 가 2026-09-24 에 합쳤다). 한 번만
+    읽어 세 자리가 나눠 쓴다.
+    """
+    path = workdir / TOPOLOGY_NAME
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as failure:
+        raise StageFailure(
+            "internal", f"{TOPOLOGY_NAME} 을 읽지 못했습니다: {failure}"
+        ) from failure
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _declared_materials(
+    spec: ModalSpec, workdir: Path, system: units.UnitSystem
+) -> list[materials.Material]:
+    """CAD 가 보낸 물성. 사람이 「내 값으로」 라고 했으면(`material_from="spec"`) 안 읽는다.
+
+    **못 읽으면 실패한다.** 빠진 물성은 Mechanical 이 기본값(구조용 강)으로 풀어 버리고, 그
+    결과는 값이 안 나오는 게 아니라 **그럴듯한 값이 나오고 틀린다.**
+    """
+    if spec.material_from == "spec":
+        return []
+    payload = _topology(workdir)
+    if payload is None:
+        return []
+    try:
+        return materials.read(payload, system)
+    except materials.MaterialProblem as failure:
+        raise StageFailure(
+            "internal",
+            f"{failure} — 사람이 넣은 물성으로 돌리려면 스펙의 물성 출처를 「스펙」 으로 "
+            "바꾸세요.",
+            details={"material": failure.material, "reason": failure.reason},
+        ) from failure
+
+
 def _declared_system(workdir: Path) -> units.UnitSystem:
     """CAD 가 선언한 단위계. 점 파일이 없으면 기본(SI)이다.
 
     **모르는 이름이면 여기서 멈춘다.** 「아마 SI 겠지」 로 돌리면 틀렸을 때 나오는 것은 오류가
     아니라 그럴듯한 값이다(`app/core/units.py` 머리말).
     """
-    path = workdir / TOPOLOGY_NAME
-    if not path.is_file():
+    payload = _topology(workdir)
+    if payload is None:
         return units.DEFAULT
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as failure:
-        raise StageFailure(
-            "internal", f"{TOPOLOGY_NAME} 을 읽지 못했습니다: {failure}"
-        ) from failure
     try:
         return units.declared_in(payload)
     except units.UnknownUnitSystem as failure:
@@ -284,15 +329,56 @@ def material_commands(material: MaterialSpec, system: units.UnitSystem) -> str:
     )
 
 
-def _apply_material(spec: ModalSpec, bodies: list[Any], system: units.UnitSystem) -> None:
-    """바디마다 명령 조각으로 물성을 덮어쓴다.
+def _apply_material(
+    spec: ModalSpec,
+    bodies: list[Any],
+    system: units.UnitSystem,
+    given: list[materials.Material],
+) -> MaterialSpec:
+    """바디마다 명령 조각으로 물성을 덮어쓴다. **쓴 물성을 돌려준다**(요약 · 질량이 쓴다).
 
     `matid` 는 Mechanical 이 조각에 심어 주는 값이다 — 바디마다 재료 번호가 다를 수 있다.
+
+    CAD 가 보낸 것이 있으면 그것이 먼저다. **바디마다 다른 재료는 아직 안 나눈다** — 어느
+    Mechanical 바디가 CAD 의 어느 파트인지는 부피 · 무게중심으로 짝지어야 하고(CompCore 5장),
+    그 자리가 없는 채로 「첫 재료를 전부에」 붙이면 **틀린 재료로 조용히 푼다.**
     """
-    text = material_commands(spec.material, system)
+    chosen = _one_material(spec, bodies, given)
+    text = material_commands(chosen, system)
     for body in bodies:
         snippet = body.AddCommandSnippet()
         snippet.AppendText(text)
+    return chosen
+
+
+def _one_material(
+    spec: ModalSpec, bodies: list[Any], given: list[materials.Material]
+) -> MaterialSpec:
+    """이 형상에 쓸 물성 하나. 못 고르면 **고르지 않고 실패한다.**"""
+    if not given:
+        return spec.material
+    every = [one for one in given if one.every_body]
+    named = [one for one in given if not one.every_body]
+    if len(given) == 1 and (given[0].every_body or len(bodies) == 1):
+        # 바디가 하나면 이름이 붙어 있어도 그 바디밖에 없다.
+        picked = given[0]
+        if picked.notes:
+            logger.info("물성 %s — %s", picked.name, " · ".join(picked.notes))
+        return picked.spec()
+    if named:
+        raise StageFailure(
+            "internal",
+            "CAD 가 파트마다 다른 물성을 보냈습니다 — 바디를 짝지어 나눠 붙이는 기능이 아직 "
+            f"없습니다(파트: {' · '.join(' / '.join(one.bodies) for one in named)}). "
+            "스펙의 물성 출처를 「스펙」 으로 바꾸면 사람이 넣은 값 하나로 돌립니다.",
+            details={"materials": [one.name for one in given]},
+        )
+    raise StageFailure(
+        "internal",
+        f"CAD 가 모든 바디에 붙는 물성을 {len(every)}개 보냈습니다 — 어느 것으로 풀지 "
+        "알 수 없습니다.",
+        details={"materials": [one.name for one in given]},
+    )
 
 
 def _add_modal(app: Any, spec: ModalSpec) -> Any:
@@ -301,8 +387,12 @@ def _add_modal(app: Any, spec: ModalSpec) -> Any:
     return analysis
 
 
-def _mass_kg(spec: ModalSpec, bodies: list[Any], system: units.UnitSystem) -> float | None:
-    """부피 x 밀도. **설계점 비교의 두 번째 축이다** — 지그는 가볍고 단단해야 한다.
+def _mass_kg(
+    material: MaterialSpec, bodies: list[Any], system: units.UnitSystem
+) -> float | None:
+    """부피 x 밀도. **쓴 물성의 밀도**로 낸다 — CAD 가 보낸 재료면 그 밀도다.
+
+    설계점 비교의 두 번째 축이다 — 지그는 가볍고 단단해야 한다.
 
     부피는 **활성계의 길이³** 로 온다(실측: mm 계에서 113,395 mm³, MKS 로 같은 형상이
     1.134e-4 m³). 그래서 계를 알아야 kg 이 나온다 — 못 읽으면 `None` 이다:
@@ -315,7 +405,7 @@ def _mass_kg(spec: ModalSpec, bodies: list[Any], system: units.UnitSystem) -> fl
         return None
     if volume <= 0:
         return None
-    return round(system.volume_m3(volume) * spec.material.density_kg_m3, 4)
+    return round(system.volume_m3(volume) * material.density_kg_m3, 4)
 
 
 def _face_records(bodies: list[Any]) -> list[FaceRecord]:

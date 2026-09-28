@@ -1,0 +1,45 @@
+{
+  "system": "mm_n_tonne",
+  "properties": [
+    {
+      "item": "Young's modulus",
+      "key": "mechanical.youngs_modulus",
+      "unit": "MPa",
+      "points": [
+        {
+          "temperature_C": null,
+          "value": 68900.0
+        }
+      ],
+      "tier": "B",
+      "representative": true
+    },
+    {
+      "item": "Poisson ratio",
+      "key": "mechanical.poisson_ratio",
+      "unit": "1",
+      "points": [
+        {
+          "temperature_C": null,
+          "value": 0.33
+        }
+      ]
+    },
+    {
+      "item": "Density",
+      "key": "physical.density",
+      "unit": "tonne/mm3",
+      "points": [
+        {
+          "temperature_C": null,
+          "value": 2.7e-09
+        }
+      ]
+    }
+  ],
+  "density": 2.7e-09,
+  "density_key": "physical.density",
+  "density_unit": "tonne/mm3",
+  "poisson_ratio": 0.33,
+  "poisson_key": "mechanical.poisson_ratio"
+}

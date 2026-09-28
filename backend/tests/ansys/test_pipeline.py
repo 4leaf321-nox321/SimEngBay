@@ -189,6 +189,63 @@ def test_DOE_점_파일_한_장으로_구속까지_간다(workdir: Path) -> None
     assert 1500 < result["modes"][0]["frequency_hz"] < 1540
 
 
+@pytest.mark.parametrize(
+    ("number", "material", "modulus_gpa", "density", "mass_kg"),
+    [
+        (1, "SS400", 206.0, 7850.0, 0.8902),
+        (2, "AL6061", 68.9, 2700.0, 0.3062),
+    ],
+)
+def test_CAD_가_보낸_물성으로_돈다(
+    number: int,
+    material: str,
+    modulus_gpa: float,
+    density: float,
+    mass_kg: float,
+    workdir: Path,
+) -> None:
+    """**재료를 훑는 DOE 가 뜻을 갖는 자리.** 점 파일의 물성을 읽어 그 값으로 푼다.
+
+    여태는 사람이 넣은 한 벌을 모든 점에 썼다 — 그래서 SS400 점과 AL6061 점이 **이름만 다르고
+    결과가 똑같이** 나왔다. 여기서 보는 것은 셋이다:
+
+    - 스펙에 적힌 200 GPa 가 아니라 **CAD 의 206 GPa** 로 푼다(1번 점).
+    - 점마다 다른 재료로 푼다(2번은 68.9 GPa · 2,700).
+    - **질량이 갈린다** — 0.89 kg 대 0.31 kg. 주파수는 강과 알루미늄의 E/밀도 비가 비슷해서
+      1% 안쪽으로 닮으므로(1,542 · 1,520 Hz), 물성이 안 들어간 것을 주파수만 보고는 알 수 없다.
+      **질량이 그 유일한 증인이다.**
+    """
+    shutil.copy(SHARED_DOE / "shapes" / "8f3a1c92.step", workdir / "input.step")
+    shutil.copy(SHARED_DOE / "points" / f"p{number:04d}.json", workdir / "topology.json")
+    spec = dict(SPEC)  # 스펙의 물성은 SS400 200 GPa · 7,850 — CAD 가 이것을 덮는다
+    spec["mesh"] = {"element_size_mm": 6}
+    spec["constraints"] = [{"region": "bolt_holes", "kind": "fixed"}]
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    for stage in STAGES:
+        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+        if stage == "modeling":
+            summary = result.summary
+            # **무슨 물성으로 돌았나를 요약이 말한다** — 값만 보고는 알 수 없다.
+            assert summary["material"] == material
+            assert summary["material_from"] == "cad"
+            assert summary["youngs_modulus_gpa"] == pytest.approx(modulus_gpa, rel=1e-6)
+            assert summary["density_kg_m3"] == pytest.approx(density, rel=1e-6)
+            # 질량은 그 밀도로 낸다 — 재료가 안 바뀌면 여기가 같아진다.
+            assert float(summary["mass_kg"]) == pytest.approx(mass_kg, rel=0.01)
+
+    result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    assert result["rigid_body_modes"] == 0
+    first = result["modes"][0]["frequency_hz"]
+    # 스펙의 200 GPa 로 풀면 1,519 Hz 다(다른 시험이 그 값을 잰다). CAD 의 값으로 풀면
+    # 1번은 206 GPa 라서 **더 높고**, 2번은 알루미늄인데도 비슷하다.
+    assert 1400 < first < 1700
+    if number == 1:
+        assert first > 1530  # 200 GPa 로 풀었으면 1,519 였다
+
+
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:
     """**조용히 자유-자유로 풀지 않는다.** 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을
     「해석이 됐다」 로 읽는다."""

@@ -59,6 +59,11 @@ class ModalSpec(BaseModel):
 
     recipe: Literal["modal"] = "modal"
     material: MaterialSpec
+    material_from: Literal["cad", "spec"] = "cad"
+    """물성을 어디서 가져오나. `cad` 면 **CAD 가 보낸 것이 먼저**고 없으면 `material` 을 쓴다.
+
+    `spec` 은 「내가 넣은 값으로 돌려라」 다 — CAD 가 보낸 것을 일부러 무시한다. 어느 쪽으로
+    돌았는지는 모델링 단계 요약에 적힌다(안 적으면 나중에 결과를 믿을 수 없다)."""
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     modes: int = Field(default=10, ge=1, le=100)
     """찾을 **탄성** 모드 수. 강체 모드는 여기 세지 않는다 — 실행기가 6개를 더해 찾는다."""

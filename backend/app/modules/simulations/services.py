@@ -29,7 +29,7 @@ from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core import cleanup, executors
+from app.core import cleanup, executors, materials, units
 from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_inside
 from app.core.doe.browse import OutsideRoots
 from app.core.doe.folder import FolderProblem
@@ -586,7 +586,30 @@ def preview_doe(path_text: str) -> DoePreviewOut:
         points=[_preview_point(one) for one in doe.points],
         usable=len(doe.usable),
         skipped=len(doe.skipped),
+        materials=_doe_materials(doe),
     )
+
+
+def _doe_materials(doe: DoeFolder) -> list[str]:
+    """폴더가 함께 보낸 재료 이름 — 훑어볼 때 보여 준다.
+
+    **못 읽는 물성은 여기서 조용히 뺀다.** 미리보기는 「이 폴더에 무엇이 있나」 를 말하는
+    자리고, 값을 읽어 세우는 일은 모델링 단계가 한다(그때는 실패한다). 훑어보기가 오류로
+    죽으면 사람은 폴더를 고를 수조차 없다.
+    """
+    names: list[str] = []
+    for point in doe.usable:
+        if point.point_file is None or not point.has_conditions:
+            continue
+        try:
+            payload = json.loads(point.point_file.read_text(encoding="utf-8"))
+            system = units.declared_in(payload)
+            found = materials.read(payload, system)
+        except (OSError, ValueError):
+            continue
+        names.extend(one.name for one in found)
+    # 설계점마다 같은 재료가 되풀이된다 — 순서를 지키며 한 번씩만.
+    return list(dict.fromkeys(names))
 
 
 def import_doe(

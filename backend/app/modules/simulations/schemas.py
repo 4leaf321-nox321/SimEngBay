@@ -99,6 +99,9 @@ class DoePreviewOut(BaseModel):
     points: list[DoePointPreview]
     usable: int
     skipped: int
+    materials: list[str] = []
+    """CAD 가 함께 보낸 재료 이름들. 비어 있으면 물성은 사람이 넣어야 한다 — 화면이 그 차이를
+    말해 주지 않으면, 재료를 훑는 DOE 가 **이름만 다른 결과**로 돌아도 아무도 모른다."""
 
 
 class DoeEntryOut(BaseModel):

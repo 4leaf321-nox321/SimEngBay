@@ -56,12 +56,16 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
   const [listing, setListing] = useState<DoeListing | null>(null)
   const [preview, setPreview] = useState<DoePreview | null>(null)
   const [material, setMaterial] = useState('SS400')
+  // **CAD 가 보낸 물성이 먼저다.** 끄면 아래 칸의 값으로 모든 점을 돌린다 — 재료를 훑는 DOE
+  // 에서는 그러면 이름만 다른 결과가 나온다(그 사실을 화면이 말해 준다).
+  const [fromCad, setFromCad] = useState(true)
   const [modes, setModes] = useState('10')
   const [region, setRegion] = useState('bolt_holes')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const workspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
+  const cadMaterials = preview?.materials ?? []
 
   // 창을 열면 첫 뿌리부터 보여 준다 — 사람이 아무것도 안 쳐도 고를 것이 있어야 한다.
   useEffect(() => {
@@ -104,6 +108,7 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
             poisson_ratio: 0.3,
             density_kg_m3: 7850,
           },
+          material_from: fromCad ? 'cad' : 'spec',
           modes: Number(modes),
           // **모든 점에 같은 스펙을 쓴다** — 그래야 결과를 견줄 수 있다(그러려고 DOE 를 돌린다).
           constraints: region.trim() ? [{ region: region.trim(), kind: 'fixed' }] : [],
@@ -264,14 +269,34 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
                 </Table>
               </div>
 
-              <fieldset className="grid grid-cols-3 gap-3 rounded-md border p-3">
+              <fieldset className="space-y-3 rounded-md border p-3">
                 <legend className="px-1 text-sm font-medium">모든 점에 같은 조건</legend>
+                {/* **물성은 점마다 다를 수 있다** — CAD 가 재료를 훑었으면 그 값으로 돈다. */}
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={fromCad}
+                    disabled={cadMaterials.length === 0}
+                    onChange={(event) => setFromCad(event.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium">CAD 가 보낸 물성 쓰기</span>
+                    <span className="text-muted-foreground block text-xs">
+                      {cadMaterials.length > 0
+                        ? `이 폴더가 함께 보낸 재료: ${cadMaterials.join(' · ')}`
+                        : '이 폴더는 물성을 보내지 않았습니다 — 아래 값으로 돕니다.'}
+                    </span>
+                  </span>
+                </label>
+                <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="doe-material">재료</Label>
                   <Input
                     id="doe-material"
                     value={material}
                     onChange={(event) => setMaterial(event.target.value)}
+                    disabled={fromCad && cadMaterials.length > 0}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -293,6 +318,7 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
                     placeholder="비우면 자유-자유"
                     className="font-mono"
                   />
+                </div>
                 </div>
               </fieldset>
             </>

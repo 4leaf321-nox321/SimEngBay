@@ -1,0 +1,21 @@
+{
+  "system": "si",
+  "density": 7850.0,
+  "density_unit": "kg/m3",
+  "density_key": "physical.density",
+  "poisson_ratio": 0.3,
+  "poisson_key": "mechanical.poisson_ratio",
+  "properties": [
+    {
+      "item": "탄성계수",
+      "key": "mechanical.youngs_modulus",
+      "unit": "Pa",
+      "points": [
+        {
+          "temperature_C": 22,
+          "value": 206000000000.0
+        }
+      ]
+    }
+  ]
+}

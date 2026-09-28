@@ -1,0 +1,21 @@
+{
+  "system": "mm_n_tonne",
+  "density": 7.85e-09,
+  "density_unit": "tonne/mm3",
+  "density_key": "physical.density",
+  "poisson_ratio": 0.3,
+  "poisson_key": "mechanical.poisson_ratio",
+  "properties": [
+    {
+      "item": "탄성계수",
+      "key": "mechanical.youngs_modulus",
+      "unit": "MPa",
+      "points": [
+        {
+          "temperature_C": 22,
+          "value": 206000.0
+        }
+      ]
+    }
+  ]
+}

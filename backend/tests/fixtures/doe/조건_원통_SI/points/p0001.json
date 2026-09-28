@@ -1,0 +1,457 @@
+{
+  "units": "mm",
+  "bodies": [
+    {
+      "name": "전체",
+      "step_product": "body_1",
+      "volume": 39214.602,
+      "centroid": [
+        40.401,
+        0.0,
+        5.0
+      ],
+      "bbox": [
+        [
+          0.0,
+          -25.0,
+          0.0
+        ],
+        [
+          80.0,
+          25.0,
+          10.0
+        ]
+      ]
+    }
+  ],
+  "regions": {
+    "구멍면": [
+      {
+        "centroid": [
+          20.0,
+          0.0,
+          5.0
+        ],
+        "area": 314.16,
+        "radius": 5.0,
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    ],
+    "끝면": [
+      {
+        "centroid": [
+          80.0,
+          0.0,
+          5.0
+        ],
+        "area": 500.0,
+        "normal": [
+          1.0,
+          0.0,
+          -0.0
+        ]
+      }
+    ]
+  },
+  "unresolved": [],
+  "point": {
+    "number": 1,
+    "study": {
+      "id": "5bd4765c-e5f1-49f9-b0e0-c1492270f7fb",
+      "name": "조건_원통_SI",
+      "method": "factorial",
+      "seed": 1
+    },
+    "params": {
+      "지름": 10.0
+    },
+    "step_file": "points/p0001.step"
+  },
+  "conditions": {
+    "schema_version": 1,
+    "units": {
+      "system": "si",
+      "label": "SI (kg · m · s · Pa)",
+      "length": "m",
+      "mass": "kg",
+      "time": "s",
+      "force": "N",
+      "stress": "Pa",
+      "temperature": "C",
+      "density": "kg/m3",
+      "conductivity": "W/(m.K)",
+      "specific_heat": "J/(kg.K)",
+      "per_temperature": "1/K",
+      "temperature_abs": "K",
+      "duration": "s",
+      "frequency": "1/s",
+      "viscosity": "Pa.s",
+      "force_per_length": "N/m",
+      "diffusivity": "m^2/s",
+      "energy": "J",
+      "moment": "N*m",
+      "acceleration": "m/s^2",
+      "angular_velocity": "rad/s"
+    },
+    "named_selections": [
+      {
+        "name": "구멍면",
+        "entity": "face",
+        "select": {
+          "kind": "cylinder",
+          "near": [
+            20,
+            0,
+            5
+          ],
+          "what": "faces"
+        }
+      },
+      {
+        "name": "끝면",
+        "entity": "face",
+        "select": {
+          "kind": "plane",
+          "near": [
+            80,
+            0,
+            5
+          ],
+          "what": "faces",
+          "normal": [
+            1,
+            0,
+            0
+          ]
+        }
+      }
+    ],
+    "materials": [
+      {
+        "apply_to": [
+          "전체"
+        ],
+        "ref": {
+          "source": "matnexus",
+          "code": "M-000158",
+          "material_id": "334ec690-e61e-4ff2-a326-a8f81becf7b5",
+          "name": "AL5052H32DEMO_-_-",
+          "fetched_at": "2026-09-28T00:00:00Z"
+        },
+        "payload": {
+          "id": "334ec690-e61e-4ff2-a326-a8f81becf7b5",
+          "code": "M-000158",
+          "note": null,
+          "alias": "Al5052-H32 Bilinear",
+          "grade": "AL5052H32DEMO",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 2680.0,
+          "details": null,
+          "category": "Aluminum",
+          "legacy_id": null,
+          "created_at": "2026-09-06T15:01:22.619540+09:00",
+          "updated_at": "2026-09-06T15:01:22.670989+09:00",
+          "record_name": "AL5052H32DEMO_-_-",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [],
+          "poisson_ratio": 0.33,
+          "spec_thickness": null,
+          "applied_products": [],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 880.0,
+                  "value_si": 880.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 비열 0.880 J/g-°C [tier 2]",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 2.38e-05,
+                  "value_si": 2.38e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "MatWeb: Aluminum 5052-H32 · CTE 23.8 μm/m-°C [tier 2]",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "연신율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 0.12,
+                  "value_si": 0.12,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 연신율 ~12% [tier 2]",
+              "input_unit": "1"
+            },
+            {
+              "item": "열전도율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 138.0,
+                  "value_si": 138.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 열전도 138 W/m-K [tier 2]",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "인장강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 228000000.0,
+                  "value_si": 228000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, UTS ~228-230 MPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 70300000000.0,
+                  "value_si": 70300000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MatWeb: Aluminum 5052-H32 · 탄성계수 70.3 GPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "항복강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 193000000.0,
+                  "value_si": 193000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 0.2% proof ~180-193 MPa [tier 2]",
+              "input_unit": "Pa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "deck_formats": [],
+        "converted": {
+          "system": "si",
+          "density": 2680.0,
+          "density_unit": "kg/m3",
+          "density_key": "physical.density",
+          "poisson_ratio": 0.33,
+          "poisson_key": "mechanical.poisson_ratio",
+          "properties": [
+            {
+              "item": "비열",
+              "unit": "J/(kg.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 880.0
+                }
+              ]
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "unit": "1/K",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 2.38e-05
+                }
+              ]
+            },
+            {
+              "item": "연신율",
+              "unit": "1",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 0.12
+                }
+              ]
+            },
+            {
+              "item": "열전도율",
+              "unit": "W/(m.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 138.0
+                }
+              ]
+            },
+            {
+              "item": "인장강도",
+              "unit": "Pa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 228000000.0
+                }
+              ]
+            },
+            {
+              "item": "탄성계수",
+              "unit": "Pa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 70300000000.0
+                }
+              ]
+            },
+            {
+              "item": "항복강도",
+              "unit": "Pa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 193000000.0
+                }
+              ]
+            }
+          ],
+          "missing_structural": [
+            "탄성계수"
+          ]
+        }
+      }
+    ],
+    "constraints": [
+      {
+        "name": "핀",
+        "type": "cylindrical",
+        "on": "구멍면",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": null,
+        "y": null,
+        "z": null,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "free"
+      }
+    ],
+    "loads": [
+      {
+        "name": "끝 누름",
+        "type": "force",
+        "on": "끝면",
+        "cs": "global",
+        "magnitude": 200.0,
+        "unit": "N",
+        "direction": [
+          0,
+          0,
+          -1
+        ],
+        "preload": null
+      },
+      {
+        "name": "핀 하중",
+        "type": "bearing",
+        "on": "구멍면",
+        "cs": "global",
+        "magnitude": 500.0,
+        "unit": "N",
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "preload": null
+      }
+    ],
+    "contacts": [],
+    "initial": [],
+    "analysis": {
+      "type": "modal",
+      "modes": 8,
+      "frequency_range": [
+        0,
+        5000
+      ],
+      "prestressed": false,
+      "solver": "program_controlled"
+    },
+    "mesh_hints": [
+      {
+        "on": "구멍면",
+        "element_size": 0.002,
+        "method": "automatic",
+        "order": "program_controlled",
+        "inflation_layers": null,
+        "defeature_size": null
+      }
+    ],
+    "coordinate_systems": []
+  },
+  "length_units": {
+    "geometry": "mm",
+    "regions": "mm",
+    "coordinate_systems": "m"
+  }
+}

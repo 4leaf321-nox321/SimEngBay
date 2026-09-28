@@ -93,6 +93,12 @@ class UnitSystem:
         """이 계의 부피 → m³. 질량을 kg 로 내는 데 쓴다."""
         return volume * self.length_m**3
 
+    @property
+    def length_mm(self) -> float:
+        """길이 1 = ? mm. **CAD 의 지문이 늘 mm 라서** 견주기 전에 이 값으로 옮긴다
+        (`length_units.regions`)."""
+        return self.length_m * 1e3
+
 
 SI = UnitSystem(
     key="si",

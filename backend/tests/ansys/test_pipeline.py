@@ -38,6 +38,8 @@ STEPS = FIXTURES / "step"
 TOPOLOGY = FIXTURES / "topology"
 #: CompCore 가 낸 DOE 폴더 한 벌 — 형상을 **나눠 쓰는** 쪽(`shapes/`)을 일부러 고른다.
 SHARED_DOE = FIXTURES / "doe" / "재료훑기-7c1d3a44"
+#: 바디 둘에 다른 재료가 붙은 폴더(CompCore 2026-09-28).
+TWO_BODIES = FIXTURES / "doe" / "조건_두바디_두재료"
 SPEC = {
     "recipe": "modal",
     "material": {
@@ -244,6 +246,61 @@ def test_CAD_가_보낸_물성으로_돈다(
     assert 1400 < first < 1700
     if number == 1:
         assert first > 1530  # 200 GPa 로 풀었으면 1,519 였다
+
+
+def test_파트마다_다른_물성을_바디마다_붙인다(workdir: Path) -> None:
+    """**조립은 파트마다 재료가 다르다** — 강판 받침판 위에 알루미늄 블록.
+
+    어느 Mechanical 바디가 CAD 의 어느 파트인지는 **이름으로 알 수 없다**: STEP 이 한글을 못
+    나른다(실측 2026-09-28 — Mechanical 이 「챘째혴챙쨔짢챠혣혨|Solid」 로 읽었다). 그래서
+    부피 · 무게중심으로 짝짓는다(`app/core/bodies.py`).
+
+    **질량이 그 증인이다.** 받침판 30,000 mm³ · 블록 32,000 mm³ 이므로
+    강(7,850)+알루미늄(2,700) 이면 0.2355 + 0.0864 = **0.3219 kg**, 물성이 뒤바뀌면
+    0.081 + 0.2512 = 0.3322 kg 다 — 3% 차이라서 주파수만 보고는 못 가른다.
+
+    폴더의 물성에는 **탄성계수가 없다**(CompCore 가 고른 MatNexus 줄에 그 값이 없다 —
+    `missing_structural`). 그래서 여기서는 값이 있는 `converted` 두 벌을 **CompCore 의 환산
+    코드로 만든 것**(`tests/fixtures/materials/`)으로 바꿔 끼운다. 바꾸는 것은 재료 선택뿐이고
+    모양은 그쪽이 낸 그대로다.
+    """
+    point = json.loads((TWO_BODIES / "points" / "p0001.json").read_text(encoding="utf-8"))
+    steel = json.loads(
+        (FIXTURES / "materials" / "등록재료-mm_n_tonne.json").read_text(encoding="utf-8")
+    )
+    aluminium = json.loads(
+        (FIXTURES / "materials" / "문헌물성-mm_n_tonne.json").read_text(encoding="utf-8")
+    )
+    point["conditions"]["materials"] = [
+        {"apply_to": ["받침판"], "ref": {"name": "SS400"}, "converted": steel},
+        {"apply_to": ["블록"], "ref": {"name": "AL6061"}, "converted": aluminium},
+    ]
+    shutil.copy(TWO_BODIES / "points" / "p0001.step", workdir / "input.step")
+    (workdir / "topology.json").write_text(
+        json.dumps(point, ensure_ascii=False), encoding="utf-8"
+    )
+
+    spec = dict(SPEC)
+    spec["mesh"] = {"element_size_mm": 8}
+    spec["constraints"] = [{"region": "바닥", "kind": "fixed"}]
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    for stage in STAGES:
+        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+        if stage == "modeling":
+            summary = result.summary
+            assert summary["bodies"] == 2
+            assert summary["material_from"] == "cad"
+            # **어느 파트에 무엇을 붙였나**를 요약이 말한다 — 값 하나로 줄이면 뒤바뀐 것을
+            # 알아볼 수 없다.
+            assert summary["material_bodies"] == "받침판=SS400 · 블록=AL6061"
+            assert float(summary["mass_kg"]) == pytest.approx(0.3219, rel=0.005)
+
+    result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    assert result["boundary"] == "constrained"
+    assert result["rigid_body_modes"] == 0
 
 
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:

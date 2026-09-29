@@ -141,6 +141,10 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
 - 목록 엔드포인트에는 서버가 상한을 강제한다(`shared/pagination.py`).
 - 스키마를 바꿨으면 `python scripts/export_openapi.py` 와 `npm run api:types` 를 함께 돌린다.
   **프론트 타입을 손으로 적지 않는다** — 어긋난 날 화면은 아무 말도 안 하고 undefined 를 그린다.
+- **생성 파일은 빌드가 만든다.** `schema.d.ts` 는 `.gitignore` 에 있으므로 **깨끗한 체크아웃에는
+  없다** — `npm run build` 앞의 `prebuild` 가 `api:types` 를 부른다. 이 자리가 없던 동안 CI 는
+  **23번 내리 빨간불이었다**(프론트 빌드 · 번들 빌드 두 단계, 2026-09-22 ~ 29). 내 PC 에는 그
+  파일이 이미 있어서 로컬만 보면 멀쩡해 보인다 — 그것이 이 함정의 전부다.
 - **폴링 경로를 만들면 `shared/access_log.py` 의 `_SKIP` 에 더한다.** 작업 상태 폴링이
   곧 생긴다 — 안 더하면 접근 로그가 그 한 줄로 가득 찬다.
 - **기계가 쓰는 경로는 `scopes.register_write_scope` 로 연다.** 스크립트 · AI 도구가 PAT 로

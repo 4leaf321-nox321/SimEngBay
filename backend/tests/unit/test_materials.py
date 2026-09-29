@@ -259,3 +259,49 @@ def test_SI_로_내보낸_폴더도_같은_규칙으로_읽는다() -> None:
     assert math.isclose(
         units.density_from(block["density"], block["density_unit"]), 2680.0, rel_tol=1e-9
     )
+
+
+SWEEP = CONDITION_FOLDERS / "조건_재료훑기"
+
+
+def _sweep_point(number: int) -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads(
+        (SWEEP / "points" / f"p{number:04d}.json").read_text(encoding="utf-8")
+    )
+    return loaded
+
+
+def test_재료_훑기는_점마다_바디_물성이_바뀐다() -> None:
+    """**CompCore 가 재료도 DOE 로 훑는다**(2026-09-29). 설계점마다 바디에 붙는 재료가
+    달라지고, 형상은 하나를 나눠 쓴다.
+
+    폴더의 물성에는 탄성계수가 없어(그쪽이 고른 MatNexus 줄의 한계) 값이 있는 `converted` 를
+    바꿔 끼워 **붙는 자리**만 본다 — 값의 모양은 CompCore 의 환산 코드가 낸 그대로다.
+    """
+    steel = _converted("등록재료-mm_n_tonne.json")
+    aluminium = _converted("문헌물성-mm_n_tonne.json")
+
+    def with_values(payload: dict[str, Any]) -> dict[str, Any]:
+        for row in payload["conditions"]["materials"]:
+            name = row["ref"]["name"]
+            row["converted"] = aluminium if "AL" in name.upper() else steel
+        return payload
+
+    first = materials.read(with_values(_sweep_point(1)), units.MM_N_TONNE)
+    # 1번 점: 받침판은 강, 블록은 알루미늄 — 바디마다 다른 재료.
+    plate = materials.for_body(first, "받침판")
+    block = materials.for_body(first, "블록")
+    assert plate is not None and block is not None
+    assert math.isclose(plate.youngs_modulus_pa, 206e9, rel_tol=1e-9)
+    assert math.isclose(block.youngs_modulus_pa, 68.9e9, rel_tol=1e-9)
+
+    second = materials.read(with_values(_sweep_point(2)), units.MM_N_TONNE)
+    # 2번 점: 한 재료가 **두 바디를 함께** 가리킨다(`apply_to: ["받침판", "블록"]`).
+    assert len(second) == 1
+    assert set(second[0].bodies) == {"받침판", "블록"}
+    for body in ("받침판", "블록"):
+        picked = materials.for_body(second, body)
+        assert picked is not None
+        assert math.isclose(picked.youngs_modulus_pa, 206e9, rel_tol=1e-9)
+    # **담아만 둔 재료는 건너뛴다** — 2번 점의 알루미늄이 `apply_to: []` 로 온다.
+    assert all(one.bodies for one in second)

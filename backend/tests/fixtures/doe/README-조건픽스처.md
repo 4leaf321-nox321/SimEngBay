@@ -36,6 +36,17 @@ COMPCORE_FIXTURE_OUT=../fixtures/simengbay .venv/bin/pytest tests/api/test_fixtu
 - 모달: 모드 8 개, 0 ~ 5000 Hz. `analysis` 에는 모달이 쓰는 칸만 실린다.
 - `length_units`: 형상 · 영역 mm, 좌표계 m.
 
+## 조건_재료훑기 — 재료만 바꿔 끼우는 DOE
+
+「조건_두바디_두재료」 와 같은 조립·조건에 **재료 인자** 하나를 걸었다: 블록의 재료를
+Al5052-H32 ↔ SECC 로(`study.json` 의 `factors` — `{"mode": "material", "bodies": ["블록"],
+"values": [이름…]}`).
+
+- 형상은 그대로라 두 점이 `shapes/<지문>.step` 하나를 나눠 쓴다.
+- 점마다 다른 것은 `conditions.materials` 의 `apply_to` 뿐이다 — 고른 재료가 `["블록"]`, 나머지는
+  블록이 빠진다. 받침판은 늘 SECC.
+- `manifest.csv` 의 `블록 재료` 열과 점 파일 `point.params` 에 그 점의 재료 이름이 있다.
+
 ## 읽을 때 알아 둘 것
 
 - 점 파일의 값은 **`conditions.units` 에 선언된 계**다. 사람은 늘 mm · N · t 로 적고, 내보낼 때만

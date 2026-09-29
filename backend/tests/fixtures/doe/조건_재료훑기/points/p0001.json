@@ -1,0 +1,746 @@
+{
+  "units": "mm",
+  "bodies": [
+    {
+      "name": "받침판",
+      "step_product": "body_1",
+      "volume": 30000.0,
+      "centroid": [
+        0.0,
+        -0.0,
+        2.5
+      ],
+      "bbox": [
+        [
+          -50.0,
+          -30.0,
+          0.0
+        ],
+        [
+          50.0,
+          30.0,
+          5.0
+        ]
+      ]
+    },
+    {
+      "name": "블록",
+      "step_product": "body_2",
+      "volume": 32000.0,
+      "centroid": [
+        0.0,
+        0.0,
+        15.0
+      ],
+      "bbox": [
+        [
+          -20.0,
+          -20.0,
+          5.0
+        ],
+        [
+          20.0,
+          20.0,
+          25.0
+        ]
+      ]
+    }
+  ],
+  "regions": {
+    "바닥": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "area": 6000.0,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      }
+    ],
+    "블록 윗면": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          25.0
+        ],
+        "area": 1600.0,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    ],
+    "판 윗면": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          5.0
+        ],
+        "area": 6000.0,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          25.0
+        ],
+        "area": 1600.0,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    ],
+    "블록 아랫면": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          5.0
+        ],
+        "area": 1600.0,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "area": 6000.0,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      }
+    ]
+  },
+  "unresolved": [],
+  "point": {
+    "number": 1,
+    "study": {
+      "id": "3b3618f1-3eab-4481-8d74-cb7b545cd18b",
+      "name": "조건_재료훑기",
+      "method": "factorial",
+      "seed": 1
+    },
+    "params": {
+      "블록 재료": "AL5052H32DEMO_-_-"
+    },
+    "step_file": "shapes/c3aed82c2d74.step"
+  },
+  "conditions": {
+    "schema_version": 1,
+    "units": {
+      "system": "mm_n_tonne",
+      "label": "mm · N · tonne (MPa)",
+      "length": "mm",
+      "mass": "tonne",
+      "time": "s",
+      "force": "N",
+      "stress": "MPa",
+      "temperature": "C",
+      "density": "tonne/mm3",
+      "conductivity": "mW/(mm.K)",
+      "specific_heat": "mJ/(tonne.K)",
+      "per_temperature": "1/K",
+      "temperature_abs": "K",
+      "duration": "s",
+      "frequency": "1/s",
+      "viscosity": "N.s/mm2",
+      "force_per_length": "N/mm",
+      "diffusivity": "mm^2/s",
+      "energy": "mJ",
+      "moment": "N*mm",
+      "acceleration": "mm/s^2",
+      "angular_velocity": "rad/s"
+    },
+    "named_selections": [
+      {
+        "name": "바닥",
+        "entity": "face",
+        "select": {
+          "role": "bottom",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "블록 윗면",
+        "entity": "face",
+        "select": {
+          "near": [
+            0,
+            0,
+            25
+          ],
+          "role": "top",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "판 윗면",
+        "entity": "face",
+        "select": {
+          "kind": "plane",
+          "near": [
+            40,
+            25,
+            5
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      {
+        "name": "블록 아랫면",
+        "entity": "face",
+        "select": {
+          "kind": "plane",
+          "near": [
+            0,
+            0,
+            5
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
+        }
+      }
+    ],
+    "materials": [
+      {
+        "apply_to": [
+          "받침판"
+        ],
+        "ref": {
+          "source": "matnexus",
+          "code": "M-000138",
+          "material_id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "name": "SECC-EXAD87-DP_선언물성_0.8",
+          "fetched_at": "2026-09-28T00:00:00Z"
+        },
+        "payload": {
+          "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "code": "M-000138",
+          "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+          "alias": null,
+          "grade": "SECC-EXAD87-DP",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 7850.0,
+          "details": "선언물성",
+          "category": "Steel",
+          "legacy_id": null,
+          "created_at": "2026-09-05T15:59:15.786123+09:00",
+          "updated_at": "2026-09-05T15:59:15.809514+09:00",
+          "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [
+            "브라켓"
+          ],
+          "poisson_ratio": 0.29,
+          "spec_thickness": 0.0008,
+          "applied_products": [
+            "예시 제품"
+          ],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 470.0,
+                  "value_si": 470.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "열전도율",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 50.0,
+                  "value_si": 50.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 1.2e-05,
+                  "value_si": 1.2e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "탄소강 20~100 °C",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "전단탄성계수",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 80.0,
+                  "value_si": 80000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "E/(2(1+ν)), ν=0.29",
+              "input_unit": "GPa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "예시",
+              "scale": null,
+              "points": [
+                {
+                  "value": 205.0,
+                  "value_si": 205000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "KS D 3506 · 일반 강판 대표값",
+              "input_unit": "GPa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "deck_formats": [],
+        "converted": {
+          "system": "mm_n_tonne",
+          "density": 7.85e-09,
+          "density_unit": "tonne/mm3",
+          "density_key": "physical.density",
+          "poisson_ratio": 0.29,
+          "poisson_key": "mechanical.poisson_ratio",
+          "properties": [
+            {
+              "item": "비열",
+              "unit": "mJ/(tonne.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 470000000.0
+                }
+              ]
+            },
+            {
+              "item": "열전도율",
+              "unit": "mW/(mm.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 50.0
+                }
+              ]
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "unit": "1/K",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 1.2e-05
+                }
+              ]
+            },
+            {
+              "item": "전단탄성계수",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 80000.0
+                }
+              ]
+            },
+            {
+              "item": "탄성계수",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 205000.0
+                }
+              ]
+            }
+          ],
+          "missing_structural": [
+            "탄성계수"
+          ]
+        }
+      },
+      {
+        "apply_to": [
+          "블록"
+        ],
+        "ref": {
+          "source": "matnexus",
+          "code": "M-000158",
+          "material_id": "334ec690-e61e-4ff2-a326-a8f81becf7b5",
+          "name": "AL5052H32DEMO_-_-",
+          "fetched_at": "2026-09-28T00:00:00Z"
+        },
+        "payload": {
+          "id": "334ec690-e61e-4ff2-a326-a8f81becf7b5",
+          "code": "M-000158",
+          "note": null,
+          "alias": "Al5052-H32 Bilinear",
+          "grade": "AL5052H32DEMO",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 2680.0,
+          "details": null,
+          "category": "Aluminum",
+          "legacy_id": null,
+          "created_at": "2026-09-06T15:01:22.619540+09:00",
+          "updated_at": "2026-09-06T15:01:22.670989+09:00",
+          "record_name": "AL5052H32DEMO_-_-",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [],
+          "poisson_ratio": 0.33,
+          "spec_thickness": null,
+          "applied_products": [],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 880.0,
+                  "value_si": 880.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 비열 0.880 J/g-°C [tier 2]",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 2.38e-05,
+                  "value_si": 2.38e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "MatWeb: Aluminum 5052-H32 · CTE 23.8 μm/m-°C [tier 2]",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "연신율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 0.12,
+                  "value_si": 0.12,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 연신율 ~12% [tier 2]",
+              "input_unit": "1"
+            },
+            {
+              "item": "열전도율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 138.0,
+                  "value_si": 138.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 열전도 138 W/m-K [tier 2]",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "인장강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 228000000.0,
+                  "value_si": 228000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, UTS ~228-230 MPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 70300000000.0,
+                  "value_si": 70300000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MatWeb: Aluminum 5052-H32 · 탄성계수 70.3 GPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "항복강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 193000000.0,
+                  "value_si": 193000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 0.2% proof ~180-193 MPa [tier 2]",
+              "input_unit": "Pa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "deck_formats": [],
+        "converted": {
+          "system": "mm_n_tonne",
+          "density": 2.6800000000000003e-09,
+          "density_unit": "tonne/mm3",
+          "density_key": "physical.density",
+          "poisson_ratio": 0.33,
+          "poisson_key": "mechanical.poisson_ratio",
+          "properties": [
+            {
+              "item": "비열",
+              "unit": "mJ/(tonne.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 880000000.0
+                }
+              ]
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "unit": "1/K",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 2.38e-05
+                }
+              ]
+            },
+            {
+              "item": "연신율",
+              "unit": "1",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 0.12
+                }
+              ]
+            },
+            {
+              "item": "열전도율",
+              "unit": "mW/(mm.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 138.0
+                }
+              ]
+            },
+            {
+              "item": "인장강도",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 228.0
+                }
+              ]
+            },
+            {
+              "item": "탄성계수",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 70300.0
+                }
+              ]
+            },
+            {
+              "item": "항복강도",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 193.0
+                }
+              ]
+            }
+          ],
+          "missing_structural": [
+            "탄성계수"
+          ]
+        }
+      }
+    ],
+    "constraints": [
+      {
+        "name": "바닥 고정",
+        "type": "fixed_support",
+        "on": "바닥",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": null,
+        "y": null,
+        "z": null,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      }
+    ],
+    "loads": [
+      {
+        "name": "누름",
+        "type": "pressure",
+        "on": "블록 윗면",
+        "cs": "global",
+        "magnitude": 1.5,
+        "unit": "MPa",
+        "direction": "normal",
+        "preload": null
+      }
+    ],
+    "contacts": [
+      {
+        "name": "블록-판",
+        "type": "bonded",
+        "source": "블록 아랫면",
+        "target": "판 윗면",
+        "friction": null,
+        "formulation": "program_controlled",
+        "behavior": "program_controlled",
+        "pinball": null,
+        "interface_treatment": "add_offset_ramped"
+      }
+    ],
+    "initial": [],
+    "analysis": {
+      "type": "static",
+      "large_deflection": false,
+      "steps": 1,
+      "substeps": null,
+      "solver": "program_controlled"
+    },
+    "mesh_hints": [
+      {
+        "on": "전체",
+        "element_size": 4.0,
+        "method": "automatic",
+        "order": "quadratic",
+        "inflation_layers": null,
+        "defeature_size": null
+      }
+    ],
+    "coordinate_systems": []
+  },
+  "length_units": {
+    "geometry": "mm",
+    "regions": "mm",
+    "coordinate_systems": "mm"
+  }
+}

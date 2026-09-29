@@ -187,3 +187,22 @@ def test_뿌리_밖은_거절한다(tmp_path: Path) -> None:
     # `..` 으로 빠져나가는 길도 — **푼 다음에** 견줘야 막힌다.
     with pytest.raises(OutsideRoots):
         resolve_inside([FIXTURES_ROOT], str(FIXTURES_ROOT / ".." / ".." / ".."))
+
+
+SWEEP_FOLDER = FIXTURES_ROOT / "조건_재료훑기"
+
+
+def test_재료를_훑으면_형상은_한_벌을_나눠_쓴다() -> None:
+    """**재료 DOE**(CompCore 2026-09-29) — 바뀌는 것이 재료뿐이라 형상이 모든 점에서 같다.
+
+    그래서 인자 값이 **글자**로 오고(재료 이름), 점들이 같은 STEP 을 가리킨다. 둘 중 하나라도
+    놓치면 화면에서 두 점이 똑같아 보이거나, 같은 형상을 두 번 모델링한다.
+    """
+    doe = read_folder(SWEEP_FOLDER)
+    assert doe.factors == ["블록 재료"]
+    assert [one.params["블록 재료"] for one in doe.usable] == [
+        "AL5052H32DEMO_-_-",
+        "SECC-EXAD87-DP_선언물성_0.8",
+    ]
+    assert len({one.shape_key for one in doe.usable}) == 1
+    assert all(one.has_conditions and one.unit_system == "mm_n_tonne" for one in doe.usable)

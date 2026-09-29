@@ -206,3 +206,26 @@ def test_재료를_훑으면_형상은_한_벌을_나눠_쓴다() -> None:
     ]
     assert len({one.shape_key for one in doe.usable}) == 1
     assert all(one.has_conditions and one.unit_system == "mm_n_tonne" for one in doe.usable)
+
+
+CONDITION_SWEEP_FOLDER = FIXTURES_ROOT / "조건_조건훑기"
+
+
+def test_조건과_배율도_인자가_된다() -> None:
+    """**인자 종류가 둘 늘었다**(CompCore 2026-09-29) — 고르기(접촉 종류)와 배율(물성).
+
+    한 표에 **글자 인자와 숫자 인자가 섞여** 온다. 숫자로 읽을 것만 읽고 나머지를 버리면
+    설계점 넷 중 둘이 화면에서 똑같아 보인다.
+    """
+    doe = read_folder(CONDITION_SWEEP_FOLDER)
+    assert doe.factors == ["접촉 종류", "블록 탄성계수 배율"]
+    assert [
+        (one.params["접촉 종류"], one.params["블록 탄성계수 배율"]) for one in doe.usable
+    ] == [
+        ("bonded", 0.9),
+        ("bonded", 1.1),
+        ("frictional", 0.9),
+        ("frictional", 1.1),
+    ]
+    # 바뀌는 것이 조건 · 물성뿐이라 네 점이 형상 한 벌을 나눠 쓴다.
+    assert len({one.shape_key for one in doe.usable}) == 1

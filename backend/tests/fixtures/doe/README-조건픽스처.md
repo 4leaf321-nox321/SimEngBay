@@ -47,9 +47,21 @@ Al5052-H32 ↔ SECC 로(`study.json` 의 `factors` — `{"mode": "material", "bo
   블록이 빠진다. 받침판은 늘 SECC.
 - `manifest.csv` 의 `블록 재료` 열과 점 파일 `point.params` 에 그 점의 재료 이름이 있다.
 
+## 조건_조건훑기 — 조건의 고르는 칸 · 물성 배율
+
+「조건_두바디_두재료」 에 인자 둘 — **접촉 종류**(`choice`: 블록-판 `bonded` ↔ `frictional`)와
+**블록 탄성계수 배율**(`scale`: 0.9 · 1.1). 네 점이 한 형상을 나눠 쓴다.
+
+- 점마다 `conditions.contacts[0].type` 이 다르다(마찰계수 0.2 는 조건에 미리 적혀 있다).
+- 블록 재료의 `converted` 값만 배율이 곱해지고 `converted.scaled = {"탄성계수": 0.9}` 가 붙는다.
+  원본(`payload`)은 그대로다. 배율이 걸린 재료는 솔버 덱을 싣지 않는다(값이 다르다).
+- 하중 크기는 인자가 아닌 도면 변수(`=압력`), 모드 수는 정수 칸의 식(`=모드수`)으로 풀렸다.
+
 ## 읽을 때 알아 둘 것
 
 - 점 파일의 값은 **`conditions.units` 에 선언된 계**다. 사람은 늘 mm · N · t 로 적고, 내보낼 때만
   옮긴다.
 - 조건은 선택 그룹 이름으로만 가리키고, 그 자리는 점 파일 `regions` 에 설계점마다 풀려 있다.
+- 물성 줄의 표준 열쇠(`mechanical.youngs_modulus` …)는 MatNexus 물성 사전(2026-09-29 스냅샷)으로
+  붙였다 — 2026-09-28 판에는 열쇠가 없어 `missing_structural: ["탄성계수"]` 가 잘못 붙어 있었다.
 - 칸의 뜻 · 기본값은 `GET /api/cad/conditions/schema` 와 CompCore `docs/해석-조건-설계.md`.

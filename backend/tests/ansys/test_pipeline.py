@@ -40,6 +40,8 @@ TOPOLOGY = FIXTURES / "topology"
 SHARED_DOE = FIXTURES / "doe" / "재료훑기-7c1d3a44"
 #: 바디 둘에 다른 재료가 붙은 폴더(CompCore 2026-09-28).
 TWO_BODIES = FIXTURES / "doe" / "조건_두바디_두재료"
+#: 조건 · 물성 배율까지 훑는 폴더(CompCore 2026-09-29) — **값이 다 들어 있다.**
+CONDITION_SWEEP = FIXTURES / "doe" / "조건_조건훑기"
 SPEC = {
     "recipe": "modal",
     "material": {
@@ -301,6 +303,60 @@ def test_파트마다_다른_물성을_바디마다_붙인다(workdir: Path) -> 
     result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
     assert result["boundary"] == "constrained"
     assert result["rigid_body_modes"] == 0
+
+
+def test_CAD_폴더_그대로_두_설계점을_돈다(workdir: Path) -> None:
+    """**바꿔 끼운 값이 하나도 없는 첫 판** — CAD 가 보낸 폴더를 그대로 돌린다.
+
+    `조건_조건훑기` 는 블록의 탄성계수를 배율로 훑는다(0.9 · 1.1). 형상 · 재료 · 밀도는 두
+    점이 같고 **블록의 탄성계수만** 다르다. 그래서 답이 갈리는 곳이 정해져 있다:
+
+    - **질량은 같아야 한다** — 밀도가 안 바뀐다(받침판 강 0.2355 + 블록 알루미늄 0.0858).
+    - **주파수는 올라야 한다** — 블록이 단단해지면(0.9 → 1.1) 고유진동수가 높아진다.
+
+    물성을 안 읽으면 둘이 **똑같이** 나오고, 바디를 뒤바꿔 붙이면 질량이 어긋난다.
+    """
+    seen: dict[int, dict[str, Any]] = {}
+    for number in (1, 2):
+        place = workdir / f"p{number:04d}"
+        place.mkdir(parents=True, exist_ok=True)
+        shutil.copy(CONDITION_SWEEP / "shapes" / "c3aed82c2d74.step", place / "input.step")
+        shutil.copy(
+            CONDITION_SWEEP / "points" / f"p{number:04d}.json", place / "topology.json"
+        )
+        spec = dict(SPEC)
+        spec["mesh"] = {"element_size_mm": 8}
+        spec["constraints"] = [{"region": "바닥", "kind": "fixed"}]
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+
+        runner = _executor()
+        summary: dict[str, Any] = {}
+        for stage in STAGES:
+            result = runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+            summary.update(result.summary)
+        result_json = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        seen[number] = {
+            "mass": float(summary["mass_kg"]),
+            "from": summary["material_from"],
+            "bodies": summary["material_bodies"],
+            "first": result_json["modes"][0]["frequency_hz"],
+            "rigid": result_json["rigid_body_modes"],
+        }
+
+    for number, found in seen.items():
+        assert found["from"] == "cad", f"p{number} 이 CAD 물성으로 안 돌았다"
+        assert found["rigid"] == 0
+        # 받침판 · 블록에 각각 다른 재료가 붙었다.
+        assert "받침판=" in found["bodies"] and "블록=" in found["bodies"]
+        assert found["mass"] == pytest.approx(0.3213, rel=0.01)
+
+    # **밀도가 같으니 질량도 같다** — 다르면 바디에 물성을 뒤바꿔 붙인 것이다.
+    assert seen[1]["mass"] == pytest.approx(seen[2]["mass"], rel=1e-6)
+    # **블록이 단단해지면 주파수가 오른다**(E 배율 0.9 → 1.1).
+    assert seen[2]["first"] > seen[1]["first"]
 
 
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:

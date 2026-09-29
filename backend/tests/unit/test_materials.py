@@ -305,3 +305,34 @@ def test_재료_훑기는_점마다_바디_물성이_바뀐다() -> None:
         assert math.isclose(picked.youngs_modulus_pa, 206e9, rel_tol=1e-9)
     # **담아만 둔 재료는 건너뛴다** — 2번 점의 알루미늄이 `apply_to: []` 로 온다.
     assert all(one.bodies for one in second)
+
+
+CONDITION_SWEEP = CONDITION_FOLDERS / "조건_조건훑기"
+
+
+def test_물성_배율이_점마다_반영된다() -> None:
+    """**이 폴더는 값이 다 들어 있다**(탄성계수 포함) — 배율로 훑으려면 그 값이 있어야 한다.
+
+    받침판은 그대로고 블록만 0.9 · 1.1 로 바뀐다. 우리가 `converted` 를 읽으므로 배율은 이미
+    값에 반영돼 온다 — **우리가 다시 곱하지 않는다**(두 번 곱하면 조용히 틀린다).
+    """
+    found = {}
+    for number in (1, 2):
+        payload = json.loads(
+            (CONDITION_SWEEP / "points" / f"p{number:04d}.json").read_text(encoding="utf-8")
+        )
+        found[number] = materials.read(payload, units.declared_in(payload))
+
+    for number, rows in found.items():
+        plate = materials.for_body(rows, "받침판")
+        assert plate is not None, f"p{number} 의 받침판 물성이 없다"
+        # 받침판은 배율 대상이 아니다 — 두 점에서 같은 값이어야 한다.
+        assert math.isclose(plate.youngs_modulus_pa, 205e9, rel_tol=1e-9)
+
+    low = materials.for_body(found[1], "블록")
+    high = materials.for_body(found[2], "블록")
+    assert low is not None and high is not None
+    assert math.isclose(low.youngs_modulus_pa, 63.27e9, rel_tol=1e-9)
+    assert math.isclose(high.youngs_modulus_pa, 77.33e9, rel_tol=1e-9)
+    # 밀도는 배율 대상이 아니다 — 질량이 같아야 두 점을 견줄 수 있다.
+    assert math.isclose(low.density_kg_m3, high.density_kg_m3, rel_tol=1e-9)

@@ -1,0 +1,5 @@
+﻿point,status,접촉 종류,블록 탄성계수 배율,step_file,point_file,unresolved,interference,error
+1,ok,bonded,0.9,shapes/c3aed82c2d74.step,points/p0001.json,,ok,
+2,ok,bonded,1.1,shapes/c3aed82c2d74.step,points/p0002.json,,ok,
+3,ok,frictional,0.9,shapes/c3aed82c2d74.step,points/p0003.json,,ok,
+4,ok,frictional,1.1,shapes/c3aed82c2d74.step,points/p0004.json,,ok,

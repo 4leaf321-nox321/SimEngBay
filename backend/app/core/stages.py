@@ -46,6 +46,8 @@ ArtifactKind = Literal[
     "dat",
     "solve_out",
     "rst",
+    # CalculiX 의 결과 파일 — `.rst` 와 같은 자리다(솔버만 다르다).
+    "frd",
     "result_json",
     "mode_png",
     "mode_vtp",
@@ -58,6 +60,7 @@ CONTENT_TYPES: dict[str, str] = {
     "topology": "application/json",
     "mechdb": "application/octet-stream",
     "dat": "text/plain",
+    "frd": "text/plain",
     "solve_out": "text/plain",
     "rst": "application/octet-stream",
     "result_json": "application/json",

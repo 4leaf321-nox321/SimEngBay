@@ -30,8 +30,18 @@ From: ubuntu:24.04
         python3.12-venv \
         python3-pip \
         libpq5 \
-        ca-certificates
+        ca-certificates \
+        gmsh \
+        calculix-ccx
     rm -rf /var/lib/apt/lists/*
+
+    # **gmsh · CalculiX 는 오픈소스 솔버 경로가 쓴다**(`app/core/calculix`). 둘 다 **GPL** 이고
+    # 우리 코드는 그것을 **딴 프로세스로** 부른다(`.geo` · `.msh` · `.inp` · `.frd` 파일 경계)
+    # — 그래서 한 프로그램이 되지 않는다. `deploy/NOTICE` 에 무엇이 들어왔는지 적어 둔다.
+    #
+    # 이 두 줄을 빼고 빌드하면 Ansys 경로만 있는 이미지가 된다. 그때 CalculiX 를 고른 작업은
+    # 「솔버를 못 찾았다 — 이미지에 깔거나 CCX_BIN 으로 알려 주세요」 로 **즉시** 실패한다.
+    # 조용히 다른 솔버로 풀지 않는다.
 
     # **의존성을 여기서 전부 얼린다.** 런타임에 이미지 루트는 읽기 전용이라
     # 첫 기동에 pip 을 부를 수 없다 — 부르면 그 자리에서 실패한다.

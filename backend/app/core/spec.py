@@ -58,6 +58,13 @@ class ModalSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["modal"] = "modal"
+    solver: Literal["ansys", "calculix"] = "ansys"
+    """무엇으로 풀까. **`ansys` 가 기본**이다 — 보고서에 쓰는 값은 거기서 나온다.
+
+    `calculix` 는 오픈소스 솔버로, **깔린 서버에서 바로 돌고 동시에 여러 점을 푼다**(라이선스
+    노드락이 없다). 대신 걸 수 있는 조건이 적다 — 못 거는 것은 모델링이 **까닭을 달아 거절**
+    한다(`app/core/calculix/deck.py` 의 능력표). 두 솔버의 수는 몇 % 갈리므로 결과에 **어느
+    쪽으로 풀었는지 도장**을 찍는다."""
     material: MaterialSpec
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"
@@ -92,6 +99,8 @@ class StaticSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["static"] = "static"
+    solver: Literal["ansys", "calculix"] = "ansys"
+    """무엇으로 풀까 — `ModalSpec.solver` 참고. 이 레시피는 아직 `ansys` 만 된다."""
     material: MaterialSpec
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"
@@ -113,6 +122,8 @@ class HarmonicSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["harmonic"] = "harmonic"
+    solver: Literal["ansys", "calculix"] = "ansys"
+    """무엇으로 풀까 — `ModalSpec.solver` 참고. 이 레시피는 아직 `ansys` 만 된다."""
     material: MaterialSpec
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"

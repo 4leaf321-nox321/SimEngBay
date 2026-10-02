@@ -20,6 +20,7 @@ export const ARTIFACT_LABELS: Record<string, string> = {
   dat: '솔버 입력(.dat)',
   solve_out: '솔버 로그',
   rst: '결과(.rst)',
+  frd: '결과(.frd)',
   result_json: '결과 요약',
   mode_png: '모드 그림',
   mode_vtp: '모드 메시',

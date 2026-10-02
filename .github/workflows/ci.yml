@@ -71,6 +71,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      # **오픈소스 솔버를 깐다 — 그러면 CI 가 형상부터 주파수까지 본다.** Ansys 가 필요한
+      # 시험(`-m ansys`)은 여기서 못 돌지만, CalculiX 경로는 라이선스가 없어서 돈다. 이 두
+      # 줄이 없으면 `tests/opensolver` 가 **조용히 건너뛰어** 초록불만 남는다.
+      - name: 오픈소스 솔버 (gmsh · CalculiX)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gmsh calculix-ccx
+          gmsh -info | head -3
+          ccx -v | head -2
+
       - name: 린트 (ruff)
         working-directory: backend
         run: |

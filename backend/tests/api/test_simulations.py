@@ -112,15 +112,28 @@ def test_스펙이_틀리면_걸기_전에_어느_칸인지_말한다(
     assert response.status_code == 400
 
 
-def test_실행기가_없는_레시피는_거절한다(client: TestClient, member: Signed) -> None:
-    static = {
-        "recipe": "static",
-        "material": MATERIAL,
-        "constraints": [{"region": "fixed_base"}],
-    }
+def test_정적_해석도_걸_수_있다(client: TestClient, member: Signed) -> None:
+    """**2026-10-02 부터 `static` 도 돈다.** 하중을 걸고 변형 · 응력을 본다.
+
+    구속은 CAD 조건에서 오므로 스펙에는 없어도 된다 — 지문 없이 구속을 적으면 그때는 거절한다
+    (아래 시험이 그 자리다).
+    """
+    static = {"recipe": "static", "material": MATERIAL}
     response = _create(client, member, spec=static, workspace=member.workspace)
+    assert response.status_code == 201, response.text
+    assert response.json()["recipe"] == "static"
+
+
+def test_모르는_레시피는_거절한다(client: TestClient, member: Signed) -> None:
+    """레시피 이름이 틀리면 **걸기 전에** 막는다 — 워커가 집어 들고 나서 죽으면 사람은 「왜
+    실패했나」 를 목록에서 찾아야 한다."""
+    response = _create(
+        client,
+        member,
+        spec={"recipe": "harmonic", "material": MATERIAL},
+        workspace=member.workspace,
+    )
     assert response.status_code == 400
-    assert "static" in response.json()["error"]["message"]
 
 
 def test_빈_형상은_걸지_않는다(client: TestClient, member: Signed) -> None:

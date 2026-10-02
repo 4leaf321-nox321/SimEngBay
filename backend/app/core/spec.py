@@ -83,20 +83,29 @@ class ModalSpec(BaseModel):
 
 
 class StaticSpec(BaseModel):
-    """정적 해석 — **자리만 있다.** 실행기가 없어 지금은 걸 수 없다(services 가 거절한다)."""
+    """정적 해석 — 하중을 걸고 **변형과 응력**을 본다.
+
+    모달과 달리 **하중이 답을 만든다.** 그래서 조건에 하중이 하나도 없으면 풀어도 전부 0 이
+    나오는데, 그 그림은 「해석이 됐다」 처럼 보인다 — 모델링이 그때 멈춘다.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["static"] = "static"
     material: MaterialSpec
+    material_from: Literal["cad", "spec"] = "cad"
+    conditions_from: Literal["cad", "spec"] = "cad"
     mesh: MeshSpec = Field(default_factory=MeshSpec)
-    constraints: list[Constraint] = Field(min_length=1)
+    constraints: list[Constraint] = Field(default_factory=list)
+    """사람이 고른 구속. **CAD 조건이 있으면 그것이 먼저다**(`conditions_from`)."""
+    large_deflection: bool = False
+    """변형이 커서 모양이 바뀌면 켠다 — 비선형이라 느리다."""
 
 
 JobSpec = Annotated[ModalSpec | StaticSpec, Field(discriminator="recipe")]
 
 #: 실행기가 있는 레시피. 여기 없는 것은 API 가 만들기 전에 거절한다.
-RUNNABLE_RECIPES: tuple[str, ...] = ("modal",)
+RUNNABLE_RECIPES: tuple[str, ...] = ("modal", "static")
 
 
 class _SpecEnvelope(BaseModel):

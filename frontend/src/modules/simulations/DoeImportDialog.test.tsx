@@ -177,7 +177,10 @@ describe('DOE 가져오기', () => {
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
 
     await waitFor(() => expect(screen.getByText(/CAD 가 적은 값 8/)).toBeDefined())
-    expect((screen.getByLabelText('모드 수') as HTMLInputElement).value).toBe('8')
+    // 칸 채우기는 효과(effect)라 한 틱 뒤다 — 값이 바뀔 때까지 기다린다.
+    await waitFor(() =>
+      expect((screen.getByLabelText('모드 수') as HTMLInputElement).value).toBe('8'),
+    )
   })
 
   it('물성을 안 보낸 폴더면 그 사실을 말한다', async () => {

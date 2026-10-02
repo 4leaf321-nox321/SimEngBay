@@ -522,6 +522,51 @@ def test_재료를_훑으면_설계점마다_물성이_갈린다(workdir: Path) 
     assert seen[2]["first"] < seen[1]["first"]
 
 
+def test_정적_해석이_변형과_응력을_낸다(workdir: Path) -> None:
+    """**하중이 답을 만드는 해석** — `조건_두바디_두재료` 가 바로 그 폴더다(바닥 고정 ·
+    블록 윗면 압력 1.5 MPa · 해석 종류 `static`).
+
+    모달과 달리 보는 것이 다르다: **얼마나 밀리고 어디가 버거운가.** 그래서 결과에 모드가
+    없고 최대 변형 · 최대 상당응력이 있다.
+
+    실측(2026-10-02, 2025 R2 Student · Windows): 최대 변형 **5.204e-4 mm** · 최대 상당응력
+    **2.523 MPa**(요소 8 mm). 응력은 DPF 에서 부르는 길이 판마다 달라 **차례로 해 본다** —
+    첫 길이 없다고 포기하면 사람이 가장 보고 싶어 하는 수가 비어서 나간다(실측으로 겪었다).
+    """
+    shutil.copy(TWO_BODIES / "points" / "p0001.step", workdir / "input.step")
+    shutil.copy(TWO_BODIES / "points" / "p0001.json", workdir / "topology.json")
+    spec = {
+        "recipe": "static",
+        "material": SPEC["material"],
+        "mesh": {"element_size_mm": 8},
+    }
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    summary: dict[str, Any] = {}
+    for stage in STAGES:
+        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+        summary.update(result.summary)
+        if stage == "modeling":
+            # 구속도 하중도 CAD 조건에서 왔다.
+            assert summary["conditions_from"] == "cad"
+            assert "pressure" in summary["loads"]
+
+    result_json = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    assert result_json["recipe"] == "static"
+    assert "modes" not in result_json
+    # **밀린 만큼이 0 이 아니어야 한다** — 0 인 결과는 「해석이 됐다」 처럼 보인다.
+    assert result_json["max_displacement"] > 0
+    assert "warning" not in result_json
+    assert result_json["max_displacement"] == pytest.approx(5.204e-4, rel=0.05)
+    # 응력도 함께 — 못 읽으면 None 이고, 그때는 수를 지어내지 않는다.
+    assert result_json["max_von_mises"] == pytest.approx(2.523, rel=0.05)
+    assert result_json["units"]["displacement"] == "mm"
+    # 변형 그림도 남는다(모달의 모드 형상과 같은 길).
+    assert (workdir / "mode_01.vtp").is_file()
+
+
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:
     """**조용히 자유-자유로 풀지 않는다.** 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을
     「해석이 됐다」 로 읽는다."""

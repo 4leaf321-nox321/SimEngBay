@@ -28,10 +28,13 @@ from app.core import conditions as condition_model
 from app.core import materials, units
 from app.core.bodies import BodyRecord, match_bodies
 from app.core.regions import FaceRecord, match_regions
-from app.core.spec import RIGID_BODY_MODES, MaterialSpec, ModalSpec
+from app.core.spec import RIGID_BODY_MODES, MaterialSpec, ModalSpec, StaticSpec
 from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
+
+#: 모델링이 받는 스펙 — 레시피마다 거는 것이 다르다.
+AnySpec = ModalSpec | StaticSpec
 
 
 #: 라이선스 실패로 볼 말. Mechanical 은 이것을 예외 메시지에 실어 준다.
@@ -53,7 +56,7 @@ BOUNDARY_NAME = "boundary.json"
 
 
 def build(
-    spec: ModalSpec,
+    spec: AnySpec,
     workdir: Path,
     *,
     input_name: str = "input.step",
@@ -84,12 +87,24 @@ def build(
         bodies = _import_geometry(app, step)
         used = _apply_material(spec, bodies, system, given, topology)
         constrained = bool(given_conditions.constraints or spec.constraints)
-        # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을 안고
-        # 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다.
-        upstream = _add_static(app) if given_conditions.prestressed else None
-        analysis = _add_modal(
-            app, spec, constrained=constrained, given=given_conditions, upstream=upstream
-        )
+        if isinstance(spec, StaticSpec):
+            # **정적 해석은 하중이 답을 만든다.** 하중이 없으면 전부 0 이 나오는데 그 그림은
+            # 「해석이 됐다」 처럼 보인다 — 여기서 멈춘다.
+            if not given_conditions.loads:
+                raise StageFailure(
+                    "internal",
+                    "정적 해석인데 하중이 하나도 없습니다 — CAD 조건에 하중을 넣거나 "
+                    "모달로 돌리세요.",
+                )
+            analysis = _add_static(app, large_deflection=spec.large_deflection)
+            upstream = analysis
+        else:
+            # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을
+            # 안고 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다.
+            upstream = _add_static(app) if given_conditions.prestressed else None
+            analysis = _add_modal(
+                app, spec, constrained=constrained, given=given_conditions, upstream=upstream
+            )
         _write_boundary(workdir, constrained=constrained, spec=spec)
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -112,7 +127,7 @@ def build(
         )
 
         dat = workdir / "model.dat"
-        if upstream is not None:
+        if upstream is not None and upstream is not analysis:
             # **정적 덱을 따로 낸다.** 모달의 덱은 재시작(linear perturbation)이라 앞선 정적
             # 해석의 `.rdb` · `.rnnn` 이 같은 폴더에 있어야 한다 — 없으면 MAPDL 이 그 자리에서
             # 죽는다(실측 2026-10-02). 솔브 단계가 이 파일을 먼저 푼다.
@@ -154,7 +169,11 @@ def build(
                 "nodes": nodes,
                 "elements": elements,
                 # **실제로 요청한 수**다 — 구속이 CAD 조건에만 있으면 스펙의 수와 다르다.
-                "modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES),
+                **(
+                    {"modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES)}
+                    if isinstance(spec, ModalSpec)
+                    else {"recipe": "static"}
+                ),
                 "ansys_version": version,
                 "constrained_regions": regions,
                 "mass_kg": mass,
@@ -287,7 +306,7 @@ def _topology(workdir: Path) -> dict[str, Any] | None:
 
 
 def _declared_materials(
-    spec: ModalSpec, workdir: Path, system: units.UnitSystem
+    spec: AnySpec, workdir: Path, system: units.UnitSystem
 ) -> list[materials.Material]:
     """CAD 가 보낸 물성. 사람이 「내 값으로」 라고 했으면(`material_from="spec"`) 안 읽는다.
 
@@ -311,7 +330,7 @@ def _declared_materials(
 
 
 def _declared_conditions(
-    spec: ModalSpec, topology: dict[str, Any] | None
+    spec: AnySpec, topology: dict[str, Any] | None
 ) -> condition_model.Conditions:
     """CAD 가 보낸 조건 — 사람이 「내 스펙으로」 라고 했으면 안 읽는다
     (`conditions_from="spec"`).
@@ -467,7 +486,7 @@ class Applied:
 
 
 def _apply_material(
-    spec: ModalSpec,
+    spec: AnySpec,
     bodies: list[Any],
     system: units.UnitSystem,
     given: list[materials.Material],
@@ -586,17 +605,22 @@ def _limit_range(analysis: Any, given: condition_model.Conditions) -> None:
         logger.warning("주파수 범위를 걸지 못했습니다 — 범위 없이 돕니다", exc_info=True)
 
 
-def _add_static(app: Any) -> Any:
-    """선응력을 만들 정적 해석. 구속과 하중이 여기 걸린다.
+def _add_static(app: Any, *, large_deflection: bool | None = None) -> Any:
+    """정적 해석. 구속과 하중이 여기 걸린다.
 
-    **재시작 파일을 남기라고 이른다**(`RESCONTROL,LINEAR`). 그것이 없으면 모달의 재시작 덱이
-    「multiframe restart 파일이 없다」 로 죽는다 — MAPDL 이 그렇게 시키라고 적어 준 그대로다.
+    선응력의 디딤돌로 쓸 때는(모달이 뒤따를 때) **재시작 파일을 남기라고 이른다**
+    (`RESCONTROL,LINEAR`). 그것이 없으면 모달의 재시작 덱이 「multiframe restart 파일이 없다」
+    로 죽는다 — MAPDL 이 그렇게 시키라고 적어 준 그대로다. 정적 해석 자체로 풀 때는 필요
+    없으므로 `large_deflection` 을 준 경우(=정적 레시피)에는 안 붙인다.
     """
     static = app.Model.AddStaticStructuralAnalysis()
-    snippet = static.AddCommandSnippet()
-    snippet.AppendText(
-        "! SimEngBay: keep restart files for the modal perturbation\nRESCONTROL,LINEAR\n"
-    )
+    if large_deflection is None:
+        snippet = static.AddCommandSnippet()
+        snippet.AppendText(
+            "! SimEngBay: keep restart files for the modal perturbation\nRESCONTROL,LINEAR\n"
+        )
+        return static
+    static.AnalysisSettings.LargeDeflection = bool(large_deflection)
     return static
 
 
@@ -711,13 +735,18 @@ def _load_magnitude(
         made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
 
 
-def _write_boundary(workdir: Path, *, constrained: bool, spec: ModalSpec) -> None:
+def _write_boundary(workdir: Path, *, constrained: bool, spec: AnySpec) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**"""
     (workdir / BOUNDARY_NAME).write_text(
         json.dumps(
             {
                 "constrained": constrained,
-                "modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES),
+                "modes_requested": (
+                    spec.modes + (0 if constrained else RIGID_BODY_MODES)
+                    if isinstance(spec, ModalSpec)
+                    else 0
+                ),
+                "recipe": spec.recipe,
             },
             ensure_ascii=False,
         ),
@@ -779,7 +808,7 @@ def _face_records(bodies: list[Any]) -> list[FaceRecord]:
 
 
 def _apply_constraints(
-    app: Any, spec: ModalSpec, workdir: Path, bodies: list[Any], analysis: Any
+    app: Any, spec: AnySpec, workdir: Path, bodies: list[Any], analysis: Any
 ) -> list[str]:
     """구속을 건다.
 
@@ -1070,7 +1099,7 @@ _CONTACT_TYPES = {
 
 def _mesh(
     app: Any,
-    spec: ModalSpec,
+    spec: AnySpec,
     given: condition_model.Conditions,
     system: units.UnitSystem,
     places: dict[str, Any],

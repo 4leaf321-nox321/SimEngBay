@@ -56,6 +56,19 @@ export interface ModeResult {
   local_mode?: boolean
 }
 
+/** 정적 해석의 결과 — **모드가 아니라 변형 · 응력**이다. */
+export interface StaticResult {
+  recipe: 'static'
+  units: { system?: string; displacement?: string; stress?: string }
+  mesh?: { nodes: number; elements: number }
+  max_displacement: number
+  max_von_mises: number | null
+  material?: string
+  shape?: { vtp: string; png?: string; points?: number }
+  warning?: string
+  fake?: boolean
+}
+
 export interface SimulationResult {
   recipe: string
   boundary: 'free-free' | 'constrained'
@@ -175,7 +188,7 @@ export const simulationApi = {
     numbers?: number[] | null
   }) => api.post<DoeImport>('/simulations/doe/import', body),
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
-  result: (id: string) => api.get<SimulationResult>(`/simulations/${id}/result`),
+  result: (id: string) => api.get<SimulationResult | StaticResult>(`/simulations/${id}/result`),
   /** 썸네일 — `<img src>` 로는 안 된다(토큰이 메모리에만 있다). blob 으로 받아 그린다. */
   image: (simulationId: string, artifactId: string) =>
     fetchBlob(`/simulations/${simulationId}/artifacts/${artifactId}/content`),

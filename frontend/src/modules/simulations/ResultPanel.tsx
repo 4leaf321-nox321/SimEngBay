@@ -10,8 +10,13 @@
 import { useEffect, useState } from 'react'
 
 import { simulationApi } from '@/modules/simulations/api'
-import type { Artifact, SimulationResult } from '@/modules/simulations/api'
+import type {
+  Artifact,
+  SimulationResult,
+  StaticResult as StaticResultData,
+} from '@/modules/simulations/api'
 import { ModalResult } from '@/modules/simulations/ModalResult'
+import { StaticResult } from '@/modules/simulations/StaticResult'
 import { ApiError } from '@/shared/api/client'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 
@@ -22,8 +27,13 @@ interface Props {
   artifacts: Artifact[]
 }
 
+/** **레시피로 가른다** — `SimulationResult.recipe` 가 넓은 글자형이라 좁혀 준다. */
+function isStatic(result: SimulationResult | StaticResultData): result is StaticResultData {
+  return result.recipe === 'static'
+}
+
 export function ResultPanel({ simulationId, status, artifacts }: Props) {
-  const [result, setResult] = useState<SimulationResult | null>(null)
+  const [result, setResult] = useState<SimulationResult | StaticResultData | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   useEffect(() => {
@@ -54,7 +64,16 @@ export function ResultPanel({ simulationId, status, artifacts }: Props) {
 
   if (status !== 'done') return null
   if (result) {
-    return <ModalResult simulationId={simulationId} result={result} artifacts={artifacts} />
+    // **레시피마다 보는 것이 다르다** — 모달은 모드, 정적은 변형 · 응력.
+    return isStatic(result) ? (
+      <StaticResult simulationId={simulationId} result={result} artifacts={artifacts} />
+    ) : (
+      <ModalResult
+        simulationId={simulationId}
+        result={result as SimulationResult}
+        artifacts={artifacts}
+      />
+    )
   }
   if (error) {
     return (

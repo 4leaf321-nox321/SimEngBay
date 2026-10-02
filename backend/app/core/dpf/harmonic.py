@@ -25,6 +25,28 @@ from app.core.stages import ArtifactSpec, StageFailure, StageResult
 logger = logging.getLogger(__name__)
 
 RESULT_NAME = "result.json"
+#: 모델링이 남긴 한 줄 — **실제로 쓴 감쇠비**가 거기 있다.
+BOUNDARY_NAME = "boundary.json"
+
+
+def _damping(spec: HarmonicSpec, workdir: Path) -> float:
+    """실제로 덱에 실린 감쇠비. **모델링이 남긴 파일이 정본이다.**
+
+    CAD 가 해석 설정에 감쇠비를 적어 보내면 그것이 스펙을 이긴다 — 그때 결과에 스펙 값을
+    적으면 화면이 거짓말을 한다. 봉우리 높이를 그 값으로 읽는 사람에게는 치명적이다
+    (봉우리는 1/2ζ 에 비례한다). 파일이 없으면(옛 작업) 스펙으로 본다.
+    """
+    path = workdir / BOUNDARY_NAME
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            value = loaded.get("damping_ratio")
+            if isinstance(value, int | float):
+                return float(value)
+        except (OSError, ValueError):
+            logger.warning("%s 를 읽지 못했습니다 — 스펙으로 봅니다", BOUNDARY_NAME)
+    return spec.damping_ratio
+
 
 #: 이보다 크면 「감쇠가 모자란 것 아닌가」 를 적어 둔다(선언된 계의 길이 단위).
 SUSPICIOUS_DISPLACEMENT = 1e3
@@ -34,6 +56,7 @@ def extract(
     spec: HarmonicSpec, workdir: Path, *, result_name: str = "file.rst"
 ) -> StageResult:
     """주파수마다 최대 변위를 읽어 `result.json` 에 곡선으로 남긴다."""
+    damping = _damping(spec, workdir)
     rst = workdir / result_name
     if not rst.is_file():
         raise StageFailure("solver_failed", f"결과 파일이 없습니다: {result_name}")
@@ -74,7 +97,7 @@ def extract(
         "recipe": "harmonic",
         "units": {"frequency": unit, "displacement": displacement_unit, "system": system},
         "mesh": {"nodes": int(mesh.nodes.n_nodes), "elements": int(mesh.elements.n_elements)},
-        "damping_ratio": spec.damping_ratio,
+        "damping_ratio": damping,
         "points": points,
         "peak": worst,
         "material": spec.material.name,
@@ -83,7 +106,7 @@ def extract(
         # **큰 수는 그럴듯해 보인다** — 감쇠가 모자라면 공진에서 수가 치솟는다.
         result["warning"] = (
             f"공진 응답이 {worst['max_displacement']:.3g} 로 큽니다 — "
-            f"감쇠비({spec.damping_ratio})가 실제보다 작지 않은지 보세요."
+            f"감쇠비({damping})가 실제보다 작지 않은지 보세요."
         )
 
     path = workdir / RESULT_NAME

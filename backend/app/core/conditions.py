@@ -153,6 +153,11 @@ class Analysis:
     modes: int | None = None
     frequency_range: tuple[float, float] | None = None
     prestressed: bool = False
+    #: 조화 응답의 감쇠비. **봉우리 높이를 거의 이 값이 정한다**(1/2ζ) — CAD 가 적어 보내면
+    #: 그것으로 푼다. 스펙 기본값으로 조용히 덮으면 CAD 가 2% 라고 한 모델이 5% 로 풀린다.
+    damping_ratio: float | None = None
+    #: 범위를 몇 점으로 나눠 푸나. 점이 적으면 **봉우리가 점 사이로 빠져나간다**(실측).
+    intervals: int | None = None
 
 
 @dataclass(frozen=True)
@@ -421,11 +426,14 @@ def _analysis(block: dict[str, Any]) -> Analysis:
         if low is not None and high is not None:
             pair = (low, high)
     modes = block.get("modes")
+    intervals = block.get("solution_intervals")
     return Analysis(
         kind=str(block.get("type") or "modal"),
         modes=int(modes) if isinstance(modes, int) else None,
         frequency_range=pair,
         prestressed=bool(block.get("prestressed")),
+        damping_ratio=_number(block.get("damping_ratio")),
+        intervals=int(intervals) if isinstance(intervals, int) else None,
     )
 
 

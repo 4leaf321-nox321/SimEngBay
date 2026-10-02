@@ -137,3 +137,23 @@ def test_면이_아닌_선택_그룹은_그렇다고_말한다() -> None:
     found = match_regions(topology, _faces("plate_holes"), wanted_regions=["측정점"])
     assert not found.ok
     assert "점(vertex)" in found.failures[0].reason
+
+
+def test_점_그룹은_면으로_짝짓지_않고_그_이유를_말한다() -> None:
+    """CAD 의 선택 그룹은 면 · 엣지 · **점**을 담는다 — 점 지문에는 `centroid` 가 없다.
+
+    `조건_측면가진`(CompCore 4e2f39a)의 `측정점` 은 기둥 끝 꼭짓점 하나이고 지문이
+    `{"point": [5, 5, 90]}` 뿐이다. 매처가 그것을 면으로 다루면 **`centroid` 로 KeyError** 가
+    나고, 그 사고는 「CAD 가 면을 잘못 냈다」 처럼 보인다. 종류를 말하고 넘어가야 한다.
+    """
+    payload = json.loads(
+        (FIXTURES / "doe" / "조건_측면가진" / "points" / "p0001.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    found = match_regions(payload, _faces("plate_holes"), wanted_regions=["측정점"])
+
+    assert found.faces == {}
+    assert len(found.failures) == 1
+    assert "점(vertex)" in found.failures[0].reason

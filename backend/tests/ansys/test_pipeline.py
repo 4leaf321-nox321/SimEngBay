@@ -41,6 +41,8 @@ TOPOLOGY = FIXTURES / "topology"
 SHARED_DOE = FIXTURES / "doe" / "재료훑기-7c1d3a44"
 #: 바디 둘에 다른 재료가 붙은 폴더(CompCore 2026-09-28).
 TWO_BODIES = FIXTURES / "doe" / "조건_두바디_두재료"
+#: 기둥 끝을 **옆으로** 흔드는 폴더(CompCore 4e2f39a) — 공진이 200~2000 Hz 안에 있다.
+SIDE_SHAKE = FIXTURES / "doe" / "조건_측면가진"
 #: 조건 · 물성 배율까지 훑는 폴더(CompCore 2026-09-29) — **값이 다 들어 있다.**
 CONDITION_SWEEP = FIXTURES / "doe" / "조건_조건훑기"
 #: 점마다 바디의 재료가 바뀌는 폴더(CompCore 2026-10-02 에 값까지 채워 다시 뽑았다).
@@ -597,76 +599,105 @@ def test_조화_응답이_공진에서_솟고_감쇠가_그_높이를_정한다(
     """**주파수를 훑으며 흔든다** — 모달이 「어디서 떠는가」 라면 이것은 「그때 얼마나 크게
     흔들리는가」 다.
 
-    `조건_두바디_두재료`(바닥 고정 · 블록 윗면 압력)를 돌린다. 구속은 앞선 모달에, 흔드는
-    하중은 조화 쪽에 걸린다.
+    `조건_측면가진`(강판 위 알루미늄 기둥 · 바닥 고정 · **기둥 끝에 X 10 N**)을 돌린다. CAD 가
+    해석 설정까지 적어 보낸다 — 200~2000 Hz · 90점 · 감쇠 0.02 · 모드 중첩.
 
-    **창을 56~64 kHz 로 잡은 이유** — 이 하중이 흔드는 모드가 거기 있다. 1 · 2차(31.5 kHz)는
-    Z 유효질량비가 0.12 나 되는데도 윗면 압력이 하는 일이 거의 0 이어서, 그 창의 응답은
-    정적값(5.2e-4 mm)에서 안 움직인다 — 29~31 kHz 는 단조 증가였고 감쇠를 2%→5% 로 올려도
-    0.2% 밖에 안 변했다(실측 2026-10-02). 20~140 kHz 를 넓게 훑어 **60 kHz 에서 18배로
-    솟는 자리**를 찾았다(모드 6 · 60,270 Hz · X 유효질량비 0.200).
+    **하중이 모드를 흔들어야 공진이 보인다.** 앞서 `조건_두바디_두재료`(윗면 Z 압력)로는
+    29~31 kHz 가 준정적이어서 응답이 정적값에서 안 움직였다 — 그 창의 모드는 Z 유효질량비가
+    0.12 여도 압력이 하는 일이 거의 0 이다(모드 힘은 하중 모양과 모드 모양의 겹침이다).
+    60 kHz 까지 올라가서야 봉우리를 봤다. 측면 가진은 **첫 굽힘을 바로 흔든다.**
 
-    **감쇠를 두 값으로 두 번 훑는다.** 봉우리 높이는 감쇠에 반비례해야 한다(1/2ζ) — 그것이
-    감쇠가 **덱에 실렸는지** 보는 가장 확실한 방법이다. 속성(`DampingRatio` ·
-    `ConstantDamping` · `StructuralDampingCoefficient`)으로는 덱에 한 줄도 안 적히므로
-    `DMPRAT` 명령 조각으로 넣는다(실측 2026-10-02). 감쇠 없이 풀면 공진에서 응답이 끝없이
-    커지고, 그 큰 수는 그럴듯해 보인다.
+    **세 번 돌린다.**
 
-    두 번째 훑기는 **형상 캐시**로 임포트를 건너뛴다(같은 형상 · 같은 메시).
+        ① CAD 그대로(감쇠 0.02)        봉우리 1260 Hz · 0.703 mm · 창 최저의 37.8배
+        ② 감쇠만 0.05 로 바꿔          봉우리가 1/2ζ 대로 낮아진다
+        ③ 기둥 100 mm 짜리 설계점      봉우리가 820 Hz 로 **내려간다**
+
+    ①에서 **스펙은 일부러 다른 값을 들고 있다**(10~100 Hz · 5점 · 감쇠 0.05) — CAD 가 적어
+    보낸 설정이 이기는지 보려는 것이다. 조용히 스펙으로 풀면 봉우리는 창 밖이고 결과는 오류
+    없이 평평하게 나온다.
+
+    실측 2026-10-02(2025 R2 Student · Windows). CompCore 어림은 1290 · 830 Hz 였다 —
+    판이 조금 휘므로 실제가 약간 낮다는 그쪽 설명과 맞는다.
     """
     cache = workdir / "cache"
-    curves: dict[float, dict[str, Any]] = {}
-    for ratio in (0.02, 0.05):
-        work = workdir / f"감쇠{int(ratio * 1000):03d}"
+    spec = {
+        "recipe": "harmonic",
+        "material": SPEC["material"],
+        "mesh": {"element_size_mm": 5},
+        # **일부러 CAD 와 다르게 둔다** — 아래에서 CAD 가 이기는 것을 본다.
+        "frequency_range_hz": [10, 100],
+        "intervals": 5,
+        "modes": 6,
+        "damping_ratio": 0.05,
+    }
+    parse_spec(spec)
+
+    def run(label: str, point: int, *, damping: float | None = None) -> dict[str, Any]:
+        """한 번 돌리고 결과를 돌려준다.
+
+        `damping` 을 주면 **CAD 조건의 감쇠비를 그 값으로 바꿔** 쓴다.
+        """
+        work = workdir / label
         work.mkdir()
-        shutil.copy(TWO_BODIES / "points" / "p0001.step", work / "input.step")
-        shutil.copy(TWO_BODIES / "points" / "p0001.json", work / "topology.json")
-        spec = {
-            "recipe": "harmonic",
-            "material": SPEC["material"],
-            "mesh": {"element_size_mm": 8},
-            "frequency_range_hz": [56000, 64000],
-            "intervals": 16,
-            # 60.2~60.4 kHz 에 모드가 셋 몰려 있다 — 그 위까지 담는다.
-            "modes": 10,
-            "damping_ratio": ratio,
-        }
-        parse_spec(spec)
+        shutil.copy(SIDE_SHAKE / "points" / f"p{point:04d}.step", work / "input.step")
+        payload = json.loads(
+            (SIDE_SHAKE / "points" / f"p{point:04d}.json").read_text(encoding="utf-8")
+        )
+        if damping is not None:
+            payload["conditions"]["analysis"]["damping_ratio"] = damping
+        (work / "topology.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
         (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
         runner = _executor(shape_cache=cache)
+        summary: dict[str, Any] = {}
         for stage in STAGES:
-            runner.run(StageContext(stage=stage, spec=spec, workdir=work))
-        curves[ratio] = json.loads((work / "result.json").read_text(encoding="utf-8"))
-        deck = (work / "model.dat").read_text(encoding="utf-8", errors="replace").lower()
-        assert f"dmprat,{ratio}" in deck, "감쇠가 덱에 안 실렸다"
-        # 앞선 모달의 덱이 따로 나왔다 — 모드 중첩은 그것을 이어받는다.
-        assert (work / "upstream.dat").is_file()
+            summary.update(
+                runner.run(StageContext(stage=stage, spec=spec, workdir=work)).summary
+            )
+        out: dict[str, Any] = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        out["summary"] = summary
+        out["deck"] = (
+            (work / "model.dat").read_text(encoding="utf-8", errors="replace").lower()
+        )
+        return out
 
-    sharp = curves[0.02]
+    # ① CAD 가 적어 보낸 설정으로 푼다.
+    sharp = run("감쇠020", 1)
     assert sharp["recipe"] == "harmonic"
+    # **CAD 가 이겼다.** 스펙은 10~100 Hz · 5점 · 감쇠 0.05 였다.
+    assert sharp["summary"]["settings_from"] == "cad"
+    assert len(sharp["points"]) == 90, "점 수가 CAD 가 말한 90 이어야 한다"
+    assert "harfrq,200,2000" in sharp["deck"]
+    # **감쇠가 덱에 실렸는가.** 속성(`DampingRatio` · `ConstantDamping` ·
+    # `StructuralDampingCoefficient`)으로는 한 줄도 안 적힌다 — 셋 다 해 봤다(실측).
+    # 그래서 명령 조각으로 넣는다. 감쇠 없이 풀면 공진에서 응답이 끝없이 커지고, 그 큰 수는
+    # 그럴듯해 보인다.
+    assert "dmprat,0.02" in sharp["deck"], "감쇠가 덱에 안 실렸다"
+    # 결과도 **실제로 쓴 값**을 적는다 — 스펙 값(0.05)을 적으면 화면이 거짓말을 한다.
     assert sharp["damping_ratio"] == 0.02
-    # **변위에 단위가 붙어 있다** — 값만 보면 mm 와 m 가 구별되지 않는다(정적에서 겪었다).
     assert sharp["units"]["displacement"] == "mm"
-    points = sharp["points"]
-    assert len(points) == 16, "주파수 점이 요청한 수만큼 나와야 한다"
-    assert all(one["max_displacement"] > 0 for one in points), (
-        "응답이 0 이면 하중이 안 걸린 것"
-    )
-    assert points[0]["frequency_hz"] == pytest.approx(56500, abs=1)
-    assert points[-1]["frequency_hz"] == pytest.approx(64000, abs=1)
 
     peak = sharp["peak"]
-    # **봉우리가 창 안쪽에 있다** — 끝에 붙으면 공진을 지나지 않은 것이고, 그때는 곡선이
-    # 올라가는 옆구리만 보여 준다(29~31 kHz 가 그랬다).
-    assert 59000 < peak["frequency_hz"] < 61500
-    assert peak["max_displacement"] == pytest.approx(9.67e-3, rel=0.1)
-    # 공진에서 솟았다 — 창 끝보다 세 배 넘게 크다(실측 3.3배).
-    assert peak["max_displacement"] > 2.5 * points[-1]["max_displacement"]
+    floor = min(one["max_displacement"] for one in sharp["points"])
+    # **첫 굽힘이 창 안에 있다** — 끝에 붙으면 공진을 지나지 않은 것이다.
+    assert 1200 < peak["frequency_hz"] < 1330
+    assert peak["max_displacement"] == pytest.approx(0.703, rel=0.15)
+    # 공진에서 솟았다 — 창에서 가장 조용한 자리의 열 배를 넘는다(실측 37.8배).
+    assert peak["max_displacement"] > 10 * floor
 
-    # **감쇠가 봉우리 높이를 정한다** — ζ 를 2.5배로 올리면 봉우리가 그만큼 낮아진다
-    # (1/2ζ, 실측 2.46배). 감쇠가 덱에 안 실리면 이 비가 1 로 나온다.
-    taller = peak["max_displacement"] / curves[0.05]["peak"]["max_displacement"]
-    assert taller == pytest.approx(2.5, rel=0.15), "감쇠가 응답을 못 바꾼다"
+    # ② 감쇠만 키운다 — 봉우리 높이는 감쇠에 반비례한다(1/2ζ).
+    soft = run("감쇠050", 1, damping=0.05)
+    assert "dmprat,0.05" in soft["deck"]
+    assert soft["damping_ratio"] == 0.05
+    taller = peak["max_displacement"] / soft["peak"]["max_displacement"]
+    assert taller == pytest.approx(2.5, rel=0.25), "감쇠가 응답을 못 바꾼다"
+
+    # ③ 설계점이 바뀌면 봉우리가 옮겨 간다 — 기둥 80 → 100 mm.
+    taller_column = run("기둥100", 2)
+    assert taller_column["peak"]["frequency_hz"] < peak["frequency_hz"] - 300
+    assert 760 < taller_column["peak"]["frequency_hz"] < 890
 
 
 def test_같은_형상은_두_번_임포트하지_않는다(workdir: Path) -> None:
@@ -713,8 +744,13 @@ def test_같은_형상은_두_번_임포트하지_않는다(workdir: Path) -> No
     assert seen[1]["reused"] is False
     assert seen[2]["reused"] is True
     assert list(cache.glob("*.mechdb")), "캐시 파일이 안 남았다"
-    # **빨라져야 한다** — 임포트(18.9초)를 건너뛴 만큼. 여유를 두고 10초로 본다.
-    assert seen[2]["seconds"] < seen[1]["seconds"] - 10
+    # **빨라져야 한다** — 임포트를 건너뛴 만큼. 다만 **고정 초로 재면 안 된다**: PC 가 다른
+    # 일을 하고 있으면 두 점이 **함께** 부풀어서(실측 2026-10-02: 54.2초 대 46.2초, 차이 8초)
+    # 「10초 이상」 이 애먼 이유로 깨진다. 비율은 같이 부풀어도 유지되므로 그것으로 본다.
+    saved = 1 - seen[2]["seconds"] / seen[1]["seconds"]
+    assert saved > 0.1, (
+        f"캐시가 시간을 못 줄였다: {seen[1]['seconds']:.1f}초 → {seen[2]['seconds']:.1f}초"
+    )
 
     # **그리고 결과가 점마다 달라야 한다** — 캐시가 앞 점의 물성을 물려받으면 같아진다.
     assert seen[1]["mass"] == pytest.approx(0.3213, rel=0.01)

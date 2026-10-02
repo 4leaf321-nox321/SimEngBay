@@ -103,10 +103,12 @@ def build(
         bodies = _bodies_of(app) if reused else _import_geometry(app, step)
         used = _apply_material(spec, bodies, system, given, topology)
         constrained = bool(given_conditions.constraints or spec.constraints)
+        plan: HarmonicPlan | None = None
         if isinstance(spec, HarmonicSpec):
             # **조화 응답은 모달이 앞에 선다**(모드 중첩) — 그 모드로 응답을 쌓는다.
             upstream = _add_modal_for_harmonic(app, spec)
-            analysis = _add_harmonic(app, spec, upstream)
+            plan = harmonic_plan(spec, given_conditions)
+            analysis = _add_harmonic(app, spec, upstream, plan)
         elif isinstance(spec, StaticSpec):
             # **정적 해석은 하중이 답을 만든다.** 하중이 없으면 전부 0 이 나오는데 그 그림은
             # 「해석이 됐다」 처럼 보인다 — 여기서 멈춘다.
@@ -125,7 +127,7 @@ def build(
             analysis = _add_modal(
                 app, spec, constrained=constrained, given=given_conditions, upstream=upstream
             )
-        _write_boundary(workdir, constrained=constrained, spec=spec)
+        _write_boundary(workdir, constrained=constrained, spec=spec, plan=plan)
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
         # **구속은 앞선 해석에 건다** — 모드 중첩의 모드는 모달에서 나오고, 선응력의 응력은
@@ -210,6 +212,15 @@ def build(
                 # **무슨 물성으로 돌았나.** 적지 않으면 「CAD 가 보낸 재료로 돈 것인지」 를
                 # 나중에 알 방법이 없다 — 재료를 훑는 DOE 에서 그것이 결과의 절반이다.
                 "conditions_from": "cad" if given_conditions.constraints else "spec",
+                **(
+                    {
+                        "damping_ratio": plan.damping_ratio,
+                        "frequency_points": plan.intervals,
+                        "settings_from": plan.source,
+                    }
+                    if plan is not None
+                    else {}
+                ),
                 **({"prestressed": True} if upstream is not None else {}),
                 **(
                     {
@@ -709,25 +720,72 @@ def _add_modal_for_harmonic(app: Any, spec: HarmonicSpec) -> Any:
     return modal
 
 
-def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any) -> Any:
+@dataclass(frozen=True)
+class HarmonicPlan:
+    """조화 응답을 **무엇으로 풀 것인가** — 범위 · 점 수 · 감쇠비.
+
+    **CAD 가 적어 보내면 그것이 먼저다.** 스펙 기본값으로 조용히 덮으면 CAD 가
+    「200~2000 Hz · 90점 · 2%」 라고 한 모델이 다른 설정으로 풀리고, 결과는 오류 없이
+    그럴듯하게 나온다. 한 자리에서 정해 **덱 · 요약 · 결과가 같은 것을 말하게** 한다.
+    """
+
+    low: float
+    high: float
+    intervals: int
+    damping_ratio: float
+    source: str
+
+
+def harmonic_plan(spec: HarmonicSpec, given: condition_model.Conditions) -> HarmonicPlan:
+    """스펙과 CAD 조건을 합쳐 실제로 풀 설정을 낸다."""
+    declared = given.analysis
+    low, high = spec.frequency_range_hz
+    intervals, damping = spec.intervals, spec.damping_ratio
+    from_cad: list[str] = []
+    if declared.frequency_range is not None:
+        low, high = declared.frequency_range
+        from_cad.append("범위")
+    if declared.intervals:
+        intervals = declared.intervals
+        from_cad.append("점 수")
+    if declared.damping_ratio is not None:
+        damping = declared.damping_ratio
+        from_cad.append("감쇠비")
+    if from_cad:
+        logger.info("조화 설정 ← CAD: %s", " · ".join(from_cad))
+    return HarmonicPlan(
+        low=low,
+        high=high,
+        intervals=intervals,
+        damping_ratio=damping,
+        source="cad" if from_cad else "spec",
+    )
+
+
+def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any, plan: HarmonicPlan) -> Any:
     """조화 응답 — **주파수를 훑으며 흔든다.**
 
     칸 이름은 실측으로 쟀다(2026-10-02): `RangeMinimum/Maximum` · `SolutionIntervals` ·
     `SolutionMethod` · `DampingRatio` · `NumberOfModesToUse`, 그리고 앞선 모달은
     `InitialConditions[0].ModalICEnvironment` 로 문다.
     """
-    low, high = spec.frequency_range_hz
+    low, high, intervals, damping = (
+        plan.low,
+        plan.high,
+        plan.intervals,
+        plan.damping_ratio,
+    )
     harmonic = app.Model.AddHarmonicResponseAnalysis()
     quantity = _global("Quantity")
     settings = harmonic.AnalysisSettings
     try:
         settings.RangeMinimum = quantity(f"{low} [Hz]")
         settings.RangeMaximum = quantity(f"{high} [Hz]")
-        settings.SolutionIntervals = spec.intervals
+        settings.SolutionIntervals = intervals
         # **`NumberOfModesToUse` 는 건드리지 않는다** — 모드 중첩에서는 앞선 모달이 그 수를
         # 정하므로 읽기 전용이다(실측 2026-10-02: "This property is parameterized and is
         # read-only"). 그래서 `_add_modal_for_harmonic` 에서 모드 수를 정한다.
-        settings.DampingRatio = spec.damping_ratio
+        settings.DampingRatio = damping
         initial = next(iter(harmonic.InitialConditions))
         initial.ModalICEnvironment = modal
         # **감쇠를 실제로 거는 자리는 명령 조각이다.** 위의 `DampingRatio` 는 화면에만 남고
@@ -737,9 +795,7 @@ def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any) -> Any:
         # 큰 수는 그럴듯해 보인다. 해석에 붙인 조각은 `/solu` 안 `solve` **앞에** 적힌다
         # (실측: 선응력 정적의 `RESCONTROL` 이 그 자리에 들어갔다).
         snippet = harmonic.AddCommandSnippet()
-        snippet.AppendText(
-            f"! SimEngBay: constant damping ratio\nDMPRAT,{spec.damping_ratio:.6g}\n"
-        )
+        snippet.AppendText(f"! SimEngBay: constant damping ratio\nDMPRAT,{damping:.6g}\n")
     except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
         raise _translated(
             failure, "internal", "조화 응답 설정을 세우지 못했습니다"
@@ -877,22 +933,30 @@ def _load_magnitude(
         made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
 
 
-def _write_boundary(workdir: Path, *, constrained: bool, spec: AnySpec) -> None:
-    """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**"""
-    (workdir / BOUNDARY_NAME).write_text(
-        json.dumps(
-            {
-                "constrained": constrained,
-                "modes_requested": (
-                    spec.modes + (0 if constrained else RIGID_BODY_MODES)
-                    if isinstance(spec, ModalSpec)
-                    else 0
-                ),
-                "recipe": spec.recipe,
-            },
-            ensure_ascii=False,
+def _write_boundary(
+    workdir: Path, *, constrained: bool, spec: AnySpec, plan: HarmonicPlan | None = None
+) -> None:
+    """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
+
+    조화면 **실제로 쓴 감쇠비**도 남긴다. CAD 가 적어 보낸 값이 스펙과 다를 수 있어서, 결과가
+    스펙 값을 적으면 **화면이 거짓말을 한다**(봉우리 높이를 그 값으로 읽는 사람에게는 치명적).
+    """
+    payload: dict[str, Any] = {
+        "constrained": constrained,
+        "modes_requested": (
+            spec.modes + (0 if constrained else RIGID_BODY_MODES)
+            if isinstance(spec, ModalSpec)
+            else 0
         ),
-        encoding="utf-8",
+        "recipe": spec.recipe,
+    }
+    if plan is not None:
+        payload["damping_ratio"] = plan.damping_ratio
+        payload["frequency_range_hz"] = [plan.low, plan.high]
+        payload["intervals"] = plan.intervals
+        payload["settings_from"] = plan.source
+    (workdir / BOUNDARY_NAME).write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
 
 

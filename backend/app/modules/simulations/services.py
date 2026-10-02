@@ -238,7 +238,12 @@ def conditions_out(payload: dict[str, Any], *, recipe: str) -> ConditionsOut:
         화면은 아무 말도 안 한다.
         """
         group = (payload.get("regions") or {}).get(region)
-        return f" · 면 {len(group)}" if isinstance(group, list) else ""
+        if not isinstance(group, list) or not group:
+            return ""
+        # 선택 그룹은 면 · 엣지 · 점을 담는다 — 지문의 모양이 종류를 말한다(점은 `point`).
+        first = group[0] if isinstance(group[0], dict) else {}
+        unit = "면" if "centroid" in first else "점" if "point" in first else "자리"
+        return f" · {unit} {len(group)}"
 
     lines: list[ConditionLine] = []
     for frame in found.frames:

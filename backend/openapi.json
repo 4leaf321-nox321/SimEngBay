@@ -3940,6 +3940,17 @@
             "type": "integer",
             "title": "Skipped"
           },
+          "suggested_modes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Modes"
+          },
           "materials": {
             "items": {
               "type": "string"

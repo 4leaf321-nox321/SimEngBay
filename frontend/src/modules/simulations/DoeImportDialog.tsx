@@ -66,6 +66,13 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
 
   const workspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const cadMaterials = preview?.materials ?? []
+  const suggestedModes = preview?.suggested_modes ?? null
+
+  // **CAD 가 적은 모드 수를 미리 채운다** — 조용히 쓰면 그쪽 기본값이 우리 것을 말없이
+  // 덮는다. 채워 두고 사람이 고치게 한다.
+  useEffect(() => {
+    if (suggestedModes) setModes(String(suggestedModes))
+  }, [suggestedModes])
 
   // 창을 열면 첫 뿌리부터 보여 준다 — 사람이 아무것도 안 쳐도 고를 것이 있어야 한다.
   useEffect(() => {
@@ -308,6 +315,11 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
                     value={modes}
                     onChange={(event) => setModes(event.target.value)}
                   />
+                  {suggestedModes !== null && (
+                    <p className="text-muted-foreground text-xs">
+                      CAD 가 적은 값 {suggestedModes}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="doe-region">구속 영역</Label>

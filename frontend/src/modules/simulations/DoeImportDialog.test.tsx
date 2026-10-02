@@ -39,6 +39,7 @@ const PREVIEW = {
   usable: 3,
   skipped: 1,
   materials: [],
+  suggested_modes: null,
   points: [
     { number: 1, params: { 두께: 6 }, usable: true, skip_reason: '' },
     { number: 2, params: { 두께: 12 }, usable: true, skip_reason: '' },
@@ -167,6 +168,16 @@ describe('DOE 가져오기', () => {
     await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
     const sent = vi.mocked(simulationApi.importDoe).mock.calls[0][0]
     expect((sent.spec as Record<string, unknown>).material_from).toBe('spec')
+  })
+
+  it('CAD 가 적은 모드 수를 미리 채운다', async () => {
+    // **조용히 쓰면 그쪽 기본값이 우리 것을 말없이 덮는다** — 채워 두고 사람이 고치게 한다.
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue({ ...PREVIEW, suggested_modes: 8 })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+
+    await waitFor(() => expect(screen.getByText(/CAD 가 적은 값 8/)).toBeDefined())
+    expect((screen.getByLabelText('모드 수') as HTMLInputElement).value).toBe('8')
   })
 
   it('물성을 안 보낸 폴더면 그 사실을 말한다', async () => {

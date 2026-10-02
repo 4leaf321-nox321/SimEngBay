@@ -87,7 +87,9 @@ def build(
         # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을 안고
         # 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다.
         upstream = _add_static(app) if given_conditions.prestressed else None
-        analysis = _add_modal(app, spec, constrained=constrained, upstream=upstream)
+        analysis = _add_modal(
+            app, spec, constrained=constrained, given=given_conditions, upstream=upstream
+        )
         _write_boundary(workdir, constrained=constrained, spec=spec)
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -162,6 +164,15 @@ def build(
                 # 나중에 알 방법이 없다 — 재료를 훑는 DOE 에서 그것이 결과의 절반이다.
                 "conditions_from": "cad" if given_conditions.constraints else "spec",
                 **({"prestressed": True} if upstream is not None else {}),
+                **(
+                    {
+                        "frequency_range_hz": "~".join(
+                            f"{one:g}" for one in given_conditions.analysis.frequency_range
+                        )
+                    }
+                    if given_conditions.analysis.frequency_range
+                    else {}
+                ),
                 **(
                     {
                         "loads": " · ".join(
@@ -552,6 +563,29 @@ def _body_records(bodies: list[Any], system: units.UnitSystem) -> list[BodyRecor
     return found
 
 
+def _limit_range(analysis: Any, given: condition_model.Conditions) -> None:
+    """CAD 가 **찾을 주파수 범위**를 적었으면 그대로 건다(`LimitSearchToRange`, 실측 자리).
+
+    스펙에는 그 칸이 없다 — 범위는 「어디를 보고 싶은가」 라서 조건 쪽에 속한다. 안 걸면
+    낮은 것부터 세어 올라가므로 **보고 싶은 대역이 모드 수 밖으로 밀려날 수 있다.**
+    """
+    span = given.analysis.frequency_range
+    if span is None:
+        return
+    low, high = span
+    if high <= low:
+        return
+    quantity = _global("Quantity")
+    settings = analysis.AnalysisSettings
+    try:
+        settings.LimitSearchToRange = True
+        settings.RangeMinimum = quantity(f"{low} [Hz]")
+        settings.RangeMaximum = quantity(f"{high} [Hz]")
+        logger.info("주파수 범위 %s ~ %s Hz ← CAD", low, high)
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        logger.warning("주파수 범위를 걸지 못했습니다 — 범위 없이 돕니다", exc_info=True)
+
+
 def _add_static(app: Any) -> Any:
     """선응력을 만들 정적 해석. 구속과 하중이 여기 걸린다.
 
@@ -566,7 +600,14 @@ def _add_static(app: Any) -> Any:
     return static
 
 
-def _add_modal(app: Any, spec: ModalSpec, *, constrained: bool, upstream: Any = None) -> Any:
+def _add_modal(
+    app: Any,
+    spec: ModalSpec,
+    *,
+    constrained: bool,
+    given: condition_model.Conditions,
+    upstream: Any = None,
+) -> Any:
     """모달 해석 하나. **찾을 모드 수는 구속 여부로 갈린다** — 자유-자유면 강체 6개를 얹는다.
 
     구속이 CAD 조건에만 있을 수 있으므로 스펙이 아니라 **실제로 건 것**으로 센다.
@@ -578,6 +619,7 @@ def _add_modal(app: Any, spec: ModalSpec, *, constrained: bool, upstream: Any = 
     analysis.AnalysisSettings.MaximumModesToFind = spec.modes + (
         0 if constrained else RIGID_BODY_MODES
     )
+    _limit_range(analysis, given)
     if upstream is None:
         return analysis
     try:

@@ -658,7 +658,21 @@ def preview_doe(path_text: str) -> DoePreviewOut:
         usable=len(doe.usable),
         skipped=len(doe.skipped),
         materials=_doe_materials(doe),
+        suggested_modes=_doe_modes(doe),
     )
+
+
+def _doe_modes(doe: DoeFolder) -> int | None:
+    """CAD 가 적은 모드 수 — 첫 점에서 읽는다(스터디 전체에 같다)."""
+    for point in doe.usable:
+        if point.point_file is None or not point.has_conditions:
+            continue
+        try:
+            payload = json.loads(point.point_file.read_text(encoding="utf-8"))
+            return condition_model.read(payload).analysis.modes
+        except (OSError, ValueError):
+            return None
+    return None
 
 
 def _doe_materials(doe: DoeFolder) -> list[str]:

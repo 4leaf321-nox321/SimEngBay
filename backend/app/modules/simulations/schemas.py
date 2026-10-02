@@ -124,6 +124,10 @@ class DoePreviewOut(BaseModel):
     points: list[DoePointPreview]
     usable: int
     skipped: int
+    suggested_modes: int | None = None
+    """CAD 가 적어 보낸 모드 수 — 화면이 **미리 채우고 사람이 고친다.**
+
+    조용히 쓰면 그쪽 기본값(6)이 우리 기본값(10)을 말없이 덮는다. 보여 주고 고르게 한다."""
     materials: list[str] = []
     """CAD 가 함께 보낸 재료 이름들. 비어 있으면 물성은 사람이 넣어야 한다 — 화면이 그 차이를
     말해 주지 않으면, 재료를 훑는 DOE 가 **이름만 다른 결과**로 돌아도 아무도 모른다."""

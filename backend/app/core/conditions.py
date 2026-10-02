@@ -204,6 +204,15 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     regions = set(_dict(payload).get("regions") or {})
     # **해석 설정을 먼저 읽는다** — 선응력인지에 따라 하중을 걸지 넘길지가 갈린다.
     made.analysis = _analysis(_dict(block.get("analysis")))
+    if made.analysis.kind and made.analysis.kind != recipe:
+        # **다른 해석을 하라고 적혀 있다.** 막지는 않는다 — 사람이 모달로 돌려 보는 일은
+        # 흔하다. 다만 말해 주지 않으면 「CAD 가 시킨 대로 돈 것」 으로 읽는다.
+        made.skipped.append(
+            Note(
+                f"해석 설정 ({made.analysis.kind})",
+                f"이 작업은 {recipe} 로 돕니다 — CAD 는 {made.analysis.kind} 를 적었습니다",
+            )
+        )
     made.frames = _frames(payload, block)
     known = {one.name for one in made.frames}
     for row in _rows(block, "constraints"):

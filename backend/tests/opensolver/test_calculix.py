@@ -100,6 +100,15 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert result["solver"] == "calculix", "어느 솔버로 풀었는지 결과에 도장이 있어야 한다"
     assert result["boundary"] == "constrained"
     assert result["rigid_body_modes"] == 0, "바닥을 고정했으면 강체 모드가 없다"
+    # **측정점** — CAD 가 점 그룹으로 보낸 자리(기둥 끝 꼭짓점)의 값. 전체 최대만 보면 센서를
+    # 붙인 자리와 견줄 수 없다(최대는 구속 모서리의 수치적 첨두일 수 있다).
+    spot = next(one for one in result["probes"] if one["name"] == "측정점")
+    assert spot["point"] == [5.0, 5.0, 90.0]
+    # 형상의 꼭짓점에는 gmsh 가 절점을 놓으므로 **딱 맞는다** — 멀면 결과가 그 사실을 적는다.
+    assert spot["distance_mm"] == 0.0
+    assert "warning" not in spot
+    assert spot["value"] > 0
+
     first = result["modes"][0]["frequency_hz"]
     # **Ansys 1,266.4 Hz 와 맞는가.** 메시가 같지 않으므로(gmsh 가 더 촘촘하다) 2% 로 본다.
     assert first == pytest.approx(1266.4, rel=0.02), f"1차 굽힘이 {first} Hz 로 나왔다"
@@ -304,6 +313,12 @@ def test_조화_응답이_공진에서_솟고_CAD_감쇠를_쓴다(ready: None, 
     assert result["recipe"] == "harmonic"
     assert result["damping_ratio"] == 0.02, "CAD 가 적어 보낸 감쇠비를 써야 한다"
     assert len(result["points"]) > 90, "고유진동수 사이마다 점이 들어가므로 더 촘촘하다"
+    # **측정점의 곡선** — 주파수마다 그 자리의 응답이 붙는다. 전체 최대는 자리가 주파수마다
+    # 옮겨 다닐 수 있고, 센서는 한 자리에 붙어 있다.
+    assert all("측정점" in one["probes"] for one in result["points"])
+    spot_peak = max(result["points"], key=lambda one: one["probes"]["측정점"])
+    assert spot_peak["frequency_hz"] == pytest.approx(1263.5, rel=0.02)
+
     peak = result["peak"]
     assert peak["frequency_hz"] == pytest.approx(1263.5, rel=0.02)
     assert peak["max_displacement"] == pytest.approx(0.703, rel=0.1)
@@ -352,6 +367,7 @@ def test_두_솔버가_같은_폴더에서_같은_수를_낸다(ready: None, tmp
     from app.core.stages import StageContext
 
     both: dict[str, list[float]] = {}
+    spots: dict[str, float] = {}
     for solver in ("calculix", "ansys"):
         work = tmp_path / solver
         work.mkdir()
@@ -378,6 +394,12 @@ def test_두_솔버가_같은_폴더에서_같은_수를_낸다(ready: None, tmp
         both[solver] = [
             one["frequency_hz"] for one in result["modes"] if not one["rigid_body"]
         ]
+        # **측정점도 견준다** — 같은 자리의 값이라야 실측과 맞춰 볼 수 있다. 모드 형상은 질량
+        # 정규화된 값이라 크기가 솔버 구현에 달려 있어 폭을 넓게 둔다(실측 2026-10-03:
+        # Ansys 430.96 · CalculiX 427.73 — 0.76% 차이).
+        spots[solver] = next(
+            one["value"] for one in result["probes"] if one["name"] == "측정점"
+        )
 
     assert len(both["ansys"]) >= 5 and len(both["calculix"]) >= 5
     gaps = [
@@ -388,3 +410,150 @@ def test_두_솔버가_같은_폴더에서_같은_수를_낸다(ready: None, tmp
     assert gaps[0] < 0.02, f"1차가 {both['ansys'][0]} 대 {both['calculix'][0]} Hz 로 갈렸다"
     # 나머지는 메시 민감도까지 감안해 3%.
     assert max(gaps[:5]) < 0.03, f"모드별 차이 {[round(one * 100, 2) for one in gaps]}%"
+    assert spots["calculix"] == pytest.approx(spots["ansys"], rel=0.05), (
+        f"측정점 값이 갈렸다: Ansys {spots['ansys']} · CalculiX {spots['calculix']}"
+    )
+
+
+#: 조건 · 물성 배율을 훑는 폴더 — p0001 은 **접착**, p0003 은 **마찰**이다(같은 형상).
+CONDITION_SWEEP = FIXTURES / "doe" / "조건_조건훑기"
+SWEEP_SHAPE = CONDITION_SWEEP / "shapes" / "c3aed82c2d74.step"
+
+
+def _sweep(tmp_path: Path, point: int, *, prestressed: bool | None = None) -> Path:
+    """`조건_조건훑기` 의 한 점을 작업 폴더에 깐다."""
+    work = tmp_path / f"p{point:04d}"
+    work.mkdir()
+    shutil.copy(SWEEP_SHAPE, work / "input.step")
+    payload = json.loads(
+        (CONDITION_SWEEP / "points" / f"p{point:04d}.json").read_text(encoding="utf-8")
+    )
+    if prestressed is not None:
+        payload["conditions"]["analysis"]["prestressed"] = prestressed
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    return work
+
+
+def test_마찰_접촉은_정적에서_비선형으로_풀고_접착과_거의_같다(
+    ready: None, tmp_path: Path
+) -> None:
+    """같은 형상 · 같은 하중에서 **접착과 마찰이 거의 같아야 한다** — 이 이음은 압축만 받는다.
+
+    블록을 위에서 누르므로 접합면에 전단이 없다. 그러면 마찰이 붙잡을 것이 없고, 접착과 같은
+    답이 나오는 것이 **맞다.** Ansys 로 같은 점을 돌려 확인했다(실측 2026-10-03: 접착
+    1.9545e-4 · 마찰 1.9501e-4 mm — 0.2% 차이).
+
+    **이 시험이 한 번 거짓을 지켰다.** 접촉 강성을 1e4 N/mm³ 고정값으로 두었을 때 마찰이
+    3.350e-4 mm(73% 더 무름)로 나왔고, 나는 그것을 「마찰이 더 밀린다」 로 단정했다. 실은 압력
+    1.5 MPa ÷ 1e4 = 1.5e-4 mm 만큼 **면이 파고든 것**이었다 — 물리가 아니라 접촉 스프링의
+    무름이다. 이제 강성을 `10 x E / h` 로 끌어내고(요소 8 mm · E 200 GPa → 250,000 N/mm³)
+    차이가 2.7% 로 줄었다.
+
+    교훈은 하나다: **한 솔버의 수만 보면 그 수가 가짜인지 모른다.**
+    """
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec["recipe"] = "static"
+    spec["material_from"] = "spec"
+    spec["mesh"] = {"element_size_mm": 8}
+
+    bonded = _sweep(tmp_path, 1)
+    (bonded / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    _run(bonded, spec)
+    rubbing = _sweep(tmp_path, 3)
+    (rubbing / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    summary = _run(rubbing, spec)
+
+    assert any("frictional" in one for one in summary["constrained_regions"])
+    deck = (rubbing / "model.inp").read_text(encoding="utf-8")
+    assert "*CONTACT PAIR" in deck
+    assert "PRESSURE-OVERCLOSURE=LINEAR" in deck
+    assert "*FRICTION" in deck
+    # 강성은 **끌어낸 값**이다 — 고정값이면 압력에 따라 면이 파고든다.
+    assert "250000" in deck.split("PRESSURE-OVERCLOSURE=LINEAR")[1].splitlines()[1]
+    # 면 정의는 `S1` 로 적는다 — 압력의 `P1` 과 섞으면 ccx 가 못 읽는다(실측).
+    assert "*SURFACE, NAME=C0S, TYPE=ELEMENT" in deck
+    assert ", S" in deck.split("*SURFACE, NAME=C0S, TYPE=ELEMENT")[1].splitlines()[1]
+
+    tight = json.loads((bonded / "result.json").read_text(encoding="utf-8"))
+    loose = json.loads((rubbing / "result.json").read_text(encoding="utf-8"))
+    gap = (
+        abs(loose["max_displacement"] - tight["max_displacement"]) / tight["max_displacement"]
+    )
+    assert gap < 0.1, (
+        f"압축만 받는 이음이라 접착과 비슷해야 한다: {loose['max_displacement']} 대 "
+        f"{tight['max_displacement']} ({gap * 100:.1f}%)"
+    )
+    # **마지막 증분**의 값이다 — 첫 증분을 읽으면 1e-5 자리가 나온다(실측 0.17배).
+    assert loose["max_displacement"] > 1.5e-4
+    # Ansys 와도 견준다(실측 1.9501e-4) — 두 솔버가 같은 자리에 있어야 수를 믿을 수 있다.
+    assert loose["max_displacement"] == pytest.approx(1.95e-4, rel=0.05)
+
+
+def test_고유치에는_접촉을_넣지_않고_그렇게_말한다(ready: None, tmp_path: Path) -> None:
+    """**CalculiX 는 고유치 해석에 접촉을 넣지 않는다** — 실측으로 가린 사실이다.
+
+    TIED 접촉 쌍을 넣고 `*FREQUENCY` 를 풀었더니 강체 모드 6개(0 · 0 · 0.0014 · 0.0016 ·
+    0.002 · 0.0022 Hz)가 나왔다 — 블록이 떠 있었다. `*STEP, PERTURBATION` 으로 비선형 정적
+    뒤에 붙여도 여덟 모드가 전부 0 Hz 였다. 접촉 요소는 비선형 단계에서만 만들어진다.
+
+    그래서 모달은 **절점을 공유시켜** 붙은 것으로 풀고, 그 사실과 「마찰을 비선형으로 보려면
+    어떻게 하라」 를 요약에 적는다. 조용히 두면 사람은 마찰이 모델에 들어갔다고 읽는다.
+    """
+    spec = dict(SPEC)
+    spec["material_from"] = "spec"
+    spec["mesh"] = {"element_size_mm": 8}
+    work = _sweep(tmp_path, 3)
+    (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    summary = _run(work, spec)
+
+    deck = (work / "model.inp").read_text(encoding="utf-8")
+    assert "*CONTACT PAIR" not in deck, "고유치 덱에 접촉을 넣으면 바디가 뜬다"
+    assert "고유치" in summary["conditions_skipped"]
+    assert "ansys" in summary["conditions_skipped"].lower()
+    result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    # 절점을 공유했으니 떠 있는 모드가 없다 — 있으면 붙지 않은 것이다.
+    assert all(one["frequency_hz"] > 1.0 for one in result["modes"])
+    assert "warning" not in result
+
+
+def test_선응력_모달은_응력_강화를_물고_간다(ready: None, tmp_path: Path) -> None:
+    """조여 놓은 상태의 공진 — **비선형 정적 뒤에 선형화해서** 모드를 뽑는다.
+
+    누르는 하중은 구조를 무르게 하므로 주파수가 **내려간다.** 실측 2026-10-03:
+    31,604.72 → 31,603.95 Hz(0.77 Hz 내려간다). Ansys 쪽도 같은 방향이었다
+    (30,090.3497 → 30,090.1351).
+
+    차이가 작지만 **방향이 정해져 있다** — 같은 값이 나오면 선응력이 안 걸린 것이고, 그때는
+    두 단계를 쓴 뜻이 없다.
+    """
+    two_bodies = FIXTURES / "doe" / "조건_두바디_두재료"
+    spec = dict(SPEC)
+    spec["mesh"] = {"element_size_mm": 8}
+    seen: dict[bool, float] = {}
+    for prestressed in (False, True):
+        work = tmp_path / ("선응력" if prestressed else "그냥")
+        work.mkdir()
+        shutil.copy(two_bodies / "points" / "p0001.step", work / "input.step")
+        payload = json.loads(
+            (two_bodies / "points" / "p0001.json").read_text(encoding="utf-8")
+        )
+        payload["conditions"]["analysis"]["prestressed"] = prestressed
+        (work / "topology.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        _run(work, spec)
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        seen[prestressed] = result["modes"][0]["frequency_hz"]
+        if prestressed:
+            deck = (work / "model.inp").read_text(encoding="utf-8")
+            # 두 단계다 — 비선형 정적, 그리고 그 상태의 고유치.
+            assert "*STEP, NLGEOM" in deck
+            assert "*STEP, PERTURBATION" in deck
+
+    assert seen[True] < seen[False], f"선응력이 안 걸렸다: {seen}"
+    # 너무 많이 내려가면 하중이 과한 것이다 — 0.1% 안에 있어야 한다(실측 0.0024%).
+    assert (seen[False] - seen[True]) / seen[False] < 0.001

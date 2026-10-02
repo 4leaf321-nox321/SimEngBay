@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.calculix import frd as frd_reader
-from app.core.calculix import tables, vtp
+from app.core.calculix import probes, tables, vtp
 from app.core.calculix.mesh import read_mesh
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -80,6 +80,9 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
             one["effective_mass_ratio"] = round(ratios[direction][int(one["number"])], 4)
 
     shapes = _draw_modes(workdir, [one["number"] for one in elastic[:VISUAL_MODES]], modes)
+    # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
+    # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다).
+    spots = _probe_modes(workdir, elastic[:1])
 
     result: dict[str, Any] = {
         "recipe": "modal",
@@ -93,6 +96,7 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         "modes": modes,
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         **({"participation": ratios} if ratios else {}),
+        **({"probes": spots} if spots else {}),
     }
     loose = [
         one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
@@ -130,6 +134,37 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         },
         detail=f"모드 {len(modes)}개" + (f" · 1차 탄성 {first} Hz" if first else ""),
     )
+
+
+def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """1차 탄성 모드의 변위를 **측정점**에서 읽는다. 점 그룹이 없으면 빈 목록.
+
+    모드 형상은 질량 정규화된 값이라 절대 크기가 아니다 — 그래서 단위를 `정규화` 로 적는다.
+    「그 자리가 이 모드에서 움직이나」 가 이 값으로 답할 물음이다.
+    """
+    topology = workdir / "topology.json"
+    result = workdir / "model.frd"
+    msh = workdir / "model.msh"
+    if not wanted or not topology.is_file() or not result.is_file() or not msh.is_file():
+        return []
+    try:
+        payload = json.loads(topology.read_text(encoding="utf-8"))
+        if not probes.wanted(payload):
+            return []
+        mesh = read_mesh(msh)
+        blocks = [one for one in frd_reader.read(result) if one.kind == "DISP"]
+    except Exception:  # pragma: no cover - 파일이 깨진 경우
+        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        return []
+    number = int(wanted[0]["number"])
+    if number > len(blocks):
+        return []
+    rows = probes.read(
+        payload, mesh.nodes, frd_reader.magnitudes(blocks[number - 1]), unit="정규화"
+    )
+    for row in rows:
+        row["mode"] = number
+    return rows
 
 
 def _draw_modes(workdir: Path, wanted: list[int], modes: list[dict[str, Any]]) -> list[str]:

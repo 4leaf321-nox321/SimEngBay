@@ -78,6 +78,7 @@ def build_mesh(
     timeout_seconds: int = 1800,
     local_sizes: dict[int, float] | None = None,
     surface_only: bool = False,
+    fragment: bool = True,
 ) -> Mesh:
     """gmsh 를 불러 메시를 만들고 읽는다. `.geo` 와 `.msh` 가 작업 폴더에 남는다.
 
@@ -89,7 +90,8 @@ def build_mesh(
     geo = workdir / ("surface.geo" if surface_only else "model.geo")
     msh = workdir / ("surface.msh" if surface_only else "model.msh")
     geo.write_text(
-        _geo(step, element_size_mm, second_order, local_sizes or {}), encoding="utf-8"
+        _geo(step, element_size_mm, second_order, local_sizes or {}, fragment),
+        encoding="utf-8",
     )
     done = tools.run(
         tools.gmsh_bin(),
@@ -105,7 +107,13 @@ def build_mesh(
     return read_mesh(msh, require_solid=not surface_only)
 
 
-def _geo(step: Path, size: float, second_order: bool, local_sizes: dict[int, float]) -> str:
+def _geo(
+    step: Path,
+    size: float,
+    second_order: bool,
+    local_sizes: dict[int, float],
+    fragment: bool = True,
+) -> str:
     """gmsh 에게 줄 쪽지. **`.geo` 파일이 경계다** — 파이썬 API 를 안 쓴다(`tools` 참고)."""
     return (
         "\n".join(
@@ -114,8 +122,12 @@ def _geo(step: Path, size: float, second_order: bool, local_sizes: dict[int, flo
                 # **절대경로로 적는다** — gmsh 는 `.geo` 가 있는 폴더를 기준으로 찾으므로
                 # 상대경로를 주면 「파일을 못 읽는다」 로 끝난다(실측 2026-10-03).
                 f'v() = ShapeFromFile("{step.resolve()}");',
-                # 맞닿은 면을 하나로 — 절점을 공유해야 붙은 모델이 된다.
-                "BooleanFragments{ Volume{:}; Delete; }{}",
+                # **맞닿은 면을 하나로 — 절점을 공유해야 붙은 모델이 된다.**
+                #
+                # 안 쪼개면(`fragment=False`) 두 솔리드가 따로 메시되어 접합면이 **두 장**으로
+                # 남는다. 그때는 접촉 쌍을 써야 하고, 안 쓰면 바디가 떨어져 있어 강체 모드가
+                # 바디마다 6개씩 나온다 — 값은 그럴듯한데 모델이 붙어 있지 않은 상태다.
+                *(["BooleanFragments{ Volume{:}; Delete; }{}"] if fragment else []),
                 f"Mesh.MeshSizeMax = {size:g};",
                 f"Mesh.MeshSizeMin = {size / 4:g};",
                 f"Mesh.ElementOrder = {2 if second_order else 1};",
@@ -215,11 +227,26 @@ PLANE_DEGREES = 5.0
 CYLINDER_SPREAD = 0.05
 
 
+@dataclass(frozen=True)
+class Shape:
+    """그 면이 무엇인가 — 종류 · 반지름 · 축, 그리고 **CAD 식 중심**.
+
+    CompCore 는 곡면의 중심을 **bbox 중심**으로 보낸다(평면만 면적 중심이다 —
+    `backend/app/core/recipe/topology.py`). 반쪽 원통처럼 잘린 면에서는 그 둘이 다르므로,
+    곡면은 bbox 중심으로 맞춰야 지문이 풀린다.
+    """
+
+    kind: str = ""
+    radius: float | None = None
+    axis: tuple[float, float, float] | None = None
+    centroid: tuple[float, float, float] | None = None
+
+
 def _classify(
     nodes: dict[int, tuple[float, float, float]],
     triangles: list[tuple[int, int, int]],
     members: set[int],
-) -> tuple[str, float | None]:
+) -> Shape:
     """그 면이 평면인가 원통인가 — **지문을 되맞추려면 반지름이 필요하다.**
 
     조건은 면 번호로 오지 않는다. 평면은 `무게중심 · 면적 · 법선`, 원통은 `반지름 · 축` 으로
@@ -233,7 +260,7 @@ def _classify(
     것을 원통이라고 적으면 그 지문이 조용히 엉뚱한 면에 붙는다.
     """
     if len(triangles) < 4:
-        return "", None
+        return Shape()
     normals: list[tuple[float, float, float]] = []
     middles: list[tuple[float, float, float]] = []
     for triangle in triangles:
@@ -251,7 +278,7 @@ def _classify(
         normals.append(tuple(one / size for one in cross))  # type: ignore[arg-type]
         middles.append(tuple((a[axis] + b[axis] + c[axis]) / 3 for axis in range(3)))  # type: ignore[arg-type]
     if len(normals) < 4:
-        return "", None
+        return Shape()
 
     mean = [sum(one[axis] for one in normals) / len(normals) for axis in range(3)]
     mean_size = math.sqrt(sum(one * one for one in mean))
@@ -259,9 +286,16 @@ def _classify(
         unit = [one / mean_size for one in mean]
         worst = max(_angle(one, unit) for one in normals)
         if worst <= PLANE_DEGREES:
-            return "plane", None
+            return Shape(kind="plane")
 
-    # 원통이면 법선이 **축에 수직**이다 — 그래서 축은 법선들이 가장 안 퍼진 방향이다.
+    box = _bbox_center(nodes, members)
+    # **구가 먼저다** — 구는 법선이 모든 방향을 향하므로 「가장 안 퍼진 축」 이 뜻을 갖지 않고,
+    # 원통으로 잘못 읽힐 수 있다. 중심에서의 거리가 고르면 구다.
+    ball = _sphere(nodes, members)
+    if ball is not None:
+        return Shape(kind="sphere", radius=ball, centroid=box)
+
+    # 원통 · 원뿔이면 법선이 **축에 수직**이다 — 그래서 축은 법선들이 가장 안 퍼진 방향이다.
     matrix = [[sum(one[i] * one[j] for one in normals) for j in range(3)] for i in range(3)]
     axis = _smallest_eigenvector(matrix)
 
@@ -273,16 +307,137 @@ def _classify(
     # 무게중심으로 두면, 잘린 면에서는 중심이 축에서 비켜 있어 반지름이 틀어진다.
     flat = _project(nodes, members, axis)
     if len(flat) < 4:
-        return "", None
+        return Shape()
     radius = _circle_radius(flat)
-    if radius is None or radius <= 0:
-        return "", None
-    return "cylinder", radius
+    if radius is not None and radius > 0:
+        return Shape(
+            kind="cylinder",
+            radius=radius,
+            axis=(axis[0], axis[1], axis[2]),
+            centroid=box,
+        )
+    # **원뿔은 축을 따라 반지름이 변한다.** 그 기울기가 뚜렷하고 잔차가 작으면 원뿔이다.
+    # 반지름은 적지 않는다 — CAD 가 보내는 원뿔의 `radius` 가 어느 자리의 것인지 계약에 없어서,
+    # 맞춰 보는 척하면 **엉뚱한 면에 붙는다.** 종류만 적어 평면 지문이 붙는 것을 막는다.
+    if _is_cone(nodes, members, axis):
+        return Shape(kind="cone", axis=(axis[0], axis[1], axis[2]), centroid=box)
+    return Shape()
 
 
 def _angle(first: tuple[float, float, float], second: list[float]) -> float:
     dot = max(-1.0, min(1.0, sum(first[axis] * second[axis] for axis in range(3))))
     return math.degrees(math.acos(dot))
+
+
+def _bbox_center(
+    nodes: dict[int, tuple[float, float, float]], members: set[int]
+) -> tuple[float, float, float] | None:
+    """절점들의 **경계상자 중심** — CAD 가 곡면의 중심으로 쓰는 정의다."""
+    points = [nodes[node] for node in members if node in nodes]
+    if not points:
+        return None
+    return tuple(  # type: ignore[return-value]
+        (min(one[axis] for one in points) + max(one[axis] for one in points)) / 2
+        for axis in range(3)
+    )
+
+
+def _sphere(nodes: dict[int, tuple[float, float, float]], members: set[int]) -> float | None:
+    """구면 맞춤 — 반지름. 고르지 않으면 `None`.
+
+    대수적 맞춤: `x²+y²+z² + Dx + Ey + Fz + G = 0` 은 네 미지수에 선형이다. **구를 먼저 가리는
+    이유**는 구의 법선이 모든 방향을 향해서, 원통을 찾는 「가장 안 퍼진 축」 이 뜻을 갖지 않기
+    때문이다 — 그대로 두면 구가 원통으로 읽힌다.
+    """
+    points = [nodes[node] for node in sorted(members) if node in nodes]
+    if len(points) < 8:
+        return None
+    rows: list[list[float]] = [[0.0] * 4 for _ in range(4)]
+    right = [0.0] * 4
+    for point in points:
+        basis = [point[0], point[1], point[2], 1.0]
+        value = -(point[0] ** 2 + point[1] ** 2 + point[2] ** 2)
+        for i in range(4):
+            for j in range(4):
+                rows[i][j] += basis[i] * basis[j]
+            right[i] += basis[i] * value
+    solved = _solve4(rows, right)
+    if solved is None:
+        return None
+    d, e, f, g = solved
+    center = (-d / 2, -e / 2, -f / 2)
+    inside = center[0] ** 2 + center[1] ** 2 + center[2] ** 2 - g
+    if inside <= 0:
+        return None
+    radius = math.sqrt(inside)
+    spread = (
+        math.sqrt(sum((math.dist(one, center) - radius) ** 2 for one in points) / len(points))
+        / radius
+    )
+    return radius if spread <= CYLINDER_SPREAD else None
+
+
+def _is_cone(
+    nodes: dict[int, tuple[float, float, float]], members: set[int], axis: list[float]
+) -> bool:
+    """원뿔인가 — **축을 따라 반지름이 곧게 변하면** 그렇다.
+
+    반지름을 돌려주지 않는다: CAD 가 보내는 원뿔의 `radius` 가 어느 자리의 것인지 계약에
+    없어서,
+    맞춰 보는 척하면 엉뚱한 면에 붙는다. 종류만 알면 **평면 지문이 곡면에 붙는 것**은 막는다.
+    """
+    points = [nodes[node] for node in sorted(members) if node in nodes]
+    if len(points) < 8:
+        return False
+    # **원점은 축 위에 있어야 한다** — 첫 절점을 쓰면 그 점이 축에서 비켜 있어서 반지름이
+    # 고리를 따라 요동치고, 원뿔이 「모르는 면」 으로 떨어진다(실측 2026-10-03). 전체 평균은
+    # 꽉 찬 원뿔 · 원통에서 축 위에 놓인다. 잘린 면에서는 안 맞아 판정이 실패하는데, 그쪽은
+    # **모른다고 두는 편이** 엉뚱한 종류로 적는 것보다 낫다.
+    origin = tuple(
+        sum(one[axis_index] for one in points) / len(points) for axis_index in range(3)
+    )
+    pairs: list[tuple[float, float]] = []
+    for point in points:
+        offset = [point[index] - origin[index] for index in range(3)]
+        along = sum(offset[index] * axis[index] for index in range(3))
+        radial = [offset[index] - along * axis[index] for index in range(3)]
+        pairs.append((along, math.sqrt(sum(one * one for one in radial))))
+    span = max(one[0] for one in pairs) - min(one[0] for one in pairs)
+    if span <= 0:
+        return False
+    # 최소제곱 직선 — 반지름이 축 위치의 1차 함수인가.
+    count = len(pairs)
+    mean_x = sum(one[0] for one in pairs) / count
+    mean_y = sum(one[1] for one in pairs) / count
+    top = sum((one[0] - mean_x) * (one[1] - mean_y) for one in pairs)
+    bottom = sum((one[0] - mean_x) ** 2 for one in pairs)
+    if bottom == 0:
+        return False
+    slope = top / bottom
+    if abs(slope) * span < CYLINDER_SPREAD * max(mean_y, 1e-9):
+        # 기울기가 거의 0 이면 원통인데, 그쪽은 앞에서 이미 걸렀다 — 여기 오면 모르는 면이다.
+        return False
+    residual = math.sqrt(
+        sum((one[1] - (mean_y + slope * (one[0] - mean_x))) ** 2 for one in pairs) / count
+    )
+    return residual <= CYLINDER_SPREAD * max(mean_y, 1e-9)
+
+
+def _solve4(matrix: list[list[float]], right: list[float]) -> tuple[float, ...] | None:
+    """4x4 선형계 — 가우스 소거. 특이하면 `None`(짐작하지 않는다)."""
+    rows = [[*row, right[index]] for index, row in enumerate(matrix)]
+    for column in range(4):
+        pivot = max(range(column, 4), key=lambda index: abs(rows[index][column]))
+        if abs(rows[pivot][column]) < 1e-12:
+            return None
+        rows[column], rows[pivot] = rows[pivot], rows[column]
+        for index in range(4):
+            if index == column:
+                continue
+            factor = rows[index][column] / rows[column][column]
+            for j in range(column, 5):
+                rows[index][j] -= factor * rows[column][j]
+    return tuple(rows[index][4] / rows[index][index] for index in range(4))
 
 
 def _project(
@@ -456,20 +611,22 @@ def _faces(
         middle: tuple[float, float, float] = tuple(  # type: ignore[assignment]
             one / area for one in center[entity]
         )
-        # **원통이면 반지름을 되맞춘다** — 지문이 그것으로 면을 가리킨다(`_classify`).
-        surface, radius = _classify(nodes, rows.get(entity, []), members.get(entity, set()))
+        # **곡면이면 되맞춘다** — 지문이 반지름 · 축으로 면을 가리킨다(`_classify`).
+        shape = _classify(nodes, rows.get(entity, []), members.get(entity, set()))
         records.append(
             FaceRecord(
                 id=entity,
-                centroid=middle,
+                # 곡면은 **CAD 와 같은 정의**(bbox 중심)로 맞춘다 — 평면은 면적 중심 그대로.
+                centroid=shape.centroid or middle,
                 area=area,
-                surface=surface,
+                surface=shape.kind,
                 normal=(
                     tuple(one / size for one in normal[entity])  # type: ignore[arg-type]
                     if size
                     else None
                 ),
-                radius=radius,
+                radius=shape.radius,
+                axis=shape.axis,
             )
         )
     return records, dict(members)

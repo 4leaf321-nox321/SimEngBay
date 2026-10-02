@@ -63,10 +63,21 @@ class FaceRecord:
     surface: str = ""
     normal: tuple[float, float, float] | None = None
     radius: float | None = None
+    axis: tuple[float, float, float] | None = None
+    """회전축의 방향(있으면). **CAD 가 곡면 지문에 `axis` 를 함께 보내므로**, 반지름과 중심이
+    같은데 축이 다른 면을 가려낼 수 있다 — 지금은 메시에서 되맞추는 쪽만 이 값을 채운다."""
 
     @property
     def is_cylinder(self) -> bool:
-        return "cylinder" in self.surface.lower() or (self.radius or 0) > 0
+        """**곡면인가**(평면이 아닌가). 이름이 옛것이라 원통만 가리키는 것처럼 보이지만, 구 ·
+        원뿔도 포함한다 — 평면 지문이 곡면에 붙는 것을 막는 것이 이 값의 일이다."""
+        # **이름은 붙여 쓴 것일 수 있다** — Mechanical 은 `GeoSurfaceTypeCylinder` 처럼 준다.
+        # 단어로 쪼개면 그 이름이 안 걸리고, 반지름이 0 인 면에서 곡면 판정이 깨진다.
+        name = self.surface.lower()
+        return (
+            any(kind in name for kind in ("cylinder", "sphere", "cone", "torus"))
+            or (self.radius or 0) > 0
+        )
 
 
 @dataclass
@@ -146,6 +157,14 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
                 distance,
                 f"중심이 {distance:.2f}mm 떨어져 있습니다(한계 {limit:.2f})",
             )
+        # **축까지 본다**(둘 다 알 때만). 반지름과 중심이 같은데 축이 다른 면은 다른 면이다 —
+        # 구멍 둘이 직각으로 만나는 자리에서 그런 일이 생긴다. 부호는 따지지 않는다(축의 방향은
+        # CAD 와 메시에서 뒤집힐 수 있다).
+        wanted_axis = _triple(wanted.get("axis"))
+        if wanted_axis is not None and face.axis is not None:
+            angle = _angle_degrees(wanted_axis, face.axis)
+            if min(angle, 180 - angle) > NORMAL_TOLERANCE_DEGREES:
+                return False, distance, f"축이 {angle:.0f}도 틀어져 있습니다"
         return True, distance, ""
 
     if face.is_cylinder:

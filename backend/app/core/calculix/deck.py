@@ -48,6 +48,8 @@ class Plan:
     skipped: list[condition_model.Note] = field(default_factory=list)
     refused: list[condition_model.Note] = field(default_factory=list)
     text: str = ""
+    #: 하중 줄들 — **선응력 모달이 그대로 다시 쓴다**(정적 단계에 같은 하중을 걸어야 한다).
+    load_rows: list[str] = field(default_factory=list)
     #: 국부 좌표계가 걸린 절점 → (축 위의 점, 축 방향).
     #:
     #: **그 절점에서는 `*CLOAD` 의 자유도 번호도 국부로 읽힌다**(1 반경 · 2 접선 · 3 축) —
@@ -66,10 +68,17 @@ def write_modal(
     held_nodes: dict[str, set[int]],
     given: condition_model.Conditions,
     shapes: dict[str, dict[str, Any]] | None = None,
+    contact_faces: dict[str, list[tuple[int, str]]] | None = None,
+    preload: list[str] | None = None,
+    element_size_mm: float = 1.0,
     modes: int,
     second_order: bool,
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
+
+    `contact_faces` 를 주면 **접촉 쌍을 쓴다**(메시를 쪼개지 않은 경우). `preload` 를 주면 그
+    줄들로 **비선형 정적 단계를 앞에 두고** 그 상태에서 모드를 뽑는다(`*STEP, PERTURBATION`) —
+    조여 놓은 상태의 공진을 보는 길이고, 접촉이 열리고 닫히는 것이 거기서 결정된다.
 
     `held_nodes` 는 **영역 이름 → 절점**이다 — 면 지문을 푼 결과를 부른 쪽에서 넣어 준다
     (그 매칭은 `app/core/regions` 가 하고, 솔버를 모른다).
@@ -78,20 +87,38 @@ def write_modal(
     lines = _head(nodes, solids, body_of, materials, plan, second_order)
     lines += _holds(held_nodes, given, plan, shapes)
 
-    for pair in given.contacts:
-        if pair.kind in LINEARIZED_CONTACTS:
-            # **절점을 공유시켜 이미 붙였다** — 그 사실을 적어 둔다. 조용히 두면 사람은
-            # 마찰이 모델에 들어갔다고 읽는다.
-            plan.skipped.append(
+    if contact_faces is None:
+        # 메시를 쪼개 붙였다(절점 공유) — 그 사실을 적어 둔다. 조용히 두면 사람은 마찰이
+        # 모델에 들어갔다고 읽는다.
+        for pair in given.contacts:
+            if pair.kind in LINEARIZED_CONTACTS:
+                why = "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다"
+                if pair.kind in NONLINEAR_CONTACTS:
+                    # **CalculiX 는 고유치에 접촉을 넣지 않는다**(실측 2026-10-03: 접촉 쌍을
+                    # 넣으면 바디가 떠서 강체 모드 6개가 나온다). 마찰을 비선형으로 보려면
+                    # 정적으로 돌리거나 Ansys 로 간다.
+                    why += (
+                        " — CalculiX 는 고유치 해석에 접촉을 넣지 않습니다. 마찰을 비선형으로"
+                        " 보려면 정적으로 돌리거나 솔버를 ansys 로 바꾸세요."
+                    )
+                else:
+                    why += "(모달에서는 같은 답입니다)."
+                plan.skipped.append(
+                    condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", why)
+                )
+                continue
+            plan.refused.append(
                 condition_model.Note(
-                    f"접촉 「{pair.name}」({pair.kind})",
-                    "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다"
-                    "(모달에서는 같은 답입니다).",
+                    f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다."
                 )
             )
-            continue
-        plan.refused.append(
-            condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
+    else:
+        lines += contact_block(
+            given.contacts,
+            contact_faces,
+            plan,
+            nonlinear=bool(preload),
+            stiffness=contact_stiffness(materials, element_size_mm),
         )
 
     for load in given.loads:
@@ -105,8 +132,18 @@ def write_modal(
     # 영역별 메시 힌트는 **메시를 만들 때** 걸린다(`build.py` 의 `_local_sizes`) — 덱에는
     # 남지 않으므로 여기서 할 일이 없다. 못 걸린 힌트는 그 자리에서 경고로 적는다.
 
+    if preload:
+        # **① 비선형 정적** — 접촉이 닫히고 마찰이 걸리고 하중이 구조를 조인다.
+        lines += ["*STEP, NLGEOM", "*STATIC", "1.0, 1.0"]
+        lines += preload
+        lines += ["*NODE FILE", "U", "*END STEP"]
+        # **② 그 상태에서 선형화해 모드를 뽑는다.** `PERTURBATION` 이 앞 단계의 강성(응력 ·
+        # 접촉)을 물고 간다 — 물고 가는지는 **재 봐야 안다**(안 물면 선형 모달과 같은 값이
+        # 나오고, 그것은 오류 없이 그럴듯하다).
+        lines += ["*STEP, PERTURBATION"]
+    else:
+        lines += ["*STEP"]
     lines += [
-        "*STEP",
         # SPOOLES — 데비안 패키지가 함께 깔아 주는 희소 솔버. ARPACK 로 고유치를 뽑는다.
         "*FREQUENCY, SOLVER=SPOOLES",
         f"{modes}",
@@ -172,6 +209,8 @@ def write_static(
     load_areas: dict[str, dict[int, float]],
     given: condition_model.Conditions,
     shapes: dict[str, dict[str, Any]] | None = None,
+    contact_faces: dict[str, list[tuple[int, str]]] | None = None,
+    element_size_mm: float = 1.0,
     second_order: bool,
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
@@ -183,9 +222,31 @@ def write_static(
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order)
     lines += _holds(held_nodes, given, plan, shapes)
+    nonlinear = False
+    if contact_faces is not None:
+        nonlinear = any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
+        lines += contact_block(
+            given.contacts,
+            contact_faces,
+            plan,
+            nonlinear=True,
+            stiffness=contact_stiffness(materials, element_size_mm),
+        )
+    else:
+        for pair in given.contacts:
+            if pair.kind in LINEARIZED_CONTACTS:
+                plan.skipped.append(
+                    condition_model.Note(
+                        f"접촉 「{pair.name}」({pair.kind})",
+                        "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다.",
+                    )
+                )
 
-    lines.append("*STEP")
+    # **비선형 접촉은 증분으로 푼다** — 한 번에 걸면 접촉이 열린 채 수렴하지 못한다.
+    lines.append("*STEP, NLGEOM" if nonlinear else "*STEP")
     lines.append("*STATIC")
+    if nonlinear:
+        lines.append("0.1, 1.0")
     applied_loads = 0
     for load in given.loads:
         rows, why = _load_rows(
@@ -195,6 +256,7 @@ def write_static(
             plan.refused.append(why)
             continue
         lines += rows
+        plan.load_rows += rows
         plan.applied.append(f"{load.kind}:{load.region}")
         applied_loads += 1
 
@@ -596,3 +658,92 @@ def _cross(first: list[float], second: list[float]) -> list[float]:
         first[2] * second[0] - first[0] * second[2],
         first[0] * second[1] - first[1] * second[0],
     ]
+
+
+#: **비선형으로 풀 접촉** — 이것들은 응답 도중 열리고 닫히고 미끄러진다.
+NONLINEAR_CONTACTS = ("frictional", "frictionless", "rough")
+#: 접촉 강성을 **재료와 요소 크기에서 끌어낸다** — `k = STIFFNESS_FACTOR x E / h`.
+#:
+#: `PRESSURE-OVERCLOSURE=LINEAR` 의 강성은 「파고든 깊이 1 mm 당 접촉 압력」 이다. 고정값을
+#: 쓰면 안 된다: 1e4 N/mm³ 로 두었더니 압력 1.5 MPa 에서 면이 1.5e-4 mm 파고들어, 마찰 접촉이
+#: 접착보다 **73% 더 무르게** 나왔다(실측 2026-10-03). Ansys 로 같은 점을 돌려 보니 접착과
+#: 마찰이 0.2% 차이였다 — 이 이음은 압축만 받아 전단이 없으므로 **그쪽이 맞다.** 내 수는
+#: 물리가 아니라 **접촉 스프링의 무름**이었다.
+#:
+#: 요소 크기로 나누는 것은 차원 때문이다(E 는 N/mm², 강성은 N/mm³). 계수가 크면 수렴이
+#: 어려워지므로 10 에서 시작한다.
+STIFFNESS_FACTOR = 10.0
+
+
+def contact_stiffness(materials: list[Material], element_size_mm: float) -> float:
+    """그 모델에 맞는 접촉 강성(N/mm³). 가장 **단단한** 재료로 잡는다 — 무른 쪽으로 잡으면
+    단단한 바디가 파고든다."""
+    hardest = max((one.youngs_modulus_pa for one in materials), default=200e9)
+    modulus_mpa = hardest / units.STRESS_UNITS["mpa"]
+    return STIFFNESS_FACTOR * modulus_mpa / max(element_size_mm, 1e-6)
+
+
+def contact_block(
+    contacts: list[condition_model.Contact],
+    faces: dict[str, list[tuple[int, str]]],
+    plan: Plan,
+    *,
+    nonlinear: bool,
+    stiffness: float,
+) -> list[str]:
+    """접촉 쌍 — `*SURFACE` 둘 + `*SURFACE INTERACTION` + `*CONTACT PAIR`.
+
+    **CalculiX 의 접착은 `*TIE` 가 아니다**(그것은 주기 대칭이다). `*SURFACE BEHAVIOR,
+    PRESSURE-OVERCLOSURE=TIED` 가 붙은 접촉이 접착이다. 마찰은 `LINEAR` + `*FRICTION` 이고,
+    **비선형**이라 정적 단계가 증분으로 돈다.
+
+    `nonlinear` 가 거짓이면 접착만 쓴다 — 모달 단독처럼 하중이 없는 해석에서는 마찰 접촉이
+    정해지지 않으므로(열려 있는지 붙어 있는지 모른다) 붙은 것으로 푸는 쪽이 예측 가능하다.
+    """
+    lines: list[str] = []
+    for index, pair in enumerate(contacts):
+        source = faces.get(pair.source) or []
+        target = faces.get(pair.target) or []
+        if not source or not target:
+            plan.refused.append(
+                condition_model.Note(
+                    f"접촉 「{pair.name}」",
+                    f"면을 못 찾았습니다({pair.source} · {pair.target}) — 접합면이 "
+                    f"양쪽으로 와야 합니다.",
+                )
+            )
+            continue
+        tied = pair.kind not in NONLINEAR_CONTACTS or not nonlinear
+        name = f"C{index}"
+        # **면 이름이 `S1` 이다** — 압력(`*DLOAD`)은 `P1` 을 쓰고 면 정의(`*SURFACE`)는 `S1` 을
+        # 쓴다. 같은 자리를 가리키는 다른 표기이고, 섞으면 ccx 가 「*SURFACE 를 읽지
+        # 못한다」 로 멈춘다(실측 2026-10-03).
+        lines += [f"*SURFACE, NAME={name}S, TYPE=ELEMENT"]
+        lines += [f"{element}, {face.replace('P', 'S')}" for element, face in source]
+        lines += [f"*SURFACE, NAME={name}T, TYPE=ELEMENT"]
+        lines += [f"{element}, {face.replace('P', 'S')}" for element, face in target]
+        lines += [f"*SURFACE INTERACTION, NAME={name}I", "*SURFACE BEHAVIOR"]
+        if tied:
+            # 접착 — 면이 서로 붙어 떨어지지도 미끄러지지도 않는다.
+            lines[-1] = "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=TIED"
+            lines.append(f"{stiffness:g}")
+        else:
+            lines[-1] = "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR"
+            lines.append(f"{stiffness:g}")
+            if pair.kind == "frictional" and pair.friction:
+                # 미끄러짐 강성은 마찰계수와 접촉 강성에서 잡는다(CalculiX 의 두 번째 칸).
+                lines += ["*FRICTION", f"{pair.friction:g}, {stiffness / 10:g}"]
+        lines += [
+            f"*CONTACT PAIR, INTERACTION={name}I, TYPE=SURFACE TO SURFACE",
+            f"{name}T, {name}S",
+        ]
+        plan.applied.append(f"{'bonded' if tied else pair.kind}:{pair.source}↔{pair.target}")
+        if tied and pair.kind in NONLINEAR_CONTACTS:
+            plan.skipped.append(
+                condition_model.Note(
+                    f"접촉 「{pair.name}」({pair.kind})",
+                    "하중이 없어 **붙은 것으로** 풀었습니다 — 마찰은 하중이 있어야 "
+                    "뜻이 있습니다.",
+                )
+            )
+    return lines

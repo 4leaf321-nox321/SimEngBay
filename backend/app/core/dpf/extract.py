@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.dpf import fields, metrics, participation, shapes, signature
+from app.core.dpf import fields, metrics, participation, probes, shapes, signature
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -107,6 +107,9 @@ def extract(
     # 「이 모드가 어느 축으로 · 전체가 함께 움직이나」 는 표의 모든 줄이 필요로 한다 —
     # 자유-자유에서는 유효질량비가 0 이라 이것 말고는 모드를 설명할 말이 없다.
     _describe_modes(rst, modes)
+    # **측정점은 1차 탄성 모드 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
+    # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다).
+    spots = _probe_modes(rst, workdir, elastic[:1])
     artifacts = _draw_modes(
         rst, workdir, [one["number"] for one in elastic[:visual_modes]], modes
     )
@@ -122,6 +125,7 @@ def extract(
         "modes": modes,
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         "participation": {name: value for name, value in ratios.items()},
+        **({"probes": spots} if spots else {}),
     }
     loose = [
         one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
@@ -155,6 +159,37 @@ def extract(
         },
         detail=f"모드 {len(modes)}개" + (f" · 1차 탄성 {first} Hz" if first else ""),
     )
+
+
+def _probe_modes(
+    rst: Path, workdir: Path, wanted: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """1차 탄성 모드의 변위를 **측정점**에서 읽는다. 점 그룹이 없으면 빈 목록.
+
+    **실패해도 해석은 끝난 것이다** — 측정점이 빠질 뿐 고유진동수는 이미 나왔다.
+    """
+    if not wanted:
+        return []
+    topology = probes.topology_of(workdir)
+    if not probes.wanted(topology):
+        return []
+    try:
+        from ansys.dpf import core as dpf
+
+        model = dpf.Model(str(rst))
+        mesh = model.metadata.meshed_region
+        number = int(wanted[0]["number"])
+        field = model.results.displacement.on_time_scoping([number]).eval()[0]
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        return []
+    # 모드 형상은 질량 정규화된 값이다 — 절대 크기가 아니라서 단위를 `정규화` 로 적는다.
+    rows = probes.read(
+        topology, mesh, field, unit="정규화", scale=probes.scale_for(str(field.unit or ""))
+    )
+    for row in rows:
+        row["mode"] = number
+    return rows
 
 
 def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:

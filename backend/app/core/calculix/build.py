@@ -75,6 +75,21 @@ def build(
     local = _local_sizes(
         step, workdir, topology, given, system, size, second_order, timeout_seconds
     )
+    # **접촉 쌍은 정적에서만 쓴다 — CalculiX 는 고유치에 접촉을 넣지 않는다.**
+    #
+    # 실측 2026-10-03: TIED 접촉 쌍을 넣고 `*FREQUENCY` 를 풀었더니 강체 모드 6개(0 · 0 ·
+    # 0.0014 · 0.0016 · 0.002 · 0.0022 Hz)가 나왔다 — 블록이 떠 있었다. `*STEP, PERTURBATION`
+    # 으로 비선형 정적 뒤에 붙여도 같았다(8개 모드 전부 0 Hz). 접촉 요소는 비선형 단계에서만
+    # 만들어진다.
+    #
+    # 그래서 모달 · 조화는 **맞닿은 면의 절점을 공유시켜**(메시를 쪼개) 붙은 것으로 푼다 —
+    # Ansys 의 bonded 와 1차에서 0.23% 차이였다. 접촉이 중요한 선응력 모달이 필요하면 Ansys 로
+    # 돌린다(그쪽은 선형 섭동에 접촉 상태를 물고 간다).
+    use_contact = (
+        isinstance(spec, StaticSpec)
+        and bool(given.loads)
+        and any(one.kind in deck_writer.NONLINEAR_CONTACTS for one in given.contacts)
+    )
     mesh = build_mesh(
         step,
         workdir,
@@ -82,6 +97,7 @@ def build(
         second_order=second_order,
         timeout_seconds=timeout_seconds,
         local_sizes=local,
+        fragment=not use_contact,
     )
     logger.info(
         "메시: 절점 %s · 요소 %s · 면 %s · 솔리드 %s",
@@ -126,9 +142,34 @@ def build(
             load_areas=areas,
             given=given,
             shapes=shapes,
+            contact_faces=_contact_faces(topology, given, mesh) if use_contact else None,
+            element_size_mm=size,
             second_order=mesh.second_order,
         )
     else:
+        preload: list[str] | None = None
+        contact_faces: dict[str, list[tuple[int, str]]] | None = None
+        if use_contact or given.prestressed:
+            # **선응력 모달** — 비선형 정적을 앞에 두고 그 상태에서 모드를 뽑는다. 하중 줄은
+            # 정적 덱을 한 번 써서 얻는다(같은 하중을 두 벌로 적지 않는다).
+            places, areas, faces = _load_places(topology, given, mesh)
+            contact_faces = _contact_faces(topology, given, mesh) if use_contact else None
+            ahead = deck_writer.write_static(
+                nodes=mesh.nodes,
+                solids=mesh.solids,
+                body_of=body_of,
+                materials=materials,
+                held_nodes=held,
+                load_nodes=places,
+                load_faces=faces,
+                load_areas=areas,
+                given=given,
+                shapes=shapes,
+                contact_faces=contact_faces,
+                element_size_mm=size,
+                second_order=mesh.second_order,
+            )
+            preload = ahead.load_rows or None
         plan = deck_writer.write_modal(
             nodes=mesh.nodes,
             solids=mesh.solids,
@@ -137,6 +178,9 @@ def build(
             held_nodes=held,
             given=given,
             shapes=shapes,
+            contact_faces=contact_faces,
+            preload=preload,
+            element_size_mm=size,
             # **자유-자유면 강체 모드 여섯을 더 뽑는다** — 안 그러면 사람이 요청한 탄성 모드
             # 수가 모자라게 나온다(Ansys 쪽과 같은 규칙).
             modes=spec.modes + (0 if constrained else RIGID_BODY_MODES),
@@ -191,8 +235,14 @@ def build(
             **(
                 {"conditions_from": "cad" if given.constraints else "spec"} if topology else {}
             ),
+            # **까닭까지 싣는다.** 이름만 적으면 「마찰을 넘겼다」 까지만 보이고, 그래서
+            # 어떻게 하라는 것인지(정적으로 돌려라 · 솔버를 바꿔라)가 아무 데도 안 남는다.
             **(
-                {"conditions_skipped": " · ".join(one.what for one in plan.skipped)}
+                {
+                    "conditions_skipped": " · ".join(
+                        f"{one.what}: {one.why}" for one in plan.skipped
+                    )
+                }
                 if plan.skipped
                 else {}
             ),
@@ -374,6 +424,41 @@ def _local_sizes(
     for failure in found.failures:
         logger.warning("메시 힌트 %s 를 못 걸었습니다: %s", failure.region, failure.reason)
     return sizes
+
+
+def _contact_faces(
+    topology: dict[str, Any], given: condition_model.Conditions, mesh: Any
+) -> dict[str, list[tuple[int, str]]]:
+    """접촉 쌍이 가리키는 영역 → **요소면**. CalculiX 가 접촉면을 그렇게 받는다.
+
+    접합면은 **양쪽이 다 와야 한다**(판쪽 · 기둥쪽). 메시를 쪼개면 둘이 한 면으로 합쳐져 한쪽이
+    안 풀리는데, 접촉을 쓸 때는 쪼개지 않으므로 둘 다 풀린다.
+    """
+    wanted = sorted(
+        {one.source for one in given.contacts} | {one.target for one in given.contacts}
+    )
+    if not wanted or not topology:
+        return {}
+    found = match_regions(topology, mesh.faces, wanted_regions=wanted)
+    if found.failures:
+        raise StageFailure(
+            "internal",
+            "접촉면을 못 찾았습니다: "
+            + " · ".join(f"{one.region}({one.reason})" for one in found.failures)
+            + f". {MESH_LIMIT}",
+        )
+    lookup = element_faces(mesh)
+    rows: dict[str, list[tuple[int, str]]] = {}
+    for name, ids in found.faces.items():
+        members: list[tuple[int, str]] = []
+        for face in ids:
+            for triangle in mesh.face_triangles.get(face, []):
+                hit = lookup.get(frozenset(triangle))
+                if hit is not None:
+                    members.append(hit)
+        rows[name] = members
+        logger.info("접촉면 %s → 면 %s · 요소면 %s", name, ids, len(members))
+    return rows
 
 
 def _region_shapes(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:

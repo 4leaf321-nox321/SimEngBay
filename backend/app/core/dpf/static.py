@@ -28,7 +28,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.dpf import shapes
+from app.core.dpf import probes, shapes
 from app.core.spec import StaticSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -64,6 +64,15 @@ def extract(
         displacement = model.results.displacement.eval()[0]
         max_displacement, displacement_unit = _peak(displacement)
         stress, stress_unit = _von_mises(model)
+        # **측정점** — 전체 최대는 구속 모서리의 수치적 첨두일 수 있고 센서는 그 자리에 없다.
+        # 실측과 견줄 수 있는 값은 이쪽이고, CalculiX 쪽과 **같은 모양**으로 적는다.
+        spots = probes.read(
+            probes.topology_of(workdir),
+            mesh,
+            displacement,
+            unit=displacement_unit,
+            scale=probes.scale_for(displacement_unit),
+        )
     except StageFailure:
         raise
     except Exception as failure:
@@ -78,6 +87,7 @@ def extract(
         },
         "mesh": {"nodes": nodes, "elements": elements},
         "max_displacement": max_displacement,
+        **({"probes": spots} if spots else {}),
         "max_von_mises": stress,
         "material": spec.material.name,
     }

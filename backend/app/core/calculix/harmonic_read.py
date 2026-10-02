@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from app.core.calculix import frd as frd_reader
+from app.core.calculix import probes
+from app.core.calculix.mesh import read_mesh
 from app.core.spec import HarmonicSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -31,6 +33,7 @@ RESULT_NAME = "result.json"
 FRD_NAME = "model.frd"
 BOUNDARY_NAME = "boundary.json"
 MSH_NAME = "model.msh"
+TOPOLOGY_NAME = "topology.json"
 
 #: 이보다 크면 「감쇠가 모자란 것 아닌가」 를 적어 둔다(mm). Ansys 쪽과 같은 문턱.
 SUSPICIOUS_DISPLACEMENT = 1e3
@@ -50,18 +53,26 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
         elif block.kind == "DISPI":
             imaginary[block.value] = block
 
+    # **측정점은 그 자리의 곡선을 만든다.** 전체 최대의 곡선과 봉우리 주파수가 다를 수 있고
+    # (최대가 나는 자리가 주파수마다 옮겨 다닌다), 센서는 한 자리에 붙어 있다 — 실측과 견줄
+    # 수 있는 것은 그쪽이다.
+    spots = _spots(workdir)
     points: list[dict[str, Any]] = []
     for value in sorted(real):
         other = imaginary.get(value)
         if other is None:
             # 짝이 없는 블록은 **버린다** — 실수부만으로 진폭을 지어내면 공진이 평평해진다.
             continue
-        points.append(
-            {
-                "frequency_hz": round(value, 4),
-                "max_displacement": round(_amplitude(real[value], other), 10),
+        row: dict[str, Any] = {
+            "frequency_hz": round(value, 4),
+            "max_displacement": round(_amplitude(real[value], other), 10),
+        }
+        if spots:
+            row["probes"] = {
+                name: round(_at_node(real[value], other, node), 10)
+                for name, node in spots.items()
             }
-        )
+        points.append(row)
     if not points:
         raise StageFailure(
             "solver_failed",
@@ -103,6 +114,45 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
             f"{worst['frequency_hz']:.1f} Hz"
         ),
     )
+
+
+def _spots(workdir: Path) -> dict[str, int]:
+    """측정점 이름 → **가장 가까운 절점**. 점 그룹이 없으면 빈 것.
+
+    절점을 한 번만 찾아 둔다 — 주파수마다 다시 찾으면 같은 일을 수백 번 한다.
+    """
+    topology = workdir / TOPOLOGY_NAME
+    msh = workdir / MSH_NAME
+    if not topology.is_file() or not msh.is_file():
+        return {}
+    try:
+        payload = json.loads(topology.read_text(encoding="utf-8"))
+        asked = probes.wanted(payload)
+        if not asked:
+            return {}
+        mesh = read_mesh(msh)
+    except Exception:  # pragma: no cover - 파일이 깨진 경우
+        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        return {}
+    found: dict[str, int] = {}
+    for name, point in asked.items():
+        hit = probes.nearest(mesh.nodes, point)
+        if hit is not None:
+            found[name] = hit[0]
+            if hit[1] > probes.FAR_MM:
+                logger.warning(
+                    "측정점 %s: 가장 가까운 절점이 %.2f mm 떨어져 있습니다", name, hit[1]
+                )
+    return found
+
+
+def _at_node(real: frd_reader.Block, imaginary: frd_reader.Block, node: int) -> float:
+    """그 절점의 진폭 — 실수부 · 허수부를 성분마다 합쳐 크기를 낸다."""
+    values = real.values.get(node)
+    other = imaginary.values.get(node)
+    if values is None or other is None or len(values) < 3 or len(other) < 3:
+        return 0.0
+    return math.sqrt(sum(values[axis] ** 2 + other[axis] ** 2 for axis in range(3)))
 
 
 def _amplitude(real: frd_reader.Block, imaginary: frd_reader.Block) -> float:

@@ -678,6 +678,11 @@ def test_조화_응답이_공진에서_솟고_감쇠가_그_높이를_정한다(
     # 결과도 **실제로 쓴 값**을 적는다 — 스펙 값(0.05)을 적으면 화면이 거짓말을 한다.
     assert sharp["damping_ratio"] == 0.02
     assert sharp["units"]["displacement"] == "mm"
+    # **측정점** — CAD 가 점 그룹으로 보낸 자리(기둥 끝 꼭짓점)의 곡선. 전체 최대만 보면 센서를
+    # 붙인 자리와 견줄 수 없고, CalculiX 경로도 같은 열쇠를 낸다(`tests/opensolver`).
+    assert all("측정점" in one["probes"] for one in sharp["points"])
+    spot_peak = max(sharp["points"], key=lambda one: one["probes"]["측정점"])
+    assert spot_peak["frequency_hz"] == pytest.approx(1260, abs=40)
 
     peak = sharp["peak"]
     floor = min(one["max_displacement"] for one in sharp["points"])

@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core.dpf import probes
 from app.core.spec import HarmonicSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -79,11 +80,20 @@ def extract(
         unit = str(support.time_frequencies.unit or "Hz")
 
         points: list[dict[str, Any]] = []
+        spots = _spots(mesh, probes.topology_of(workdir))
         # **변위에 단위를 달아 둔다** — 값만 보면 mm 와 m 가 구별되지 않는다(정적에서 겪었다).
         displacement_unit = ""
         for index, value in enumerate(frequencies, start=1):
             peak, displacement_unit = _amplitude(dpf, np, model, index)
-            points.append({"frequency_hz": round(value, 4), "max_displacement": peak})
+            row: dict[str, Any] = {
+                "frequency_hz": round(value, 4),
+                "max_displacement": peak,
+            }
+            if spots:
+                # **측정점의 곡선** — 주파수마다 그 자리의 응답. 전체 최대는 자리가 주파수마다
+                # 옮겨 다닐 수 있고, 센서는 한 자리에 붙어 있다.
+                row["probes"] = _at_spots(dpf, np, model, index, spots)
+            points.append(row)
     except StageFailure:
         raise
     except Exception as failure:
@@ -123,6 +133,51 @@ def extract(
             f"{worst['frequency_hz']:.1f} {unit}"
         ),
     )
+
+
+def _spots(mesh: Any, topology: dict[str, Any]) -> dict[str, int]:
+    """측정점 이름 → **가장 가까운 절점**. 주파수마다 다시 찾으면 같은 일을 수백 번 한다."""
+    asked = probes.wanted(topology)
+    if not asked:
+        return {}
+    try:
+        import numpy as np
+
+        places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
+        ids = np.asarray(mesh.nodes.scoping.ids, dtype=int)
+        scale = probes.scale_for(str(mesh.unit or ""))
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("측정점을 못 찾았습니다 — 없이 갑니다", exc_info=True)
+        return {}
+    found: dict[str, int] = {}
+    for name, point in asked.items():
+        gaps = np.linalg.norm(places - np.asarray(point, dtype=float) / scale, axis=1)
+        index = int(gaps.argmin())
+        found[name] = int(ids[index])
+        if float(gaps[index]) * scale > probes.FAR_MM:
+            logger.warning(
+                "측정점 %s: 가장 가까운 절점이 %.2f mm 떨어져 있습니다",
+                name,
+                float(gaps[index]) * scale,
+            )
+    return found
+
+
+def _at_spots(
+    dpf: Any, np: Any, model: Any, index: int, spots: dict[str, int]
+) -> dict[str, float]:
+    """그 주파수에서 측정점마다 진폭. 복소 결과라 **진폭 연산자**를 쓴다(실수부만 읽으면
+    위상에 따라 작게 나온다 — `_amplitude` 와 같은 이유다)."""
+    fields = model.results.displacement.on_time_scoping([index]).eval()
+    try:
+        field = dpf.operators.math.amplitude_fc(fields_container=fields).eval()[0]
+    except Exception:
+        field = fields[0]
+    ids = np.asarray(field.scoping.ids, dtype=int)
+    data = np.asarray(field.data, dtype=float)
+    size = np.linalg.norm(data, axis=1) if data.ndim == 2 else np.abs(data)
+    by_node = dict(zip(ids.tolist(), size.tolist(), strict=False))
+    return {name: round(float(by_node.get(node, 0.0)), 10) for name, node in spots.items()}
 
 
 def _amplitude(dpf: Any, np: Any, model: Any, index: int) -> tuple[float, str]:

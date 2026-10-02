@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from app.core.spec import ModalSpec, StaticSpec, parse_spec
+from app.core.spec import HarmonicSpec, ModalSpec, StaticSpec, parse_spec
 from app.core.stages import STAGES, ArtifactSpec, Stage, StageFailure, StageResult
 
 #: 결과 파일 이름. 단계마다 따로 둔다 — 한 폴더에서 네 단계가 차례로 돌고, 지난 단계의 기록이
@@ -40,7 +40,7 @@ def result_path(workdir: Path, stage: str) -> Path:
 
 def run_stage(
     stage: Stage,
-    spec: ModalSpec | StaticSpec,
+    spec: ModalSpec | StaticSpec | HarmonicSpec,
     workdir: Path,
     *,
     input_name: str,
@@ -75,6 +75,12 @@ def run_stage(
             processes=solver_processes,
             timeout_seconds=timeout_seconds,
         )
+
+    if stage == "extracting" and isinstance(spec, HarmonicSpec):
+        # **조화 응답은 곡선이다** — 주파수마다 응답이 나온다.
+        from app.core.dpf.harmonic import extract as extract_harmonic
+
+        return extract_harmonic(spec, workdir)
 
     if stage == "extracting" and isinstance(spec, StaticSpec):
         # **정적은 모드가 아니다** — 변형 · 응력을 읽는다.
@@ -130,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         raw = json.loads((workdir / "spec.json").read_text(encoding="utf-8"))
         spec = parse_spec(raw)
-        if not isinstance(spec, ModalSpec | StaticSpec):  # pragma: no cover - 스펙이 둘뿐이다
+        if not isinstance(spec, ModalSpec | StaticSpec | HarmonicSpec):  # pragma: no cover
             raise StageFailure("internal", f"{spec.recipe} 레시피는 실행기가 없습니다.")
         result = run_stage(
             args.stage,

@@ -28,13 +28,19 @@ from app.core import conditions as condition_model
 from app.core import materials, units
 from app.core.bodies import BodyRecord, match_bodies
 from app.core.regions import FaceRecord, match_regions
-from app.core.spec import RIGID_BODY_MODES, MaterialSpec, ModalSpec, StaticSpec
+from app.core.spec import (
+    RIGID_BODY_MODES,
+    HarmonicSpec,
+    MaterialSpec,
+    ModalSpec,
+    StaticSpec,
+)
 from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
 
 #: 모델링이 받는 스펙 — 레시피마다 거는 것이 다르다.
-AnySpec = ModalSpec | StaticSpec
+AnySpec = ModalSpec | StaticSpec | HarmonicSpec
 
 
 #: 라이선스 실패로 볼 말. Mechanical 은 이것을 예외 메시지에 실어 준다.
@@ -48,6 +54,9 @@ def _is_license_problem(failure: Exception) -> bool:
 
 #: CAD 플랫폼이 보낸 영역 지문. 구속이 있는 스펙은 이것이 있어야 돈다.
 TOPOLOGY_NAME = "topology.json"
+
+#: 앞선 해석의 덱 — 뒤 덱이 이것을 이어받는다(선응력 · 모드 중첩). 솔브가 먼저 푼다.
+UPSTREAM_NAME = "upstream.dat"
 
 #: **이 작업이 자유-자유인가**를 뒤 단계에 넘기는 자리. 스펙만 보면 알 수 없다 — 구속이
 #: CAD 조건에만 있을 수 있고(`conditions_from="cad"`), 그때 결과가 「자유-자유」 로 적히면
@@ -87,7 +96,11 @@ def build(
         bodies = _import_geometry(app, step)
         used = _apply_material(spec, bodies, system, given, topology)
         constrained = bool(given_conditions.constraints or spec.constraints)
-        if isinstance(spec, StaticSpec):
+        if isinstance(spec, HarmonicSpec):
+            # **조화 응답은 모달이 앞에 선다**(모드 중첩) — 그 모드로 응답을 쌓는다.
+            upstream = _add_modal_for_harmonic(app, spec)
+            analysis = _add_harmonic(app, spec, upstream)
+        elif isinstance(spec, StaticSpec):
             # **정적 해석은 하중이 답을 만든다.** 하중이 없으면 전부 0 이 나오는데 그 그림은
             # 「해석이 됐다」 처럼 보인다 — 여기서 멈춘다.
             if not given_conditions.loads:
@@ -119,7 +132,11 @@ def build(
             )
         else:
             regions = _apply_constraints(app, spec, workdir, bodies, analysis)
-        if upstream is not None:
+        if isinstance(spec, HarmonicSpec):
+            # **조화 응답의 하중은 흔드는 힘이다** — 앞선 모달이 아니라 조화 쪽에 건다.
+            # (모달에 걸면 덱에 `sfedele,all` 만 남아 응답이 전부 0 으로 나온다 — 실측.)
+            _apply_loads(app, given_conditions, system, places, analysis)
+        elif upstream is not None:
             _apply_loads(app, given_conditions, system, places, upstream)
         mass = _mass_kg(used, bodies, system)
         nodes, elements = _mesh(
@@ -128,17 +145,18 @@ def build(
 
         dat = workdir / "model.dat"
         if upstream is not None and upstream is not analysis:
-            # **정적 덱을 따로 낸다.** 모달의 덱은 재시작(linear perturbation)이라 앞선 정적
-            # 해석의 `.rdb` · `.rnnn` 이 같은 폴더에 있어야 한다 — 없으면 MAPDL 이 그 자리에서
-            # 죽는다(실측 2026-10-02). 솔브 단계가 이 파일을 먼저 푼다.
-            static_dat = workdir / "static.dat"
+            # **앞선 해석의 덱을 따로 낸다.** 뒤 덱이 그것을 **이어받기** 때문이다 —
+            # 선응력 모달은 재시작(`.rdb` · `.rnnn`), 조화 응답은 모달의 `file.db`
+            # (`resume,file,db`). 없으면 MAPDL 이 그 자리에서 죽는다(둘 다 실측 2026-10-02).
+            # 솔브 단계가 이 파일을 **먼저** 푼다.
+            upstream_dat = workdir / UPSTREAM_NAME
             try:
-                upstream.WriteInputFile(str(static_dat))
+                upstream.WriteInputFile(str(upstream_dat))
             except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
                 raise _translated(
-                    failure, "solver_failed", "정적 해석 입력 파일을 쓰지 못했습니다"
+                    failure, "solver_failed", "앞선 해석의 입력 파일을 쓰지 못했습니다"
                 ) from failure
-            artifacts_extra = [ArtifactSpec("dat", static_dat)]
+            artifacts_extra = [ArtifactSpec("dat", upstream_dat)]
         else:
             artifacts_extra = []
         try:
@@ -603,6 +621,46 @@ def _limit_range(analysis: Any, given: condition_model.Conditions) -> None:
         logger.info("주파수 범위 %s ~ %s Hz ← CAD", low, high)
     except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
         logger.warning("주파수 범위를 걸지 못했습니다 — 범위 없이 돕니다", exc_info=True)
+
+
+def _add_modal_for_harmonic(app: Any, spec: HarmonicSpec) -> Any:
+    """조화 응답이 쓸 모드를 먼저 푼다 — **모드 중첩**은 그 모드로 응답을 쌓는다.
+
+    구속 · 접촉은 이 해석에 걸린다(모드가 거기서 나온다). 하중은 조화 쪽이다.
+    """
+    modal = app.Model.AddModalAnalysis()
+    modal.AnalysisSettings.MaximumModesToFind = spec.modes
+    return modal
+
+
+def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any) -> Any:
+    """조화 응답 — **주파수를 훑으며 흔든다.**
+
+    칸 이름은 실측으로 쟀다(2026-10-02): `RangeMinimum/Maximum` · `SolutionIntervals` ·
+    `SolutionMethod` · `DampingRatio` · `NumberOfModesToUse`, 그리고 앞선 모달은
+    `InitialConditions[0].ModalICEnvironment` 로 문다.
+    """
+    low, high = spec.frequency_range_hz
+    harmonic = app.Model.AddHarmonicResponseAnalysis()
+    quantity = _global("Quantity")
+    settings = harmonic.AnalysisSettings
+    try:
+        settings.RangeMinimum = quantity(f"{low} [Hz]")
+        settings.RangeMaximum = quantity(f"{high} [Hz]")
+        settings.SolutionIntervals = spec.intervals
+        # **`NumberOfModesToUse` 는 건드리지 않는다** — 모드 중첩에서는 앞선 모달이 그 수를
+        # 정하므로 읽기 전용이다(실측 2026-10-02: "This property is parameterized and is
+        # read-only"). 그래서 `_add_modal_for_harmonic` 에서 모드 수를 정한다.
+        #
+        # **감쇠가 없으면 공진에서 응답이 끝없이 커진다** — 스펙이 0 을 막지만 여기서도 건다.
+        settings.DampingRatio = spec.damping_ratio
+        initial = next(iter(harmonic.InitialConditions))
+        initial.ModalICEnvironment = modal
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise _translated(
+            failure, "internal", "조화 응답 설정을 세우지 못했습니다"
+        ) from failure
+    return harmonic
 
 
 def _add_static(app: Any, *, large_deflection: bool | None = None) -> Any:

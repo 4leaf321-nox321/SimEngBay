@@ -102,16 +102,42 @@ class StaticSpec(BaseModel):
     """변형이 커서 모양이 바뀌면 켠다 — 비선형이라 느리다."""
 
 
-JobSpec = Annotated[ModalSpec | StaticSpec, Field(discriminator="recipe")]
+class HarmonicSpec(BaseModel):
+    """조화 응답 — **주파수를 훑으며 흔든다.** 모달이 「어디서 떠는가」 라면 이것은 「그 떨림이
+    얼마나 크게 나오는가」 다.
+
+    감쇠가 없으면 공진에서 응답이 **끝없이 커진다** — 그래서 감쇠비를 안 주면 거절한다.
+    수치가 무한대로 가는 그림은 「해석이 됐다」 처럼 보인다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipe: Literal["harmonic"] = "harmonic"
+    material: MaterialSpec
+    material_from: Literal["cad", "spec"] = "cad"
+    conditions_from: Literal["cad", "spec"] = "cad"
+    mesh: MeshSpec = Field(default_factory=MeshSpec)
+    constraints: list[Constraint] = Field(default_factory=list)
+    frequency_range_hz: tuple[float, float] = (0.0, 2000.0)
+    """훑을 범위. CAD 조건이 있으면 그것이 먼저다."""
+    intervals: int = Field(default=10, ge=1, le=1000)
+    """범위를 몇 점으로 나눠 푸나 — 공진 근처를 자세히 보려면 늘린다."""
+    modes: int = Field(default=10, ge=1, le=100)
+    """모드 중첩에 쓸 모드 수."""
+    damping_ratio: float = Field(default=0.02, gt=0, lt=1)
+    """임계 감쇠에 대한 비. 강 구조는 0.01 ~ 0.03."""
+
+
+JobSpec = Annotated[ModalSpec | StaticSpec | HarmonicSpec, Field(discriminator="recipe")]
 
 #: 실행기가 있는 레시피. 여기 없는 것은 API 가 만들기 전에 거절한다.
-RUNNABLE_RECIPES: tuple[str, ...] = ("modal", "static")
+RUNNABLE_RECIPES: tuple[str, ...] = ("modal", "static", "harmonic")
 
 
 class _SpecEnvelope(BaseModel):
     spec: JobSpec
 
 
-def parse_spec(raw: object) -> ModalSpec | StaticSpec:
+def parse_spec(raw: object) -> ModalSpec | StaticSpec | HarmonicSpec:
     """dict(JSON) → 스펙. 레시피 판별과 칸 검증을 한 번에 — 오류는 pydantic 의 것 그대로."""
     return _SpecEnvelope.model_validate({"spec": raw}).spec

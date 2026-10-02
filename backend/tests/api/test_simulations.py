@@ -130,7 +130,7 @@ def test_모르는_레시피는_거절한다(client: TestClient, member: Signed)
     response = _create(
         client,
         member,
-        spec={"recipe": "harmonic", "material": MATERIAL},
+        spec={"recipe": "thermal", "material": MATERIAL},
         workspace=member.workspace,
     )
     assert response.status_code == 400

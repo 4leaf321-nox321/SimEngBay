@@ -111,9 +111,11 @@ def solve(
 
     **선응력이면 정적 덱이 먼저다.** 모달의 덱은 재시작(linear perturbation)이라 앞선 정적
     해석의 `.rdb` · `.rnnn` 이 같은 폴더에 있어야 한다 — 없으면 MAPDL 이 「multiframe restart
-    파일이 없다」 로 죽는다(실측 2026-10-02). 모델링이 `static.dat` 를 남겼으면 그것부터 푼다.
+    파일이 없다」 로 죽는다. 조화 응답(모드 중첩)도 같은 꼴이다 — 앞선 모달의 `file.db` 를
+    `resume` 한다. 모델링이 `upstream.dat` 를 남겼으면 **그것부터** 푼다
+    (둘 다 실측 2026-10-02).
     """
-    upstream = workdir / "static.dat"
+    upstream = workdir / "upstream.dat"
     if upstream.is_file():
         _run_deck(
             workdir,
@@ -122,7 +124,7 @@ def solve(
             root=root,
             processes=processes,
             timeout_seconds=timeout_seconds,
-            output_name="static.out",
+            output_name="upstream.out",
         )
     dat = workdir / "model.dat"
     if not dat.is_file():

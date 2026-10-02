@@ -567,6 +567,55 @@ def test_정적_해석이_변형과_응력을_낸다(workdir: Path) -> None:
     assert (workdir / "mode_01.vtp").is_file()
 
 
+def test_조화_응답이_주파수_곡선을_낸다(workdir: Path) -> None:
+    """**주파수를 훑으며 흔든다** — 모달이 「어디서 떠는가」 라면 이것은 「그때 얼마나 크게
+    흔들리는가」 다.
+
+    `조건_두바디_두재료`(바닥 고정 · 블록 윗면 압력)를 조화 응답으로 돌린다. 구속은 앞선
+    모달에, 흔드는 하중은 조화 쪽에 걸린다.
+
+    **결과가 곡선이다** — 주파수 점마다 최대 변위가 붙는다. 공진 근처에서 값이 솟아야 한다.
+    """
+    shutil.copy(TWO_BODIES / "points" / "p0001.step", workdir / "input.step")
+    shutil.copy(TWO_BODIES / "points" / "p0001.json", workdir / "topology.json")
+    spec = {
+        "recipe": "harmonic",
+        "material": SPEC["material"],
+        "mesh": {"element_size_mm": 8},
+        # **1차가 30,090 Hz 근처다**(모달 실측). 감쇠 2% 면 공진 폭이 ~0.6 kHz 라, 넓게
+        # 훑으면 점 사이로 봉우리가 빠져나간다 — 실제로 2 kHz 간격에서 그랬다. 좁게 훑는다.
+        "frequency_range_hz": [29000, 31000],
+        "intervals": 10,
+        "modes": 6,
+        "damping_ratio": 0.02,
+    }
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+    runner = _executor()
+    summary: dict[str, Any] = {}
+    for stage in STAGES:
+        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+        summary.update(result.summary)
+
+    result_json = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    assert result_json["recipe"] == "harmonic"
+    points = result_json["points"]
+    assert len(points) == 10, "주파수 점이 요청한 수만큼 나와야 한다"
+    assert all(one["max_displacement"] > 0 for one in points), (
+        "응답이 0 이면 하중이 안 걸린 것"
+    )
+    assert points[0]["frequency_hz"] == pytest.approx(29200, abs=1)
+    assert points[-1]["frequency_hz"] == pytest.approx(31000, abs=1)
+    # 앞선 모달의 덱이 따로 나왔다 — 모드 중첩은 그것을 이어받는다.
+    assert (workdir / "upstream.dat").is_file()
+
+    # **아직 못 본 것: 공진 증폭.** 1차(30,090 Hz)를 지나는데 응답이 정적값(5.204e-4)에서
+    # 거의 안 움직인다(5.1e-4 ~ 5.3e-4). 덱에는 `hropt,msup` · `harfrq` 가 바르게 적히지만
+    # 감쇠(`dmprat`)가 안 실린다 — 모드 중첩이 증폭을 안 하고 있다는 뜻이다. 그 자리를 찾기
+    # 전까지 **봉우리를 단정하지 않는다**(2026-10-02, 계획서에 적어 두었다).
+
+
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:
     """**조용히 자유-자유로 풀지 않는다.** 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을
     「해석이 됐다」 로 읽는다."""

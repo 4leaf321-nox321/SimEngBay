@@ -1,5 +1,5 @@
 {
-  "id": "3b3618f1-3eab-4481-8d74-cb7b545cd18b",
+  "id": "c01a72ad-dd50-4621-83e9-41112abdbb87",
   "name": "조건_재료훑기",
   "description": "",
   "method": "factorial",
@@ -16,10 +16,12 @@
       "bodies": [
         "블록"
       ],
+      "target": null,
       "values": [
         "AL5052H32DEMO_-_-",
         "SECC-EXAD87-DP_선언물성_0.8"
       ],
+      "property": null,
       "resolution": null
     }
   ],
@@ -402,33 +404,33 @@
         "name": "바닥",
         "entity": "face",
         "select": {
-          "role": "bottom",
-          "what": "faces"
+          "body": "받침판",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
         }
       },
       {
         "name": "블록 윗면",
         "entity": "face",
         "select": {
-          "near": [
+          "body": "블록",
+          "what": "faces",
+          "normal": [
             0,
             0,
-            25
-          ],
-          "role": "top",
-          "what": "faces"
+            1
+          ]
         }
       },
       {
         "name": "판 윗면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            40,
-            25,
-            5
-          ],
+          "body": "받침판",
           "what": "faces",
           "normal": [
             0,
@@ -441,12 +443,7 @@
         "name": "블록 아랫면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            0,
-            0,
-            5
-          ],
+          "body": "블록",
           "what": "faces",
           "normal": [
             0,
@@ -459,7 +456,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-b45ec20f@example.local"
+    "email": "member-970b6bcd@example.local"
   },
   "requested_by": null
 }

@@ -90,19 +90,6 @@
           0.0,
           1.0
         ]
-      },
-      {
-        "centroid": [
-          0.0,
-          0.0,
-          25.0
-        ],
-        "area": 1600.0,
-        "normal": [
-          0.0,
-          0.0,
-          1.0
-        ]
       }
     ],
     "블록 아랫면": [
@@ -118,19 +105,6 @@
           -0.0,
           -1.0
         ]
-      },
-      {
-        "centroid": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "area": 6000.0,
-        "normal": [
-          -0.0,
-          -0.0,
-          -1.0
-        ]
       }
     ]
   },
@@ -138,7 +112,7 @@
   "point": {
     "number": 4,
     "study": {
-      "id": "34cfd456-81eb-4329-94e6-c5c064eaa67e",
+      "id": "48135821-4b22-4dd6-91d2-72f314d53b17",
       "name": "조건_조건훑기",
       "method": "factorial",
       "seed": 1
@@ -180,33 +154,33 @@
         "name": "바닥",
         "entity": "face",
         "select": {
-          "role": "bottom",
-          "what": "faces"
+          "body": "받침판",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
         }
       },
       {
         "name": "블록 윗면",
         "entity": "face",
         "select": {
-          "near": [
+          "body": "블록",
+          "what": "faces",
+          "normal": [
             0,
             0,
-            25
-          ],
-          "role": "top",
-          "what": "faces"
+            1
+          ]
         }
       },
       {
         "name": "판 윗면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            40,
-            25,
-            5
-          ],
+          "body": "받침판",
           "what": "faces",
           "normal": [
             0,
@@ -219,12 +193,7 @@
         "name": "블록 아랫면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            0,
-            0,
-            5
-          ],
+          "body": "블록",
           "what": "faces",
           "normal": [
             0,

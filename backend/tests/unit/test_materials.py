@@ -206,30 +206,33 @@ def test_바디마다_다른_물성을_고른다() -> None:
 CONDITION_FOLDERS = FIXTURES / "doe"
 
 
-def test_조건_픽스처의_물성에는_탄성계수가_없다() -> None:
-    """**CompCore 가 2026-09-28 에 준 조건 폴더 두 벌의 실제 상태다.**
+def test_조건_픽스처는_이제_값을_다_들고_온다() -> None:
+    """**2026-10-02 에 CompCore 가 값이 있는 재료로 다시 뽑았다.**
 
-    고른 MatNexus 줄(SECC 선언물성 · AL5052 데모)에 탄성계수가 없어서 `converted` 에
-    `missing_structural: ["탄성계수"]` 가 실려 온다. 그러면 선형 탄성으로 풀 수 없다 —
-    **그때 조용히 넘어가면** Mechanical 이 기본값(구조용 강)으로 풀고, 알루미늄 블록이
-    강으로 풀린 결과가 그럴듯하게 나온다.
+    그전에는 세 폴더 모두 탄성계수가 없어(`missing_structural`) CAD 물성으로는 못 돌았다 —
+    그 상태를 시험으로 못 박아 두었더니, 폴더가 바뀐 날 이 줄이 먼저 알려 줬다.
 
-    이 시험은 「지금 이 폴더로는 CAD 물성으로 못 돈다」 를 못 박는다 — 그쪽이 탄성계수가 있는
-    재료로 폴더를 다시 내보내면 여기서 먼저 알려 준다(그때 이 시험을 고친다).
+    `조건_원통_SI` 만 아직 그대로다(그 재료에는 탄성계수가 없다) — 거기서는 **거절해야** 한다.
     """
-    for name in ("조건_두바디_두재료", "조건_원통_SI"):
+    for name in ("조건_두바디_두재료", "조건_재료훑기", "조건_조건훑기"):
         payload = json.loads(
             (CONDITION_FOLDERS / name / "points" / "p0001.json").read_text(encoding="utf-8")
         )
-        with pytest.raises(materials.MaterialProblem) as caught:
-            materials.read(payload, units.declared_in(payload))
-        assert "탄성계수" in caught.value.reason
+        found = materials.read(payload, units.declared_in(payload))
+        assert found, f"{name} 에서 물성을 못 읽었다"
+        for one in found:
+            assert one.youngs_modulus_pa > 0
+            assert one.density_kg_m3 > 0
 
-        # 다만 **밀도 · 푸아송비는 왔다** — 빠진 것이 무엇인지 말할 수 있어야 한다.
-        first = payload["conditions"]["materials"][0]["converted"]
-        assert first["density"] > 0
-        assert first["poisson_ratio"] > 0
-        assert first["missing_structural"] == ["탄성계수"]
+    # 값이 없는 폴더는 **그대로 막는다** — 조용히 넘기면 기본 물성(구조용 강)으로 풀린다.
+    payload = json.loads(
+        (CONDITION_FOLDERS / "조건_원통_SI" / "points" / "p0001.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    with pytest.raises(materials.MaterialProblem) as caught:
+        materials.read(payload, units.declared_in(payload))
+    assert "탄성계수" in caught.value.reason
 
 
 def test_SI_로_내보낸_폴더도_같은_규칙으로_읽는다() -> None:

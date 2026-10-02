@@ -1,5 +1,5 @@
 {
-  "id": "c97e667b-42bf-4cca-875b-929a884d5015",
+  "id": "b5e492c9-1b79-49b4-afb7-76385d308f9d",
   "name": "조건_두바디_두재료",
   "description": "",
   "method": "factorial",
@@ -13,10 +13,13 @@
       "start": null,
       "steps": 5,
       "value": null,
+      "bodies": [],
+      "target": null,
       "values": [
         5.0,
         8.0
       ],
+      "property": null,
       "resolution": null
     }
   ],
@@ -399,33 +402,33 @@
         "name": "바닥",
         "entity": "face",
         "select": {
-          "role": "bottom",
-          "what": "faces"
+          "body": "받침판",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
         }
       },
       {
         "name": "블록 윗면",
         "entity": "face",
         "select": {
-          "near": [
+          "body": "블록",
+          "what": "faces",
+          "normal": [
             0,
             0,
-            25
-          ],
-          "role": "top",
-          "what": "faces"
+            1
+          ]
         }
       },
       {
         "name": "판 윗면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            40,
-            25,
-            5
-          ],
+          "body": "받침판",
           "what": "faces",
           "normal": [
             0,
@@ -438,12 +441,7 @@
         "name": "블록 아랫면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            0,
-            0,
-            5
-          ],
+          "body": "블록",
           "what": "faces",
           "normal": [
             0,
@@ -456,7 +454,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-2514f263@example.local"
+    "email": "member-970b6bcd@example.local"
   },
   "requested_by": null
 }

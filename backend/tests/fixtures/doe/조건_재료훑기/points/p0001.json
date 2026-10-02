@@ -90,19 +90,6 @@
           0.0,
           1.0
         ]
-      },
-      {
-        "centroid": [
-          0.0,
-          0.0,
-          25.0
-        ],
-        "area": 1600.0,
-        "normal": [
-          0.0,
-          0.0,
-          1.0
-        ]
       }
     ],
     "블록 아랫면": [
@@ -118,19 +105,6 @@
           -0.0,
           -1.0
         ]
-      },
-      {
-        "centroid": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "area": 6000.0,
-        "normal": [
-          -0.0,
-          -0.0,
-          -1.0
-        ]
       }
     ]
   },
@@ -138,7 +112,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "3b3618f1-3eab-4481-8d74-cb7b545cd18b",
+      "id": "c01a72ad-dd50-4621-83e9-41112abdbb87",
       "name": "조건_재료훑기",
       "method": "factorial",
       "seed": 1
@@ -179,33 +153,33 @@
         "name": "바닥",
         "entity": "face",
         "select": {
-          "role": "bottom",
-          "what": "faces"
+          "body": "받침판",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
         }
       },
       {
         "name": "블록 윗면",
         "entity": "face",
         "select": {
-          "near": [
+          "body": "블록",
+          "what": "faces",
+          "normal": [
             0,
             0,
-            25
-          ],
-          "role": "top",
-          "what": "faces"
+            1
+          ]
         }
       },
       {
         "name": "판 윗면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            40,
-            25,
-            5
-          ],
+          "body": "받침판",
           "what": "faces",
           "normal": [
             0,
@@ -218,12 +192,7 @@
         "name": "블록 아랫면",
         "entity": "face",
         "select": {
-          "kind": "plane",
-          "near": [
-            0,
-            0,
-            5
-          ],
+          "body": "블록",
           "what": "faces",
           "normal": [
             0,
@@ -375,6 +344,7 @@
           "properties": [
             {
               "item": "비열",
+              "key": "thermal.specific_heat",
               "unit": "mJ/(tonne.K)",
               "points": [
                 {
@@ -385,6 +355,7 @@
             },
             {
               "item": "열전도율",
+              "key": "thermal.conductivity",
               "unit": "mW/(mm.K)",
               "points": [
                 {
@@ -395,6 +366,7 @@
             },
             {
               "item": "선팽창계수(CTE)",
+              "key": "thermal.expansion_linear",
               "unit": "1/K",
               "points": [
                 {
@@ -405,6 +377,7 @@
             },
             {
               "item": "전단탄성계수",
+              "key": "mechanical.shear_modulus",
               "unit": "MPa",
               "points": [
                 {
@@ -415,6 +388,7 @@
             },
             {
               "item": "탄성계수",
+              "key": "mechanical.youngs_modulus",
               "unit": "MPa",
               "points": [
                 {
@@ -423,9 +397,6 @@
                 }
               ]
             }
-          ],
-          "missing_structural": [
-            "탄성계수"
           ]
         }
       },
@@ -598,6 +569,7 @@
           "properties": [
             {
               "item": "비열",
+              "key": "thermal.specific_heat",
               "unit": "mJ/(tonne.K)",
               "points": [
                 {
@@ -608,6 +580,7 @@
             },
             {
               "item": "선팽창계수(CTE)",
+              "key": "thermal.expansion_linear",
               "unit": "1/K",
               "points": [
                 {
@@ -618,6 +591,7 @@
             },
             {
               "item": "연신율",
+              "key": "mechanical.elongation_at_break",
               "unit": "1",
               "points": [
                 {
@@ -628,6 +602,7 @@
             },
             {
               "item": "열전도율",
+              "key": "thermal.conductivity",
               "unit": "mW/(mm.K)",
               "points": [
                 {
@@ -638,6 +613,7 @@
             },
             {
               "item": "인장강도",
+              "key": "mechanical.tensile_strength",
               "unit": "MPa",
               "points": [
                 {
@@ -648,6 +624,7 @@
             },
             {
               "item": "탄성계수",
+              "key": "mechanical.youngs_modulus",
               "unit": "MPa",
               "points": [
                 {
@@ -658,6 +635,7 @@
             },
             {
               "item": "항복강도",
+              "key": "mechanical.yield_strength",
               "unit": "MPa",
               "points": [
                 {
@@ -666,9 +644,6 @@
                 }
               ]
             }
-          ],
-          "missing_structural": [
-            "탄성계수"
           ]
         }
       }

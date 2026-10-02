@@ -42,6 +42,8 @@ SHARED_DOE = FIXTURES / "doe" / "재료훑기-7c1d3a44"
 TWO_BODIES = FIXTURES / "doe" / "조건_두바디_두재료"
 #: 조건 · 물성 배율까지 훑는 폴더(CompCore 2026-09-29) — **값이 다 들어 있다.**
 CONDITION_SWEEP = FIXTURES / "doe" / "조건_조건훑기"
+#: 점마다 바디의 재료가 바뀌는 폴더(CompCore 2026-10-02 에 값까지 채워 다시 뽑았다).
+MATERIAL_SWEEP = FIXTURES / "doe" / "조건_재료훑기"
 SPEC = {
     "recipe": "modal",
     "material": {
@@ -472,6 +474,52 @@ def test_선응력을_켜면_하중이_쓰인다(workdir: Path) -> None:
     # 차이는 작지만(0.0007%) 방향이 정해져 있다. 같은 값이면 선응력이 안 걸린 것이다.
     assert seen["선응력"]["first"] < seen["그냥"]["first"]
     assert abs(seen["선응력"]["first"] - seen["그냥"]["first"]) > 0.05
+
+
+def test_재료를_훑으면_설계점마다_물성이_갈린다(workdir: Path) -> None:
+    """**CAD 폴더 그대로, 재료 DOE 를 끝까지.** 여태 폴더에 탄성계수가 없어 못 하던 검증이다.
+
+    `조건_재료훑기` 는 블록의 재료를 바꿔 끼운다 — 1번은 알루미늄(AL5052), 2번은 두 바디 모두
+    강(SECC). 형상은 한 벌을 나눠 쓴다.
+
+    **질량이 갈려야 한다**: 받침판 30,000 mm³ · 블록 32,000 mm³ 이므로 1번은 강+알루미늄
+    (0.2355 + 0.0858 = 0.3213 kg), 2번은 둘 다 강(0.2355 + 0.2512 = 0.4867 kg). 물성을 안
+    읽으면 두 점이 **같은 값**으로 나온다.
+    """
+    seen: dict[int, dict[str, Any]] = {}
+    for number in (1, 2):
+        place = workdir / f"p{number:04d}"
+        place.mkdir(parents=True, exist_ok=True)
+        point = json.loads(
+            (MATERIAL_SWEEP / "points" / f"p{number:04d}.json").read_text(encoding="utf-8")
+        )
+        shape = MATERIAL_SWEEP / point["point"]["step_file"]
+        shutil.copy(shape, place / "input.step")
+        shutil.copy(MATERIAL_SWEEP / "points" / f"p{number:04d}.json", place / "topology.json")
+        spec = dict(SPEC)
+        spec["mesh"] = {"element_size_mm": 8}
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+
+        runner = _executor()
+        summary: dict[str, Any] = {}
+        for stage in STAGES:
+            result = runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+            summary.update(result.summary)
+        result_json = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        seen[number] = {
+            "mass": float(summary["mass_kg"]),
+            "material": summary["material"],
+            "first": result_json["modes"][0]["frequency_hz"],
+        }
+
+    # 1번: 강판 + 알루미늄 블록. 2번: 둘 다 강.
+    assert seen[1]["mass"] == pytest.approx(0.3213, rel=0.01)
+    assert seen[2]["mass"] == pytest.approx(0.4867, rel=0.01)
+    # **무거워지면 주파수가 내려간다** — 블록이 알루미늄에서 강으로 바뀌면 질량이 더 는다.
+    assert seen[2]["first"] < seen[1]["first"]
 
 
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,6 +57,29 @@ class SimulationSummaryOut(BaseModel):
     finished_at: datetime | None
 
 
+class ConditionLine(BaseModel):
+    """CAD 가 보낸 조건 한 줄 — **반영하나 안 하나**를 화면이 그대로 읽는다."""
+
+    kind: str
+    """`constraint` · `contact` · `load` · `mesh` · `frame` · `analysis`."""
+    label: str
+    detail: str = ""
+    status: Literal["applied", "skipped", "refused"] = "applied"
+    why: str = ""
+    """넘기거나 막은 까닭 — 비어 있으면 반영한 것이다."""
+
+
+class ConditionsOut(BaseModel):
+    """작업 하나에 딸린 조건 전부.
+
+    **없으면 `lines` 가 비어 있다** — 사람이 준 스펙으로 돈 것이다.
+    """
+
+    lines: list[ConditionLine] = []
+    unit_system: str = ""
+    prestressed: bool = False
+
+
 class SimulationOut(SimulationSummaryOut):
     spec: dict[str, Any]
     stages: list[StageOut]
@@ -64,6 +87,8 @@ class SimulationOut(SimulationSummaryOut):
     artifacts: list[ArtifactOut]
     attempts: int
     worker_id: str | None
+    conditions: ConditionsOut = ConditionsOut()
+    """CAD 가 보낸 조건과 **우리가 그것을 어떻게 다뤘나**. 조용히 무시하지 않으려고 싣는다."""
 
 
 class SimulationCreateForm(BaseModel):

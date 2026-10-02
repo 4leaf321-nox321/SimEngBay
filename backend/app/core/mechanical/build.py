@@ -84,19 +84,46 @@ def build(
         bodies = _import_geometry(app, step)
         used = _apply_material(spec, bodies, system, given, topology)
         constrained = bool(given_conditions.constraints or spec.constraints)
-        analysis = _add_modal(app, spec, constrained=constrained)
+        # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을 안고
+        # 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다.
+        upstream = _add_static(app) if given_conditions.prestressed else None
+        analysis = _add_modal(app, spec, constrained=constrained, upstream=upstream)
         _write_boundary(workdir, constrained=constrained, spec=spec)
         _guard_solver_units(analysis, system)
+        places: dict[str, Any] = {}
         if given_conditions.constraints or given_conditions.contacts:
-            regions = _apply_given_conditions(
-                app, given_conditions, system, topology or {}, bodies, analysis
+            regions, places = _apply_given_conditions(
+                app,
+                given_conditions,
+                system,
+                topology or {},
+                bodies,
+                upstream if upstream is not None else analysis,
             )
         else:
             regions = _apply_constraints(app, spec, workdir, bodies, analysis)
+        if upstream is not None:
+            _apply_loads(app, given_conditions, system, places, upstream)
         mass = _mass_kg(used, bodies, system)
-        nodes, elements = _mesh(app, spec)
+        nodes, elements = _mesh(
+            app, spec, given_conditions, system, places, topology or {}, bodies
+        )
 
         dat = workdir / "model.dat"
+        if upstream is not None:
+            # **정적 덱을 따로 낸다.** 모달의 덱은 재시작(linear perturbation)이라 앞선 정적
+            # 해석의 `.rdb` · `.rnnn` 이 같은 폴더에 있어야 한다 — 없으면 MAPDL 이 그 자리에서
+            # 죽는다(실측 2026-10-02). 솔브 단계가 이 파일을 먼저 푼다.
+            static_dat = workdir / "static.dat"
+            try:
+                upstream.WriteInputFile(str(static_dat))
+            except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+                raise _translated(
+                    failure, "solver_failed", "정적 해석 입력 파일을 쓰지 못했습니다"
+                ) from failure
+            artifacts_extra = [ArtifactSpec("dat", static_dat)]
+        else:
+            artifacts_extra = []
         try:
             analysis.WriteInputFile(str(dat))
         except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
@@ -106,7 +133,7 @@ def build(
         if not dat.is_file():
             raise StageFailure("solver_failed", "솔버 입력 파일이 만들어지지 않았습니다.")
 
-        artifacts = [ArtifactSpec("dat", dat)]
+        artifacts = [ArtifactSpec("dat", dat), *artifacts_extra]
         # **`.mechdb` 는 디버깅용이다.** 리눅스에 GUI 는 없지만 파일은 OS 간
         # 호환이라,
         # 개발자 Windows PC 에서 열어 「모델이 어떻게 생겼나」 를 본다. 저장에 실패해도
@@ -134,6 +161,17 @@ def build(
                 # **무슨 물성으로 돌았나.** 적지 않으면 「CAD 가 보낸 재료로 돈 것인지」 를
                 # 나중에 알 방법이 없다 — 재료를 훑는 DOE 에서 그것이 결과의 절반이다.
                 "conditions_from": "cad" if given_conditions.constraints else "spec",
+                **({"prestressed": True} if upstream is not None else {}),
+                **(
+                    {
+                        "loads": " · ".join(
+                            f"{one.kind}:{one.region or '전체'}"
+                            for one in given_conditions.loads
+                        )
+                    }
+                    if given_conditions.loads
+                    else {}
+                ),
                 **(
                     {
                         "conditions_skipped": " · ".join(
@@ -514,16 +552,121 @@ def _body_records(bodies: list[Any], system: units.UnitSystem) -> list[BodyRecor
     return found
 
 
-def _add_modal(app: Any, spec: ModalSpec, *, constrained: bool) -> Any:
+def _add_static(app: Any) -> Any:
+    """선응력을 만들 정적 해석. 구속과 하중이 여기 걸린다.
+
+    **재시작 파일을 남기라고 이른다**(`RESCONTROL,LINEAR`). 그것이 없으면 모달의 재시작 덱이
+    「multiframe restart 파일이 없다」 로 죽는다 — MAPDL 이 그렇게 시키라고 적어 준 그대로다.
+    """
+    static = app.Model.AddStaticStructuralAnalysis()
+    snippet = static.AddCommandSnippet()
+    snippet.AppendText(
+        "! SimEngBay: keep restart files for the modal perturbation\nRESCONTROL,LINEAR\n"
+    )
+    return static
+
+
+def _add_modal(app: Any, spec: ModalSpec, *, constrained: bool, upstream: Any = None) -> Any:
     """모달 해석 하나. **찾을 모드 수는 구속 여부로 갈린다** — 자유-자유면 강체 6개를 얹는다.
 
     구속이 CAD 조건에만 있을 수 있으므로 스펙이 아니라 **실제로 건 것**으로 센다.
+
+    `upstream` 이 있으면 **그 정적 해석의 응력을 안고 푼다**(실측 2026-10-02:
+    `InitialConditions[0].PreStressICEnvironment`). 볼트를 조인 상태의 공진이 그 자리다.
     """
     analysis = app.Model.AddModalAnalysis()
     analysis.AnalysisSettings.MaximumModesToFind = spec.modes + (
         0 if constrained else RIGID_BODY_MODES
     )
+    if upstream is None:
+        return analysis
+    try:
+        initial = next(iter(analysis.InitialConditions))
+        initial.PreStressICEnvironment = upstream
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise _translated(failure, "internal", "선응력 링크를 걸지 못했습니다") from failure
     return analysis
+
+
+#: 하중 종류 → Mechanical 의 만드는 자리(실측 2026-10-02).
+_LOAD_MAKERS = {
+    "pressure": "AddPressure",
+    "force": "AddForce",
+    "moment": "AddMoment",
+    "bearing": "AddBearingLoad",
+    "bolt_pretension": "AddBoltPretension",
+    "standard_earth_gravity": "AddEarthGravity",
+    "acceleration": "AddAcceleration",
+    "rotational_velocity": "AddRotationalVelocity",
+}
+
+
+def _apply_loads(
+    app: Any,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    places: dict[str, Any],
+    static: Any,
+) -> None:
+    """하중을 **정적 해석에** 건다 — 그 응력을 모달이 안고 푼다.
+
+    크기는 선언된 계의 값이라 단위를 붙여 준다. 방향은 성분 벡터이거나 면의 법선(압력)이다.
+    """
+    quantity = _global("Quantity")
+    for load in given.loads:
+        maker = _LOAD_MAKERS.get(load.kind)
+        if maker is None:  # pragma: no cover - 조건 층이 먼저 막는다
+            raise StageFailure("internal", f"못 거는 하중입니다: {load.kind}")
+        try:
+            made = getattr(static, maker)()
+            if load.region:
+                place = places.get(load.region)
+                if place is None:
+                    raise StageFailure(
+                        "region_unresolved",
+                        f"하중 「{load.name}」 의 자리 「{load.region}」 를 못 찾았습니다",
+                    )
+                made.Location = place
+            _load_magnitude(made, load, system, quantity)
+            made.Name = load.name
+            logger.info("하중 %s(%s) ← %s", load.name, load.kind, load.region or "전체")
+        except StageFailure:
+            raise
+        except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+            raise _translated(
+                failure, "internal", f"하중 「{load.name}」({load.kind})을 걸지 못했습니다"
+            ) from failure
+
+
+def _load_magnitude(
+    made: Any, load: condition_model.Load, system: units.UnitSystem, quantity: Any
+) -> None:
+    """크기와 방향 — **단위를 값에서 떼지 않는다**(CAD 가 `unit` 을 함께 보낸다)."""
+    unit = load.unit or system.length_label
+    if load.kind == "bolt_pretension":
+        if load.preload is None:
+            raise StageFailure("internal", f"볼트 「{load.name}」 에 예압이 없습니다")
+        made.Preload.Output.DiscreteValues = [quantity(f"{load.preload} [{unit}]")]
+        return
+    if load.direction is not None and load.kind in (
+        "force",
+        "moment",
+        "bearing",
+        "acceleration",
+    ):
+        # 성분으로 준다 — 크기를 방향 벡터에 실어 나눈다.
+        size = load.magnitude or 0.0
+        length = sum(one * one for one in load.direction) ** 0.5 or 1.0
+        made.DefineBy = _global("Ansys").Mechanical.DataModel.Enums.LoadDefineBy.Components
+        for axis, part in zip(
+            ("XComponent", "YComponent", "ZComponent"), load.direction, strict=True
+        ):
+            getattr(made, axis).Output.DiscreteValues = [
+                quantity(f"{size * part / length} [{unit}]")
+            ]
+        return
+    if load.magnitude is not None and hasattr(made, "Magnitude"):
+        made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
 
 
 def _write_boundary(workdir: Path, *, constrained: bool, spec: ModalSpec) -> None:
@@ -663,7 +806,7 @@ def _apply_given_conditions(
     topology: dict[str, Any],
     bodies: list[Any],
     analysis: Any,
-) -> list[str]:
+) -> tuple[list[str], dict[str, Any]]:
     """**CAD 가 보낸 구속 · 접촉을 건다** — 종류마다 Mechanical 의 짝으로.
 
     매핑표는 우리 것이다(CompCore 는 솔버를 모른다). 칸 이름은 **실측으로 쟀다**
@@ -674,9 +817,12 @@ def _apply_given_conditions(
         {one.region for one in given.constraints}
         | {one.source for one in given.contacts}
         | {one.target for one in given.contacts}
+        # **하중의 자리도 여기서 함께 짝짓는다** — 빼 두면 선응력에서 「자리를 못 찾았다」 로
+        # 늦게 죽는다(실측 2026-10-02).
+        | {one.region for one in given.loads if one.region}
     )
     if not wanted:
-        return []
+        return [], {}
 
     matched = match_regions(topology, _face_records(bodies), wanted_regions=wanted)
     if not matched.ok:
@@ -690,9 +836,10 @@ def _apply_given_conditions(
         )
 
     places = {name: _named_selection(app, name, matched.faces[name]) for name in wanted}
+    frames = _build_frames(app, given, system)
     applied: list[str] = []
     for constraint in given.constraints:
-        _one_constraint(analysis, constraint, places[constraint.region], system)
+        _one_constraint(analysis, constraint, places[constraint.region], system, frames)
         applied.append(f"{constraint.kind}:{constraint.region}")
         logger.info("구속 %s(%s) ← %s", constraint.name, constraint.kind, constraint.region)
     for contact in given.contacts:
@@ -701,7 +848,62 @@ def _apply_given_conditions(
         logger.info(
             "접촉 %s(%s) %s ↔ %s", contact.name, contact.kind, contact.source, contact.target
         )
-    return applied
+    return applied, places
+
+
+def _build_frames(
+    app: Any, given: condition_model.Conditions, system: units.UnitSystem
+) -> dict[str, Any]:
+    """CAD 가 보낸 좌표계를 Mechanical 에 세운다 — 이름 → 좌표계 객체.
+
+    **원점은 선언된 계의 길이**로 온다(`length_units.coordinate_systems`). 축은 단위 벡터인데
+    Mechanical 에는 벡터를 적는 칸이 없어 **회전으로 세운다**(실측 2026-10-02:
+    `AddTransformation` + `SetTransformationValue(번호, 도)`). 그래서 축 → 각으로 바꾸고
+    (`conditions.euler_xyz`, CompCore 와 같은 X → Y → Z 고정축 순서), **세운 뒤 되읽어 맞는지
+    본다** — 틀린 좌표계는 성분을 딴 방향으로 걸고 그 사실은 결과를 봐도 모른다.
+    """
+    import math
+
+    if not given.frames:
+        return {}
+    axis_type = _global("Ansys").Mechanical.DataModel.Enums.CoordinateSystemAxisType
+    kind = _global("Ansys").Mechanical.DataModel.Enums.TransformationType
+    quantity = _global("Quantity")
+    made: dict[str, Any] = {}
+    for frame in given.frames:
+        try:
+            cs = app.Model.CoordinateSystems.AddCoordinateSystem()
+            cs.Name = frame.name
+            for name, value in zip(
+                ("OriginX", "OriginY", "OriginZ"), frame.origin, strict=True
+            ):
+                setattr(cs, name, quantity(f"{value} [{system.length_label}]"))
+            angles = condition_model.euler_xyz(frame)
+            axes = (axis_type.PositiveXAxis, axis_type.PositiveYAxis, axis_type.PositiveZAxis)
+            index = 0
+            for axis, angle in zip(axes, angles, strict=True):
+                if abs(angle) < 1e-9:
+                    continue
+                cs.AddTransformation(kind.Rotation, axis)
+                index += 1
+                cs.SetTransformationValue(index, angle)
+                # **되읽어 본다** — 돌려주는 값은 라디안이다(실측).
+                back = math.degrees(float(cs.GetTransformationValue(index)))
+                if abs(back - angle) > 1e-3:
+                    raise StageFailure(
+                        "internal",
+                        f"좌표계 「{frame.name}」 의 회전이 안 들어갔습니다"
+                        f"({angle:.4f}° 를 넣었는데 {back:.4f}° 입니다)",
+                    )
+            made[frame.name] = cs
+            logger.info("좌표계 %s ← 원점 %s · 회전 %s", frame.name, frame.origin, angles)
+        except StageFailure:
+            raise
+        except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+            raise _translated(
+                failure, "internal", f"좌표계 「{frame.name}」 을 세우지 못했습니다"
+            ) from failure
+    return made
 
 
 def _one_constraint(
@@ -709,6 +911,7 @@ def _one_constraint(
     constraint: condition_model.Constraint,
     place: Any,
     system: units.UnitSystem,
+    frames: dict[str, Any],
 ) -> None:
     """구속 하나를 Mechanical 에. **못 거는 종류는 여기 오지 않는다**(조건 층이 막는다)."""
     kind = constraint.kind
@@ -748,6 +951,15 @@ def _one_constraint(
                 f"{constraint.stiffness} [{system.foundation_label}]"
             )
         elif kind in ("displacement", "remote_displacement"):
+            if constraint.cs not in condition_model.GLOBAL_FRAMES:
+                found = frames.get(constraint.cs)
+                if found is None:  # pragma: no cover - 조건 층이 먼저 막는다
+                    raise StageFailure(
+                        "internal",
+                        f"구속 「{constraint.name}」 이 가리키는 좌표계 "
+                        f"「{constraint.cs}」 가 없습니다",
+                    )
+                support.CoordinateSystem = found
             _components(support, constraint, system, rotations=kind == "remote_displacement")
     except StageFailure:
         raise
@@ -814,12 +1026,38 @@ _CONTACT_TYPES = {
 }
 
 
-def _mesh(app: Any, spec: ModalSpec) -> tuple[int, int]:
+def _mesh(
+    app: Any,
+    spec: ModalSpec,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    places: dict[str, Any],
+    topology: dict[str, Any],
+    bodies: list[Any],
+) -> tuple[int, int]:
+    """메시를 만든다. **CAD 의 메시 힌트는 바람이다** — 영역마다 주는 것은 그대로 받고,
+    전체 크기는 사람이 정한 것이 먼저다.
+
+    전체를 CAD 가 덮게 두면 라이선스 절점 상한(Student)에 걸려 **아무 설계점도 안 돈다.**
+    영역 사이징은 더하기만 하므로 그 위험이 없다.
+    """
     enums = _global("Ansys").Mechanical.DataModel.Enums
     quantity = _global("Quantity")
     mesh = app.Model.Mesh
+    whole = next(
+        (
+            one
+            for one in given.mesh_hints
+            if one.region in ("전체", "all") and one.element_size is not None
+        ),
+        None,
+    )
     if spec.mesh.element_size_mm is not None:
         mesh.ElementSize = quantity(f"{spec.mesh.element_size_mm} [mm]")
+    elif whole is not None:
+        mesh.ElementSize = quantity(f"{whole.element_size} [{system.length_label}]")
+        logger.info("메시 전체 크기 ← CAD %s %s", whole.element_size, system.length_label)
+    _mesh_sizings(app, given, system, places, topology, bodies)
     mesh.ElementOrder = (
         enums.ElementOrder.Quadratic
         if spec.mesh.order == "quadratic"
@@ -838,6 +1076,53 @@ def _mesh(app: Any, spec: ModalSpec) -> tuple[int, int]:
             details={"element_size_mm": spec.mesh.element_size_mm},
         )
     return nodes, elements
+
+
+def _mesh_sizings(
+    app: Any,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    places: dict[str, Any],
+    topology: dict[str, Any],
+    bodies: list[Any],
+) -> None:
+    """영역마다의 요소 크기 — `Mesh.AddSizing()`.
+
+    조건이 쓰지 않은 영역에도 힌트가 올 수 있어, 그때는 **여기서 한 번 더 짝짓는다.**
+    못 찾으면 **메시 힌트 때문에 해석을 막지는 않는다** — 바람이지 조건이 아니다.
+    """
+    local = [
+        one
+        for one in given.mesh_hints
+        if one.element_size is not None and one.region not in ("전체", "all")
+    ]
+    if not local:
+        return
+
+    missing = [one.region for one in local if one.region not in places]
+    if missing:
+        matched = match_regions(topology, _face_records(bodies), wanted_regions=missing)
+        for name in missing:
+            ids = matched.faces.get(name)
+            if ids:
+                places[name] = _named_selection(app, name, ids)
+            else:
+                logger.warning("메시 힌트의 영역 %s 를 못 찾았습니다 — 그냥 넘어갑니다", name)
+
+    quantity = _global("Quantity")
+    for hint in local:
+        place = places.get(hint.region)
+        if place is None:
+            continue
+        try:
+            sizing = app.Model.Mesh.AddSizing()
+            sizing.Location = place
+            sizing.ElementSize = quantity(f"{hint.element_size} [{system.length_label}]")
+            logger.info("메시 %s ← %s %s", hint.region, hint.element_size, system.length_label)
+        except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+            logger.warning(
+                "메시 힌트 %s 를 걸지 못했습니다 — 넘어갑니다", hint.region, exc_info=True
+            )
 
 
 def _translated(failure: Exception, code: FailureCode, what: str) -> StageFailure:

@@ -419,6 +419,61 @@ def test_CAD_가_보낸_구속과_접촉을_건다(workdir: Path) -> None:
     assert seen[1]["first"] != pytest.approx(seen[3]["first"], rel=1e-4)
 
 
+def test_선응력을_켜면_하중이_쓰인다(workdir: Path) -> None:
+    """**조여 놓고 떠는 상태** — CompCore 의 주 용도다(볼트를 조인 뒤의 공진).
+
+    같은 폴더를 두 번 돌린다. 한 번은 그대로(하중은 「건너뜀」), 한 번은 조건의 `prestressed`
+    를 켜서. 켜면 정적 해석이 먼저 돌고 모달이 그 응력을 안고 푼다 — **주파수가 달라져야
+    한다.** 같으면 하중이 안 걸린 것이다.
+    """
+    seen: dict[str, Any] = {}
+    for label, prestressed in (("그냥", False), ("선응력", True)):
+        place = workdir / label
+        place.mkdir(parents=True, exist_ok=True)
+        point = json.loads(
+            (CONDITION_SWEEP / "points" / "p0001.json").read_text(encoding="utf-8")
+        )
+        point["conditions"]["analysis"]["prestressed"] = prestressed
+        shutil.copy(CONDITION_SWEEP / "shapes" / "c3aed82c2d74.step", place / "input.step")
+        (place / "topology.json").write_text(
+            json.dumps(point, ensure_ascii=False), encoding="utf-8"
+        )
+        spec = dict(SPEC)
+        spec["mesh"] = {"element_size_mm": 8}
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+
+        runner = _executor()
+        summary: dict[str, Any] = {}
+        for stage in STAGES:
+            result = runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+            summary.update(result.summary)
+        result_json = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        seen[label] = {
+            "prestressed": summary.get("prestressed", False),
+            "loads": summary.get("loads", ""),
+            "skipped": summary.get("conditions_skipped", ""),
+            "first": result_json["modes"][0]["frequency_hz"],
+            "static": (place / "static.dat").is_file(),
+        }
+
+    # 그냥 돌리면 하중은 걸지 않고 **그 사실을 말한다.**
+    assert seen["그냥"]["prestressed"] is False
+    assert "하중" in seen["그냥"]["skipped"]
+    # 켜면 하중이 정적 해석에 걸린다.
+    assert seen["선응력"]["prestressed"] is True
+    assert "pressure" in seen["선응력"]["loads"]
+    # 정적 덱이 따로 나왔다 — 모달의 덱은 그 재시작이다.
+    assert seen["선응력"]["static"], "정적 덱(static.dat)이 없다"
+    # **응력을 안고 풀면 값이 달라진다.** 누르는 하중은 구조를 무르게 하므로 **낮아진다** —
+    # 실측(2026-10-02): 30,090.3497 → 30,090.1351 Hz(압력 1.5 MPa · 2,400 N).
+    # 차이는 작지만(0.0007%) 방향이 정해져 있다. 같은 값이면 선응력이 안 걸린 것이다.
+    assert seen["선응력"]["first"] < seen["그냥"]["first"]
+    assert abs(seen["선응력"]["first"] - seen["그냥"]["first"]) > 0.05
+
+
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:
     """**조용히 자유-자유로 풀지 않는다.** 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을
     「해석이 됐다」 로 읽는다."""

@@ -11,6 +11,7 @@ import { useParams } from 'react-router-dom'
 
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
 import type { Artifact, Simulation, Stage } from '@/modules/simulations/api'
+import { ConditionList } from '@/modules/simulations/ConditionList'
 import { ResultPanel } from '@/modules/simulations/ResultPanel'
 import {
   ARTIFACT_LABELS,
@@ -282,6 +283,9 @@ export default function SimulationDetailPage() {
           </dl>
         </section>
       )}
+
+      {/* **조건을 조용히 무시하지 않는다** — 무엇을 반영하고 무엇을 넘겼는지 그대로 보인다. */}
+      <ConditionList conditions={simulation.conditions} />
 
       {/* 결과 요약은 **끝난 뒤에 한 번만** 받는다. 폴링에 실으면 같은 파일을 2초마다 읽는다. */}
       <ResultPanel

@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core import cleanup, executors, materials, units
+from app.core import conditions as condition_model
 from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_inside
 from app.core.doe.browse import OutsideRoots
 from app.core.doe.folder import FolderProblem
@@ -51,6 +52,8 @@ from app.modules.simulations.models import (
 )
 from app.modules.simulations.schemas import (
     ArtifactOut,
+    ConditionLine,
+    ConditionsOut,
     DoeEntryOut,
     DoeImportOut,
     DoeListingOut,
@@ -194,7 +197,75 @@ def to_out(db: Session, simulation: Simulation) -> SimulationOut:
         ],
         attempts=simulation.attempts,
         worker_id=simulation.worker_id,
+        conditions=_conditions_of(simulation),
     )
+
+
+def _conditions_of(simulation: Simulation) -> ConditionsOut:
+    """CAD 가 보낸 조건을 화면이 읽을 줄로 편다.
+
+    **반영한 것 · 넘긴 것 · 막은 것**을 그대로 보여 준다 — 조건을 넣었는데 결과가 같을 때,
+    그것이 무시된 것인지 원래 그런 것인지 사람이 알 수 있어야 한다.
+    """
+    hex_id = simulation.id.hex
+    path = work_root() / hex_id[:2] / hex_id / TOPOLOGY_NAME
+    if not path.is_file():
+        return ConditionsOut()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        spec = parse_spec(simulation.spec)
+        found = condition_model.read(payload, recipe=spec.recipe)
+        system = units.declared_in(payload)
+    except (OSError, ValueError, ValidationError):
+        logger.warning("조건을 읽지 못했습니다 — 화면에는 비워 둡니다", exc_info=True)
+        return ConditionsOut()
+
+    lines: list[ConditionLine] = []
+    for frame in found.frames:
+        lines.append(
+            ConditionLine(
+                kind="frame",
+                label=f"좌표계 {frame.name}",
+                detail=f"원점 {tuple(round(one, 3) for one in frame.origin)}",
+            )
+        )
+    for rule in found.constraints:
+        lines.append(
+            ConditionLine(
+                kind="constraint", label=rule.name, detail=f"{rule.kind} · {rule.region}"
+            )
+        )
+    for pair in found.contacts:
+        lines.append(
+            ConditionLine(
+                kind="contact",
+                label=pair.name,
+                detail=f"{pair.kind} · {pair.source} ↔ {pair.target}",
+            )
+        )
+    for load in found.loads:
+        size = f"{load.magnitude:g} {load.unit}" if load.magnitude is not None else ""
+        lines.append(
+            ConditionLine(kind="load", label=load.name, detail=f"{load.kind} {size}".strip())
+        )
+    for hint in found.mesh_hints:
+        if hint.element_size is not None:
+            lines.append(
+                ConditionLine(
+                    kind="mesh",
+                    label=f"메시 {hint.region}",
+                    detail=f"요소 {hint.element_size:g}",
+                )
+            )
+    for note in found.skipped:
+        lines.append(
+            ConditionLine(kind="load", label=note.what, status="skipped", why=note.why)
+        )
+    for note in found.refused:
+        lines.append(
+            ConditionLine(kind="constraint", label=note.what, status="refused", why=note.why)
+        )
+    return ConditionsOut(lines=lines, unit_system=system.key, prestressed=found.prestressed)
 
 
 def recipes() -> list[RecipeOut]:

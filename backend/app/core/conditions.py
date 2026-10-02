@@ -87,6 +87,22 @@ class Constraint:
 
 
 @dataclass(frozen=True)
+class Frame:
+    """좌표계 하나 — 구속 · 하중의 성분이 가리키는 방향.
+
+    점 파일에 **설계점마다 풀려서** 온다(`{name, source, origin, x, y, z}`). 원점은 선언된
+    단위계의 길이고(`length_units.coordinate_systems`), 축은 단위 벡터다.
+    """
+
+    name: str
+    origin: tuple[float, float, float]
+    x_axis: tuple[float, float, float]
+    y_axis: tuple[float, float, float]
+    z_axis: tuple[float, float, float]
+    source: str = ""
+
+
+@dataclass(frozen=True)
 class Contact:
     """접촉 한 쌍 — 두 **면 그룹**이 만나는 자리."""
 
@@ -97,6 +113,25 @@ class Contact:
     friction: float | None = None
     behavior: str = "program_controlled"
     formulation: str = "program_controlled"
+
+
+@dataclass(frozen=True)
+class Load:
+    """하중 하나 — **선응력 모달**(정적 → 모달)에서 쓴다.
+
+    크기는 선언된 단위계의 값이고(`unit` 이 함께 온다), 방향은 좌표계(`cs`)의 성분이거나
+    `"normal"`(면의 법선 — 압력만)이다.
+    """
+
+    name: str
+    kind: str
+    region: str = ""
+    cs: str = "global"
+    magnitude: float | None = None
+    unit: str = ""
+    direction: tuple[float, float, float] | None = None
+    normal: bool = False
+    preload: float | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +169,10 @@ class Conditions:
 
     constraints: list[Constraint] = field(default_factory=list)
     contacts: list[Contact] = field(default_factory=list)
+    frames: list[Frame] = field(default_factory=list)
+    """이름 붙인 좌표계. 구속의 `cs` 가 이 이름을 가리킨다."""
+    loads: list[Load] = field(default_factory=list)
+    """**선응력 모달에서만 쓴다.** 그냥 모달이면 `skipped` 에 적고 여기는 비운다."""
     mesh_hints: list[MeshHint] = field(default_factory=list)
     analysis: Analysis = field(default_factory=Analysis)
     skipped: list[Note] = field(default_factory=list)
@@ -143,7 +182,12 @@ class Conditions:
 
     @property
     def empty(self) -> bool:
-        return not (self.constraints or self.contacts or self.mesh_hints)
+        return not (self.constraints or self.contacts or self.mesh_hints or self.loads)
+
+    @property
+    def prestressed(self) -> bool:
+        """정적 해석을 먼저 풀어야 하나 — **하중이 있고 선응력을 켰을 때**."""
+        return bool(self.loads) and self.analysis.prestressed
 
 
 def read(payload: Any, *, recipe: str = "modal") -> Conditions:
@@ -158,6 +202,12 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         return made
 
     regions = set(_dict(payload).get("regions") or {})
+    # **해석 설정을 먼저 읽는다** — 선응력인지에 따라 하중을 걸지 넘길지가 갈린다.
+    made.analysis = _analysis(_dict(block.get("analysis")))
+    made.frames = _frames(payload, block)
+    known = {one.name for one in made.frames}
+    for row in _rows(block, "constraints"):
+        _needs_frame(row, known, made)
     for row in _rows(block, "constraints"):
         _constraint(row, regions, made)
     for row in _rows(block, "contacts"):
@@ -168,11 +218,73 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         _load(row, recipe, made)
     for row in _rows(block, "initial"):
         _initial(row, recipe, made)
-    made.analysis = _analysis(_dict(block.get("analysis")))
     return made
 
 
 # --- 갈래마다 ------------------------------------------------------------------
+
+
+#: `cs` 가 이 이름이면 전역이다 — CompCore 와 같은 말을 쓴다.
+GLOBAL_FRAMES = {"", "global", "전역"}
+
+
+def _frames(payload: dict[str, Any], block: dict[str, Any]) -> list[Frame]:
+    """점 파일의 `coordinate_systems` — 설계점마다 풀린 원점과 축.
+
+    조건 블록에도 같은 이름의 정의가 있지만 그것은 **식이 섞인 원본**이다. 푼 값은 점 파일
+    바깥에 실려 오므로 그쪽을 쓴다.
+    """
+    rows = _dict(payload).get("coordinate_systems")
+    if not isinstance(rows, list):
+        rows = block.get("coordinate_systems") if isinstance(block, dict) else None
+    made: list[Frame] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        origin = _triple(row.get("origin"))
+        x_axis = _triple(row.get("x")) or (1.0, 0.0, 0.0)
+        y_axis = _triple(row.get("y")) or (0.0, 1.0, 0.0)
+        z_axis = _triple(row.get("z")) or (0.0, 0.0, 1.0)
+        if not name or origin is None:
+            continue
+        made.append(
+            Frame(
+                name=name,
+                origin=origin,
+                x_axis=x_axis,
+                y_axis=y_axis,
+                z_axis=z_axis,
+                source=str(row.get("source") or ""),
+            )
+        )
+    return made
+
+
+def _needs_frame(row: dict[str, Any], known: set[str], made: Conditions) -> None:
+    """**모르는 좌표계를 조용히 전역으로 읽지 않는다** — 성분이 딴 방향으로 걸린다."""
+    name = str(row.get("cs") or "").strip()
+    kind = str(row.get("type") or "")
+    if kind not in ("displacement", "remote_displacement"):
+        # 나머지 종류는 좌표계를 안 쓴다(원통은 원통의 축, 면 지지는 면을 따른다).
+        return
+    if name.lower() in GLOBAL_FRAMES or name in known:
+        return
+    made.refused.append(
+        Note(
+            f"구속 「{row.get('name') or kind}」",
+            f"가리키는 좌표계 「{name}」 가 점 파일에 없습니다",
+        )
+    )
+
+
+def _triple(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, list | tuple) or len(value) != 3:
+        return None
+    made = [_number(one) for one in value]
+    if any(one is None for one in made):
+        return None
+    return (float(made[0]), float(made[1]), float(made[2]))  # type: ignore[arg-type]
 
 
 def _constraint(row: dict[str, Any], regions: set[str], made: Conditions) -> None:
@@ -246,23 +358,40 @@ def _mesh_hint(row: dict[str, Any], made: Conditions) -> None:
 
 
 def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
-    """하중 — **모달에서는 답을 바꾸지 않는다.**
+    """하중 — **선응력 모달이면 걸고, 그냥 모달이면 넘긴다.**
 
-    선응력 모달(`static` → `modal`)이 붙기 전까지는 걸 자리가 없다. 조용히 버리면 사람은
+    조여 놓고 떠는 상태(볼트 예압 · 원심력)를 보려면 정적 해석을 먼저 풀어야 한다. 선응력이
+    아니면 하중은 고유진동수를 바꾸지 않으므로 그 사실을 적고 넘어간다 — 조용히 버리면 사람은
     「압력을 줬는데 왜 주파수가 같지」 를 묻지도 못한다.
     """
     name = str(row.get("name") or "이름 없는 하중")
     kind = str(row.get("type") or "")
-    if recipe == "modal" and kind in _INERT_IN_MODAL:
+    if kind not in _INERT_IN_MODAL:
+        made.refused.append(Note(f"하중 「{name}」", f"모르는 하중입니다: {kind}"))
+        return
+    if recipe == "modal" and not made.analysis.prestressed:
         made.skipped.append(
             Note(
                 f"하중 「{name}」({kind})",
-                "모달에서는 하중이 고유진동수를 바꾸지 않습니다"
-                " — 선응력 해석이 붙으면 쓰입니다",
+                "모달에서는 하중이 고유진동수를 바꾸지 않습니다 — 선응력을 켜면 쓰입니다",
             )
         )
         return
-    made.refused.append(Note(f"하중 「{name}」", f"아직 걸 수 없는 하중입니다: {kind}"))
+
+    direction = row.get("direction")
+    made.loads.append(
+        Load(
+            name=name,
+            kind=kind,
+            region=str(row.get("on") or ""),
+            cs=str(row.get("cs") or "global"),
+            magnitude=_number(row.get("magnitude")),
+            unit=str(row.get("unit") or ""),
+            direction=_triple(direction),
+            normal=direction == "normal",
+            preload=_number(row.get("preload")),
+        )
+    )
 
 
 def _initial(row: dict[str, Any], recipe: str, made: Conditions) -> None:
@@ -317,3 +446,25 @@ def _number(value: Any) -> float | None:
 
 def _hold(value: Any) -> Hold:
     return "free" if str(value or "fixed").strip() == "free" else "fixed"
+
+
+def euler_xyz(frame: Frame) -> tuple[float, float, float]:
+    """좌표계의 축 → **X → Y → Z 고정축 회전각**(도). CompCore 의 규칙과 같은 순서다.
+
+    Mechanical 에는 축 벡터를 바로 적는 칸이 없고 회전으로 세운다. 돌려 보낸 각을 다시 행렬로
+    만들면 원래 축이 나와야 한다 — 시험이 그것을 본다(둘이 어긋나면 성분이 딴 방향으로 걸리고,
+    그 사실은 결과를 봐도 모른다).
+    """
+    import math
+
+    # 열이 각 축인 회전행렬 R = [x y z] 이고, 고정축 X → Y → Z 는 R = Rz·Ry·Rx 다.
+    # 그래서 R[2][0] = -sin(pitch) · R[2][1] = cos(pitch)sin(roll) ·
+    # R[1][0] = sin(yaw)cos(pitch) 다.
+    pitch = math.asin(max(-1.0, min(1.0, -frame.x_axis[2])))
+    if abs(math.cos(pitch)) > 1e-9:
+        roll = math.atan2(frame.y_axis[2], frame.z_axis[2])
+        yaw = math.atan2(frame.x_axis[1], frame.x_axis[0])
+    else:  # pragma: no cover - 짐벌락(90도)에서는 한 쌍으로만 적을 수 있다
+        roll = math.atan2(-frame.z_axis[1], frame.y_axis[1])
+        yaw = 0.0
+    return tuple(round(math.degrees(one), 9) for one in (roll, pitch, yaw))  # type: ignore[return-value]

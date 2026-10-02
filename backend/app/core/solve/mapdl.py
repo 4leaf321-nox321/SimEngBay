@@ -22,12 +22,15 @@ from app.core.stages import ArtifactSpec, StageFailure, StageResult
 RESULT_NAME = "file.rst"
 OUTPUT_NAME = "solve.out"
 
-#: `solve.out` 에서 이것이 보이면 라이선스 문제다 — 고칠 곳이 다르므로 따로 센다.
+#: **오류 줄에** 이것이 보이면 라이선스 문제다 — 고칠 곳이 다르므로 따로 센다.
+#:
+#: 로그 전체를 보면 안 된다: MAPDL 은 **머리말에 늘 라이선스를 적는다**(「Ansys Student
+#: License」). 그래서 선응력 재시작이 실패한 것을 「라이선스」 로 읽어 사람을 엉뚱한 데로
+#: 보냈다(실측 2026-10-02 — 진짜 원인은 재시작 파일이 없다는 것이었다).
 _LICENSE_MARKS = (
     "license",
     "licence",
     "ANSYSLI",
-    "not available",
 )
 #: 솔버가 스스로 적는 오류 표식.
 _ERROR_MARKS = ("*** ERROR ***", "*** FATAL")
@@ -56,6 +59,46 @@ def _root_from_env(version: int) -> Path | None:
     return Path(value) if value else None
 
 
+def _run_deck(
+    workdir: Path,
+    dat: Path,
+    *,
+    version: int,
+    root: Path | None,
+    processes: int,
+    timeout_seconds: int,
+    output_name: str,
+) -> str:
+    """덱 하나를 MAPDL 로 돌리고 로그를 돌려준다. **실패하면 여기서 멈춘다.**"""
+    binary = executable(root, version)
+    if not binary.is_file():
+        raise StageFailure(
+            "solver_failed",
+            f"솔버 실행 파일이 없습니다: {binary}",
+            details={"executable": str(binary)},
+        )
+    command = [str(binary), "-b", "-np", str(processes), "-i", dat.name, "-o", output_name]
+    try:
+        finished = subprocess.run(
+            command,
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as failure:
+        raise StageFailure(
+            "timeout", f"솔버가 {timeout_seconds // 60}분 안에 끝나지 않았습니다."
+        ) from failure
+
+    output = workdir / output_name
+    log = output.read_text(encoding="utf-8", errors="replace") if output.is_file() else ""
+    if _has(log, _ERROR_MARKS):
+        raise _diagnose(log, finished.returncode, [])
+    return log
+
+
 def solve(
     workdir: Path,
     *,
@@ -64,7 +107,23 @@ def solve(
     processes: int = 2,
     timeout_seconds: int = 10800,
 ) -> StageResult:
-    """`model.dat` 를 풀고 `.rst` 를 남긴다."""
+    """`model.dat` 를 풀고 `.rst` 를 남긴다.
+
+    **선응력이면 정적 덱이 먼저다.** 모달의 덱은 재시작(linear perturbation)이라 앞선 정적
+    해석의 `.rdb` · `.rnnn` 이 같은 폴더에 있어야 한다 — 없으면 MAPDL 이 「multiframe restart
+    파일이 없다」 로 죽는다(실측 2026-10-02). 모델링이 `static.dat` 를 남겼으면 그것부터 푼다.
+    """
+    upstream = workdir / "static.dat"
+    if upstream.is_file():
+        _run_deck(
+            workdir,
+            upstream,
+            version=version,
+            root=root,
+            processes=processes,
+            timeout_seconds=timeout_seconds,
+            output_name="static.out",
+        )
     dat = workdir / "model.dat"
     if not dat.is_file():
         raise StageFailure(
@@ -122,10 +181,27 @@ def _has(log: str, marks: tuple[str, ...]) -> bool:
     return any(mark.lower() in lowered for mark in marks)
 
 
+def _error_text(log: str) -> str:
+    """오류 · 치명 블록만 모은다 — 표식이 보인 줄부터 빈 줄까지.
+
+    **머리말은 보지 않는다.** 거기에는 늘 라이선스 이름이 적혀 있다.
+    """
+    found: list[str] = []
+    keeping = False
+    for line in log.splitlines():
+        if any(mark.lower() in line.lower() for mark in _ERROR_MARKS):
+            keeping = True
+        elif keeping and not line.strip():
+            keeping = False
+        if keeping:
+            found.append(line)
+    return "\n".join(found)
+
+
 def _diagnose(log: str, return_code: int, artifacts: list[ArtifactSpec]) -> StageFailure:
     """왜 결과가 없나. **라이선스를 따로 가른다** — 그것은 워커 수나 라이선스 서버의 일이다."""
     tail = "\n".join(line for line in log.splitlines()[-40:] if line.strip())
-    if _has(log, _LICENSE_MARKS):
+    if _has(_error_text(log), _LICENSE_MARKS):
         return StageFailure(
             "license",
             "솔버가 라이선스를 받지 못했습니다. "

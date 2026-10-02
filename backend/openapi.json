@@ -3552,6 +3552,70 @@
         ],
         "title": "ChangePasswordRequest"
       },
+      "ConditionLine": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "skipped",
+              "refused"
+            ],
+            "title": "Status",
+            "default": "applied"
+          },
+          "why": {
+            "type": "string",
+            "title": "Why",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label"
+        ],
+        "title": "ConditionLine",
+        "description": "CAD 가 보낸 조건 한 줄 — **반영하나 안 하나**를 화면이 그대로 읽는다."
+      },
+      "ConditionsOut": {
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ConditionLine"
+            },
+            "type": "array",
+            "title": "Lines",
+            "default": []
+          },
+          "unit_system": {
+            "type": "string",
+            "title": "Unit System",
+            "default": ""
+          },
+          "prestressed": {
+            "type": "boolean",
+            "title": "Prestressed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ConditionsOut",
+        "description": "작업 하나에 딸린 조건 전부.\n\n**없으면 `lines` 가 비어 있다** — 사람이 준 스펙으로 돈 것이다."
+      },
       "CreateAccountRequest": {
         "properties": {
           "email": {
@@ -4901,6 +4965,14 @@
               }
             ],
             "title": "Worker Id"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/ConditionsOut",
+            "default": {
+              "lines": [],
+              "unit_system": "",
+              "prestressed": false
+            }
           }
         },
         "type": "object",

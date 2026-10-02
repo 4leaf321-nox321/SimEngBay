@@ -94,6 +94,16 @@ class UnitSystem:
         return volume * self.length_m**3
 
     @property
+    def length_label(self) -> str:
+        """길이 단위 이름 — Mechanical 에 값을 줄 때 **단위를 붙여** 준다(`Quantity`)."""
+        return "mm" if self.length_m < 1.0 else "m"
+
+    @property
+    def foundation_label(self) -> str:
+        """기초 강성(응력/길이)의 단위 이름 — 탄성 지지가 쓴다."""
+        return "N mm^-3" if self.length_m < 1.0 else "N m^-3"
+
+    @property
     def length_mm(self) -> float:
         """길이 1 = ? mm. **CAD 의 지문이 늘 mm 라서** 견주기 전에 이 값으로 옮긴다
         (`length_units.regions`)."""

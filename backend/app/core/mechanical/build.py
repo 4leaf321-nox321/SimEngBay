@@ -24,10 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.core import conditions as condition_model
 from app.core import materials, units
 from app.core.bodies import BodyRecord, match_bodies
 from app.core.regions import FaceRecord, match_regions
-from app.core.spec import MaterialSpec, ModalSpec
+from app.core.spec import RIGID_BODY_MODES, MaterialSpec, ModalSpec
 from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,11 @@ def _is_license_problem(failure: Exception) -> bool:
 
 #: CAD 플랫폼이 보낸 영역 지문. 구속이 있는 스펙은 이것이 있어야 돈다.
 TOPOLOGY_NAME = "topology.json"
+
+#: **이 작업이 자유-자유인가**를 뒤 단계에 넘기는 자리. 스펙만 보면 알 수 없다 — 구속이
+#: CAD 조건에만 있을 수 있고(`conditions_from="cad"`), 그때 결과가 「자유-자유」 로 적히면
+#: 강체 모드 수를 세는 경고까지 거짓이 된다(실측 2026-10-02).
+BOUNDARY_NAME = "boundary.json"
 
 
 def build(
@@ -68,15 +74,25 @@ def build(
     # **CAD 가 보낸 물성**. 읽을 수 없으면 여기서 멈춘다 — 빠진 물성은 Mechanical 이 기본값
     # (구조용 강)으로 풀고, 그 사실은 고유진동수가 틀린 뒤에야 드러난다.
     given = _declared_materials(spec, workdir, system)
+    # **CAD 가 보낸 조건** — 못 거는 것이 하나라도 있으면 여기서 멈춘다(Mechanical 을 띄우기
+    # 전에). 조용히 빼면 「조건을 넣었는데 왜 결과가 같지」 를 사람이 물을 자리가 없다.
+    given_conditions = _declared_conditions(spec, topology)
 
     app = _start_app(version)
     try:
         _use_unit_system(app, system)
         bodies = _import_geometry(app, step)
         used = _apply_material(spec, bodies, system, given, topology)
-        analysis = _add_modal(app, spec)
+        constrained = bool(given_conditions.constraints or spec.constraints)
+        analysis = _add_modal(app, spec, constrained=constrained)
+        _write_boundary(workdir, constrained=constrained, spec=spec)
         _guard_solver_units(analysis, system)
-        regions = _apply_constraints(app, spec, workdir, bodies, analysis)
+        if given_conditions.constraints or given_conditions.contacts:
+            regions = _apply_given_conditions(
+                app, given_conditions, system, topology or {}, bodies, analysis
+            )
+        else:
+            regions = _apply_constraints(app, spec, workdir, bodies, analysis)
         mass = _mass_kg(used, bodies, system)
         nodes, elements = _mesh(app, spec)
 
@@ -108,7 +124,8 @@ def build(
                 "bodies": len(bodies),
                 "nodes": nodes,
                 "elements": elements,
-                "modes_requested": spec.modes_to_find,
+                # **실제로 요청한 수**다 — 구속이 CAD 조건에만 있으면 스펙의 수와 다르다.
+                "modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES),
                 "ansys_version": version,
                 "constrained_regions": regions,
                 "mass_kg": mass,
@@ -116,6 +133,16 @@ def build(
                 "solver_unit_system": system.solver,
                 # **무슨 물성으로 돌았나.** 적지 않으면 「CAD 가 보낸 재료로 돈 것인지」 를
                 # 나중에 알 방법이 없다 — 재료를 훑는 DOE 에서 그것이 결과의 절반이다.
+                "conditions_from": "cad" if given_conditions.constraints else "spec",
+                **(
+                    {
+                        "conditions_skipped": " · ".join(
+                            one.what for one in given_conditions.skipped
+                        )
+                    }
+                    if given_conditions.skipped
+                    else {}
+                ),
                 "material": " · ".join(used.names),
                 "material_from": used.source,
                 **(
@@ -232,6 +259,31 @@ def _declared_materials(
             "바꾸세요.",
             details={"material": failure.material, "reason": failure.reason},
         ) from failure
+
+
+def _declared_conditions(
+    spec: ModalSpec, topology: dict[str, Any] | None
+) -> condition_model.Conditions:
+    """CAD 가 보낸 조건 — 사람이 「내 스펙으로」 라고 했으면 안 읽는다
+    (`conditions_from="spec"`).
+
+    **못 거는 조건이 있으면 멈춘다.** 구속이 빠지면 모드가 통째로 달라지는데, 그 사실은
+    고유진동수를 보고도 알 수 없다. 모달에서 답을 안 바꾸는 것(하중 · 환경 온도)은 멈추지 않고
+    요약에 적는다 — 그래야 「압력을 줬는데 왜 같지」 를 사람이 읽을 수 있다.
+    """
+    if spec.conditions_from == "spec" or topology is None:
+        return condition_model.Conditions()
+    found = condition_model.read(topology, recipe=spec.recipe)
+    if found.refused:
+        raise StageFailure(
+            "region_unresolved",
+            "CAD 가 보낸 조건 중 아직 걸 수 없는 것이 있습니다: "
+            + " · ".join(f"{one.what} — {one.why}" for one in found.refused),
+            details={"refused": [{"what": one.what, "why": one.why} for one in found.refused]},
+        )
+    for note in found.skipped:
+        logger.info("조건 건너뜀 %s — %s", note.what, note.why)
+    return found
 
 
 def _declared_system(workdir: Path) -> units.UnitSystem:
@@ -462,10 +514,30 @@ def _body_records(bodies: list[Any], system: units.UnitSystem) -> list[BodyRecor
     return found
 
 
-def _add_modal(app: Any, spec: ModalSpec) -> Any:
+def _add_modal(app: Any, spec: ModalSpec, *, constrained: bool) -> Any:
+    """모달 해석 하나. **찾을 모드 수는 구속 여부로 갈린다** — 자유-자유면 강체 6개를 얹는다.
+
+    구속이 CAD 조건에만 있을 수 있으므로 스펙이 아니라 **실제로 건 것**으로 센다.
+    """
     analysis = app.Model.AddModalAnalysis()
-    analysis.AnalysisSettings.MaximumModesToFind = spec.modes_to_find
+    analysis.AnalysisSettings.MaximumModesToFind = spec.modes + (
+        0 if constrained else RIGID_BODY_MODES
+    )
     return analysis
+
+
+def _write_boundary(workdir: Path, *, constrained: bool, spec: ModalSpec) -> None:
+    """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**"""
+    (workdir / BOUNDARY_NAME).write_text(
+        json.dumps(
+            {
+                "constrained": constrained,
+                "modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _mass_kg(used: Applied, bodies: list[Any], system: units.UnitSystem) -> float | None:
@@ -563,21 +635,183 @@ def _apply_constraints(
             },
         )
 
-    selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
     applied: list[str] = []
     for constraint in spec.constraints:
-        ids = matched.faces[constraint.region]
-        named = app.Model.AddNamedSelection()
-        named.Name = constraint.region
-        info = app.ExtAPI.SelectionManager.CreateSelectionInfo(selection_type.GeometryEntities)
-        info.Ids = ids
-        named.Location = info
-        # 지금 거는 것은 완전 고정 하나다. 원통 구속 · 볼트 예압은 조건 모델이 오면 붙는다.
+        named = _named_selection(app, constraint.region, matched.faces[constraint.region])
         support = analysis.AddFixedSupport()
         support.Location = named
         applied.append(constraint.region)
-        logger.info("구속 %s ← 면 %s", constraint.region, ids)
+        logger.info("구속 %s ← 면 %s", constraint.region, matched.faces[constraint.region])
     return applied
+
+
+def _named_selection(app: Any, name: str, ids: list[int]) -> Any:
+    """면 번호들을 이름 붙인 선택으로 — 구속 · 접촉이 이것을 가리킨다."""
+    selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
+    named = app.Model.AddNamedSelection()
+    named.Name = name
+    info = app.ExtAPI.SelectionManager.CreateSelectionInfo(selection_type.GeometryEntities)
+    info.Ids = ids
+    named.Location = info
+    return named
+
+
+def _apply_given_conditions(
+    app: Any,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    topology: dict[str, Any],
+    bodies: list[Any],
+    analysis: Any,
+) -> list[str]:
+    """**CAD 가 보낸 구속 · 접촉을 건다** — 종류마다 Mechanical 의 짝으로.
+
+    매핑표는 우리 것이다(CompCore 는 솔버를 모른다). 칸 이름은 **실측으로 쟀다**
+    (2026-10-02, 2025 R2): `Radial` · `Axial` · `Tangential` · `XComponent` ·
+    `FoundationStiffness` · `Behavior` · `ContactType`.
+    """
+    wanted = sorted(
+        {one.region for one in given.constraints}
+        | {one.source for one in given.contacts}
+        | {one.target for one in given.contacts}
+    )
+    if not wanted:
+        return []
+
+    matched = match_regions(topology, _face_records(bodies), wanted_regions=wanted)
+    if not matched.ok:
+        raise StageFailure(
+            "region_unresolved",
+            "CAD 가 보낸 조건의 자리를 형상에서 찾지 못했습니다: "
+            + " · ".join(
+                f"{one.region}[{one.index}] {one.reason}" for one in matched.failures
+            ),
+            details={"failures": [one.region for one in matched.failures]},
+        )
+
+    places = {name: _named_selection(app, name, matched.faces[name]) for name in wanted}
+    applied: list[str] = []
+    for constraint in given.constraints:
+        _one_constraint(analysis, constraint, places[constraint.region], system)
+        applied.append(f"{constraint.kind}:{constraint.region}")
+        logger.info("구속 %s(%s) ← %s", constraint.name, constraint.kind, constraint.region)
+    for contact in given.contacts:
+        _one_contact(app, contact, places[contact.source], places[contact.target])
+        applied.append(f"contact:{contact.kind}")
+        logger.info(
+            "접촉 %s(%s) %s ↔ %s", contact.name, contact.kind, contact.source, contact.target
+        )
+    return applied
+
+
+def _one_constraint(
+    analysis: Any,
+    constraint: condition_model.Constraint,
+    place: Any,
+    system: units.UnitSystem,
+) -> None:
+    """구속 하나를 Mechanical 에. **못 거는 종류는 여기 오지 않는다**(조건 층이 막는다)."""
+    kind = constraint.kind
+    try:
+        if kind == "fixed_support":
+            support = analysis.AddFixedSupport()
+        elif kind == "frictionless":
+            support = analysis.AddFrictionlessSupport()
+        elif kind == "compression_only":
+            support = analysis.AddCompressionOnlySupport()
+        elif kind == "cylindrical":
+            support = analysis.AddCylindricalSupport()
+        elif kind == "elastic_support":
+            support = analysis.AddElasticSupport()
+        elif kind == "displacement":
+            support = analysis.AddDisplacement()
+        elif kind == "remote_displacement":
+            support = analysis.AddRemoteDisplacement()
+        else:  # pragma: no cover - 조건 층이 먼저 막는다
+            raise StageFailure("internal", f"못 거는 구속입니다: {kind}")
+        support.Location = place
+
+        if kind == "cylindrical":
+            holds = _global("Ansys").Mechanical.DataModel.Enums.FixedOrFree
+            support.Radial = holds.Fixed if constraint.radial == "fixed" else holds.Free
+            support.Axial = holds.Fixed if constraint.axial == "fixed" else holds.Free
+            support.Tangential = (
+                holds.Fixed if constraint.tangential == "fixed" else holds.Free
+            )
+        elif kind == "elastic_support":
+            if constraint.stiffness is None:
+                raise StageFailure(
+                    "internal", f"탄성 지지 「{constraint.name}」 에 기초 강성이 없습니다"
+                )
+            quantity = _global("Quantity")
+            support.FoundationStiffness = quantity(
+                f"{constraint.stiffness} [{system.foundation_label}]"
+            )
+        elif kind in ("displacement", "remote_displacement"):
+            _components(support, constraint, system, rotations=kind == "remote_displacement")
+    except StageFailure:
+        raise
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise _translated(
+            failure, "internal", f"구속 「{constraint.name}」({kind})을 걸지 못했습니다"
+        ) from failure
+
+
+def _components(
+    support: Any,
+    constraint: condition_model.Constraint,
+    system: units.UnitSystem,
+    *,
+    rotations: bool,
+) -> None:
+    """성분마다 **자유 · 고정 · 변위량**. `None` 은 건드리지 않는다(기본이 자유다).
+
+    0 은 고정이고 그 밖은 그만큼 움직인다 — 둘을 헷갈리면 구속이 통째로 바뀐다.
+    """
+    quantity = _global("Quantity")
+    axes = ("XComponent", "YComponent", "ZComponent")
+    for name, value in zip(axes, constraint.components, strict=True):
+        if value is None:
+            continue
+        getattr(support, name).Output.DiscreteValues = [
+            quantity(f"{value} [{system.length_label}]")
+        ]
+    if not rotations:
+        return
+    for name, value in zip(
+        ("RotationX", "RotationY", "RotationZ"), constraint.rotations, strict=True
+    ):
+        if value is None:
+            continue
+        getattr(support, name).Output.DiscreteValues = [quantity(f"{value} [deg]")]
+
+
+def _one_contact(app: Any, contact: condition_model.Contact, source: Any, target: Any) -> None:
+    """접촉 한 쌍 — `ConnectionGroup` 아래 `ContactRegion`(실측한 자리)."""
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    try:
+        group = app.Model.Connections.AddConnectionGroup()
+        region = group.AddContactRegion()
+        region.SourceLocation = source
+        region.TargetLocation = target
+        region.ContactType = getattr(enums.ContactType, _CONTACT_TYPES[contact.kind])
+        if contact.kind == "frictional" and contact.friction is not None:
+            region.FrictionCoefficient = contact.friction
+        region.Name = contact.name
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise _translated(
+            failure, "internal", f"접촉 「{contact.name}」({contact.kind})을 걸지 못했습니다"
+        ) from failure
+
+
+#: 중립 이름 → Mechanical 의 `ContactType` 멤버(실측 2026-10-02).
+_CONTACT_TYPES = {
+    "bonded": "Bonded",
+    "no_separation": "NoSeparation",
+    "frictional": "Frictional",
+    "frictionless": "Frictionless",
+    "rough": "Rough",
+}
 
 
 def _mesh(app: Any, spec: ModalSpec) -> tuple[int, int]:

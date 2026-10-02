@@ -28,6 +28,23 @@ logger = logging.getLogger(__name__)
 
 RESULT_NAME = "result.json"
 
+#: 모델링이 남긴 「무엇으로 돌았나」. **스펙만 보면 알 수 없다** — 구속이 CAD 조건에만 있을 수
+#: 있다(`app/core/mechanical/build.py` 의 `BOUNDARY_NAME`).
+BOUNDARY_NAME = "boundary.json"
+
+
+def _free_free(spec: ModalSpec, workdir: Path) -> bool:
+    """자유-자유로 돌았나. 모델링이 남긴 파일이 정본이고, 없으면 스펙으로 본다(옛 작업)."""
+    path = workdir / BOUNDARY_NAME
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            return not bool(loaded.get("constrained"))
+        except (OSError, ValueError):
+            logger.warning("%s 를 읽지 못했습니다 — 스펙으로 봅니다", BOUNDARY_NAME)
+    return spec.is_free_free
+
+
 #: 이보다 낮으면 강체 모드로 본다. 수치 오차 때문에 0 이 정확히 0 으로 안 나온다
 #: (실측: 여섯 번째가 0.0023 Hz).
 RIGID_BODY_HZ = 1.0
@@ -50,6 +67,7 @@ def extract(
     if not rst.is_file():
         raise StageFailure("solver_failed", f"결과 파일이 없습니다: {result_name}")
 
+    free_free = _free_free(spec, workdir)
     frequencies, units, nodes, elements = _read(rst)
     if not frequencies:
         raise StageFailure("solver_failed", "결과 파일에 모드가 없습니다.")
@@ -57,7 +75,7 @@ def extract(
     modes: list[dict[str, Any]] = []
     elastic_index = 0
     for index, value in enumerate(frequencies):
-        rigid = spec.is_free_free and value < RIGID_BODY_HZ and index < RIGID_BODY_MODES
+        rigid = free_free and value < RIGID_BODY_HZ and index < RIGID_BODY_MODES
         if not rigid:
             elastic_index += 1
         modes.append(
@@ -94,7 +112,7 @@ def extract(
     )
     result: dict[str, Any] = {
         "recipe": "modal",
-        "boundary": "free-free" if spec.is_free_free else "constrained",
+        "boundary": "free-free" if free_free else "constrained",
         "units": units,
         # 모드 형상의 크기는 질량 정규화된 값이다 — 절대 변위가 아니다. 3단계의 뷰어가 이 말을
         # 읽고 「배율」 을 말한다.
@@ -105,7 +123,7 @@ def extract(
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         "participation": {name: value for name, value in ratios.items()},
     }
-    if spec.is_free_free and rigid_found != RIGID_BODY_MODES:
+    if free_free and rigid_found != RIGID_BODY_MODES:
         # **세어 보고 다르면 적어 둔다.** 다중 바디에서 접촉이 빠지면 강체 모드가 6개가 아니라
         # 12개(바디마다 6개)로 나온다 — 값은 그럴듯한데 모델이 붙어 있지 않은 상태다.
         result["warning"] = (

@@ -199,9 +199,12 @@ def match_regions(
     regions: dict[str, Any] = topology.get("regions") or {}
     unresolved_by_cad: set[str] = set(topology.get("unresolved") or [])
     scale = model_scale(topology)
-    taken: set[int] = set()
 
     for name in wanted_regions if wanted_regions is not None else list(regions):
+        # **집은 면은 영역 안에서만 다시 안 쓴다.** 영역끼리는 겹칠 수 있다 — CAD 의 선택
+        # 그룹은 사람이 짓는 것이라 같은 면이 두 조건에 들어가는 일이 정상이다(고정면이
+        # 접촉면이기도 한 자리). 전역으로 막으면 **뒤에 오는 영역이 애먼 이유로 실패한다.**
+        taken: set[int] = set()
         if name in unresolved_by_cad:
             # CAD 가 이미 못 풀었다고 적어 보냈다. 그 이름으로는 형상에 자리가 없다.
             result.failures.append(

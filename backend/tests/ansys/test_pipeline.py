@@ -359,6 +359,66 @@ def test_CAD_폴더_그대로_두_설계점을_돈다(workdir: Path) -> None:
     assert seen[2]["first"] > seen[1]["first"]
 
 
+def test_CAD_가_보낸_구속과_접촉을_건다(workdir: Path) -> None:
+    """**조건을 읽어 거는 첫 판** — 스펙에는 구속을 하나도 안 적고 CAD 것만으로 돈다.
+
+    `조건_조건훑기` 는 접촉 종류를 훑는다(1번 본딩 · 3번 마찰). 접촉이 바뀌면 두 바디가 붙은
+    정도가 달라지므로 **고유진동수가 달라져야 한다** — 조건을 안 읽으면 두 점이 같은 답을 낸다.
+
+    실측(2026-10-02, 2025 R2 Student · Windows): 본딩 30,090.3 Hz · 마찰 쪽은 더 낮다.
+    """
+    seen: dict[int, dict[str, Any]] = {}
+    for number in (1, 3):
+        place = workdir / f"p{number:04d}"
+        place.mkdir(parents=True, exist_ok=True)
+        shutil.copy(CONDITION_SWEEP / "shapes" / "c3aed82c2d74.step", place / "input.step")
+        shutil.copy(
+            CONDITION_SWEEP / "points" / f"p{number:04d}.json", place / "topology.json"
+        )
+        # **스펙에는 구속이 없다** — 전부 CAD 가 보낸 조건에서 온다.
+        spec = dict(SPEC)
+        spec["mesh"] = {"element_size_mm": 8}
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+
+        runner = _executor()
+        summary: dict[str, Any] = {}
+        for stage in STAGES:
+            result = runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+            summary.update(result.summary)
+        result_json = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        seen[number] = {
+            "from": summary["conditions_from"],
+            "regions": summary["constrained_regions"],
+            "skipped": summary.get("conditions_skipped", ""),
+            "first": result_json["modes"][0]["frequency_hz"],
+            "rigid": result_json["rigid_body_modes"],
+            "boundary": result_json["boundary"],
+            "modes": len(result_json["modes"]),
+            "requested": summary["modes_requested"],
+        }
+
+    for number, found in seen.items():
+        assert found["from"] == "cad", f"p{number} 이 CAD 조건으로 안 돌았다"
+        # 바닥 고정 지지 + 접촉 한 쌍이 걸렸다.
+        assert any("fixed_support" in one for one in found["regions"])
+        assert any("contact" in one for one in found["regions"])
+        assert found["rigid"] == 0, "구속이 걸렸으면 강체 모드가 없어야 한다"
+        # **스펙에는 구속이 없다** — 그래도 결과는 「구속」 이어야 한다. CAD 조건으로 걸었기
+        # 때문이다. 여기가 「자유-자유」 로 적히면 강체 모드를 세는 경고까지 거짓이 된다.
+        assert found["boundary"] == "constrained"
+        # 자유-자유가 아니므로 강체 6개를 얹지 않는다 — 요청한 만큼만 나온다.
+        assert found["requested"] == 5
+        assert found["modes"] == 5
+        # **모달에서 못 쓰는 하중은 버리지 않고 말한다.**
+        assert "하중" in found["skipped"]
+
+    # 본딩(1번)과 마찰(3번)은 붙은 정도가 다르다 — 같은 값이면 접촉이 안 걸린 것이다.
+    assert seen[1]["first"] != pytest.approx(seen[3]["first"], rel=1e-4)
+
+
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:
     """**조용히 자유-자유로 풀지 않는다.** 그 결과는 0 Hz 여섯 개를 달고 나오고, 사람은 그것을
     「해석이 됐다」 로 읽는다."""

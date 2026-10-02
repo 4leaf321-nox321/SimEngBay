@@ -60,6 +60,9 @@ class ModalSpec(BaseModel):
     recipe: Literal["modal"] = "modal"
     material: MaterialSpec
     material_from: Literal["cad", "spec"] = "cad"
+    conditions_from: Literal["cad", "spec"] = "cad"
+    """구속 · 접촉을 어디서 가져오나. `cad` 면 **CAD 가 보낸 조건이 먼저**고, 없으면 아래
+    `constraints` 를 쓴다. `spec` 은 「내가 고른 영역만 완전 고정으로」 다."""
     """물성을 어디서 가져오나. `cad` 면 **CAD 가 보낸 것이 먼저**고 없으면 `material` 을 쓴다.
 
     `spec` 은 「내가 넣은 값으로 돌려라」 다 — CAD 가 보낸 것을 일부러 무시한다. 어느 쪽으로

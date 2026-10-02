@@ -202,23 +202,43 @@ def to_out(db: Session, simulation: Simulation) -> SimulationOut:
 
 
 def _conditions_of(simulation: Simulation) -> ConditionsOut:
-    """CAD 가 보낸 조건을 화면이 읽을 줄로 편다.
-
-    **반영한 것 · 넘긴 것 · 막은 것**을 그대로 보여 준다 — 조건을 넣었는데 결과가 같을 때,
-    그것이 무시된 것인지 원래 그런 것인지 사람이 알 수 있어야 한다.
-    """
+    """작업 폴더의 점 파일을 찾아 조건 줄로 편다. **못 읽으면 비워 둔다.**"""
     hex_id = simulation.id.hex
     path = work_root() / hex_id[:2] / hex_id / TOPOLOGY_NAME
     if not path.is_file():
         return ConditionsOut()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        spec = parse_spec(simulation.spec)
-        found = condition_model.read(payload, recipe=spec.recipe)
-        system = units.declared_in(payload)
+        recipe = parse_spec(simulation.spec).recipe
     except (OSError, ValueError, ValidationError):
         logger.warning("조건을 읽지 못했습니다 — 화면에는 비워 둡니다", exc_info=True)
         return ConditionsOut()
+    return conditions_out(payload, recipe=recipe)
+
+
+def conditions_out(payload: dict[str, Any], *, recipe: str) -> ConditionsOut:
+    """CAD 가 보낸 조건을 화면이 읽을 줄로 편다.
+
+    **반영한 것 · 넘긴 것 · 막은 것**을 그대로 보여 준다 — 조건을 넣었는데 결과가 같을 때,
+    그것이 무시된 것인지 원래 그런 것인지 사람이 알 수 있어야 한다.
+    """
+    try:
+        found = condition_model.read(payload, recipe=recipe)
+        system = units.declared_in(payload)
+    except (ValueError, ValidationError):
+        logger.warning("조건을 읽지 못했습니다 — 화면에는 비워 둡니다", exc_info=True)
+        return ConditionsOut()
+
+    def faces(region: str) -> str:
+        """그 영역이 **면 몇 개**로 풀렸나 — 없으면 빈 글자.
+
+        **면 수가 안 보이면 줄어든 것을 모른다.** CAD 의 선택 규칙 `near` 가 2026-10-02
+        (CompCore v0.4.0)부터 「가장 가까운 **하나**」 로 바뀌었다 — 볼트 구멍 넷을 잡던 규칙이
+        하나만 잡아도 이름(`fixed_support · bolt_holes`)은 똑같다. 그러면 주파수만 달라지고
+        화면은 아무 말도 안 한다.
+        """
+        group = (payload.get("regions") or {}).get(region)
+        return f" · 면 {len(group)}" if isinstance(group, list) else ""
 
     lines: list[ConditionLine] = []
     for frame in found.frames:
@@ -232,7 +252,9 @@ def _conditions_of(simulation: Simulation) -> ConditionsOut:
     for rule in found.constraints:
         lines.append(
             ConditionLine(
-                kind="constraint", label=rule.name, detail=f"{rule.kind} · {rule.region}"
+                kind="constraint",
+                label=rule.name,
+                detail=f"{rule.kind} · {rule.region}{faces(rule.region)}",
             )
         )
     for pair in found.contacts:
@@ -246,7 +268,11 @@ def _conditions_of(simulation: Simulation) -> ConditionsOut:
     for load in found.loads:
         size = f"{load.magnitude:g} {load.unit}" if load.magnitude is not None else ""
         lines.append(
-            ConditionLine(kind="load", label=load.name, detail=f"{load.kind} {size}".strip())
+            ConditionLine(
+                kind="load",
+                label=load.name,
+                detail=f"{load.kind} {size}".strip() + faces(load.region),
+            )
         )
     for hint in found.mesh_hints:
         if hint.element_size is not None:

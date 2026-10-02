@@ -12,9 +12,11 @@ import { useEffect, useState } from 'react'
 import { simulationApi } from '@/modules/simulations/api'
 import type {
   Artifact,
+  HarmonicResult as HarmonicResultData,
   SimulationResult,
   StaticResult as StaticResultData,
 } from '@/modules/simulations/api'
+import { HarmonicResult } from '@/modules/simulations/HarmonicResult'
 import { ModalResult } from '@/modules/simulations/ModalResult'
 import { StaticResult } from '@/modules/simulations/StaticResult'
 import { ApiError } from '@/shared/api/client'
@@ -27,13 +29,20 @@ interface Props {
   artifacts: Artifact[]
 }
 
+/** 화면이 받을 수 있는 결과 — **레시피마다 모양이 다르다.** */
+type AnyResult = SimulationResult | StaticResultData | HarmonicResultData
+
 /** **레시피로 가른다** — `SimulationResult.recipe` 가 넓은 글자형이라 좁혀 준다. */
-function isStatic(result: SimulationResult | StaticResultData): result is StaticResultData {
+function isStatic(result: AnyResult): result is StaticResultData {
   return result.recipe === 'static'
 }
 
+function isHarmonic(result: AnyResult): result is HarmonicResultData {
+  return result.recipe === 'harmonic'
+}
+
 export function ResultPanel({ simulationId, status, artifacts }: Props) {
-  const [result, setResult] = useState<SimulationResult | StaticResultData | null>(null)
+  const [result, setResult] = useState<AnyResult | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   useEffect(() => {
@@ -64,10 +73,16 @@ export function ResultPanel({ simulationId, status, artifacts }: Props) {
 
   if (status !== 'done') return null
   if (result) {
-    // **레시피마다 보는 것이 다르다** — 모달은 모드, 정적은 변형 · 응력.
-    return isStatic(result) ? (
-      <StaticResult simulationId={simulationId} result={result} artifacts={artifacts} />
-    ) : (
+    // **레시피마다 보는 것이 다르다** — 모달은 모드, 정적은 변형 · 응력, 조화는 곡선.
+    // **모르는 레시피를 모달로 보내지 않는다** — 모달 화면은 `modes` 를 바로 훑어서, 그 칸이
+    // 없는 결과(조화)를 주면 화면이 통째로 깨진다(실측).
+    if (isStatic(result)) {
+      return <StaticResult simulationId={simulationId} result={result} artifacts={artifacts} />
+    }
+    if (isHarmonic(result)) {
+      return <HarmonicResult result={result} />
+    }
+    return (
       <ModalResult
         simulationId={simulationId}
         result={result as SimulationResult}

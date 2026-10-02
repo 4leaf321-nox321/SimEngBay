@@ -128,17 +128,17 @@ def build(
         _write_boundary(workdir, constrained=constrained, spec=spec)
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
+        # **구속은 앞선 해석에 건다** — 모드 중첩의 모드는 모달에서 나오고, 선응력의 응력은
+        # 정적에서 나온다. 뒤 해석에 걸면 앞이 자유-자유로 풀려 **엉뚱한 모드로 응답을
+        # 쌓는다.**
+        # CAD 조건이든 스펙 구속이든 같은 자리여야 한다.
+        held = upstream if upstream is not None else analysis
         if given_conditions.constraints or given_conditions.contacts:
             regions, places = _apply_given_conditions(
-                app,
-                given_conditions,
-                system,
-                topology or {},
-                bodies,
-                upstream if upstream is not None else analysis,
+                app, given_conditions, system, topology or {}, bodies, held
             )
         else:
-            regions = _apply_constraints(app, spec, workdir, bodies, analysis)
+            regions = _apply_constraints(app, spec, workdir, bodies, held)
         if isinstance(spec, HarmonicSpec):
             # **조화 응답의 하중은 흔드는 힘이다** — 앞선 모달이 아니라 조화 쪽에 건다.
             # (모달에 걸면 덱에 `sfedele,all` 만 남아 응답이 전부 0 으로 나온다 — 실측.)
@@ -727,11 +727,19 @@ def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any) -> Any:
         # **`NumberOfModesToUse` 는 건드리지 않는다** — 모드 중첩에서는 앞선 모달이 그 수를
         # 정하므로 읽기 전용이다(실측 2026-10-02: "This property is parameterized and is
         # read-only"). 그래서 `_add_modal_for_harmonic` 에서 모드 수를 정한다.
-        #
-        # **감쇠가 없으면 공진에서 응답이 끝없이 커진다** — 스펙이 0 을 막지만 여기서도 건다.
         settings.DampingRatio = spec.damping_ratio
         initial = next(iter(harmonic.InitialConditions))
         initial.ModalICEnvironment = modal
+        # **감쇠를 실제로 거는 자리는 명령 조각이다.** 위의 `DampingRatio` 는 화면에만 남고
+        # **덱에는 한 줄도 안 적힌다** — 그 속성 · `ConstantDamping` ·
+        # `StructuralDampingCoefficient` 셋 다 해 봤지만 `dmprat`/`mdamp`/`alphad` 가
+        # 안 나왔다(실측 2026-10-02). 감쇠 없이 풀면 공진에서 응답이 끝없이 커지고, 그
+        # 큰 수는 그럴듯해 보인다. 해석에 붙인 조각은 `/solu` 안 `solve` **앞에** 적힌다
+        # (실측: 선응력 정적의 `RESCONTROL` 이 그 자리에 들어갔다).
+        snippet = harmonic.AddCommandSnippet()
+        snippet.AppendText(
+            f"! SimEngBay: constant damping ratio\nDMPRAT,{spec.damping_ratio:.6g}\n"
+        )
     except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
         raise _translated(
             failure, "internal", "조화 응답 설정을 세우지 못했습니다"
@@ -1263,11 +1271,30 @@ def _mesh(
         mesh.ElementSize = quantity(f"{whole.element_size} [{system.length_label}]")
         logger.info("메시 전체 크기 ← CAD %s %s", whole.element_size, system.length_label)
     _mesh_sizings(app, given, system, places, topology, bodies)
-    mesh.ElementOrder = (
+    wanted = (
         enums.ElementOrder.Quadratic
         if spec.mesh.order == "quadratic"
         else enums.ElementOrder.Linear
     )
+    # **같은 값이면 쓰지 않는다.** `ElementOrder` 가 간헐적으로 「This property is
+    # parameterized and is read-only」 로 거절된다(실측 2026-10-02: 같은 시험이 두 번은
+    # 멀쩡했고 세 번째에 났다). 기본값은 `ProgramControlled` 이고 평소에는 쓰기가 된다.
+    if mesh.ElementOrder != wanted:
+        try:
+            mesh.ElementOrder = wanted
+        except Exception as failure:
+            # 요청이 2차이고 지금이 `ProgramControlled` 면 **결과가 같다**(실측: 같은 형상 ·
+            # 같은 요소 크기에서 절점 1328 · 요소 179 로 동일) — 경고만 남기고 간다.
+            # 그 밖에는 멈춘다. 1차 요소로 조용히 풀면 강성이 과하게 나오는데, 그 수는
+            # 그럴듯해 보인다.
+            if spec.mesh.order != "quadratic" or str(mesh.ElementOrder) != "ProgramControlled":
+                raise _translated(
+                    failure, "mesh_failed", "요소 차수를 바꾸지 못했습니다"
+                ) from failure
+            logger.warning(
+                "요소 차수를 못 바꿨습니다(읽기 전용) — ProgramControlled 로 갑니다"
+                "(2차와 같은 메시다)",
+            )
     try:
         mesh.GenerateMesh()
     except Exception as failure:

@@ -56,6 +56,21 @@ export interface ModeResult {
   local_mode?: boolean
 }
 
+/** 조화 응답의 결과 — **주파수 점마다 최대 변위**, 곧 곡선이다. */
+export interface HarmonicResult {
+  recipe: 'harmonic'
+  units: { frequency: string; displacement?: string; system?: string }
+  mesh?: { nodes: number; elements: number }
+  /** 감쇠비. **봉우리 높이를 거의 이 값이 정한다**(1/2ζ) — 그래서 곡선과 같이 보여 준다. */
+  damping_ratio: number
+  points: { frequency_hz: number; max_displacement: number }[]
+  /** 가장 크게 흔들린 점. 창 끝에 붙어 있으면 공진의 옆구리만 본 것이다. */
+  peak: { frequency_hz: number; max_displacement: number }
+  material?: string
+  warning?: string
+  fake?: boolean
+}
+
 /** 정적 해석의 결과 — **모드가 아니라 변형 · 응력**이다. */
 export interface StaticResult {
   recipe: 'static'
@@ -188,7 +203,8 @@ export const simulationApi = {
     numbers?: number[] | null
   }) => api.post<DoeImport>('/simulations/doe/import', body),
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
-  result: (id: string) => api.get<SimulationResult | StaticResult>(`/simulations/${id}/result`),
+  result: (id: string) =>
+    api.get<SimulationResult | StaticResult | HarmonicResult>(`/simulations/${id}/result`),
   /** 썸네일 — `<img src>` 로는 안 된다(토큰이 메모리에만 있다). blob 으로 받아 그린다. */
   image: (simulationId: string, artifactId: string) =>
     fetchBlob(`/simulations/${simulationId}/artifacts/${artifactId}/content`),

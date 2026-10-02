@@ -70,11 +70,19 @@ def _executor(*, shape_cache: Path | None = None) -> executors.Executor:
 @pytest.fixture
 def workdir(tmp_path: Path) -> Path:
     """**Ansys 가 쓸 수 있는 폴더여야 한다.** windows-bridge 면 Windows 쪽 경로를 준다 —
-    `\\\\wsl$` 에 쓰게 하면 느리고 잠금 문제가 난다(계획서 3.1)."""
+    `\\\\wsl$` 에 쓰게 하면 느리고 잠금 문제가 난다(계획서 3.1).
+
+    **매번 비운다.** 이름이 시험 이름에서 나오므로 같은 폴더가 실행마다 다시 쓰이는데, 앞
+    실행의 찌꺼기가 남으면 시험이 **조용히 다른 것을 재게 된다** — 형상 캐시가 남아 「첫 점이
+    캐시를 만든다」 가 깨졌고(실측 2026-10-02), 남은 `result.json` 은 안 푼 해석을 푼 것처럼
+    보이게 할 수 있다.
+    """
     base = os.environ.get("ANSYS_TEST_WORK_DIR")
     if base is None:
         return tmp_path
     target = Path(base) / tmp_path.name
+    # Ansys 가 파일을 물고 있으면 못 지우는 것도 있다 — 지울 수 있는 것만 지운다.
+    shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -183,7 +191,15 @@ def test_DOE_점_파일_한_장으로_구속까지_간다(workdir: Path) -> None
     for stage in STAGES:
         result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
         if stage == "modeling":
-            assert result.summary["constrained_regions"] == ["bolt_holes"]
+            # **CAD 조건이 먼저다.** 이 폴더는 `fixed_support` on `bolt_holes` 를 들고
+            # 있어서, 위에서 사람이 넣은 구속이 아니라 그것이 걸린다 — 요약 이름의
+            # `fixed_support:` 머리가 그 증거다(사람 것이 걸렸으면 `bolt_holes` 였다).
+            # 둘이 같은 면을 잡으므로 주파수는 아래의 1,519 Hz 그대로여야 한다.
+            assert result.summary["constrained_regions"] == ["fixed_support:bolt_holes"]
+            assert result.summary["conditions_from"] == "cad"
+            # 물성도 CAD 가 먼저다 — 아래 주파수의 자릿수가 여기서 정해진다.
+            assert result.summary["material_from"] == "cad"
+            assert float(result.summary["youngs_modulus_gpa"]) == 206.0
             # 선언대로 세웠는가 — `.dat` 의 숫자가 읽히는 계까지 함께 남긴다.
             assert result.summary["unit_system"] == "mm_n_tonne"
             assert result.summary["solver_unit_system"] == "ConsistentNMM"
@@ -194,8 +210,11 @@ def test_DOE_점_파일_한_장으로_구속까지_간다(workdir: Path) -> None
     assert result["boundary"] == "constrained"
     assert result["rigid_body_modes"] == 0
     assert all(one["frequency_hz"] > 1.0 for one in result["modes"])
-    # **MKS 로 돌린 같은 형상과 같은 값**(1,519 Hz). 단위가 어긋나면 여기서 자릿수가 갈린다.
-    assert 1500 < result["modes"][0]["frequency_hz"] < 1540
+    # **1,541.6 Hz 의 유래.** MKS 로 돌린 같은 형상이 1,519 Hz 였고 그때 탄성계수는 스펙의
+    # 200 GPa 였다. 이 폴더는 CAD 물성(SS400 · 206 GPa)을 들고 있고 **CAD 가 먼저다** —
+    # 주파수는 √E 에 비례하므로 1519 * √(206/200) = 1,541.5 Hz 다(실측 1,541.644).
+    # 단위가 어긋나면 이 자리에서 자릿수가 갈린다(Pa 로 적으면 10³ 배 작아진다).
+    assert 1530 < result["modes"][0]["frequency_hz"] < 1555
 
 
 @pytest.mark.parametrize(
@@ -461,7 +480,9 @@ def test_선응력을_켜면_하중이_쓰인다(workdir: Path) -> None:
             "loads": summary.get("loads", ""),
             "skipped": summary.get("conditions_skipped", ""),
             "first": result_json["modes"][0]["frequency_hz"],
-            "static": (place / "static.dat").is_file(),
+            # **앞선 해석의 덱은 `upstream.dat` 한 이름이다** — 선응력의 정적이든 조화의
+            # 모달이든 같은 자리다(솔브가 그것부터 푼다).
+            "upstream": (place / "upstream.dat").is_file(),
         }
 
     # 그냥 돌리면 하중은 걸지 않고 **그 사실을 말한다.**
@@ -471,7 +492,9 @@ def test_선응력을_켜면_하중이_쓰인다(workdir: Path) -> None:
     assert seen["선응력"]["prestressed"] is True
     assert "pressure" in seen["선응력"]["loads"]
     # 정적 덱이 따로 나왔다 — 모달의 덱은 그 재시작이다.
-    assert seen["선응력"]["static"], "정적 덱(static.dat)이 없다"
+    assert seen["선응력"]["upstream"], "앞선 정적 해석의 덱(upstream.dat)이 없다"
+    # 안 켠 쪽에는 없어야 한다 — 있으면 덱이 하나로 끝나지 않았다는 뜻이다.
+    assert not seen["그냥"]["upstream"]
     # **응력을 안고 풀면 값이 달라진다.** 누르는 하중은 구조를 무르게 하므로 **낮아진다** —
     # 실측(2026-10-02): 30,090.3497 → 30,090.1351 Hz(압력 1.5 MPa · 2,400 N).
     # 차이는 작지만(0.0007%) 방향이 정해져 있다. 같은 값이면 선응력이 안 걸린 것이다.
@@ -570,53 +593,80 @@ def test_정적_해석이_변형과_응력을_낸다(workdir: Path) -> None:
     assert (workdir / "mode_01.vtp").is_file()
 
 
-def test_조화_응답이_주파수_곡선을_낸다(workdir: Path) -> None:
+def test_조화_응답이_공진에서_솟고_감쇠가_그_높이를_정한다(workdir: Path) -> None:
     """**주파수를 훑으며 흔든다** — 모달이 「어디서 떠는가」 라면 이것은 「그때 얼마나 크게
     흔들리는가」 다.
 
-    `조건_두바디_두재료`(바닥 고정 · 블록 윗면 압력)를 조화 응답으로 돌린다. 구속은 앞선
-    모달에, 흔드는 하중은 조화 쪽에 걸린다.
+    `조건_두바디_두재료`(바닥 고정 · 블록 윗면 압력)를 돌린다. 구속은 앞선 모달에, 흔드는
+    하중은 조화 쪽에 걸린다.
 
-    **결과가 곡선이다** — 주파수 점마다 최대 변위가 붙는다. 공진 근처에서 값이 솟아야 한다.
+    **창을 56~64 kHz 로 잡은 이유** — 이 하중이 흔드는 모드가 거기 있다. 1 · 2차(31.5 kHz)는
+    Z 유효질량비가 0.12 나 되는데도 윗면 압력이 하는 일이 거의 0 이어서, 그 창의 응답은
+    정적값(5.2e-4 mm)에서 안 움직인다 — 29~31 kHz 는 단조 증가였고 감쇠를 2%→5% 로 올려도
+    0.2% 밖에 안 변했다(실측 2026-10-02). 20~140 kHz 를 넓게 훑어 **60 kHz 에서 18배로
+    솟는 자리**를 찾았다(모드 6 · 60,270 Hz · X 유효질량비 0.200).
+
+    **감쇠를 두 값으로 두 번 훑는다.** 봉우리 높이는 감쇠에 반비례해야 한다(1/2ζ) — 그것이
+    감쇠가 **덱에 실렸는지** 보는 가장 확실한 방법이다. 속성(`DampingRatio` ·
+    `ConstantDamping` · `StructuralDampingCoefficient`)으로는 덱에 한 줄도 안 적히므로
+    `DMPRAT` 명령 조각으로 넣는다(실측 2026-10-02). 감쇠 없이 풀면 공진에서 응답이 끝없이
+    커지고, 그 큰 수는 그럴듯해 보인다.
+
+    두 번째 훑기는 **형상 캐시**로 임포트를 건너뛴다(같은 형상 · 같은 메시).
     """
-    shutil.copy(TWO_BODIES / "points" / "p0001.step", workdir / "input.step")
-    shutil.copy(TWO_BODIES / "points" / "p0001.json", workdir / "topology.json")
-    spec = {
-        "recipe": "harmonic",
-        "material": SPEC["material"],
-        "mesh": {"element_size_mm": 8},
-        # **1차가 30,090 Hz 근처다**(모달 실측). 감쇠 2% 면 공진 폭이 ~0.6 kHz 라, 넓게
-        # 훑으면 점 사이로 봉우리가 빠져나간다 — 실제로 2 kHz 간격에서 그랬다. 좁게 훑는다.
-        "frequency_range_hz": [29000, 31000],
-        "intervals": 10,
-        "modes": 6,
-        "damping_ratio": 0.02,
-    }
-    parse_spec(spec)
-    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    cache = workdir / "cache"
+    curves: dict[float, dict[str, Any]] = {}
+    for ratio in (0.02, 0.05):
+        work = workdir / f"감쇠{int(ratio * 1000):03d}"
+        work.mkdir()
+        shutil.copy(TWO_BODIES / "points" / "p0001.step", work / "input.step")
+        shutil.copy(TWO_BODIES / "points" / "p0001.json", work / "topology.json")
+        spec = {
+            "recipe": "harmonic",
+            "material": SPEC["material"],
+            "mesh": {"element_size_mm": 8},
+            "frequency_range_hz": [56000, 64000],
+            "intervals": 16,
+            # 60.2~60.4 kHz 에 모드가 셋 몰려 있다 — 그 위까지 담는다.
+            "modes": 10,
+            "damping_ratio": ratio,
+        }
+        parse_spec(spec)
+        (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        runner = _executor(shape_cache=cache)
+        for stage in STAGES:
+            runner.run(StageContext(stage=stage, spec=spec, workdir=work))
+        curves[ratio] = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        deck = (work / "model.dat").read_text(encoding="utf-8", errors="replace").lower()
+        assert f"dmprat,{ratio}" in deck, "감쇠가 덱에 안 실렸다"
+        # 앞선 모달의 덱이 따로 나왔다 — 모드 중첩은 그것을 이어받는다.
+        assert (work / "upstream.dat").is_file()
 
-    runner = _executor()
-    summary: dict[str, Any] = {}
-    for stage in STAGES:
-        result = runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
-        summary.update(result.summary)
-
-    result_json = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
-    assert result_json["recipe"] == "harmonic"
-    points = result_json["points"]
-    assert len(points) == 10, "주파수 점이 요청한 수만큼 나와야 한다"
+    sharp = curves[0.02]
+    assert sharp["recipe"] == "harmonic"
+    assert sharp["damping_ratio"] == 0.02
+    # **변위에 단위가 붙어 있다** — 값만 보면 mm 와 m 가 구별되지 않는다(정적에서 겪었다).
+    assert sharp["units"]["displacement"] == "mm"
+    points = sharp["points"]
+    assert len(points) == 16, "주파수 점이 요청한 수만큼 나와야 한다"
     assert all(one["max_displacement"] > 0 for one in points), (
         "응답이 0 이면 하중이 안 걸린 것"
     )
-    assert points[0]["frequency_hz"] == pytest.approx(29200, abs=1)
-    assert points[-1]["frequency_hz"] == pytest.approx(31000, abs=1)
-    # 앞선 모달의 덱이 따로 나왔다 — 모드 중첩은 그것을 이어받는다.
-    assert (workdir / "upstream.dat").is_file()
+    assert points[0]["frequency_hz"] == pytest.approx(56500, abs=1)
+    assert points[-1]["frequency_hz"] == pytest.approx(64000, abs=1)
 
-    # **아직 못 본 것: 공진 증폭.** 1차(30,090 Hz)를 지나는데 응답이 정적값(5.204e-4)에서
-    # 거의 안 움직인다(5.1e-4 ~ 5.3e-4). 덱에는 `hropt,msup` · `harfrq` 가 바르게 적히지만
-    # 감쇠(`dmprat`)가 안 실린다 — 모드 중첩이 증폭을 안 하고 있다는 뜻이다. 그 자리를 찾기
-    # 전까지 **봉우리를 단정하지 않는다**(2026-10-02, 계획서에 적어 두었다).
+    peak = sharp["peak"]
+    # **봉우리가 창 안쪽에 있다** — 끝에 붙으면 공진을 지나지 않은 것이고, 그때는 곡선이
+    # 올라가는 옆구리만 보여 준다(29~31 kHz 가 그랬다).
+    assert 59000 < peak["frequency_hz"] < 61500
+    assert peak["max_displacement"] == pytest.approx(9.67e-3, rel=0.1)
+    # 공진에서 솟았다 — 창 끝보다 세 배 넘게 크다(실측 3.3배).
+    assert peak["max_displacement"] > 2.5 * points[-1]["max_displacement"]
+
+    # **감쇠가 봉우리 높이를 정한다** — ζ 를 2.5배로 올리면 봉우리가 그만큼 낮아진다
+    # (1/2ζ, 실측 2.46배). 감쇠가 덱에 안 실리면 이 비가 1 로 나온다.
+    taller = peak["max_displacement"] / curves[0.05]["peak"]["max_displacement"]
+    assert taller == pytest.approx(2.5, rel=0.15), "감쇠가 응답을 못 바꾼다"
 
 
 def test_같은_형상은_두_번_임포트하지_않는다(workdir: Path) -> None:

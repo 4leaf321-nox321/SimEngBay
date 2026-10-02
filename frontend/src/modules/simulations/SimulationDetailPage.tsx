@@ -65,12 +65,19 @@ const SUMMARY_LABELS: Record<string, string> = {
   material_from: '물성 출처',
   youngs_modulus_gpa: '탄성계수',
   density_kg_m3: '밀도',
+  // 정적 · 조화는 모드가 아니라 **크기**를 낸다. 단위는 결과 카드가 붙여 준다.
+  max_displacement: '최대 변형',
+  max_von_mises: '최대 상당응력',
+  frequency_points: '주파수 점',
+  peak_hz: '봉우리 주파수',
+  peak_displacement: '봉우리 변위',
 }
 
 function shownSummary(key: string, value: unknown): string {
   if (value == null) return '—'
   if (key === 'input_bytes' && typeof value === 'number') return shownSize(value)
   if (key === 'first_elastic_hz' && typeof value === 'number') return `${value.toFixed(2)} Hz`
+  if (key === 'peak_hz' && typeof value === 'number') return `${value.toFixed(1)} Hz`
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
   if (key === 'material_from') return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`

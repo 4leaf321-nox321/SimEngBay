@@ -56,8 +56,10 @@ def extract(
         unit = str(support.time_frequencies.unit or "Hz")
 
         points: list[dict[str, Any]] = []
+        # **변위에 단위를 달아 둔다** — 값만 보면 mm 와 m 가 구별되지 않는다(정적에서 겪었다).
+        displacement_unit = ""
         for index, value in enumerate(frequencies, start=1):
-            peak = _amplitude(dpf, np, model, index)
+            peak, displacement_unit = _amplitude(dpf, np, model, index)
             points.append({"frequency_hz": round(value, 4), "max_displacement": peak})
     except StageFailure:
         raise
@@ -70,7 +72,7 @@ def extract(
     worst = max(points, key=lambda one: one["max_displacement"])
     result: dict[str, Any] = {
         "recipe": "harmonic",
-        "units": {"frequency": unit, "system": system},
+        "units": {"frequency": unit, "displacement": displacement_unit, "system": system},
         "mesh": {"nodes": int(mesh.nodes.n_nodes), "elements": int(mesh.elements.n_elements)},
         "damping_ratio": spec.damping_ratio,
         "points": points,
@@ -100,8 +102,8 @@ def extract(
     )
 
 
-def _amplitude(dpf: Any, np: Any, model: Any, index: int) -> float:
-    """주파수 한 점의 **진폭**(최대 변위).
+def _amplitude(dpf: Any, np: Any, model: Any, index: int) -> tuple[float, str]:
+    """주파수 한 점의 **진폭**(최대 변위)과 그 단위.
 
     조화 응답의 결과는 **복소수**다 — 실수부만 읽으면 위상에 따라 작게 나오고 공진이 평평해
     보인다. 진폭 연산자를 먼저 쓰고, 없으면 실수부 크기로 물러선다.
@@ -111,9 +113,10 @@ def _amplitude(dpf: Any, np: Any, model: Any, index: int) -> float:
         field = dpf.operators.math.amplitude_fc(fields_container=fields).eval()[0]
     except Exception:
         field = fields[0]
+    unit = str(field.unit or "")
     data = np.asarray(field.data)
     if data.size == 0:
-        return 0.0
+        return 0.0, unit
     if data.ndim == 2:
-        return float(np.max(np.linalg.norm(data, axis=1)))
-    return float(np.max(np.abs(data)))
+        return float(np.max(np.linalg.norm(data, axis=1))), unit
+    return float(np.max(np.abs(data))), unit

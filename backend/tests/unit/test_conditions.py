@@ -105,3 +105,20 @@ def test_모르는_구속은_막는다() -> None:
     payload["conditions"]["constraints"][0]["type"] = "spring_support"
     found = conditions.read(payload)
     assert any("spring_support" in one.why for one in found.refused)
+
+
+def test_조건_줄에_면_수가_붙는다() -> None:
+    """**면 수가 안 보이면 줄어든 것을 모른다.**
+
+    CompCore v0.4.0(2026-10-02)부터 선택 규칙 `near` 가 「가장 가까운 **하나**」 로 바뀌었다.
+    볼트 구멍 넷을 잡던 규칙이 하나만 잡아도 조건의 이름(`fixed_support · bolt_holes`)은
+    똑같다 — 그러면 주파수만 조용히 달라진다. 그래서 화면 줄에 **몇 면으로 풀렸는지**를 적는다.
+    """
+    from app.modules.simulations.services import conditions_out
+
+    out = conditions_out(_point("조건_두바디_두재료"), recipe="static")
+
+    constraint = next(one for one in out.lines if one.kind == "constraint")
+    assert constraint.detail == "fixed_support · 바닥 · 면 1"
+    load = next(one for one in out.lines if one.kind == "load" and one.status == "applied")
+    assert load.detail.endswith("· 면 1")

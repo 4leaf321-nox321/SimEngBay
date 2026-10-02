@@ -16,7 +16,9 @@ mm · tonne · N (MPa) 로 쓴다 — 형상이 늘 mm 이므로(CompCore 계약
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.core import conditions as condition_model
 from app.core import units
@@ -25,8 +27,12 @@ from app.core.materials import Material
 
 logger = logging.getLogger(__name__)
 
-#: 걸 수 있는 구속. 나머지는 거절한다(원통 지지 · 회전 자유도 등은 국부 좌표 변환이 필요하다).
-SUPPORTED_CONSTRAINTS = ("fixed_support",)
+#: 걸 수 있는 구속.
+#:
+#: **원통 지지는 국부 좌표계로 건다**(`*TRANSFORM, TYPE=C`) — 그 계의 자유도 1 · 2 · 3 이
+#: 반경 · 접선 · 축이다. 그래서 「핀에 끼운 채 돈다」(접선만 자유)가 그대로 표현된다. 전역
+#: 좌표로 억지로 옮기면 그 모델은 돌지 못하고, 주파수가 올라간 채 그럴듯하게 나온다.
+SUPPORTED_CONSTRAINTS = ("fixed_support", "cylindrical")
 #: 걸 수 있는 접촉 — **본딩은 절점 공유로 이미 걸려 있다**(`mesh.py` 의 `BooleanFragments`).
 #: 마찰 · 무마찰도 모달에서는 처음 붙어 있으면 같은 답이라, 「붙은 것으로 풀었다」 고 적는다.
 LINEARIZED_CONTACTS = ("bonded", "no_separation", "frictional", "frictionless", "rough")
@@ -42,6 +48,13 @@ class Plan:
     skipped: list[condition_model.Note] = field(default_factory=list)
     refused: list[condition_model.Note] = field(default_factory=list)
     text: str = ""
+    #: 국부 좌표계가 걸린 절점 → (축 위의 점, 축 방향).
+    #:
+    #: **그 절점에서는 `*CLOAD` 의 자유도 번호도 국부로 읽힌다**(1 반경 · 2 접선 · 3 축) —
+    #: CalculiX 가 `*TRANSFORM` 을 구속과 하중에 **함께** 적용한다. 전역 성분을 그대로 적으면
+    #: 힘이 엉뚱한 방향으로 들어가고, 그 결과는 오류 없이 그럴듯하게 나온다(실측 2026-10-03:
+    #: 베어링 하중이 구멍면에 걸릴 때 그 자리였다).
+    local_frames: dict[int, tuple[list[float], list[float]]] = field(default_factory=dict)
 
 
 def write_modal(
@@ -52,6 +65,7 @@ def write_modal(
     materials: list[Material],
     held_nodes: dict[str, set[int]],
     given: condition_model.Conditions,
+    shapes: dict[str, dict[str, Any]] | None = None,
     modes: int,
     second_order: bool,
 ) -> Plan:
@@ -62,7 +76,7 @@ def write_modal(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order)
-    lines += _holds(held_nodes, given, plan)
+    lines += _holds(held_nodes, given, plan, shapes)
 
     for pair in given.contacts:
         if pair.kind in LINEARIZED_CONTACTS:
@@ -88,13 +102,8 @@ def write_modal(
             )
         )
 
-    for hint in given.mesh_hints:
-        if hint.region not in ("전체", "all"):
-            plan.skipped.append(
-                condition_model.Note(
-                    f"메시 힌트 「{hint.region}」", "영역별 요소 크기는 아직 못 겁니다."
-                )
-            )
+    # 영역별 메시 힌트는 **메시를 만들 때** 걸린다(`build.py` 의 `_local_sizes`) — 덱에는
+    # 남지 않으므로 여기서 할 일이 없다. 못 걸린 힌트는 그 자리에서 경고로 적는다.
 
     lines += [
         "*STEP",
@@ -138,8 +147,8 @@ def _nset(name: str, members: set[int]) -> list[str]:
     return lines
 
 
-#: 걸 수 있는 하중 — 압력(면 법선)과 힘(면 절점에 분배). 나머지는 거절한다.
-SUPPORTED_LOADS = ("pressure", "force")
+#: 걸 수 있는 하중 — 압력(면 법선) · 힘(면 절점에 분배) · 베어링(원통면의 반쪽).
+SUPPORTED_LOADS = ("pressure", "force", "bearing")
 
 #: C3D10 · C3D4 의 면 번호 → 모서리 절점 자리(1부터). CalculiX 가 쓰는 순서다 —
 #: 틀리면 압력이 **엉뚱한 면에** 걸리고, 그 결과는 오류 없이 그럴듯하게 나온다.
@@ -162,7 +171,7 @@ def write_static(
     load_faces: dict[str, list[tuple[int, str]]],
     load_areas: dict[str, dict[int, float]],
     given: condition_model.Conditions,
-    system: units.UnitSystem,
+    shapes: dict[str, dict[str, Any]] | None = None,
     second_order: bool,
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
@@ -173,71 +182,20 @@ def write_static(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order)
-    lines += _holds(held_nodes, given, plan)
+    lines += _holds(held_nodes, given, plan, shapes)
 
     lines.append("*STEP")
     lines.append("*STATIC")
     applied_loads = 0
     for load in given.loads:
-        if load.kind not in SUPPORTED_LOADS:
-            plan.refused.append(
-                condition_model.Note(
-                    f"하중 「{load.name}」({load.kind})",
-                    "CalculiX 경로가 아직 못 거는 하중입니다 — Ansys 로 돌리세요.",
-                )
-            )
+        rows, why = _load_rows(
+            load, load_faces, load_areas, load_nodes, nodes, shapes, plan.local_frames
+        )
+        if why is not None:
+            plan.refused.append(why)
             continue
-        if load.magnitude is None:
-            plan.refused.append(
-                condition_model.Note(f"하중 「{load.name}」", "크기가 없습니다.")
-            )
-            continue
-        if load.kind == "pressure":
-            faces = load_faces.get(load.region) or []
-            if not faces:
-                plan.refused.append(
-                    condition_model.Note(
-                        f"하중 「{load.name}」",
-                        f"영역 「{load.region}」 의 요소면을 못 찾았습니다.",
-                    )
-                )
-                continue
-            # 압력은 **선언된 계의 응력 단위**로 온다(MPa 등) — 덱은 MPa 다.
-            value = (
-                units.stress_from(load.magnitude, load.unit or "MPa")
-                / units.STRESS_UNITS["mpa"]
-            )
-            lines.append("*DLOAD")
-            for element, face in faces:
-                lines.append(f"{element}, {face}, {value:.8g}")
-            plan.applied.append(f"pressure:{load.region}")
-            applied_loads += 1
-            continue
-
-        # 힘 — 면 절점에 **분담 면적으로 나눈다.** 고르게 나누면 모서리 절점이 과하게 받는다.
-        areas = load_areas.get(load.region) or {}
-        members = load_nodes.get(load.region) or set()
-        if not areas or not members:
-            plan.refused.append(
-                condition_model.Note(
-                    f"하중 「{load.name}」", f"영역 「{load.region}」 의 절점을 못 찾았습니다."
-                )
-            )
-            continue
-        direction = load.direction or (0.0, 0.0, -1.0)
-        total = sum(areas.values())
-        if total <= 0:
-            plan.refused.append(
-                condition_model.Note(f"하중 「{load.name}」", "면적이 0 입니다.")
-            )
-            continue
-        lines.append("*CLOAD")
-        for node, share in sorted(areas.items()):
-            portion = load.magnitude * share / total
-            for axis, component in enumerate(direction[:3], start=1):
-                if component:
-                    lines.append(f"{node}, {axis}, {portion * component:.8g}")
-        plan.applied.append(f"force:{load.region}")
+        lines += rows
+        plan.applied.append(f"{load.kind}:{load.region}")
         applied_loads += 1
 
     if not applied_loads:
@@ -269,6 +227,58 @@ def write_static(
     ]
     plan.text = "\n".join(lines) + "\n"
     return plan
+
+
+def _bearing_shares(
+    load: condition_model.Load,
+    areas: dict[int, float],
+    direction: tuple[float, float, float],
+    nodes: dict[int, tuple[float, float, float]] | None,
+    shapes: dict[str, dict[str, Any]] | None,
+) -> tuple[dict[int, float], condition_model.Note | None]:
+    """베어링 하중 — **구멍의 반쪽만** 받는다.
+
+    핀이 밀면 구멍은 그 방향 쪽 반쪽에서만 눌린다. 면 전체에 고르게 걸면 합력은 같아도 반대쪽을
+    당기는 모델이 되어, 구멍 주변 응력과 변형 모양이 달라진다. 그래서 분담 면적에 **반경 방향과
+    하중 방향의 겹침**(cos)을 곱한다 — 고전적인 베어링 분포다.
+
+    축은 CAD 지문의 `axis` 를 쓴다(선언이 정본). 없으면 거절한다 — 짐작해서 반쪽을 고르면
+    그 결과는 오류 없이 그럴듯하게 나온다.
+    """
+    shape = (shapes or {}).get(load.region) or {}
+    centroid, axis = shape.get("centroid"), shape.get("axis")
+    if nodes is None or not (isinstance(centroid, list) and isinstance(axis, list)):
+        return {}, condition_model.Note(
+            f"하중 「{load.name}」",
+            f"영역 「{load.region}」 에 원통 축이 없습니다 — 베어링 하중은 축이 필요합니다.",
+        )
+    size = math.sqrt(sum(one * one for one in axis))
+    if size == 0:
+        return {}, condition_model.Note(f"하중 「{load.name}」", "축이 0 입니다.")
+    unit_axis = [one / size for one in axis]
+    pull = math.sqrt(sum(one * one for one in direction))
+    if pull == 0:
+        return {}, condition_model.Note(f"하중 「{load.name}」", "방향이 0 입니다.")
+    unit_load = [one / pull for one in direction]
+    shares: dict[int, float] = {}
+    for node, area in areas.items():
+        point = nodes.get(node)
+        if point is None:
+            continue
+        offset = [point[index] - centroid[index] for index in range(3)]
+        along = sum(offset[index] * unit_axis[index] for index in range(3))
+        radial = [offset[index] - along * unit_axis[index] for index in range(3)]
+        length = math.sqrt(sum(one * one for one in radial))
+        if length == 0:
+            continue
+        overlap = sum(radial[index] / length * unit_load[index] for index in range(3))
+        if overlap > 0:
+            shares[node] = area * overlap
+    if not shares:
+        return {}, condition_model.Note(
+            f"하중 「{load.name}」", "하중 방향 쪽 반쪽에 절점이 없습니다."
+        )
+    return shares, None
 
 
 def _head(
@@ -303,9 +313,16 @@ def _head(
 
 
 def _holds(
-    held_nodes: dict[str, set[int]], given: condition_model.Conditions, plan: Plan
+    held_nodes: dict[str, set[int]],
+    given: condition_model.Conditions,
+    plan: Plan,
+    shapes: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
-    """구속 — 레시피가 달라도 같은 부분이다."""
+    """구속 — 레시피가 달라도 같은 부분이다.
+
+    `shapes` 는 영역 이름 → **CAD 가 보낸 지문**이다(원통이면 `axis` · `centroid`). 축은
+    메시에서 되맞출 수도 있지만 **선언이 정본이다** — 그쪽이 사람이 의도한 축이다.
+    """
     lines: list[str] = []
     for index, rule in enumerate(given.constraints):
         if rule.kind not in SUPPORTED_CONSTRAINTS:
@@ -324,10 +341,74 @@ def _holds(
                 )
             )
             continue
-        lines += _nset(f"HOLD{index}", members)
-        lines += ["*BOUNDARY", f"HOLD{index}, 1, 3, 0.0"]
+        name = f"HOLD{index}"
+        if rule.kind == "cylindrical":
+            rows, why, frame = _cylindrical(
+                name, rule, members, (shapes or {}).get(rule.region)
+            )
+            if why is not None:
+                plan.refused.append(why)
+                continue
+            lines += rows
+            if frame is not None:
+                for node in members:
+                    plan.local_frames[node] = frame
+            plan.applied.append(f"cylindrical:{rule.region}")
+            continue
+        lines += _nset(name, members)
+        lines += ["*BOUNDARY", f"{name}, 1, 3, 0.0"]
         plan.applied.append(f"{rule.kind}:{rule.region}")
     return lines
+
+
+def _cylindrical(
+    name: str,
+    rule: condition_model.Constraint,
+    members: set[int],
+    shape: dict[str, Any] | None,
+) -> tuple[list[str], condition_model.Note | None, tuple[list[float], list[float]] | None]:
+    """원통 지지 — 국부 좌표계를 세우고 방향마다 고정 · 자유를 건다.
+
+    `*TRANSFORM, TYPE=C` 는 **축 위의 두 점**으로 계를 세운다. 그 계에서 자유도 1 이 반경,
+    2 가 접선, 3 이 축이다(CalculiX 설명서). 셋 다 자유면 구속이 아니므로 거절한다 — 조용히
+    넘기면 그 모델은 떠 있고, 0 Hz 모드가 줄줄이 나온다.
+    """
+    centroid = (shape or {}).get("centroid")
+    axis = (shape or {}).get("axis")
+    if not (isinstance(centroid, list) and isinstance(axis, list)):
+        return (
+            [],
+            condition_model.Note(
+                f"구속 「{rule.name}」",
+                f"영역 「{rule.region}」 에 원통 축이 없습니다 — CAD 지문에 `axis` 가 "
+                f"필요합니다.",
+            ),
+            None,
+        )
+    held = [
+        index
+        for index, hold in enumerate((rule.radial, rule.tangential, rule.axial), start=1)
+        if hold == "fixed"
+    ]
+    if not held:
+        return (
+            [],
+            condition_model.Note(
+                f"구속 「{rule.name}」", "반경 · 접선 · 축이 모두 자유라 구속이 아닙니다."
+            ),
+            None,
+        )
+    second = [centroid[index] + axis[index] for index in range(3)]
+    lines = _nset(name, members)
+    frame = ([float(one) for one in centroid], [float(one) for one in axis])
+    lines += [
+        f"*TRANSFORM, NSET={name}, TYPE=C",
+        ", ".join(f"{one:.6f}" for one in (*centroid, *second)),
+        "*BOUNDARY",
+    ]
+    # 자유도 번호가 **국부 계의 것**이다: 1 반경 · 2 접선 · 3 축.
+    lines += [f"{name}, {dof}, {dof}, 0.0" for dof in held]
+    return lines, None, frame
 
 
 def write_harmonic(
@@ -341,6 +422,7 @@ def write_harmonic(
     load_faces: dict[str, list[tuple[int, str]]],
     load_areas: dict[str, dict[int, float]],
     given: condition_model.Conditions,
+    shapes: dict[str, dict[str, Any]] | None = None,
     plan_of: HarmonicPlan,
     modes: int,
     second_order: bool,
@@ -357,7 +439,7 @@ def write_harmonic(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order)
-    lines += _holds(held_nodes, given, plan)
+    lines += _holds(held_nodes, given, plan, shapes)
 
     # ① 모드를 푸고 남긴다.
     lines += [
@@ -383,7 +465,9 @@ def write_harmonic(
     ]
     applied_loads = 0
     for load in given.loads:
-        rows, why = _load_rows(load, load_faces, load_areas, load_nodes)
+        rows, why = _load_rows(
+            load, load_faces, load_areas, load_nodes, nodes, shapes, plan.local_frames
+        )
         if why is not None:
             plan.refused.append(why)
             continue
@@ -418,8 +502,11 @@ def _load_rows(
     load_faces: dict[str, list[tuple[int, str]]],
     load_areas: dict[str, dict[int, float]],
     load_nodes: dict[str, set[int]],
+    nodes: dict[int, tuple[float, float, float]] | None = None,
+    shapes: dict[str, dict[str, Any]] | None = None,
+    frames: dict[int, tuple[list[float], list[float]]] | None = None,
 ) -> tuple[list[str], condition_model.Note | None]:
-    """하중 한 줄 뭉치 — 압력은 요소면, 힘은 절점. 못 걸면 까닭을 돌려준다."""
+    """하중 한 줄 뭉치 — 압력은 요소면, 힘 · 베어링은 절점. 못 걸면 까닭을 돌려준다."""
     if load.kind not in SUPPORTED_LOADS:
         return [], condition_model.Note(
             f"하중 「{load.name}」({load.kind})",
@@ -446,14 +533,66 @@ def _load_rows(
         return [], condition_model.Note(
             f"하중 「{load.name}」", f"영역 「{load.region}」 의 절점을 못 찾았습니다."
         )
+    direction = load.direction or (0.0, 0.0, -1.0)
+    if load.kind == "bearing":
+        areas, why = _bearing_shares(load, areas, direction, nodes, shapes)
+        if why is not None:
+            return [], why
     total = sum(areas.values())
     if total <= 0:
         return [], condition_model.Note(f"하중 「{load.name}」", "면적이 0 입니다.")
-    direction = load.direction or (0.0, 0.0, -1.0)
     rows = ["*CLOAD"]
     for node, share in sorted(areas.items()):
         portion = load.magnitude * share / total
-        for axis, component in enumerate(direction[:3], start=1):
+        vector = [portion * component for component in direction[:3]]
+        frame = (frames or {}).get(node)
+        if frame is not None:
+            # **그 절점은 국부 계로 읽힌다** — 전역 성분을 그대로 적으면 힘이 반경 · 접선 ·
+            # 축으로 뒤바뀐다(`Plan.local_frames` 참고).
+            vector = _to_local(vector, nodes, node, frame)
+        for axis, component in enumerate(vector, start=1):
             if component:
-                rows.append(f"{node}, {axis}, {portion * component:.8g}")
+                rows.append(f"{node}, {axis}, {component:.8g}")
     return rows, None
+
+
+def _to_local(
+    vector: list[float],
+    nodes: dict[int, tuple[float, float, float]] | None,
+    node: int,
+    frame: tuple[list[float], list[float]],
+) -> list[float]:
+    """전역 성분 → 원통 국부 성분(반경 · 접선 · 축).
+
+    **근사가 아니라 정확한 변환이다**: 세 단위벡터에 내사영한 것이 그 계의 성분이다. 절점
+    좌표를 모르면(있을 수 없는 일이지만) 바꾸지 않고 둔다 — 틀린 변환보다 안 바꾸는 편이 덜
+    위험하다.
+    """
+    point = (nodes or {}).get(node)
+    if point is None:
+        return vector
+    origin, axis = frame
+    size = math.sqrt(sum(one * one for one in axis))
+    if size == 0:
+        return vector
+    unit_axis = [one / size for one in axis]
+    offset = [point[index] - origin[index] for index in range(3)]
+    along = sum(offset[index] * unit_axis[index] for index in range(3))
+    radial = [offset[index] - along * unit_axis[index] for index in range(3)]
+    length = math.sqrt(sum(one * one for one in radial))
+    if length == 0:
+        return vector
+    unit_radial = [one / length for one in radial]
+    unit_tangent = _cross(unit_axis, unit_radial)
+    return [
+        sum(vector[index] * basis[index] for index in range(3))
+        for basis in (unit_radial, unit_tangent, unit_axis)
+    ]
+
+
+def _cross(first: list[float], second: list[float]) -> list[float]:
+    return [
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    ]

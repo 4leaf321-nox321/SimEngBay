@@ -70,18 +70,18 @@ def build(
     system = units.declared_in(topology) if topology else units.DEFAULT
     given = _declared_conditions(spec, topology)
 
-    size = spec.mesh.element_size_mm
-    if size is None:
-        raise StageFailure(
-            "mesh_failed",
-            "요소 크기가 없습니다 — CalculiX 경로는 gmsh 에게 크기를 줘야 합니다.",
-        )
+    size = _global_size(spec, given, system)
+    second_order = spec.mesh.order == "quadratic"
+    local = _local_sizes(
+        step, workdir, topology, given, system, size, second_order, timeout_seconds
+    )
     mesh = build_mesh(
         step,
         workdir,
         element_size_mm=size,
-        second_order=spec.mesh.order == "quadratic",
+        second_order=second_order,
         timeout_seconds=timeout_seconds,
+        local_sizes=local,
     )
     logger.info(
         "메시: 절점 %s · 요소 %s · 면 %s · 솔리드 %s",
@@ -94,6 +94,7 @@ def build(
     body_of, materials, material_from = _materials(spec, topology, system, mesh)
     held = _held_nodes(topology, given, mesh)
     constrained = plan_constrained(given, spec)
+    shapes = _region_shapes(topology)
     if isinstance(spec, HarmonicSpec):
         places, areas, faces = _load_places(topology, given, mesh)
         shake = harmonic_plan(spec, given)
@@ -107,6 +108,7 @@ def build(
             load_faces=faces,
             load_areas=areas,
             given=given,
+            shapes=shapes,
             plan_of=shake,
             modes=spec.modes,
             second_order=mesh.second_order,
@@ -123,7 +125,7 @@ def build(
             load_faces=faces,
             load_areas=areas,
             given=given,
-            system=system,
+            shapes=shapes,
             second_order=mesh.second_order,
         )
     else:
@@ -134,6 +136,7 @@ def build(
             materials=materials,
             held_nodes=held,
             given=given,
+            shapes=shapes,
             # **자유-자유면 강체 모드 여섯을 더 뽑는다** — 안 그러면 사람이 요청한 탄성 모드
             # 수가 모자라게 나온다(Ansys 쪽과 같은 규칙).
             modes=spec.modes + (0 if constrained else RIGID_BODY_MODES),
@@ -293,6 +296,97 @@ def _held_nodes(
         held[name] = members
         logger.info("구속 영역 %s → 면 %s · 절점 %s", name, ids, len(members))
     return held
+
+
+def _global_size(
+    spec: AnySpec, given: condition_model.Conditions, system: units.UnitSystem
+) -> float:
+    """전역 요소 크기(mm). 스펙이 비면 **CAD 의 「전체」 힌트**를 쓴다.
+
+    둘 다 없으면 멈춘다 — gmsh 는 크기를 안 주면 제 나름으로 잡고, 그러면 같은 형상이 실행마다
+    다른 메시로 풀린다(설계점 비교가 무너진다).
+    """
+    if spec.mesh.element_size_mm is not None:
+        return float(spec.mesh.element_size_mm)
+    whole = next(
+        (
+            one
+            for one in given.mesh_hints
+            if one.region in ("전체", "all") and one.element_size is not None
+        ),
+        None,
+    )
+    if whole is not None and whole.element_size is not None:
+        # 힌트는 **선언된 계의 길이**다(SI 면 m) — 형상은 늘 mm 이므로 옮긴다.
+        size = whole.element_size * system.length_mm
+        logger.info(
+            "메시 전체 크기 ← CAD %s %s (%s mm)", whole.element_size, system.length_label, size
+        )
+        return float(size)
+    raise StageFailure(
+        "mesh_failed",
+        "요소 크기가 없습니다 — 스펙에 넣거나 CAD 가 「전체」 메시 힌트를 보내야 합니다.",
+    )
+
+
+def _local_sizes(
+    step: Path,
+    workdir: Path,
+    topology: dict[str, Any],
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    size: float,
+    second_order: bool,
+    timeout_seconds: int,
+) -> dict[int, float]:
+    """영역별 메시 힌트 → **면 번호 → 크기(mm)**.
+
+    힌트는 영역 **이름**으로 오고 gmsh 는 면 **번호**로 받는다. 그 번호는 메시를 만들어 봐야
+    아는 면 지문에서 나오므로, **면만 먼저 한 번 메시한다**(2차원, 빠르다). 힌트가 없으면 이
+    통과를 건너뛴다 — 공짜가 아니기 때문이다.
+    """
+    wanted = {
+        hint.region: hint.element_size * system.length_mm
+        for hint in given.mesh_hints
+        if hint.element_size is not None and hint.region not in ("전체", "all")
+    }
+    if not wanted or not topology:
+        return {}
+    try:
+        rough = build_mesh(
+            step,
+            workdir,
+            element_size_mm=size,
+            second_order=second_order,
+            timeout_seconds=timeout_seconds,
+            surface_only=True,
+        )
+        found = match_regions(topology, rough.faces, wanted_regions=list(wanted))
+    except StageFailure:
+        # **힌트를 못 걸어도 해석은 한다** — 전역 크기로 풀린다. 다만 조용히 넘기지 않는다.
+        logger.warning("영역별 메시 힌트를 못 걸었습니다 — 전역 크기로 갑니다", exc_info=True)
+        return {}
+    sizes: dict[int, float] = {}
+    for name, ids in found.faces.items():
+        for face in ids:
+            sizes[face] = wanted[name]
+        logger.info("메시 힌트 %s → 면 %s · %s mm", name, ids, wanted[name])
+    for failure in found.failures:
+        logger.warning("메시 힌트 %s 를 못 걸었습니다: %s", failure.region, failure.reason)
+    return sizes
+
+
+def _region_shapes(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """영역 이름 → **CAD 가 보낸 지문 한 장**(첫 항목).
+
+    원통 지지의 축 · 베어링 하중의 축이 거기 있다. 메시에서 되맞출 수도 있지만 **선언이
+    정본이다** — 사람이 의도한 축이 그쪽이고, 되맞춘 축은 부호가 뒤집힐 수 있다.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for name, rows in (topology.get("regions") or {}).items():
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            found[name] = rows[0]
+    return found
 
 
 def _load_places(

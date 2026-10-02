@@ -56,8 +56,12 @@ class Mesh:
     face_nodes: dict[int, set[int]]
     #: 껍데기 삼각형(모서리 셋) — 모드 형상 파일이 이것만 쓴다(`vtp.py`).
     triangles: list[tuple[int, int, int]]
-    #: 면 번호 → 그 면의 삼각형들. 압력 하중이 면마다 요소면을 적을 때 쓴다.
+    #: 면 번호 → 그 면의 삼각형들(모서리 셋). 압력 하중이 요소면을 적을 때 쓴다.
     face_triangles: dict[int, list[tuple[int, int, int]]]
+    #: 면 번호 → 그 면 요소의 **절점 전부**(2차면 여섯). 힘을 나눌 때 쓴다 — 중간 절점을
+    #: 빼면 모서리만 하중을 받아, 2차 요소에서는 오히려 **거꾸로 된** 분포가 된다(일관 하중은
+    #: 모서리에 0 을 준다). 실측 2026-10-03: 구멍면 절점 436 중 57 만 받았다.
+    face_rings: dict[int, list[list[int]]]
     second_order: bool
 
     @property
@@ -72,14 +76,24 @@ def build_mesh(
     element_size_mm: float,
     second_order: bool = True,
     timeout_seconds: int = 1800,
+    local_sizes: dict[int, float] | None = None,
+    surface_only: bool = False,
 ) -> Mesh:
-    """gmsh 를 불러 메시를 만들고 읽는다. `.geo` 와 `.msh` 가 작업 폴더에 남는다."""
-    geo = workdir / "model.geo"
-    msh = workdir / "model.msh"
-    geo.write_text(_geo(step, element_size_mm, second_order), encoding="utf-8")
+    """gmsh 를 불러 메시를 만들고 읽는다. `.geo` 와 `.msh` 가 작업 폴더에 남는다.
+
+    `local_sizes` 는 **면 번호 → 요소 크기(mm)** 다 — CAD 의 영역별 메시 힌트가 그렇게
+    들어온다. `surface_only` 는 **면 번호를 먼저 알아내는 1차 통과**에 쓴다(2차원만 메시하므로
+    빠르다): 힌트는 영역 **이름**으로 오고, 그 이름을 면 번호로 바꾸려면 면 지문이 필요한데
+    그 지문이 메시에서 나온다(닭과 달걀). 그 순서는 `build.py` 가 쥔다.
+    """
+    geo = workdir / ("surface.geo" if surface_only else "model.geo")
+    msh = workdir / ("surface.msh" if surface_only else "model.msh")
+    geo.write_text(
+        _geo(step, element_size_mm, second_order, local_sizes or {}), encoding="utf-8"
+    )
     done = tools.run(
         tools.gmsh_bin(),
-        [str(geo), "-3", "-o", str(msh), "-nopopup", "-v", "2"],
+        [str(geo), "-2" if surface_only else "-3", "-o", str(msh), "-nopopup", "-v", "2"],
         cwd=workdir,
         timeout_seconds=timeout_seconds,
         what="gmsh",
@@ -87,16 +101,19 @@ def build_mesh(
     if not msh.is_file():
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
         raise StageFailure("mesh_failed", f"gmsh 가 메시를 못 만들었습니다:\n{tail}")
-    return read_mesh(msh)
+    # 1차 통과는 **면만** 만든다 — 사면체가 없는 것이 정상이다.
+    return read_mesh(msh, require_solid=not surface_only)
 
 
-def _geo(step: Path, size: float, second_order: bool) -> str:
+def _geo(step: Path, size: float, second_order: bool, local_sizes: dict[int, float]) -> str:
     """gmsh 에게 줄 쪽지. **`.geo` 파일이 경계다** — 파이썬 API 를 안 쓴다(`tools` 참고)."""
     return (
         "\n".join(
             [
                 'SetFactory("OpenCASCADE");',
-                f'v() = ShapeFromFile("{step}");',
+                # **절대경로로 적는다** — gmsh 는 `.geo` 가 있는 폴더를 기준으로 찾으므로
+                # 상대경로를 주면 「파일을 못 읽는다」 로 끝난다(실측 2026-10-03).
+                f'v() = ShapeFromFile("{step.resolve()}");',
                 # 맞닿은 면을 하나로 — 절점을 공유해야 붙은 모델이 된다.
                 "BooleanFragments{ Volume{:}; Delete; }{}",
                 f"Mesh.MeshSizeMax = {size:g};",
@@ -105,14 +122,25 @@ def _geo(step: Path, size: float, second_order: bool) -> str:
                 # 물리 그룹을 안 만들어도 전부 저장한다 — 우리는 기하 번호로 찾는다.
                 "Mesh.SaveAll = 1;",
                 "Mesh.MshFileVersion = 2.2;",
+                # **영역별 힌트는 그 면의 점에 크기를 준다.** `MeshSize{ PointsOf{ … } }` 는
+                # gmsh 의 고전적인 방법이고, 필드를 세우는 것보다 읽기 쉽다. 전역 크기보다 큰
+                # 값을 줘도 gmsh 가 받아 준다 — 그것이 CAD 가 말한 것이면 그대로 쓴다.
+                *(
+                    f"MeshSize{{ PointsOf{{ Surface{{{face}}}; }} }} = {value:g};"
+                    for face, value in sorted(local_sizes.items())
+                ),
             ]
         )
         + "\n"
     )
 
 
-def read_mesh(msh: Path) -> Mesh:
-    """`.msh`(2.2) 를 읽어 절점 · 요소 · 면 지문 · 바디 지문을 낸다."""
+def read_mesh(msh: Path, *, require_solid: bool = True) -> Mesh:
+    """`.msh`(2.2) 를 읽어 절점 · 요소 · 면 지문 · 바디 지문을 낸다.
+
+    `require_solid` 를 끄면 **면만 있는 메시**도 받는다(면 번호를 알아내는 1차 통과). 켜 두면
+    사면체가 없을 때 멈춘다 — 그대로 풀면 요소가 없는 해석이 끝까지 돌 수 있다.
+    """
     nodes, elements = _parse(msh)
     if not nodes:
         raise StageFailure("mesh_failed", "메시에 절점이 없습니다.")
@@ -126,12 +154,13 @@ def read_mesh(msh: Path) -> Mesh:
         number += 1
         second_order = second_order or kind == 11
         solids[entity].append((number, [ids[one] for one in order]))
-    if not solids:
+    if not solids and require_solid:
         raise StageFailure(
             "mesh_failed", "메시에 사면체가 없습니다 — 형상이 솔리드인지 보세요."
         )
     faces, face_nodes = _faces(nodes, elements)
     by_face = _triangles(elements)
+    rings = _rings(elements)
     return Mesh(
         nodes=nodes,
         solids=dict(solids),
@@ -140,6 +169,7 @@ def read_mesh(msh: Path) -> Mesh:
         face_nodes=face_nodes,
         triangles=[one for rows in by_face.values() for one in rows],
         face_triangles=by_face,
+        face_rings=rings,
         second_order=second_order,
     )
 
@@ -178,6 +208,214 @@ def _parse(
     return nodes, elements
 
 
+#: 법선이 이 안에서 모이면 **평면**으로 본다. 2차 요소의 곡면 삼각형도 모서리 셋으로 재면
+#: 몇 도씩 흔들리므로 0 도로 못 박을 수 없다.
+PLANE_DEGREES = 5.0
+#: 축에서의 거리가 이만큼 고르면 **원통**으로 본다(평균 대비 표준편차).
+CYLINDER_SPREAD = 0.05
+
+
+def _classify(
+    nodes: dict[int, tuple[float, float, float]],
+    triangles: list[tuple[int, int, int]],
+    members: set[int],
+) -> tuple[str, float | None]:
+    """그 면이 평면인가 원통인가 — **지문을 되맞추려면 반지름이 필요하다.**
+
+    조건은 면 번호로 오지 않는다. 평면은 `무게중심 · 면적 · 법선`, 원통은 `반지름 · 축` 으로
+    온다(CompCore 계약). Mechanical 은 형상을 들고 있어 그 둘을 바로 주지만, 우리는 메시만
+    있으므로 **삼각형에서 되맞춘다.** 못 맞추면 원통 지문이 영구히 안 풀린다(실측 2026-10-03:
+    `조건_원통_SI` 의 구멍면).
+
+    판정 순서가 중요하다. **평면을 먼저 가린다** — 평면을 원통으로 잘못 보면 지금 잘 풀리는
+    지문들이 「평면이 아닙니다」 로 깨진다. 법선이 한 방향으로 모이면 평면이고, 그렇지 않으면
+    축을 찾아 반지름이 고른지 본다. 둘 다 아니면 **아무 말도 하지 않는다**(빈 글자) — 모르는
+    것을 원통이라고 적으면 그 지문이 조용히 엉뚱한 면에 붙는다.
+    """
+    if len(triangles) < 4:
+        return "", None
+    normals: list[tuple[float, float, float]] = []
+    middles: list[tuple[float, float, float]] = []
+    for triangle in triangles:
+        a, b, c = (nodes[one] for one in triangle)
+        u = [b[axis] - a[axis] for axis in range(3)]
+        v = [c[axis] - a[axis] for axis in range(3)]
+        cross = (
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        )
+        size = math.sqrt(sum(one * one for one in cross))
+        if size == 0:
+            continue
+        normals.append(tuple(one / size for one in cross))  # type: ignore[arg-type]
+        middles.append(tuple((a[axis] + b[axis] + c[axis]) / 3 for axis in range(3)))  # type: ignore[arg-type]
+    if len(normals) < 4:
+        return "", None
+
+    mean = [sum(one[axis] for one in normals) / len(normals) for axis in range(3)]
+    mean_size = math.sqrt(sum(one * one for one in mean))
+    if mean_size > 0:
+        unit = [one / mean_size for one in mean]
+        worst = max(_angle(one, unit) for one in normals)
+        if worst <= PLANE_DEGREES:
+            return "plane", None
+
+    # 원통이면 법선이 **축에 수직**이다 — 그래서 축은 법선들이 가장 안 퍼진 방향이다.
+    matrix = [[sum(one[i] * one[j] for one in normals) for j in range(3)] for i in range(3)]
+    axis = _smallest_eigenvector(matrix)
+
+    # **반지름은 절점으로 맞춘다.** 삼각형 무게중심은 원통 **안쪽**에 있어서(내접 다각형)
+    # 반지름이 작게 나온다 — 실측 2026-10-03: 요소 4 mm 에서 5.0 이 4.75 로 읽혔고, 그 차이로
+    # 지문이 안 풀렸다. 절점은 gmsh 가 면 위에 놓으므로 그것이 정본이다.
+    #
+    # 원을 맞추는 것은 **반쪽 원통**(구멍의 절반 등) 때문이다. 축의 방향만 알고 중심을 면의
+    # 무게중심으로 두면, 잘린 면에서는 중심이 축에서 비켜 있어 반지름이 틀어진다.
+    flat = _project(nodes, members, axis)
+    if len(flat) < 4:
+        return "", None
+    radius = _circle_radius(flat)
+    if radius is None or radius <= 0:
+        return "", None
+    return "cylinder", radius
+
+
+def _angle(first: tuple[float, float, float], second: list[float]) -> float:
+    dot = max(-1.0, min(1.0, sum(first[axis] * second[axis] for axis in range(3))))
+    return math.degrees(math.acos(dot))
+
+
+def _project(
+    nodes: dict[int, tuple[float, float, float]], members: set[int], axis: list[float]
+) -> list[tuple[float, float]]:
+    """절점을 **축에 수직한 평면**으로 눕힌다 — 거기서는 원통이 원이다."""
+    first = [1.0, 0.0, 0.0]
+    if abs(axis[0]) > 0.9:
+        first = [0.0, 1.0, 0.0]
+    u = _cross(axis, first)
+    size = math.sqrt(sum(one * one for one in u))
+    if size == 0:
+        return []
+    u = [one / size for one in u]
+    v = _cross(axis, u)
+    return [
+        (
+            sum(nodes[node][index] * u[index] for index in range(3)),
+            sum(nodes[node][index] * v[index] for index in range(3)),
+        )
+        for node in sorted(members)
+        if node in nodes
+    ]
+
+
+def _circle_radius(points: list[tuple[float, float]]) -> float | None:
+    """평면 위 점들에 원을 맞춘다 — 반지름만 돌려준다. **고르지 않으면 `None`.**
+
+    대수적 원 맞춤(Kåsa): `x² + y² + Dx + Ey + F = 0` 은 D · E · F 에 선형이라 3x3 한 번으로
+    풀린다. 원통이 아니면 잔차가 커지므로 거기서 가려낸다 — 모르는 것을 원통이라고 적으면
+    그 지문이 조용히 엉뚱한 면에 붙는다.
+    """
+    count = len(points)
+    sum_x = sum(one[0] for one in points)
+    sum_y = sum(one[1] for one in points)
+    sum_xx = sum(one[0] ** 2 for one in points)
+    sum_yy = sum(one[1] ** 2 for one in points)
+    sum_xy = sum(one[0] * one[1] for one in points)
+    sum_xr = sum(one[0] * (one[0] ** 2 + one[1] ** 2) for one in points)
+    sum_yr = sum(one[1] * (one[0] ** 2 + one[1] ** 2) for one in points)
+    sum_r = sum(one[0] ** 2 + one[1] ** 2 for one in points)
+    matrix = [
+        [sum_xx, sum_xy, sum_x],
+        [sum_xy, sum_yy, sum_y],
+        [sum_x, sum_y, float(count)],
+    ]
+    right = [-sum_xr, -sum_yr, -sum_r]
+    solved = _solve3(matrix, right)
+    if solved is None:
+        return None
+    d, e, f = solved
+    center = (-d / 2, -e / 2)
+    inside = center[0] ** 2 + center[1] ** 2 - f
+    if inside <= 0:
+        return None
+    radius = math.sqrt(inside)
+    spread = (
+        math.sqrt(sum((math.dist(one, center) - radius) ** 2 for one in points) / count)
+        / radius
+    )
+    return radius if spread <= CYLINDER_SPREAD else None
+
+
+def _cross(first: list[float], second: list[float]) -> list[float]:
+    return [
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    ]
+
+
+def _solve3(
+    matrix: list[list[float]], right: list[float]
+) -> tuple[float, float, float] | None:
+    """3x3 선형계 — 크라메르. 특이하면 `None`(짐작하지 않는다)."""
+
+    def determinant(rows: list[list[float]]) -> float:
+        return (
+            rows[0][0] * (rows[1][1] * rows[2][2] - rows[1][2] * rows[2][1])
+            - rows[0][1] * (rows[1][0] * rows[2][2] - rows[1][2] * rows[2][0])
+            + rows[0][2] * (rows[1][0] * rows[2][1] - rows[1][1] * rows[2][0])
+        )
+
+    base = determinant(matrix)
+    if abs(base) < 1e-12:
+        return None
+    found: list[float] = []
+    for column in range(3):
+        swapped = [row[:] for row in matrix]
+        for index in range(3):
+            swapped[index][column] = right[index]
+        found.append(determinant(swapped) / base)
+    return found[0], found[1], found[2]
+
+
+def _smallest_eigenvector(matrix: list[list[float]]) -> list[float]:
+    """대칭 3x3 의 **가장 작은 고윳값**의 고유벡터 — 야코비 회전 몇 번으로 끝난다.
+
+    numpy 를 쓰지 않는다: 리눅스 워커에 없고, 이 한 가지를 위해 넣을 만한 꾸러미가 아니다
+    (`vtp.py` 와 같은 판단이다).
+    """
+    a = [row[:] for row in matrix]
+    vectors = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    for _ in range(50):
+        # 비대각 중 가장 큰 자리를 없앤다.
+        pivot = max((abs(a[i][j]), i, j) for i in range(3) for j in range(3) if i < j)
+        size, i, j = pivot
+        if size < 1e-12:
+            break
+        if a[i][i] == a[j][j]:
+            angle = math.pi / 4
+        else:
+            angle = 0.5 * math.atan2(2 * a[i][j], a[i][i] - a[j][j])
+        cos, sin = math.cos(angle), math.sin(angle)
+        for k in range(3):
+            first, second = a[k][i], a[k][j]
+            a[k][i] = cos * first + sin * second
+            a[k][j] = -sin * first + cos * second
+        for k in range(3):
+            first, second = a[i][k], a[j][k]
+            a[i][k] = cos * first + sin * second
+            a[j][k] = -sin * first + cos * second
+        for k in range(3):
+            first, second = vectors[k][i], vectors[k][j]
+            vectors[k][i] = cos * first + sin * second
+            vectors[k][j] = -sin * first + cos * second
+    diagonal = [a[index][index] for index in range(3)]
+    least = diagonal.index(min(diagonal))
+    column = [vectors[row][least] for row in range(3)]
+    size = math.sqrt(sum(one * one for one in column))
+    return [one / size for one in column] if size else [0.0, 0.0, 1.0]
+
+
 def _faces(
     nodes: dict[int, tuple[float, float, float]],
     elements: list[tuple[int, int, list[int]]],
@@ -212,19 +450,26 @@ def _faces(
             center[entity][axis] += area * (a[axis] + b[axis] + c[axis]) / 3
             normal[entity][axis] += cross[axis] / twice * area
     records: list[FaceRecord] = []
+    rows = _triangles(elements)
     for entity, area in sorted(area_of.items()):
         size = math.sqrt(sum(one * one for one in normal[entity]))
+        middle: tuple[float, float, float] = tuple(  # type: ignore[assignment]
+            one / area for one in center[entity]
+        )
+        # **원통이면 반지름을 되맞춘다** — 지문이 그것으로 면을 가리킨다(`_classify`).
+        surface, radius = _classify(nodes, rows.get(entity, []), members.get(entity, set()))
         records.append(
             FaceRecord(
                 id=entity,
-                centroid=tuple(one / area for one in center[entity]),  # type: ignore[arg-type]
+                centroid=middle,
                 area=area,
-                surface="",
+                surface=surface,
                 normal=(
                     tuple(one / size for one in normal[entity])  # type: ignore[arg-type]
                     if size
                     else None
                 ),
+                radius=radius,
             )
         )
     return records, dict(members)
@@ -257,8 +502,8 @@ def tributary_areas(mesh: Mesh, faces: list[int]) -> dict[int, float]:
     """
     shares: dict[int, float] = {}
     for face in faces:
-        for triangle in mesh.face_triangles.get(face, []):
-            a, b, c = (mesh.nodes[one] for one in triangle)
+        for ring in mesh.face_rings.get(face, []):
+            a, b, c = (mesh.nodes[one] for one in ring[:3])
             u = [b[axis] - a[axis] for axis in range(3)]
             v = [c[axis] - a[axis] for axis in range(3)]
             cross = [
@@ -269,9 +514,9 @@ def tributary_areas(mesh: Mesh, faces: list[int]) -> dict[int, float]:
             area = math.sqrt(sum(one * one for one in cross)) / 2
             if area <= 0:
                 continue
-            members = [one for one in triangle]
-            for node in members:
-                shares[node] = shares.get(node, 0.0) + area / len(members)
+            # **그 요소면의 절점 전부에 나눈다**(2차면 여섯) — 모서리만 주면 분포가 거꾸로다.
+            for node in ring:
+                shares[node] = shares.get(node, 0.0) + area / len(ring)
     return shares
 
 
@@ -283,6 +528,15 @@ def _triangles(
     for kind, entity, ids in elements:
         if kind in TRIANGLE_KINDS and len(ids) >= 3:
             found[entity].append((ids[0], ids[1], ids[2]))
+    return dict(found)
+
+
+def _rings(elements: list[tuple[int, int, list[int]]]) -> dict[int, list[list[int]]]:
+    """면마다 표면 요소의 **절점 전부** — 1차면 셋, 2차면 여섯."""
+    found: dict[int, list[list[int]]] = defaultdict(list)
+    for kind, entity, ids in elements:
+        if kind in TRIANGLE_KINDS and len(ids) >= 3:
+            found[entity].append(list(ids))
     return dict(found)
 
 

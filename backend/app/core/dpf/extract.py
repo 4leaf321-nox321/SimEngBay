@@ -123,6 +123,17 @@ def extract(
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         "participation": {name: value for name, value in ratios.items()},
     }
+    loose = [
+        one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
+    ]
+    if not free_free and loose:
+        # **구속이 있는데 0 Hz 모드가 있다** — 어느 방향이 자유라는 뜻이다(원통 지지의 접선
+        # 처럼 일부러 열어 둔 것일 수 있다). 구속을 잘못 걸어 통째로 떠 있는 경우도 똑같이
+        # 보이므로, 값만으로 가르지 않고 사람에게 묻는다.
+        result["warning"] = (
+            f"구속이 있는데 {len(loose)}개 모드가 0 Hz 입니다 — 자유로 둔 방향(원통 지지의 "
+            f"접선 등)이 있는지 보세요."
+        )
     if free_free and rigid_found != RIGID_BODY_MODES:
         # **세어 보고 다르면 적어 둔다.** 다중 바디에서 접촉이 빠지면 강체 모드가 6개가 아니라
         # 12개(바디마다 6개)로 나온다 — 값은 그럴듯한데 모델이 붙어 있지 않은 상태다.

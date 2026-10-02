@@ -245,7 +245,7 @@ class SubprocessExecutor:
             )
         # **종료 코드가 아니라 결과 파일을 믿는다.** 자식이 왜 죽었는지는 그 파일에만 있고,
         # 없으면 read_result 가 「도중에 죽었다」 고 말한다.
-        return stage_run.read_result(ctx.workdir, ctx.stage)
+        return stage_run.read_result(ctx.workdir, ctx.stage, exit_code=child.returncode)
 
 
 def _stop(child: subprocess.Popen[str]) -> None:

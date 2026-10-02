@@ -227,13 +227,20 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def read_result(workdir: Path, stage: str) -> StageResult:
-    """`main` 이 쓴 성공 결과를 읽어 `StageResult` 로. 실패는 `StageFailure` 로 던진다."""
+def read_result(workdir: Path, stage: str, *, exit_code: int | None = None) -> StageResult:
+    """`main` 이 쓴 성공 결과를 읽어 `StageResult` 로. 실패는 `StageFailure` 로 던진다.
+
+    `exit_code` 를 주면 **그 수를 메시지에 적는다.** 임베디드 Mechanical 은 가끔 아무 말도 없이
+    터지는데(실측 2026-10-03: 종료 코드 116 · stderr 비어 있음 · 다시 돌리면 통과), 그때 화면에
+    종료 코드라도 남아야 로그를 뒤질 단서가 된다.
+    """
     path = result_path(workdir, stage)
     if not path.is_file():
+        tail = f"(종료 코드 {exit_code})" if exit_code is not None else ""
         raise StageFailure(
             "internal",
-            f"{stage} 단계가 결과 파일을 남기지 않았습니다 — 프로세스가 도중에 죽었습니다.",
+            f"{stage} 단계가 결과 파일을 남기지 않았습니다 — 프로세스가 도중에 "
+            f"죽었습니다{tail}. 다시 걸어 보세요.",
         )
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not payload.get("ok"):

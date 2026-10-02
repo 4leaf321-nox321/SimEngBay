@@ -279,6 +279,55 @@ def test_워커_경로도_같은_함수를_지난다(
     assert done.attempts == 1
 
 
+def test_워커는_제_솔버의_작업만_집는다(
+    client: TestClient, db: Session, member: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**Ansys 는 워커 하나 · CalculiX 는 여럿** — 그래서 집는 작업을 솔버로 가른다.
+
+    Ansys 는 노드락 라이선스가 하나라 워커를 늘리면 나머지가 라이선스 오류로 실패한다.
+    CalculiX 는 라이선스가 없어 코어 수만큼 띄울 수 있다. 구분이 없으면 CalculiX 를 늘리려다
+    **Ansys 작업을 깨뜨린다** — 그 사고는 「해석이 실패했다」 로만 보인다.
+    """
+    monkeypatch.setattr(get_settings(), "jobs_inline", False)
+    ansys_job = _create(client, member, workspace=member.workspace)
+    assert ansys_job.status_code == 201
+    open_job = _create(
+        client, member, spec={**MODAL, "solver": "calculix"}, workspace=member.workspace
+    )
+    assert open_job.status_code == 201, open_job.text
+
+    # CalculiX 워커는 **먼저 들어온 Ansys 작업을 건너뛴다**(순서보다 솔버가 먼저다).
+    picked = services.claim_next(db, "open-worker", solvers=("calculix",))
+    assert picked is not None
+    assert str(picked.id) == open_job.json()["id"]
+
+    # Ansys 워커는 자기 것을 집는다.
+    other = services.claim_next(db, "ansys-worker", solvers=("ansys",))
+    assert other is not None
+    assert str(other.id) == ansys_job.json()["id"]
+
+    # 더 집을 것이 없다.
+    assert services.claim_next(db, "open-worker", solvers=("calculix",)) is None
+
+
+def test_솔버_칸이_없는_옛_작업은_ansys_로_본다(
+    client: TestClient, db: Session, member: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """스펙의 기본값과 같게 본다.
+
+    안 그러면 옛 작업이 **아무 워커도 안 집어** 영원히 대기한다.
+    """
+    monkeypatch.setattr(get_settings(), "jobs_inline", False)
+    created = _create(client, member, spec=MODAL, workspace=member.workspace)
+    assert created.status_code == 201
+    assert "solver" not in MODAL, "이 시험은 솔버 칸이 없는 스펙이어야 뜻이 있다"
+
+    assert services.claim_next(db, "open-worker", solvers=("calculix",)) is None
+    picked = services.claim_next(db, "ansys-worker", solvers=("ansys",))
+    assert picked is not None
+    assert str(picked.id) == created.json()["id"]
+
+
 def test_결과_요약은_파일_그대로_온다(client: TestClient, member: Signed) -> None:
     """**DB 에 옮겨 담지 않는다** — 해석이 낸 파일이 정본이고, 표로 복사하면 두 벌이 갈린다."""
     created = _create(client, member, workspace=member.workspace)

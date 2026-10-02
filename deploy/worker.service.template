@@ -1,8 +1,11 @@
 [Unit]
 # **인스턴스 유닛이다** — `@@APP_SLUG@@-worker@1` · `@2` … 로 여럿 띄운다.
-# 워커 하나가 한 번에 작업 하나를 돌린다. **개수 = Mechanical 라이선스 수**(지금은 fake
-# 실행기라 상관없지만, 1.5단계에서 진짜 실행기가 오면 그 수를 넘긴 워커는 라이선스 오류로
-# 실패한다). DB 를 큐로 쓰므로 워커끼리 조율할 것은 없다(FOR UPDATE SKIP LOCKED).
+# 워커 하나가 한 번에 작업 하나를 돌린다. DB 를 큐로 쓰므로 워커끼리 조율할 것은 없다
+# (FOR UPDATE SKIP LOCKED).
+#
+# **Ansys 워커 개수 = Mechanical 라이선스 수.** 그 수를 넘긴 워커는 라이선스 오류로 실패한다.
+# **CalculiX 는 라이선스가 없어 코어 수만큼** 띄울 수 있으므로, 솔버로 갈라 띄운다 — 아래
+# `worker-%i.env` 에 `SIMULATION_SOLVERS` 를 적는다(없으면 그 워커는 전부 집는다).
 Description=@@APP_NAME@@ 해석 작업 워커 %i
 After=network-online.target @@APP_SLUG@@.service
 Wants=network-online.target
@@ -25,6 +28,15 @@ WorkingDirectory=@@INSTALL_DIR@@
 # **Ansys 는 이미지에 굽지 않는다**(수십 GB · 버전을 올릴 때마다 다시 굽는다). 호스트나 공용
 # 스토리지의 설치본을 `--bind` 로 건다 — `ANSYS_HOST_DIR` 를 주면 deploy.sh 가 아래 줄을
 # 채우고, 안 주면 그 줄을 지운다(그 서버에서는 fake 실행기로만 돈다).
+# **인스턴스마다 다른 설정을 줄 수 있다** — 있으면 읽고 없으면 넘어간다(`-`).
+# 솔버를 갈라 띄울 때 쓴다:
+#
+#     echo SIMULATION_SOLVERS=ansys    > @@INSTALL_DIR@@/worker-1.env    # 라이선스 하나
+#     echo SIMULATION_SOLVERS=calculix > @@INSTALL_DIR@@/worker-2.env    # 코어 수만큼
+#
+# 안 두면 그 워커는 **전부** 집는다(설정을 안 건드린 설치는 그대로 돈다).
+EnvironmentFile=-@@INSTALL_DIR@@/worker-%i.env
+
 ExecStart=/usr/bin/apptainer exec \
     --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
     --bind @@FILESTORE_DIR@@:/data/filestore \

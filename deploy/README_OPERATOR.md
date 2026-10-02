@@ -153,6 +153,33 @@ sudo journalctl -u <slug> -f
 systemctl status '<slug>-worker@1'
 ```
 
+### 솔버를 갈라 띄우기 — CalculiX 로 설계점을 동시에 풀려면
+
+**Ansys 는 노드락 라이선스가 하나라 워커도 하나여야 한다.** CalculiX(오픈소스)는 라이선스가
+없어 코어 수만큼 띄울 수 있다. 섞어 띄우면 CalculiX 를 늘리려다 **Ansys 작업이 라이선스 오류로
+실패한다** — 그래서 워커마다 집을 솔버를 정한다:
+
+```bash
+cd ~/apps/<slug>
+echo SIMULATION_SOLVERS=ansys    > worker-1.env     # 하나만
+for i in 2 3 4; do echo SIMULATION_SOLVERS=calculix > worker-$i.env; done
+sudo systemctl restart '<slug>-worker@*'
+journalctl -u '<slug>-worker@2' -n 5    # 「솔버 calculix」 가 찍힌다
+```
+
+파일이 없는 워커는 **전부** 집는다(설정을 안 건드린 설치는 그대로 돈다). 워커 수 자체는
+`WORKER_COUNT` 로 정한다(설치 · 갱신 때).
+
+**CalculiX 가 이미지에 있는지**는 이렇게 본다:
+
+```bash
+apptainer exec ~/apps/<slug>/app.sif ccx -v
+apptainer exec ~/apps/<slug>/app.sif gmsh -info | head -3
+```
+
+없으면 그 서버에서는 CalculiX 를 고른 작업이 「솔버를 못 찾았다」 로 **즉시** 실패한다 —
+조용히 다른 솔버로 풀지 않는다(`deploy/NOTICE`).
+
 ### DOE 공용 폴더 — CAD 가 내보낸 것을 읽으려면
 
 CAD 플랫폼(CompCore)이 설계점 묶음을 폴더로 내보내고, 이 서버가 **그 폴더를 읽어** 해석을
@@ -284,7 +311,7 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | `connection refused` (DB) | `systemctl status postgresql`, `.env` 의 포트 확인 |
 | 화면이 500, 로그에 "없는 컬럼" | 마이그레이션이 안 돌았다. `sudo ./deploy.sh update` |
 | **해석 작업이 「대기」 에서 안 움직인다** | 워커가 안 돈다. `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
-| 해석 작업이 `license` 로 실패한다 | 워커 수가 Mechanical 라이선스 수보다 많다. `WORKER_COUNT` 를 줄여 다시 설치한다 |
+| 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `WORKER_COUNT` 를 낮춰 다시 설치하거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
 | **DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 없이 설치했다. 그 값을 주고 `sudo ./deploy.sh update` |
 | DOE 화면에 「폴더가 없습니다」 | `.env` 의 `DOE_ROOTS` 가 **호스트 경로**를 가리킨다. 컨테이너 안에서 보이는 이름(`/data/doe`)이어야 한다 |
 | 폴더는 보이는데 DOE 표시가 안 붙는다 | 그 폴더에 `manifest.csv` 가 없다 — CAD 가 내보내기를 끝내지 않았거나 상위 폴더를 보고 있다 |

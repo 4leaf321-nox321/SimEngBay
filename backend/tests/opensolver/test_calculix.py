@@ -106,27 +106,136 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert len(result["modes"]) == 6
 
 
-def test_곡면_지문은_메시에서_못_찾고_그렇게_말한다(ready: None, tmp_path: Path) -> None:
-    """**메시에서 면을 되찾는 길의 한계** — 삼각형에는 「이 면이 원통인가」 가 없다.
+def test_능력표에_없는_구속은_까닭을_달아_거절한다(ready: None, tmp_path: Path) -> None:
+    """탄성 지지는 아직 못 건다 — **조용히 완전 고정으로 바꾸지 않는다.**
 
-    `조건_원통_SI` 는 구멍면(원통)에 원통 지지를 건다. CAD 지문은 반지름으로 그 면을
-    가리키는데,
-    gmsh 가 낸 표면 요소에서는 무게중심 · 면적 · 법선만 나온다 — 그래서 **못 찾는다.** 조용히
-    다른 면을 잡거나 구속을 빼면 그 결과는 오류 없이 그럴듯하게 나오므로 **멈추고, 솔버를
-    바꾸라고 말한다.**
+    고정으로 바꿔 풀면 더 단단한 모델이 되어 주파수가 올라가는데, 결과만 보면 알 수 없다.
+    능력표(`calculix/deck.py` 의 `SUPPORTED_CONSTRAINTS`)에 없으면 멈추고, **어떻게 하면
+    되는지**까지 말한다.
+    """
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", tmp_path / "input.step")
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    payload["conditions"]["constraints"][0]["type"] = "elastic_support"
+    payload["conditions"]["constraints"][0]["stiffness"] = 1000.0
+    (tmp_path / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    with pytest.raises(StageFailure) as caught:
+        _run(tmp_path, SPEC)
+
+    assert "elastic_support" in str(caught.value)
+    assert "ansys" in str(caught.value).lower(), "어떻게 하면 되는지까지 말해야 한다"
+
+
+#: `조건_원통_SI` 를 Ansys 로 돌린 값(실측 2026-10-03 · 요소 4 mm · 물성은 스펙).
+#: 1차는 **0 Hz** 다 — 접선이 자유라 핀을 축으로 돈다. 그 뒤가 탄성 모드다.
+CYLINDER_ANSYS_HZ = (2165.2, 4746.0, 11051.5, 11640.5, 13943.9)
+
+
+def test_원통면을_메시에서_되맞춰_구속을_건다(ready: None, tmp_path: Path) -> None:
+    """**곡면 지문을 메시에서 되살린다** — 그러면 원통 지지가 걸린다.
+
+    조건은 면 번호로 오지 않는다. 평면은 `무게중심 · 면적 · 법선`, 원통은 `반지름 · 축` 으로
+    온다. Mechanical 은 형상을 들고 있어 그 둘을 바로 주지만 우리는 메시만 있다 — 그래서
+    삼각형에서 **되맞춘다**(법선이 수직인 축을 찾고, 절점에 원을 맞춘다).
+
+    삼각형 무게중심으로 반지름을 재면 **내접 다각형이라 작게 나온다**(실측: 5.0 이 4.75) —
+    그래서 면 위에 있는 **절점**으로 맞춘다.
+
+    원통 지지는 국부 좌표계로 건다(`*TRANSFORM, TYPE=C`): 자유도 1 반경 · 2 접선 · 3 축.
+    이 폴더는 **접선만 자유**라 핀에 끼운 채 돈다 — 그래서 0 Hz 모드가 하나 나오고, 결과가
+    그 사실을 경고로 말한다. 영역별 메시 힌트(구멍면 2 mm)도 함께 걸린다.
     """
     cylinder = FIXTURES / "doe" / "조건_원통_SI"
     shutil.copy(cylinder / "points" / "p0001.step", tmp_path / "input.step")
     shutil.copy(cylinder / "points" / "p0001.json", tmp_path / "topology.json")
     spec = dict(SPEC)
-    # 이 폴더의 물성에는 탄성계수가 없다 — 사람이 넣은 값으로 돌린다.
+    spec["material_from"] = "spec"  # 이 폴더의 물성에는 탄성계수가 없다.
+    spec["mesh"] = {"element_size_mm": 6}
+
+    summary = _run(tmp_path, spec)
+
+    assert "cylindrical:구멍면" in summary["constrained_regions"]
+    deck = (tmp_path / "model.inp").read_text(encoding="utf-8")
+    assert "*TRANSFORM, NSET=HOLD0, TYPE=C" in deck
+    held = [
+        one.strip()
+        for one in deck.split("*TRANSFORM")[1].split("*BOUNDARY")[1].splitlines()
+        if one.startswith("HOLD0")
+    ]
+    # 반경(1) · 축(3) 고정, **접선(2) 자유** — 그것이 「핀에 끼운 채 돈다」 다.
+    assert held == ["HOLD0, 1, 1, 0.0", "HOLD0, 3, 3, 0.0"]
+    # 영역별 메시 힌트가 gmsh 에게 갔다 — 구멍면만 2 mm(선언은 0.002 m).
+    geo = (tmp_path / "model.geo").read_text(encoding="utf-8")
+    assert "MeshSize{ PointsOf{ Surface{" in geo
+    assert "= 2;" in geo
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    # **0 Hz 모드를 말해 준다** — 자유로 둔 방향이 있다는 뜻이다. 구속을 잘못 걸어 통째로
+    # 떠 있는 경우도 똑같이 보이므로 값만으로 가르지 않는다.
+    assert "0 Hz" in result.get("warning", "")
+    elastic = [one["frequency_hz"] for one in result["modes"]][1:]
+    gaps = [
+        abs(open_hz - ansys_hz) / ansys_hz
+        for ansys_hz, open_hz in zip(CYLINDER_ANSYS_HZ, elastic, strict=False)
+    ]
+    assert max(gaps) < 0.02, f"Ansys 와 {[round(one * 100, 2) for one in gaps]}% 갈렸다"
+
+
+def test_베어링_하중은_구멍의_반쪽에_국부_성분으로_걸린다(ready: None, tmp_path: Path) -> None:
+    """핀이 밀면 구멍은 **그 방향 쪽 반쪽만** 눌린다.
+
+    면 전체에 고르게 걸면 합력은 같아도 반대쪽을 당기는 모델이 되어, 구멍 주변 변형이 달라진다.
+    그래서 분담 면적에 반경 방향과 하중 방향의 겹침(cos)을 곱한다.
+
+    그리고 **국부 좌표계가 걸린 절점에서는 `*CLOAD` 의 방향도 국부로 읽힌다** — CalculiX 가
+    `*TRANSFORM` 을 구속과 하중에 함께 적용한다. 전역 성분을 그대로 적으면 힘이 반경 · 접선 ·
+    축으로 뒤바뀌고, 그 결과는 오류 없이 그럴듯하게 나온다(실측 2026-10-03에 그 자리를 밟았다).
+    """
+    cylinder = FIXTURES / "doe" / "조건_원통_SI"
+    shutil.copy(cylinder / "points" / "p0001.step", tmp_path / "input.step")
+    shutil.copy(cylinder / "points" / "p0001.json", tmp_path / "topology.json")
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec["recipe"] = "static"
     spec["material_from"] = "spec"
+    spec["mesh"] = {"element_size_mm": 6}
 
-    with pytest.raises(StageFailure) as caught:
-        _run(tmp_path, spec)
+    summary = _run(tmp_path, spec)
 
-    assert "구멍면" in str(caught.value)
-    assert "ansys" in str(caught.value), "어떻게 하면 되는지까지 말해야 한다"
+    assert "bearing:구멍면" in summary["constrained_regions"]
+    deck = (tmp_path / "model.inp").read_text(encoding="utf-8")
+    hole = {
+        int(one.strip())
+        for line in deck.split("*NSET, NSET=HOLD0")[1].split("*TRANSFORM")[0].splitlines()
+        for one in line.split(",")
+        if one.strip().isdigit()
+    }
+    loaded: set[int] = set()
+    local = 0
+    for block in deck.split("*CLOAD")[1:]:
+        for line in block.splitlines():
+            if not line.strip():
+                # `*CLOAD` 바로 뒤의 빈 줄 — 여기서 멈추면 한 줄도 못 읽는다.
+                continue
+            parts = [one.strip() for one in line.split(",")]
+            if len(parts) != 3 or not parts[0].isdigit():
+                break
+            node, dof = int(parts[0]), parts[1]
+            if node in hole:
+                loaded.add(node)
+                if dof in ("1", "2"):
+                    local += 1
+    assert hole and loaded, "구멍면에 하중이 걸려야 한다"
+    # **반쪽만** 받는다 — 전부 받으면 분포가 아니라 평균이다.
+    assert 0.3 < len(loaded) / len(hole) < 0.7, (
+        f"구멍 절점 {len(hole)} 중 {len(loaded)} 이 받았다"
+    )
+    # 그 절점의 성분은 **국부**(반경 · 접선)다 — 전역 X 로 적혀 있으면 안 된다.
+    assert local >= len(loaded), "국부 성분으로 적혀야 한다"
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["max_displacement"] > 0
 
 
 def test_정적_해석이_변형과_응력을_낸다(ready: None, tmp_path: Path) -> None:

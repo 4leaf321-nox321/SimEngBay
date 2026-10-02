@@ -54,7 +54,10 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     modes: list[dict[str, Any]] = []
     elastic_index = 0
     for index, value in enumerate(values, start=1):
-        rigid = value < RIGID_BODY_HZ
+        # **구속이 있으면 강체로 세지 않는다** — Ansys 쪽과 같은 규칙이다(`dpf/extract.py`).
+        # 구속된 모델의 0 Hz 는 「강체」 가 아니라 **자유로 둔 방향**이고(원통 지지의 접선 등),
+        # 그것은 아래에서 경고로 말한다. 두 솔버가 같은 표를 내야 설계점 비교가 성립한다.
+        rigid = not constrained and value < RIGID_BODY_HZ and index <= RIGID_BODY_MODES
         if not rigid:
             elastic_index += 1
         modes.append(
@@ -91,6 +94,17 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         **({"participation": ratios} if ratios else {}),
     }
+    loose = [
+        one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
+    ]
+    if constrained and loose:
+        # **구속이 있는데 0 Hz 모드가 있다** — 어느 방향이 자유라는 뜻이다. 원통 지지의 접선
+        # 처럼 일부러 열어 둔 것일 수 있으나, 구속을 잘못 걸어 통째로 떠 있는 경우도 똑같이
+        # 보인다. 값만으로는 못 가르므로 **사람에게 묻는다.**
+        result["warning"] = (
+            f"구속이 있는데 {len(loose)}개 모드가 0 Hz 입니다 — 자유로 둔 방향(원통 지지의 "
+            f"접선 등)이 있는지 보세요."
+        )
     if not constrained and rigid_found != RIGID_BODY_MODES:
         # **세어 보고 다르면 적어 둔다.** 바디가 여럿인데 접합면이 안 붙었으면 강체 모드가
         # 바디마다 6개씩 나온다 — 값은 그럴듯한데 모델이 떨어져 있는 상태다.

@@ -1074,14 +1074,30 @@ def cancel(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
     return simulation
 
 
-def claim_next(db: Session, worker_id: str) -> Simulation | None:
+def claim_next(
+    db: Session, worker_id: str, *, solvers: tuple[str, ...] | None = None
+) -> Simulation | None:
     """queued 하나를 가져온다. `SKIP LOCKED` — 다른 워커가 잠근 행은 건너뛴다. 이것이 없으면 두
-    번째 워커는 첫 워커가 커밋할 때까지 서고, 워커를 늘린 뜻이 없어진다."""
+    번째 워커는 첫 워커가 커밋할 때까지 서고, 워커를 늘린 뜻이 없어진다.
+
+    `solvers` 를 주면 **그 솔버의 작업만** 집는다. 쓰는 곳은 하나다: **Ansys 는 노드락
+    라이선스가 하나라 워커도 하나여야 하고, CalculiX 는 라이선스가 없어 코어 수만큼 띄울 수
+    있다.** 그래서 운영은 「Ansys 워커 하나 + CalculiX 워커 N개」 로 띄운다. 구분이 없으면
+    CalculiX 를 늘리려고 워커를 늘렸다가 **Ansys 작업이 라이선스 오류로 실패한다.**
+
+    솔버 칸이 없는 옛 작업은 `ansys` 로 본다(스펙의 기본값과 같다).
+    """
+    where = "status = 'queued' AND deleted_at IS NULL"
+    params: dict[str, Any] = {}
+    if solvers is not None:
+        where += " AND COALESCE(spec->>'solver', 'ansys') = ANY(:solvers)"
+        params["solvers"] = list(solvers)
     picked = db.execute(
         text(
-            "SELECT id FROM simulations WHERE status = 'queued' AND deleted_at IS NULL "
+            f"SELECT id FROM simulations WHERE {where} "
             "ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED"
-        )
+        ),
+        params,
     ).scalar()
     if picked is None:
         db.commit()

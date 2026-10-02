@@ -72,6 +72,9 @@ class SubprocessOptions:
     ansys_version: int = 252
     ansys_root: Path | None = None
     solver_processes: int = 2
+    shape_cache: Path | None = None
+    """형상 캐시 자리. **작업 폴더 밖**이라야 설계점끼리 나눠 쓴다(STEP 임포트가 모델링
+    시간의 거의 전부다 — 실측 18.9초)."""
     wrapper: tuple[str, ...] = ()
     """자식 파이썬을 **감싸서** 띄울 명령.
 
@@ -157,6 +160,15 @@ class SubprocessExecutor:
             "--visual-modes",
             str(self.options.visual_modes),
         ]
+        if self.options.shape_cache is not None:
+            # **형상 캐시는 작업 폴더 밖에 있다** — 설계점마다 폴더가 다르므로, 같은 형상을
+            # 나눠 쓰려면 한 자리에 모아야 한다.
+            cache = (
+                to_windows_path(self.options.shape_cache)
+                if self.windows and str(self.options.shape_cache).startswith("/")
+                else str(self.options.shape_cache)
+            )
+            command += ["--shape-cache", cache]
         if self.options.ansys_root is not None:
             root = (
                 to_windows_path(self.options.ansys_root)

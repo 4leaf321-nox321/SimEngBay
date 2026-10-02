@@ -1116,6 +1116,9 @@ def default_executor() -> executors.Executor:
         solver_processes=settings.solver_processes,
         wrapper=tuple(settings.mechanical_env.split()),
         visual_modes=settings.visual_modes,
+        # **형상 캐시는 작업 폴더들과 나란히 둔다** — 설계점마다 폴더가 다르므로 같은 형상을
+        # 나눠 쓰려면 한 자리여야 한다. 지우면 다음 작업이 다시 만든다(덤이다).
+        shape_cache=work_root() / ".shape-cache",
     )
 
 

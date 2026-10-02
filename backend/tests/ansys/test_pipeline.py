@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -57,11 +58,13 @@ SPEC = {
 }
 
 
-def _executor() -> executors.Executor:
+def _executor(*, shape_cache: Path | None = None) -> executors.Executor:
     """이 시험들만의 실행기 — **`SIMULATION_EXECUTOR` 과 다른 이름을 본다**(머리말 참고)."""
     name = os.environ.get("ANSYS_TEST_EXECUTOR", "local")
     python = os.environ.get("ANSYS_TEST_PYTHON")
-    return executors.resolve(name, python=Path(python) if python else None)
+    return executors.resolve(
+        name, python=Path(python) if python else None, shape_cache=shape_cache
+    )
 
 
 @pytest.fixture
@@ -614,6 +617,58 @@ def test_조화_응답이_주파수_곡선을_낸다(workdir: Path) -> None:
     # 거의 안 움직인다(5.1e-4 ~ 5.3e-4). 덱에는 `hropt,msup` · `harfrq` 가 바르게 적히지만
     # 감쇠(`dmprat`)가 안 실린다 — 모드 중첩이 증폭을 안 하고 있다는 뜻이다. 그 자리를 찾기
     # 전까지 **봉우리를 단정하지 않는다**(2026-10-02, 계획서에 적어 두었다).
+
+
+def test_같은_형상은_두_번_임포트하지_않는다(workdir: Path) -> None:
+    """**형상 캐시** — STEP 임포트가 모델링 시간의 거의 전부다(실측: 임포트 18.9초 · 메시
+    1.7초 · 캐시 다시 열기 0.7초).
+
+    `조건_재료훑기` 의 두 점은 형상 한 벌을 나눠 쓴다(재료만 바뀐다). 그러면 두 번째 점은
+    **임포트를 건너뛰고 캐시를 연다** — 그만큼 빨라져야 한다.
+
+    캐시가 틀리면 조용히 어긋난다(앞 점의 조건을 물려받거나 면 번호가 달라진다). 그래서 수만
+    보지 않고 **결과가 점마다 제대로 갈리는지**까지 본다.
+    """
+    cache = workdir / "cache"
+    seen: dict[int, dict[str, Any]] = {}
+    for number in (1, 2):
+        place = workdir / f"p{number:04d}"
+        place.mkdir(parents=True, exist_ok=True)
+        point = json.loads(
+            (MATERIAL_SWEEP / "points" / f"p{number:04d}.json").read_text(encoding="utf-8")
+        )
+        shutil.copy(MATERIAL_SWEEP / point["point"]["step_file"], place / "input.step")
+        shutil.copy(MATERIAL_SWEEP / "points" / f"p{number:04d}.json", place / "topology.json")
+        spec = dict(SPEC)
+        spec["mesh"] = {"element_size_mm": 8}
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+
+        runner = _executor(shape_cache=cache)
+        started = time.perf_counter()
+        summary: dict[str, Any] = {}
+        for stage in ("fetching", "modeling"):
+            result = runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+            summary.update(result.summary)
+        seen[number] = {
+            "reused": summary["shape_reused"],
+            "seconds": time.perf_counter() - started,
+            "mass": float(summary["mass_kg"]),
+            "material": summary.get("material_bodies", summary["material"]),
+        }
+
+    # 첫 점이 캐시를 만들고, 둘째 점이 그것을 쓴다.
+    assert seen[1]["reused"] is False
+    assert seen[2]["reused"] is True
+    assert list(cache.glob("*.mechdb")), "캐시 파일이 안 남았다"
+    # **빨라져야 한다** — 임포트(18.9초)를 건너뛴 만큼. 여유를 두고 10초로 본다.
+    assert seen[2]["seconds"] < seen[1]["seconds"] - 10
+
+    # **그리고 결과가 점마다 달라야 한다** — 캐시가 앞 점의 물성을 물려받으면 같아진다.
+    assert seen[1]["mass"] == pytest.approx(0.3213, rel=0.01)
+    assert seen[2]["mass"] == pytest.approx(0.4867, rel=0.01)
 
 
 def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir: Path) -> None:

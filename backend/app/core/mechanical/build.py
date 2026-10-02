@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -70,6 +71,7 @@ def build(
     *,
     input_name: str = "input.step",
     version: int = 252,
+    cache_dir: Path | None = None,
 ) -> StageResult:
     """형상 하나로 FE 모델을 만들고 `model.dat` 을 남긴다.
 
@@ -90,10 +92,15 @@ def build(
     # 전에). 조용히 빼면 「조건을 넣었는데 왜 결과가 같지」 를 사람이 물을 자리가 없다.
     given_conditions = _declared_conditions(spec, topology)
 
+    # **형상 캐시** — STEP 임포트가 모델링 시간의 거의 전부다(실측 2026-10-02: 임포트 18.9초 ·
+    # 메시 1.7초 · 다시 열기 0.7초). 같은 형상 · 같은 메시면 한 번 만들어 두고 **연다.**
+    cached = _cache_path(cache_dir, step, spec, given_conditions)
+
     app = _start_app(version)
     try:
         _use_unit_system(app, system)
-        bodies = _import_geometry(app, step)
+        reused = _open_cached(app, cached)
+        bodies = _bodies_of(app) if reused else _import_geometry(app, step)
         used = _apply_material(spec, bodies, system, given, topology)
         constrained = bool(given_conditions.constraints or spec.constraints)
         if isinstance(spec, HarmonicSpec):
@@ -142,6 +149,8 @@ def build(
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, topology or {}, bodies
         )
+        if cached is not None and not reused:
+            _save_cache(app, cached)
 
         dat = workdir / "model.dat"
         if upstream is not None and upstream is not analysis:
@@ -195,6 +204,7 @@ def build(
                 "ansys_version": version,
                 "constrained_regions": regions,
                 "mass_kg": mass,
+                "shape_reused": reused,
                 "unit_system": system.key,
                 "solver_unit_system": system.solver,
                 # **무슨 물성으로 돌았나.** 적지 않으면 「CAD 가 보낸 재료로 돈 것인지」 를
@@ -258,6 +268,72 @@ def build(
 
 
 # --- 단계별 -------------------------------------------------------------------
+
+
+def _cache_path(
+    cache_dir: Path | None,
+    step: Path,
+    spec: AnySpec,
+    given: condition_model.Conditions,
+) -> Path | None:
+    """이 작업이 쓸 형상 캐시 파일. 쓸 수 없으면 `None`.
+
+    **열쇠에 들어가는 것**: 형상 바이트 · 레시피 · 요소 크기 · 차수. 메시가 그것들에 딸리기
+    때문이다 — 하나라도 다르면 다른 모델이다.
+
+    **영역마다의 메시 힌트가 있으면 캐시를 안 쓴다.** 그 사이징은 이름 붙은 선택(=조건)을
+    가리키는데, 조건이 든 모델을 캐시에 넣으면 **다음 점이 앞 점의 조건을 물려받는다.**
+    그 상태는 결과를 봐도 모른다.
+    """
+    if cache_dir is None or not step.is_file():
+        return None
+    if any(
+        one.element_size is not None and one.region not in ("전체", "all")
+        for one in given.mesh_hints
+    ):
+        return None
+    digest = hashlib.sha256()
+    digest.update(step.read_bytes())
+    digest.update(spec.recipe.encode())
+    digest.update(str(spec.mesh.element_size_mm).encode())
+    digest.update(spec.mesh.order.encode())
+    return cache_dir / f"{digest.hexdigest()[:16]}.mechdb"
+
+
+def _open_cached(app: Any, cached: Path | None) -> bool:
+    """캐시를 연다. 열었으면 참 — **실패는 실패가 아니다**(그냥 새로 만든다).
+
+    실측(2026-10-02): 다시 열기 0.7초 · 임포트 18.9초. 그리고 **면 번호가 그대로다** —
+    영역 매칭이 그것으로 돌기 때문에 이 확인이 없으면 캐시를 쓸 수 없었다.
+    """
+    if cached is None or not cached.is_file():
+        return False
+    try:
+        app.open(str(cached))
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        logger.warning("형상 캐시를 열지 못했습니다 — 새로 만듭니다", exc_info=True)
+        return False
+    logger.info("형상 캐시를 썼습니다: %s", cached.name)
+    return True
+
+
+def _save_cache(app: Any, cached: Path) -> None:
+    """임포트 · 메시를 마친 모델을 캐시로. **실패해도 작업은 계속한다** — 캐시는 덤이다."""
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        app.save_as(str(cached), overwrite=True)
+        logger.info("형상 캐시를 남겼습니다: %s", cached.name)
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        logger.warning("형상 캐시를 남기지 못했습니다 — 다음에도 새로 만듭니다", exc_info=True)
+
+
+def _bodies_of(app: Any) -> list[Any]:
+    """연 모델의 바디들 — 임포트한 뒤와 같은 모양으로."""
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    bodies = list(app.Model.Geometry.GetChildren(enums.DataModelObjectCategory.Body, True))
+    if not bodies:
+        raise StageFailure("geometry_import", "형상 캐시에 바디가 없습니다.")
+    return bodies
 
 
 def _start_app(version: int) -> Any:

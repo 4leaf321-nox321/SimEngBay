@@ -39,6 +39,7 @@ def resolve(
     ansys_version: int = 252,
     ansys_root: Path | None = None,
     solver_processes: int = 2,
+    shape_cache: Path | None = None,
     wrapper: tuple[str, ...] = (),
     visual_modes: int = 6,
 ) -> Executor:
@@ -58,6 +59,7 @@ def resolve(
         ansys_version=ansys_version,
         ansys_root=ansys_root,
         solver_processes=solver_processes,
+        shape_cache=shape_cache,
         wrapper=wrapper,
         visual_modes=visual_modes,
     )

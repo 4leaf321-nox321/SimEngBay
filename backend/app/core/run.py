@@ -49,6 +49,7 @@ def run_stage(
     solver_processes: int,
     timeout_seconds: int,
     visual_modes: int,
+    cache_dir: Path | None = None,
 ) -> StageResult:
     """단계 하나. **Ansys import 는 그 단계에 들어갈 때** — 없는 것을 미리 부르지 않는다."""
     if stage == "fetching":
@@ -63,7 +64,9 @@ def run_stage(
     if stage == "modeling":
         from app.core.mechanical import build
 
-        return build(spec, workdir, input_name=input_name, version=version)
+        return build(
+            spec, workdir, input_name=input_name, version=version, cache_dir=cache_dir
+        )
 
     if stage == "solving":
         from app.core.solve import solve
@@ -127,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--solver-processes", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=int, default=10800)
     parser.add_argument("--visual-modes", type=int, default=6)
+    # **형상 캐시 자리** — 안 주면 캐시를 안 쓴다(임포트를 매번 한다).
+    parser.add_argument("--shape-cache", type=Path, default=None)
     args = parser.parse_args(argv)
 
     workdir: Path = args.workdir
@@ -148,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             solver_processes=args.solver_processes,
             timeout_seconds=args.timeout_seconds,
             visual_modes=args.visual_modes,
+            cache_dir=args.shape_cache,
         )
     except StageFailure as failure:
         target.write_text(

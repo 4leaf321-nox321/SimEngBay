@@ -54,6 +54,10 @@ class Mesh:
     bodies: list[BodyRecord]
     #: 면 번호 → 그 면의 절점 전부(2차 요소의 중간 절점까지)
     face_nodes: dict[int, set[int]]
+    #: 껍데기 삼각형(모서리 셋) — 모드 형상 파일이 이것만 쓴다(`vtp.py`).
+    triangles: list[tuple[int, int, int]]
+    #: 면 번호 → 그 면의 삼각형들. 압력 하중이 면마다 요소면을 적을 때 쓴다.
+    face_triangles: dict[int, list[tuple[int, int, int]]]
     second_order: bool
 
     @property
@@ -127,12 +131,15 @@ def read_mesh(msh: Path) -> Mesh:
             "mesh_failed", "메시에 사면체가 없습니다 — 형상이 솔리드인지 보세요."
         )
     faces, face_nodes = _faces(nodes, elements)
+    by_face = _triangles(elements)
     return Mesh(
         nodes=nodes,
         solids=dict(solids),
         faces=faces,
         bodies=_bodies(nodes, solids),
         face_nodes=face_nodes,
+        triangles=[one for rows in by_face.values() for one in rows],
+        face_triangles=by_face,
         second_order=second_order,
     )
 
@@ -221,6 +228,62 @@ def _faces(
             )
         )
     return records, dict(members)
+
+
+def element_faces(mesh: Mesh) -> dict[frozenset[int], tuple[int, str]]:
+    """모서리 절점 셋 → (요소 번호, 면 이름). **압력을 요소면에 걸 때** 쓴다.
+
+    CalculiX 는 압력을 `요소, P번호, 값` 으로 받는다 — 면을 절점으로 가리키지 않는다. 그래서
+    표면 삼각형을 요소의 어느 면인지로 되돌려야 한다. 면 번호를 틀리면 압력이 **엉뚱한 면에**
+    걸리고, 그 결과는 오류 없이 그럴듯하게 나온다.
+    """
+    from app.core.calculix.deck import TET_FACES
+
+    found: dict[frozenset[int], tuple[int, str]] = {}
+    for rows in mesh.solids.values():
+        for number, ids in rows:
+            for name, corners in TET_FACES.items():
+                key = frozenset(ids[one] for one in corners)
+                found.setdefault(key, (number, name))
+    return found
+
+
+def tributary_areas(mesh: Mesh, faces: list[int]) -> dict[int, float]:
+    """그 면들의 절점마다 **분담 면적** — 힘을 나눌 때 쓴다.
+
+    고르게 나누면 모서리 절점이 과하게 받는다(2차 요소에서는 더 심하다). 삼각형 면적을 그
+    절점들에 나눠 더하면, 적어도 **합력과 분포가 함께** 맞는다. 하중면 바로 아래의 응력은
+    근사이므로(2차 요소의 일관 하중은 모서리에 0 을 준다) 그 자리를 보려면 Ansys 로 돌린다.
+    """
+    shares: dict[int, float] = {}
+    for face in faces:
+        for triangle in mesh.face_triangles.get(face, []):
+            a, b, c = (mesh.nodes[one] for one in triangle)
+            u = [b[axis] - a[axis] for axis in range(3)]
+            v = [c[axis] - a[axis] for axis in range(3)]
+            cross = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ]
+            area = math.sqrt(sum(one * one for one in cross)) / 2
+            if area <= 0:
+                continue
+            members = [one for one in triangle]
+            for node in members:
+                shares[node] = shares.get(node, 0.0) + area / len(members)
+    return shares
+
+
+def _triangles(
+    elements: list[tuple[int, int, list[int]]],
+) -> dict[int, list[tuple[int, int, int]]]:
+    """면마다 **모서리 셋만** 남긴 삼각형. 2차 요소의 중간 절점은 그림에 필요 없다."""
+    found: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    for kind, entity, ids in elements:
+        if kind in TRIANGLE_KINDS and len(ids) >= 3:
+            found[entity].append((ids[0], ids[1], ids[2]))
+    return dict(found)
 
 
 def _bodies(

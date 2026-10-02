@@ -54,6 +54,12 @@ const SUMMARY_LABELS: Record<string, string> = {
   rigid_body_modes: '강체 모드',
   first_elastic_hz: '1차 탄성 모드',
   solver_seconds: '솔버 시간',
+  // **어느 솔버로 풀었나.** 두 솔버의 수가 몇 % 갈리므로, 이것이 안 보이면 「왜 어제와 값이
+  // 다르냐」 를 아무도 설명할 수 없다(실측: 1차 굽힘 Ansys 1,266.4 · CalculiX 1,263.5 Hz).
+  solver: '솔버',
+  mesh_order: '요소 차수',
+  settings_from: '해석 설정 출처',
+  damping_ratio: '감쇠비',
   ansys_version: 'Ansys 버전',
   // **CAD 가 선언한 계**로 세션을 세운다(2026-09-24). 숫자가 어느 계로 들어갔는지는 값을
   // 보고 알 수 없어서 — 틀리면 그럴듯한 값이 나온다 — 여기에 적어 둔다.
@@ -79,7 +85,10 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'first_elastic_hz' && typeof value === 'number') return `${value.toFixed(2)} Hz`
   if (key === 'peak_hz' && typeof value === 'number') return `${value.toFixed(1)} Hz`
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
-  if (key === 'material_from') return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
+  if (key === 'material_from' || key === 'settings_from')
+    return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
+  if (key === 'solver') return value === 'calculix' ? 'CalculiX (오픈소스)' : 'Ansys'
+  if (key === 'damping_ratio' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
   if (key === 'density_kg_m3' && typeof value === 'number')
     return `${value.toLocaleString()} kg/m³`

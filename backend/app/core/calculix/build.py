@@ -22,7 +22,8 @@ from app.core import materials as material_model
 from app.core import units
 from app.core.bodies import match_bodies
 from app.core.calculix import deck as deck_writer
-from app.core.calculix.mesh import build_mesh
+from app.core.calculix.mesh import build_mesh, element_faces, tributary_areas
+from app.core.harmonic import harmonic_plan
 from app.core.regions import match_regions
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -33,6 +34,14 @@ logger = logging.getLogger(__name__)
 AnySpec = ModalSpec | StaticSpec | HarmonicSpec
 
 BOUNDARY_NAME = "boundary.json"
+#: 면을 못 찾았을 때 덧붙이는 말. **메시에서 되찾는 길의 한계**다 — 삼각형에는 「이 면이
+#: 원통인가」 가 없다. 평면 · 넓이 · 법선으로 찾는 지문은 풀리고, 곡면 지문(원통 반지름 등)은
+#: 아직 못 푼다(실측 2026-10-03: `조건_원통_SI` 의 구멍면). 그것까지 하려면 메시에 원통을
+#: 맞춰 보는 일이 필요하다.
+MESH_LIMIT = (
+    "CalculiX 경로는 **메시에서** 면을 되찾으므로 곡면 지문(원통 반지름 등)은 아직 못 풉니다 "
+    "— 그 조건이 필요하면 솔버를 ansys 로 돌리세요."
+)
 TOPOLOGY_NAME = "topology.json"
 DECK_NAME = "model.inp"
 
@@ -50,10 +59,8 @@ def build(
         raise StageFailure(
             "internal",
             f"CalculiX 경로는 아직 「{spec.recipe}」 를 못 풉니다 — 솔버를 ansys 로 "
-            f"바꾸거나 모달로 돌리세요.",
+            f"바꾸거나 {' · '.join(deck_writer.SUPPORTED_RECIPES)} 로 돌리세요.",
         )
-    if not isinstance(spec, ModalSpec):  # pragma: no cover - 위에서 이미 걸린다
-        raise StageFailure("internal", "모달 스펙이 아닙니다.")
 
     step = workdir / input_name
     if not step.is_file():
@@ -87,18 +94,51 @@ def build(
     body_of, materials, material_from = _materials(spec, topology, system, mesh)
     held = _held_nodes(topology, given, mesh)
     constrained = plan_constrained(given, spec)
-    plan = deck_writer.write_modal(
-        nodes=mesh.nodes,
-        solids=mesh.solids,
-        body_of=body_of,
-        materials=materials,
-        held_nodes=held,
-        given=given,
-        # **자유-자유면 강체 모드 여섯을 더 뽑는다** — 안 그러면 사람이 요청한 탄성 모드 수가
-        # 모자라게 나온다(Ansys 쪽과 같은 규칙).
-        modes=spec.modes + (0 if constrained else RIGID_BODY_MODES),
-        second_order=mesh.second_order,
-    )
+    if isinstance(spec, HarmonicSpec):
+        places, areas, faces = _load_places(topology, given, mesh)
+        shake = harmonic_plan(spec, given)
+        plan = deck_writer.write_harmonic(
+            nodes=mesh.nodes,
+            solids=mesh.solids,
+            body_of=body_of,
+            materials=materials,
+            held_nodes=held,
+            load_nodes=places,
+            load_faces=faces,
+            load_areas=areas,
+            given=given,
+            plan_of=shake,
+            modes=spec.modes,
+            second_order=mesh.second_order,
+        )
+    elif isinstance(spec, StaticSpec):
+        places, areas, faces = _load_places(topology, given, mesh)
+        plan = deck_writer.write_static(
+            nodes=mesh.nodes,
+            solids=mesh.solids,
+            body_of=body_of,
+            materials=materials,
+            held_nodes=held,
+            load_nodes=places,
+            load_faces=faces,
+            load_areas=areas,
+            given=given,
+            system=system,
+            second_order=mesh.second_order,
+        )
+    else:
+        plan = deck_writer.write_modal(
+            nodes=mesh.nodes,
+            solids=mesh.solids,
+            body_of=body_of,
+            materials=materials,
+            held_nodes=held,
+            given=given,
+            # **자유-자유면 강체 모드 여섯을 더 뽑는다** — 안 그러면 사람이 요청한 탄성 모드
+            # 수가 모자라게 나온다(Ansys 쪽과 같은 규칙).
+            modes=spec.modes + (0 if constrained else RIGID_BODY_MODES),
+            second_order=mesh.second_order,
+        )
     if plan.refused:
         # **못 거는 조건은 조용히 빼지 않는다.** 그대로 풀면 구속 없는 해석이 끝까지 돌고,
         # 그 결과는 0 Hz 여섯 개를 달고 나온다.
@@ -111,17 +151,22 @@ def build(
 
     path = workdir / DECK_NAME
     path.write_text(plan.text, encoding="utf-8")
+    boundary: dict[str, Any] = {
+        "constrained": constrained,
+        "modes_requested": spec.modes if isinstance(spec, ModalSpec) else 0,
+        "recipe": spec.recipe,
+        "solver": "calculix",
+    }
+    if isinstance(spec, HarmonicSpec):
+        # **실제로 쓴 감쇠비 · 범위 · 점 수.** 결과가 스펙 값을 적으면 화면이 거짓말을 한다 —
+        # 봉우리 높이는 1/2ζ 로 읽히기 때문이다(Ansys 쪽과 같은 규칙).
+        shake_plan = harmonic_plan(spec, given)
+        boundary["damping_ratio"] = shake_plan.damping_ratio
+        boundary["frequency_range_hz"] = [shake_plan.low, shake_plan.high]
+        boundary["intervals"] = shake_plan.intervals
+        boundary["settings_from"] = shake_plan.source
     (workdir / BOUNDARY_NAME).write_text(
-        json.dumps(
-            {
-                "constrained": constrained,
-                "modes_requested": spec.modes,
-                "recipe": spec.recipe,
-                "solver": "calculix",
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+        json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
     mass = _mass_kg(materials, body_of, mesh)
     return StageResult(
@@ -131,7 +176,7 @@ def build(
             "bodies": len(mesh.solids),
             "nodes": len(mesh.nodes),
             "elements": mesh.element_count,
-            "modes_requested": spec.modes,
+            **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
             "mesh_order": "quadratic" if mesh.second_order else "linear",
             "constrained_regions": plan.applied,
             "mass_kg": mass,
@@ -156,7 +201,7 @@ def build(
     )
 
 
-def plan_constrained(given: condition_model.Conditions, spec: ModalSpec) -> bool:
+def plan_constrained(given: condition_model.Conditions, spec: AnySpec) -> bool:
     """구속이 하나라도 걸리나 — 자유-자유면 강체 모드 여섯을 더 뽑아야 한다."""
     return bool(given.constraints or spec.constraints)
 
@@ -175,7 +220,7 @@ def _topology(workdir: Path) -> dict[str, Any]:
 
 
 def _declared_conditions(
-    spec: ModalSpec, topology: dict[str, Any]
+    spec: AnySpec, topology: dict[str, Any]
 ) -> condition_model.Conditions:
     """CAD 가 보낸 조건. `conditions_from == "spec"` 이면 일부러 안 읽는다."""
     if not topology or spec.conditions_from != "cad":
@@ -187,7 +232,7 @@ def _declared_conditions(
 
 
 def _materials(
-    spec: ModalSpec,
+    spec: AnySpec,
     topology: dict[str, Any],
     system: units.UnitSystem,
     mesh: Any,
@@ -237,7 +282,8 @@ def _held_nodes(
         raise StageFailure(
             "internal",
             "구속을 걸 면을 못 찾았습니다: "
-            + " · ".join(f"{one.region}({one.reason})" for one in found.failures),
+            + " · ".join(f"{one.region}({one.reason})" for one in found.failures)
+            + f". {MESH_LIMIT}",
         )
     held: dict[str, set[int]] = {}
     for name, ids in found.faces.items():
@@ -247,6 +293,49 @@ def _held_nodes(
         held[name] = members
         logger.info("구속 영역 %s → 면 %s · 절점 %s", name, ids, len(members))
     return held
+
+
+def _load_places(
+    topology: dict[str, Any], given: condition_model.Conditions, mesh: Any
+) -> tuple[dict[str, set[int]], dict[str, dict[int, float]], dict[str, list[tuple[int, str]]]]:
+    """하중이 가리키는 영역을 절점 · 분담 면적 · **요소면**으로 바꾼다.
+
+    압력은 요소면에 걸고(`*DLOAD`), 힘은 절점에 나눠 건다(`*CLOAD`) — CalculiX 가 그렇게
+    받는다.
+    면을 찾는 일은 구속과 똑같이 `app/core/regions` 가 한다.
+    """
+    wanted = [load.region for load in given.loads if load.region]
+    if not wanted or not topology:
+        return {}, {}, {}
+    found = match_regions(topology, mesh.faces, wanted_regions=wanted)
+    if found.failures:
+        raise StageFailure(
+            "internal",
+            "하중을 걸 면을 못 찾았습니다: "
+            + " · ".join(f"{one.region}({one.reason})" for one in found.failures)
+            + f". {MESH_LIMIT}",
+        )
+    lookup = element_faces(mesh)
+    places: dict[str, set[int]] = {}
+    areas: dict[str, dict[int, float]] = {}
+    faces: dict[str, list[tuple[int, str]]] = {}
+    for name, ids in found.faces.items():
+        members: set[int] = set()
+        for face in ids:
+            members |= mesh.face_nodes.get(face, set())
+        places[name] = members
+        areas[name] = tributary_areas(mesh, ids)
+        rows: list[tuple[int, str]] = []
+        for face in ids:
+            for triangle in mesh.face_triangles.get(face, []):
+                hit = lookup.get(frozenset(triangle))
+                if hit is not None:
+                    rows.append(hit)
+        faces[name] = rows
+        logger.info(
+            "하중 영역 %s → 면 %s · 절점 %s · 요소면 %s", name, ids, len(members), len(rows)
+        )
+    return places, areas, faces
 
 
 def _mass_kg(

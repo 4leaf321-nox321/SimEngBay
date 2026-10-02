@@ -2,12 +2,16 @@
 
 Ansys 경로(`app/core/mechanical` · `solve` · `dpf`)와 **역할이 일대일로 맞는다**:
 
-    build.py   모델링 — gmsh 로 메시, 조건을 걸고 `.inp` 를 쓴다   (mechanical/build.py)
-    solve.py   솔브 — `ccx` 를 부른다                              (solve/mapdl.py)
-    read.py    추출 — `.dat` 에서 고유진동수를 읽는다              (dpf/extract.py)
-    deck.py    덱 쓰기와 **능력표**(무엇을 걸 수 있나)
-    mesh.py    메시와 면 · 바디 지문
-    tools.py   gmsh · ccx 를 **딴 프로세스로** 부르는 자리(GPL 경계)
+    build.py        모델링 — gmsh 로 메시, 조건을 걸고 `.inp` 를 쓴다  (mechanical/build.py)
+    solve.py        솔브 — `ccx` 를 부른다                             (solve/mapdl.py)
+    read.py         모달 추출 — `.dat` 의 고유진동수 · 유효질량비      (dpf/extract.py)
+    static_read.py  정적 추출 — `.frd` 의 변위 · 상당응력              (dpf/static.py)
+    harmonic_read.py 조화 추출 — `.frd` 의 실수부 · 허수부 → 진폭       (dpf/harmonic.py)
+    deck.py         덱 쓰기와 **능력표**(무엇을 걸 수 있나)
+    mesh.py         메시와 면 · 바디 지문, 요소면 · 분담 면적
+    frd.py          `.frd` 읽기(고정 폭) · vtp.py 모드 형상 쓰기
+    tables.py       `.dat` 의 표들 — 고유진동수 · 유효질량비
+    tools.py        gmsh · ccx 를 **딴 프로세스로** 부르는 자리(GPL 경계)
 
 조건 읽기 · 물성 · 바디 짝짓기 · 영역 매칭은 **둘이 같은 코드를 쓴다** — 그래서 두 솔버가 같은
 조건을 같은 자리에 걸고, 수를 견주는 것이 뜻을 가진다.
@@ -18,7 +22,9 @@ Ansys 경로(`app/core/mechanical` · `solve` · `dpf`)와 **역할이 일대일
 """
 
 from app.core.calculix.build import build
+from app.core.calculix.harmonic_read import extract as extract_harmonic
 from app.core.calculix.read import extract
 from app.core.calculix.solve import solve
+from app.core.calculix.static_read import extract as extract_static
 
-__all__ = ["build", "extract", "solve"]
+__all__ = ["build", "extract", "extract_harmonic", "extract_static", "solve"]

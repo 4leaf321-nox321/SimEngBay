@@ -106,21 +106,101 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert len(result["modes"]) == 6
 
 
-def test_못_푸는_레시피는_까닭을_달아_거절한다(tmp_path: Path) -> None:
-    """정적 · 조화는 아직 CalculiX 경로가 없다 — **조용히 모달로 풀지 않는다.**
+def test_곡면_지문은_메시에서_못_찾고_그렇게_말한다(ready: None, tmp_path: Path) -> None:
+    """**메시에서 면을 되찾는 길의 한계** — 삼각형에는 「이 면이 원통인가」 가 없다.
 
-    도구가 없어도 도는 시험이다(거절이 메시보다 먼저다). 솔버를 골라 두고 못 푸는 레시피를
-    냈을 때, 사람이 「왜 안 되나」 를 바로 알아야 한다.
+    `조건_원통_SI` 는 구멍면(원통)에 원통 지지를 건다. CAD 지문은 반지름으로 그 면을
+    가리키는데,
+    gmsh 가 낸 표면 요소에서는 무게중심 · 면적 · 법선만 나온다 — 그래서 **못 찾는다.** 조용히
+    다른 면을 잡거나 구속을 빼면 그 결과는 오류 없이 그럴듯하게 나오므로 **멈추고, 솔버를
+    바꾸라고 말한다.**
     """
-    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", tmp_path / "input.step")
-    spec = {key: value for key, value in SPEC.items() if key != "modes"}
-    spec["recipe"] = "static"
+    cylinder = FIXTURES / "doe" / "조건_원통_SI"
+    shutil.copy(cylinder / "points" / "p0001.step", tmp_path / "input.step")
+    shutil.copy(cylinder / "points" / "p0001.json", tmp_path / "topology.json")
+    spec = dict(SPEC)
+    # 이 폴더의 물성에는 탄성계수가 없다 — 사람이 넣은 값으로 돌린다.
+    spec["material_from"] = "spec"
 
     with pytest.raises(StageFailure) as caught:
         _run(tmp_path, spec)
 
-    assert "static" in str(caught.value)
-    assert "ansys" in str(caught.value)
+    assert "구멍면" in str(caught.value)
+    assert "ansys" in str(caught.value), "어떻게 하면 되는지까지 말해야 한다"
+
+
+def test_정적_해석이_변형과_응력을_낸다(ready: None, tmp_path: Path) -> None:
+    """`조건_두바디_두재료` — 바닥 고정 · 블록 윗면 압력 1.5 MPa.
+
+    **Ansys 와 견준다**(실측 2026-10-02: 변형 5.204e-4 mm · 응력 2.523 MPa). 변형은 0.4% 안에서
+    맞는다. **첨두응력은 그만큼 못 맞는다** — 요소에서 절점으로 외삽한 값이라 메시와 외삽
+    방식에
+    크게 흔들린다(실측 1.959 MPa, 22% 낮다). 그래서 응력은 **자릿수와 범위**만 지킨다: 그 폭을
+    좁게 잡으면 메시를 조금 바꿀 때마다 깨지고, 아무도 안 보는 시험이 된다.
+    """
+    two_bodies = FIXTURES / "doe" / "조건_두바디_두재료"
+    shutil.copy(two_bodies / "points" / "p0001.step", tmp_path / "input.step")
+    shutil.copy(two_bodies / "points" / "p0001.json", tmp_path / "topology.json")
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec["recipe"] = "static"
+    spec["mesh"] = {"element_size_mm": 8}
+
+    summary = _run(tmp_path, spec)
+
+    assert summary["mass_kg"] == pytest.approx(0.3213, rel=0.02)
+    assert "pressure:블록 윗면" in summary["constrained_regions"]
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["recipe"] == "static"
+    assert result["solver"] == "calculix"
+    assert result["units"]["displacement"] == "mm"
+    # **0 인 결과는 「해석이 됐다」 처럼 보인다** — 그래서 경고가 없어야 한다.
+    assert "warning" not in result
+    assert result["max_displacement"] == pytest.approx(5.204e-4, rel=0.05)
+    assert 1.0 < result["max_von_mises"] < 4.0
+    # 변형 그림도 남는다 — 모달의 모드 형상과 같은 길이라 화면이 그대로 읽는다.
+    assert (tmp_path / "mode_01.vtp").is_file()
+
+
+def test_조화_응답이_공진에서_솟고_CAD_감쇠를_쓴다(ready: None, tmp_path: Path) -> None:
+    """`조건_측면가진` — 기둥 끝에 X 10 N, CAD 가 200~2000 Hz · 감쇠 0.02 를 적어 보낸다.
+
+    **Ansys 와 견준다**(실측 2026-10-02: 봉우리 1,260 Hz · 0.703 mm). CalculiX 는 1,263.5 Hz ·
+    0.728 mm 다 — 주파수 0.3% · 진폭 3.6% 차이.
+
+    **스펙은 일부러 다른 값을 들고 있다**(10~100 Hz · 감쇠 0.05) — CAD 가 이기는지 보려는
+    것이다. 조용히 스펙으로 풀면 봉우리가 창 밖이고 결과는 오류 없이 평평하게 나온다.
+
+    그리고 **점이 요청보다 많다**: CalculiX 는 점 수를 고유진동수 **사이마다** 쓴다(실측 90 →
+    268점). 그 덕에 봉우리가 점 사이로 빠져나갈 수 없다.
+    """
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", tmp_path / "input.step")
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.json", tmp_path / "topology.json")
+    spec = {key: value for key, value in SPEC.items()}
+    spec["recipe"] = "harmonic"
+    spec["frequency_range_hz"] = [10, 100]
+    spec["intervals"] = 5
+    spec["damping_ratio"] = 0.05
+
+    _run(tmp_path, spec)
+
+    deck = (tmp_path / "model.inp").read_text(encoding="utf-8")
+    # 감쇠는 `*MODAL DAMPING` 한 줄이다 — Ansys 에서는 명령 조각이 필요했다.
+    assert "*MODAL DAMPING" in deck
+    assert "0.02" in deck.split("*MODAL DAMPING")[1].splitlines()[1]
+    # CAD 의 범위가 이겼다 — 스펙은 10~100 Hz 였다.
+    assert "*STEADY STATE DYNAMICS" in deck
+    assert deck.split("*STEADY STATE DYNAMICS")[1].splitlines()[1].startswith("200")
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["recipe"] == "harmonic"
+    assert result["damping_ratio"] == 0.02, "CAD 가 적어 보낸 감쇠비를 써야 한다"
+    assert len(result["points"]) > 90, "고유진동수 사이마다 점이 들어가므로 더 촘촘하다"
+    peak = result["peak"]
+    assert peak["frequency_hz"] == pytest.approx(1263.5, rel=0.02)
+    assert peak["max_displacement"] == pytest.approx(0.703, rel=0.1)
+    # 공진에서 솟았다 — 창에서 가장 조용한 자리의 열 배를 넘는다.
+    floor = min(one["max_displacement"] for one in result["points"])
+    assert peak["max_displacement"] > 10 * floor
 
 
 def test_점_그룹만_가리키는_구속은_거절한다(ready: None, tmp_path: Path) -> None:

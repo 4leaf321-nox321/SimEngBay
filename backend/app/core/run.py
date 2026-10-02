@@ -93,12 +93,20 @@ def run_stage(
         )
 
     if stage == "extracting" and spec.solver == "calculix":
-        from app.core.calculix import extract as extract_open
+        if isinstance(spec, HarmonicSpec):
+            from app.core.calculix import extract_harmonic as extract_open_harmonic
 
+            return extract_open_harmonic(spec, workdir)
+        if isinstance(spec, StaticSpec):
+            from app.core.calculix import extract_static as extract_open_static
+
+            return extract_open_static(spec, workdir)
         if not isinstance(spec, ModalSpec):  # pragma: no cover - 모델링이 먼저 막는다
             raise StageFailure(
                 "internal", f"CalculiX 경로는 아직 「{spec.recipe}」 를 못 읽습니다."
             )
+        from app.core.calculix import extract as extract_open
+
         return extract_open(spec, workdir)
 
     if stage == "extracting" and isinstance(spec, HarmonicSpec):

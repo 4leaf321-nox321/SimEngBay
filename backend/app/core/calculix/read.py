@@ -1,8 +1,10 @@
 """추출 단계 — CalculiX 의 `.dat` 에서 고유진동수를 읽는다.
 
 **결과 모양은 Ansys 쪽과 같다**(`app/core/dpf/extract.py`). 화면 · 스터디 비교 · 모드 추적이 그
-모양을 읽으므로, 솔버가 바뀌었다고 다른 모양을 내면 전부 손봐야 한다. 그래서 같은 열쇠를 쓰고,
-**아직 없는 것은 넣지 않는다** — 유효질량비 · 모드 형상은 2단계다. 비어 있는 것과 0 은 다르다.
+모양을 읽으므로, 솔버가 바뀌었다고 다른 모양을 내면 전부 손봐야 한다. 그래서 같은 열쇠를 쓴다 —
+고유진동수 · **유효질량비**(`.dat` 의 유효모달질량 ÷ 전체 유효질량) · **모드 형상**(`.frd` 의
+변위를 `.vtp` 로). **없는 것은 넣지 않는다**: 썸네일 PNG 는 안 만든다(pyvista 가 필요하고,
+화면은 3D 뷰어로 본다). 비어 있는 것과 0 은 다르다.
 
 `result.json` 에 **어느 솔버로 풀었는지 도장을 찍는다.** 두 솔버의 수가 몇 % 갈리므로(실측
 2026-10-02: 1차 1,266.4 대 1,263.5 Hz), 그 도장이 없으면 「어제와 값이 다르다」 가 영구
@@ -17,6 +19,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.core.calculix import frd as frd_reader
+from app.core.calculix import tables, vtp
+from app.core.calculix.mesh import read_mesh
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -28,11 +33,8 @@ BOUNDARY_NAME = "boundary.json"
 
 #: 이보다 낮으면 강체 모드로 본다 — Ansys 쪽과 같은 문턱(수치 오차로 0 이 정확히 0 이 아니다).
 RIGID_BODY_HZ = 1.0
-#: `.dat` 의 고유치 표 머리말. 그 아래 줄은 **다섯 칸**이다(실측 2026-10-02):
-#: `모드 / 고유치 / rad·s⁻¹ / Hz / 허수부`. 네 번째가 Hz 다 — 칸 수를 넷으로 못 박으면 한 줄도
-#: 안 읽힌다(그렇게 해 봤다).
-EIGEN_HEAD = "E I G E N V A L U E   O U T P U T"
-_ROW = re.compile(r"^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+\S+)*\s*$")
+#: 모드 형상을 몇 개까지 그릴까 — Ansys 쪽 `visual_modes` 와 같은 뜻이다.
+VISUAL_MODES = 6
 
 
 def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
@@ -41,7 +43,8 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     if not data.is_file():
         raise StageFailure("solver_failed", f"결과 파일이 없습니다: {DATA_NAME}")
 
-    values = frequencies(data.read_text(encoding="utf-8", errors="replace"))
+    report = data.read_text(encoding="utf-8", errors="replace")
+    values = tables.frequencies(report)
     if not values:
         raise StageFailure(
             "solver_failed",
@@ -65,6 +68,16 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     rigid_found = sum(1 for one in modes if one["rigid_body"])
     elastic = [one for one in modes if not one["rigid_body"]]
 
+    # **유효질량비는 곁들이는 값이다** — 표가 없다고 다 끝난 해석을 실패로 적지 않는다.
+    ratios = tables.effective_mass_ratios(report)
+    for one in modes:
+        direction = tables.dominant(ratios, int(one["number"]))
+        if direction is not None:
+            one["dominant_direction"] = direction
+            one["effective_mass_ratio"] = round(ratios[direction][int(one["number"])], 4)
+
+    shapes = _draw_modes(workdir, [one["number"] for one in elastic[:VISUAL_MODES]], modes)
+
     result: dict[str, Any] = {
         "recipe": "modal",
         "solver": "calculix",
@@ -75,6 +88,8 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         "rigid_body_modes": rigid_found,
         **({"mesh": mesh} if mesh else {}),
         "modes": modes,
+        # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
+        **({"participation": ratios} if ratios else {}),
     }
     if not constrained and rigid_found != RIGID_BODY_MODES:
         # **세어 보고 다르면 적어 둔다.** 바디가 여럿인데 접합면이 안 붙었으면 강체 모드가
@@ -88,43 +103,60 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     first = elastic[0]["frequency_hz"] if elastic else None
     return StageResult(
-        artifacts=[ArtifactSpec("result_json", path)],
+        artifacts=[
+            ArtifactSpec("result_json", path),
+            *(ArtifactSpec("mode_vtp", workdir / name) for name in shapes),
+        ],
         summary={
             "solver": "calculix",
             "modes": len(modes),
             "rigid_body_modes": rigid_found,
             "first_elastic_hz": first,
-            # 모드 형상은 아직 안 만든다 — 0 이라고 적어 화면이 「없다」 를 알게 한다.
-            "mode_shapes": 0,
+            "mode_shapes": len(shapes),
         },
         detail=f"모드 {len(modes)}개" + (f" · 1차 탄성 {first} Hz" if first else ""),
     )
 
 
-def frequencies(text: str) -> list[float]:
-    """`.dat` 의 고유진동수(Hz) 목록.
+def _draw_modes(workdir: Path, wanted: list[int], modes: list[dict[str, Any]]) -> list[str]:
+    """고른 모드의 형상을 `.vtp` 로 쓴다. **못 만들면 그림만 없다** — 해석은 끝난 것이다.
 
-    표의 네 번째 칸이 Hz 다(첫 칸 모드 번호 · 둘째 고유치 · 셋째 rad/s · 다섯째 허수부). 표
-    뒤에 **참여계수 표**가 이어지므로 **빈 줄에서 끊는다** — 안 끊으면 그 숫자까지 모드로 읽어
-    0 Hz 가 줄줄이 붙는다(실측 2026-10-02, 스파이크에서 그랬다).
-
-    그 참여계수 표는 2단계에서 쓸 값이다 — 방향별 유효질량비를 거기서 낼 수 있다(Ansys 쪽
-    `app/core/dpf/participation.py` 가 하는 일).
+    `.frd` 의 블록 순서가 모드 순서다. 표면 삼각형은 `.msh` 에서 다시 읽는다 — 모델링이 남긴
+    파일이 정본이고, 그래야 이 단계를 따로 다시 돌릴 수 있다.
     """
-    head = text.find(EIGEN_HEAD)
-    if head < 0:
+    result = workdir / "model.frd"
+    msh = workdir / "model.msh"
+    if not wanted or not result.is_file() or not msh.is_file():
         return []
-    found: list[float] = []
-    started = False
-    for line in text[head + len(EIGEN_HEAD) :].splitlines():
-        row = _ROW.match(line)
-        if row:
-            started = True
-            found.append(float(row.group(4)))
+    try:
+        mesh = read_mesh(msh)
+        blocks = [one for one in frd_reader.read(result) if one.kind == "DISP"]
+    except Exception:  # pragma: no cover - 파일이 깨진 경우
+        logger.warning("모드 형상을 못 읽었습니다 — 그림 없이 갑니다", exc_info=True)
+        return []
+
+    by_mode = {index: block for index, block in enumerate(blocks, start=1)}
+    made: list[str] = []
+    for number in wanted:
+        block = by_mode.get(number)
+        if block is None:
             continue
-        if started and not line.strip():
-            break
-    return found
+        magnitude = frd_reader.magnitudes(block)
+        name = f"mode_{number:02d}.vtp"
+        counts = vtp.write(
+            workdir / name,
+            nodes=mesh.nodes,
+            triangles=mesh.triangles,
+            displacement=block.values,
+            magnitude=magnitude,
+        )
+        made.append(name)
+        for one in modes:
+            if one["number"] == number:
+                one["vtp"] = name
+                one["max_displacement"] = round(max(magnitude.values(), default=0.0), 8)
+                one["points"] = counts["points"]
+    return made
 
 
 def _declared(workdir: Path) -> tuple[bool, dict[str, int]]:

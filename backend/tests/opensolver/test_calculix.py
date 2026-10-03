@@ -436,22 +436,23 @@ def _sweep(tmp_path: Path, point: int, *, prestressed: bool | None = None) -> Pa
     return work
 
 
-def test_마찰_접촉은_정적에서_비선형으로_풀고_접착과_거의_같다(
+def test_마찰_접촉은_정적에서_비선형으로_풀고_접착보다_무르다(
     ready: None, tmp_path: Path
 ) -> None:
-    """같은 형상 · 같은 하중에서 **접착과 마찰이 거의 같아야 한다** — 이 이음은 압축만 받는다.
+    """같은 형상 · 같은 하중에서 마찰은 **접착보다 무르거나 같다** — 단단할 수는 없다.
 
-    블록을 위에서 누르므로 접합면에 전단이 없다. 그러면 마찰이 붙잡을 것이 없고, 접착과 같은
-    답이 나오는 것이 **맞다.** Ansys 로 같은 점을 돌려 확인했다(실측 2026-10-03: 접착
-    1.9545e-4 · 마찰 1.9501e-4 mm — 0.2% 차이).
+    이 이음은 압축만 받지만, 눌린 블록이 옆으로 퍼지려 하므로(푸아송) 마찰이면 가장자리가 조금
+    미끄러지고, 접촉면 자체도 유한 강성이다. 그래서 접착보다 더 밀린다.
 
-    **이 시험이 한 번 거짓을 지켰다.** 접촉 강성을 1e4 N/mm³ 고정값으로 두었을 때 마찰이
-    3.350e-4 mm(73% 더 무름)로 나왔고, 나는 그것을 「마찰이 더 밀린다」 로 단정했다. 실은 압력
-    1.5 MPa ÷ 1e4 = 1.5e-4 mm 만큼 **면이 파고든 것**이었다 — 물리가 아니라 접촉 스프링의
-    무름이다. 이제 강성을 `10 x E / h` 로 끌어내고(요소 8 mm · E 200 GPa → 250,000 N/mm³)
-    차이가 2.7% 로 줄었다.
+    **얼마나 더 밀리나는 솔버가 정한다** — 실측 2026-10-03(요소 8 mm · 물성은 스펙):
 
-    교훈은 하나다: **한 솔버의 수만 보면 그 수가 가짜인지 모른다.**
+        CalculiX   접착 1.932e-4 · 마찰 1.983e-4 mm   (+2.7%, 접촉 강성 10 x E / h)
+        Ansys      접착 1.955e-4 · 마찰 2.297e-4 mm   (+17.5%, 프로그램 제어)
+
+    그래서 두 수를 단정하지 않고 **방향과 자릿수만** 본다. 이 기록에는 거짓 숫자가 두 번
+    끼었다: ① 접촉 강성을 1e4 N/mm³ 로 두어 면이 파고든 CalculiX 의 +73%. ② 그것을 「틀렸다」
+    고 판정한 Ansys 의 +0.2% — 그 값은 Mechanical 의 **자동 접착 접촉**이 우리 마찰 접촉을
+    덮어서 나온 것이었다. 기준이 틀리면 교차 검증이 틀린 결론을 확인해 준다.
     """
     spec = {key: value for key, value in SPEC.items() if key != "modes"}
     spec["recipe"] = "static"
@@ -470,7 +471,7 @@ def test_마찰_접촉은_정적에서_비선형으로_풀고_접착과_거의_�
     assert "*CONTACT PAIR" in deck
     assert "PRESSURE-OVERCLOSURE=LINEAR" in deck
     assert "*FRICTION" in deck
-    # 강성은 **끌어낸 값**이다 — 고정값이면 압력에 따라 면이 파고든다.
+    # 강성은 **끌어낸 값**이다 — 고정값이면 압력에 따라 면이 파고든다(+73% 의 원인).
     assert "250000" in deck.split("PRESSURE-OVERCLOSURE=LINEAR")[1].splitlines()[1]
     # 면 정의는 `S1` 로 적는다 — 압력의 `P1` 과 섞으면 ccx 가 못 읽는다(실측).
     assert "*SURFACE, NAME=C0S, TYPE=ELEMENT" in deck
@@ -478,17 +479,12 @@ def test_마찰_접촉은_정적에서_비선형으로_풀고_접착과_거의_�
 
     tight = json.loads((bonded / "result.json").read_text(encoding="utf-8"))
     loose = json.loads((rubbing / "result.json").read_text(encoding="utf-8"))
-    gap = (
-        abs(loose["max_displacement"] - tight["max_displacement"]) / tight["max_displacement"]
-    )
-    assert gap < 0.1, (
-        f"압축만 받는 이음이라 접착과 비슷해야 한다: {loose['max_displacement']} 대 "
-        f"{tight['max_displacement']} ({gap * 100:.1f}%)"
-    )
+    # 마찰은 접착보다 **단단할 수 없다**.
+    assert loose["max_displacement"] >= tight["max_displacement"]
+    # 그리고 접촉 스프링이 파고드는 자릿수(+73%)는 아니다 — 끌어낸 강성의 증거다.
+    assert loose["max_displacement"] < tight["max_displacement"] * 1.3
     # **마지막 증분**의 값이다 — 첫 증분을 읽으면 1e-5 자리가 나온다(실측 0.17배).
     assert loose["max_displacement"] > 1.5e-4
-    # Ansys 와도 견준다(실측 1.9501e-4) — 두 솔버가 같은 자리에 있어야 수를 믿을 수 있다.
-    assert loose["max_displacement"] == pytest.approx(1.95e-4, rel=0.05)
 
 
 def test_고유치에는_접촉을_넣지_않고_그렇게_말한다(ready: None, tmp_path: Path) -> None:
@@ -557,3 +553,64 @@ def test_선응력_모달은_응력_강화를_물고_간다(ready: None, tmp_pat
     assert seen[True] < seen[False], f"선응력이 안 걸렸다: {seen}"
     # 너무 많이 내려가면 하중이 과한 것이다 — 0.1% 안에 있어야 한다(실측 0.0024%).
     assert (seen[False] - seen[True]) / seen[False] < 0.001
+
+
+#: CompCore 의 전단 이음(2026-10-03) — 강판 위 알루미늄 판을 40 mm 겹쳐 놓고, 겹친 자리를
+#: 클램프로 누른 채 위판 끝을 **변위**로 0.04 mm 당긴다. 마찰이 일을 하는지 보는 폴더다.
+SHEAR_JOINT = FIXTURES / "doe" / "조건_전단이음"
+
+
+def _shear(tmp_path: Path, point: int) -> dict[str, Any]:
+    """전단 이음의 한 점을 풀고 결과를 돌려준다."""
+    work = tmp_path / f"p{point:04d}"
+    work.mkdir()
+    shutil.copy(next(iter((SHEAR_JOINT / "shapes").glob("*.step"))), work / "input.step")
+    shutil.copy(SHEAR_JOINT / "points" / f"p{point:04d}.json", work / "topology.json")
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec["recipe"] = "static"
+    spec["mesh"] = {"element_size_mm": 2.5}
+    (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    _run(work, spec)
+    result: dict[str, Any] = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    return result
+
+
+def _slip(result: dict[str, Any]) -> float:
+    """미끄럼 = 이음 입구에서 위판과 아래판의 X 변위 차(같은 자리의 두 바디 꼭짓점)."""
+    spots = {one["name"]: one for one in result["probes"]}
+    upper, lower = spots["이음 입구 위판"], spots["이음 입구 아래판"]
+    return float(upper["vector"][0] - lower["vector"][0])
+
+
+def test_전단_이음에서_마찰이_일을_한다(ready: None, tmp_path: Path) -> None:
+    """**마찰이 μN 에서 버티기를 멈춘다** — CompCore 가 우리를 시험하려고 만든 폴더다.
+
+    클램프 12.5 MPa x 800 mm² = 10 kN, μ 0.15 → μN = **1,500 N**. 위판 끝을 0.04 mm 당기면
+    접착은 축강성만큼 버티고(손셈 3.2~3.9 kN), 마찰은 1,500 N 에서 미끄러진다. 그쪽 말:
+    「2 번에서 두 솔버가 차이 없음이면 그쪽이 틀린 것이다」.
+
+    실측 2026-10-03(요소 2.5 mm): 접착 3,631 N · 미끄럼 0 / 마찰 **1,499.6 N** · 미끄럼
+    0.0217 mm. Ansys 도 1,483 N · 0.0218 mm 로 맞다 — Ansys 쪽은 처음에 접착 반력 3,627 N 을
+    냈는데, Mechanical 이 형상을 읽을 때 만든 **자동 접착 접촉**이 우리 마찰 접촉을 덮고
+    있었다.
+
+    미끄럼은 같은 자리(60, 12.5, 5)의 **두 바디 꼭짓점**의 X 차다 — 지문의 `body` 로 가르지
+    않으면 둘이 같은 절점을 잡아 늘 0 이 된다.
+    """
+    bonded = _shear(tmp_path, 1)
+    rubbing = _shear(tmp_path, 2)
+
+    pull_bonded = bonded["reactions"]["당기는 끝"][0]
+    pull_rubbing = rubbing["reactions"]["당기는 끝"][0]
+    assert 3200 < pull_bonded < 3900, f"접착 반력이 손셈 밖이다: {pull_bonded} N"
+    assert pull_rubbing == pytest.approx(1500, rel=0.05), (
+        f"마찰이 μN(1,500 N)에서 멈춰야 한다: {pull_rubbing} N"
+    )
+    # 접착은 같은 절점을 공유하므로(메시를 쪼갰다) 미끄럼이 0 이다.
+    assert _slip(bonded) == pytest.approx(0.0, abs=1e-9)
+    assert 0.018 < _slip(rubbing) < 0.026, f"미끄럼 {_slip(rubbing)} mm"
+    # 측정점이 바디를 갈랐다 — 같은 자리의 다른 바디 꼭짓점이다.
+    spots = {one["name"]: one for one in rubbing["probes"]}
+    assert spots["이음 입구 위판"]["body"] == "위판"
+    assert spots["이음 입구 아래판"]["body"] == "아래판"
+    assert spots["이음 입구 위판"]["node"] != spots["이음 입구 아래판"]["node"]

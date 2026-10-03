@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 #: **원통 지지는 국부 좌표계로 건다**(`*TRANSFORM, TYPE=C`) — 그 계의 자유도 1 · 2 · 3 이
 #: 반경 · 접선 · 축이다. 그래서 「핀에 끼운 채 돈다」(접선만 자유)가 그대로 표현된다. 전역
 #: 좌표로 억지로 옮기면 그 모델은 돌지 못하고, 주파수가 올라간 채 그럴듯하게 나온다.
-SUPPORTED_CONSTRAINTS = ("fixed_support", "cylindrical")
+SUPPORTED_CONSTRAINTS = ("fixed_support", "cylindrical", "displacement", "frictionless")
 #: 걸 수 있는 접촉 — **본딩은 절점 공유로 이미 걸려 있다**(`mesh.py` 의 `BooleanFragments`).
 #: 마찰 · 무마찰도 모달에서는 처음 붙어 있으면 같은 답이라, 「붙은 것으로 풀었다」 고 적는다.
 LINEARIZED_CONTACTS = ("bonded", "no_separation", "frictional", "frictionless", "rough")
@@ -50,6 +50,8 @@ class Plan:
     text: str = ""
     #: 하중 줄들 — **선응력 모달이 그대로 다시 쓴다**(정적 단계에 같은 하중을 걸어야 한다).
     load_rows: list[str] = field(default_factory=list)
+    #: 반력을 읽을 영역 → 절점 집합 이름. 변위로 당긴 자리다 — 거기서 버틴 힘이 답이다.
+    reaction_sets: dict[str, str] = field(default_factory=dict)
     #: 국부 좌표계가 걸린 절점 → (축 위의 점, 축 방향).
     #:
     #: **그 절점에서는 `*CLOAD` 의 자유도 번호도 국부로 읽힌다**(1 반경 · 2 접선 · 3 축) —
@@ -95,14 +97,17 @@ def write_modal(
                 why = "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다"
                 if pair.kind in NONLINEAR_CONTACTS:
                     # **CalculiX 는 고유치에 접촉을 넣지 않는다**(실측 2026-10-03: 접촉 쌍을
-                    # 넣으면 바디가 떠서 강체 모드 6개가 나온다). 마찰을 비선형으로 보려면
-                    # 정적으로 돌리거나 Ansys 로 간다.
+                    # 넣으면 바디가 떠서 강체 모드 6개가 나온다). 그래서 붙여서 푸는데,
+                    # **Ansys 는 같은 마찰 접촉을 모달에서 미끄러짐을 허용해 푼다** — 실측
+                    # 1차 27,940.6(접착) → 26,472.8 Hz(마찰), 5.3% 낮다. 즉 이 경로의 주파수가
+                    # 그만큼 **높게** 나올 수 있다. 그 사실을 사람에게 말한다.
                     why += (
-                        " — CalculiX 는 고유치 해석에 접촉을 넣지 않습니다. 마찰을 비선형으로"
-                        " 보려면 정적으로 돌리거나 솔버를 ansys 로 바꾸세요."
+                        " — CalculiX 는 고유치 해석에 접촉을 넣지 않습니다. Ansys 는 같은 마찰"
+                        " 접촉을 미끄러짐을 허용해 풀어 주파수가 더 낮게 나옵니다(실측 5.3%)."
+                        " 마찰을 반영하려면 솔버를 ansys 로 바꾸세요."
                     )
                 else:
-                    why += "(모달에서는 같은 답입니다)."
+                    why += "(본딩은 두 솔버가 같은 답을 냅니다 — 실측 0.23%)."
                 plan.skipped.append(
                     condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", why)
                 )
@@ -279,6 +284,11 @@ def write_static(
             condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
         )
 
+    for region, nset in plan.reaction_sets.items():
+        # **반력 합** — 변위로 당긴 자리가 버틴 힘. `TOTALS=ONLY` 면 `.dat` 에 합만 찍힌다
+        # (절점마다 찍으면 수천 줄이다). 증분마다 찍히므로 마지막 것을 읽는다.
+        lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY", "RF"]
+        logger.info("반력 자리 %s → %s", region, nset)
     lines += [
         "*NODE FILE",
         "U",
@@ -417,10 +427,90 @@ def _holds(
                     plan.local_frames[node] = frame
             plan.applied.append(f"cylindrical:{rule.region}")
             continue
+        if rule.kind == "displacement":
+            rows, why = _displacement(name, rule, members)
+            if why is not None:
+                plan.refused.append(why)
+                continue
+            lines += rows
+            # **반력을 읽을 자리다** — 변위로 당겼으면 그만큼 버틴 힘이 답이다(`*NODE PRINT`).
+            plan.reaction_sets[rule.region] = name
+            plan.applied.append(f"displacement:{rule.region}")
+            continue
+        if rule.kind == "frictionless":
+            rows, why = _frictionless(name, rule, members, (shapes or {}).get(rule.region))
+            if why is not None:
+                plan.refused.append(why)
+                continue
+            lines += rows
+            plan.applied.append(f"frictionless:{rule.region}")
+            continue
         lines += _nset(name, members)
         lines += ["*BOUNDARY", f"{name}, 1, 3, 0.0"]
         plan.applied.append(f"{rule.kind}:{rule.region}")
     return lines
+
+
+def _displacement(
+    name: str, rule: condition_model.Constraint, members: set[int]
+) -> tuple[list[str], condition_model.Note | None]:
+    """변위 제어 — 성분마다 **정한 값만큼** 움직인다. `None` 은 자유다.
+
+    힘이 아니라 변위로 당기는 까닭(CompCore 의 전단 이음 폴더): 이음이 미끄러져도 강체 운동이
+    안 되어 정적 해석이 풀린다. 힘으로 당기면 미끄러지는 순간 붙잡을 것이 없다.
+
+    전역 좌표만 받는다 — 국부 좌표계로 적힌 변위를 전역으로 풀면 **다른 방향으로** 당긴다.
+    """
+    if rule.cs not in ("", "global"):
+        return [], condition_model.Note(
+            f"구속 「{rule.name}」",
+            f"좌표계 「{rule.cs}」 의 변위 제어는 아직 못 겁니다 — 솔버를 ansys 로 바꾸세요.",
+        )
+    held = [
+        (dof, value)
+        for dof, value in enumerate(rule.components[:3], start=1)
+        if value is not None
+    ]
+    if not held:
+        return [], condition_model.Note(
+            f"구속 「{rule.name}」", "세 성분이 모두 자유라 구속이 아닙니다."
+        )
+    lines = _nset(name, members)
+    lines.append("*BOUNDARY")
+    lines += [f"{name}, {dof}, {dof}, {value:.8g}" for dof, value in held]
+    return lines, None
+
+
+def _frictionless(
+    name: str,
+    rule: condition_model.Constraint,
+    members: set[int],
+    shape: dict[str, Any] | None,
+) -> tuple[list[str], condition_model.Note | None]:
+    """마찰 없는 지지 — **면의 법선 방향만** 막는다. 면을 따라서는 자유롭게 미끄러진다.
+
+    법선은 CAD 지문의 `normal` 이다(선언이 정본). 지금은 **축에 나란한 면만** 받는다 — 기울어진
+    면은 국부 좌표계를 세워야 하는데, 그 절점에 걸린 하중까지 국부로 읽히므로
+    (`Plan.local_frames`) 그 길을 함께 다져야 한다. 못 받으면 까닭을 달아 거절한다.
+    """
+    normal = (shape or {}).get("normal")
+    if not isinstance(normal, list) or len(normal) != 3:
+        return [], condition_model.Note(
+            f"구속 「{rule.name}」",
+            f"영역 「{rule.region}」 에 법선이 없습니다(평면이어야 합니다).",
+        )
+    size = math.sqrt(sum(float(one) ** 2 for one in normal))
+    unit = [float(one) / size for one in normal] if size else [0.0, 0.0, 0.0]
+    axis = max(range(3), key=lambda index: abs(unit[index]))
+    if abs(unit[axis]) < 0.999:
+        return [], condition_model.Note(
+            f"구속 「{rule.name}」",
+            "축에 나란하지 않은 면의 마찰 없는 지지는 아직 못 겁니다 — 솔버를 ansys 로 "
+            "바꾸세요.",
+        )
+    lines = _nset(name, members)
+    lines += ["*BOUNDARY", f"{name}, {axis + 1}, {axis + 1}, 0.0"]
+    return lines, None
 
 
 def _cylindrical(
@@ -666,9 +756,13 @@ NONLINEAR_CONTACTS = ("frictional", "frictionless", "rough")
 #:
 #: `PRESSURE-OVERCLOSURE=LINEAR` 의 강성은 「파고든 깊이 1 mm 당 접촉 압력」 이다. 고정값을
 #: 쓰면 안 된다: 1e4 N/mm³ 로 두었더니 압력 1.5 MPa 에서 면이 1.5e-4 mm 파고들어, 마찰 접촉이
-#: 접착보다 **73% 더 무르게** 나왔다(실측 2026-10-03). Ansys 로 같은 점을 돌려 보니 접착과
-#: 마찰이 0.2% 차이였다 — 이 이음은 압축만 받아 전단이 없으므로 **그쪽이 맞다.** 내 수는
-#: 물리가 아니라 **접촉 스프링의 무름**이었다.
+#: 접착보다 **73% 더 무르게** 나왔다(실측 2026-10-03) — 물리가 아니라 **접촉 스프링의
+#: 무름**이었다. 끌어낸 강성으로는 +2.7% 다. (Ansys 는 +17.5% — 법선 벌칙 강성의 기본값이
+#: 다르다. 한때 「Ansys 는 0.2%」 로 적었는데, 그 값은 자동 접착 접촉에 덮인 것이었다.)
+#:
+#: 전단을 받는 이음에서는 이 값이 답을 좌우하지 않는다 — CompCore 의 전단 이음에서 미끄러지는
+#: 점은 두 솔버가 μN 으로 맞았다(1,500 · 1,483 N). **붙어 있는** 점은 접선 벌칙 강성(아래
+#: `*FRICTION` 의 둘째 칸)이 정하고, 거기서는 두 솔버가 갈린다.
 #:
 #: 요소 크기로 나누는 것은 차원 때문이다(E 는 N/mm², 강성은 N/mm³). 계수가 크면 수렴이
 #: 어려워지므로 10 에서 시작한다.

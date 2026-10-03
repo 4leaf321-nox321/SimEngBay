@@ -2,147 +2,205 @@
   "units": "mm",
   "bodies": [
     {
-      "name": "받침판",
+      "name": "아래판",
       "step_product": "body_1",
-      "volume": 30000.0,
+      "volume": 12500.0,
       "centroid": [
+        50.0,
         0.0,
-        -0.0,
         2.5
       ],
       "bbox": [
         [
-          -50.0,
-          -30.0,
+          0.0,
+          -12.5,
           0.0
         ],
         [
-          50.0,
-          30.0,
+          100.0,
+          12.5,
           5.0
         ]
       ]
     },
     {
-      "name": "블록",
+      "name": "위판",
       "step_product": "body_2",
-      "volume": 32000.0,
+      "volume": 12500.0,
       "centroid": [
+        110.0,
         0.0,
-        0.0,
-        15.0
+        7.5
       ],
       "bbox": [
         [
-          -20.0,
-          -20.0,
+          60.0,
+          -12.5,
           5.0
         ],
         [
-          20.0,
-          20.0,
-          25.0
+          160.0,
+          12.5,
+          10.0
         ]
       ]
     }
   ],
   "regions": {
+    "고정단": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          2.5
+        ],
+        "area": 125.0,
+        "normal": [
+          -1.0,
+          -0.0,
+          0.0
+        ],
+        "body": "아래판"
+      }
+    ],
     "바닥": [
       {
         "centroid": [
-          0.0,
+          50.0,
           0.0,
           0.0
         ],
-        "area": 6000.0,
+        "area": 2500.0,
         "normal": [
           -0.0,
           -0.0,
           -1.0
         ],
-        "body": "받침판"
+        "body": "아래판"
       }
     ],
-    "블록 윗면": [
+    "당기는 끝": [
       {
         "centroid": [
+          160.0,
           0.0,
-          0.0,
-          25.0
+          7.5
         ],
-        "area": 1600.0,
+        "area": 125.0,
+        "normal": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "body": "위판"
+      }
+    ],
+    "클램프면": [
+      {
+        "centroid": [
+          80.0,
+          0.0,
+          10.0
+        ],
+        "area": 800.0,
         "normal": [
           0.0,
           0.0,
           1.0
         ],
-        "body": "블록"
+        "body": "위판"
       }
     ],
-    "판 윗면": [
+    "접합 아래판쪽": [
       {
         "centroid": [
-          0.0,
+          80.0,
           0.0,
           5.0
         ],
-        "area": 6000.0,
+        "area": 1000.0,
         "normal": [
           0.0,
           0.0,
           1.0
         ],
-        "body": "받침판"
+        "body": "아래판"
       }
     ],
-    "블록 아랫면": [
+    "접합 위판쪽": [
       {
         "centroid": [
-          0.0,
+          80.0,
           0.0,
           5.0
         ],
-        "area": 1600.0,
+        "area": 1000.0,
         "normal": [
           -0.0,
           -0.0,
           -1.0
         ],
-        "body": "블록"
+        "body": "위판"
+      }
+    ],
+    "이음 입구 위판": [
+      {
+        "point": [
+          60.0,
+          12.5,
+          5.0
+        ],
+        "body": "위판"
+      }
+    ],
+    "이음 입구 아래판": [
+      {
+        "point": [
+          60.0,
+          12.5,
+          5.0
+        ],
+        "body": "아래판"
       }
     ]
   },
   "unresolved": [],
+  "measures": {
+    "접합_넓이": 1000.0,
+    "클램프_넓이": 800.0
+  },
   "quality": {
     "valid": true,
     "solids": 2,
-    "faces": 12,
-    "edges": 24,
+    "faces": 15,
+    "edges": 35,
     "min_wall": 5.0,
     "min_wall_at": [
-      -33.333,
-      -20.0,
+      16.667,
+      -8.333,
       0.0
     ],
-    "shortest_edge": 5.0,
+    "shortest_edge": 2.5,
     "short_edges": 0,
-    "narrowest_face": 4.6154,
+    "narrowest_face": 4.1667,
     "narrow_faces": 0,
     "warnings": [],
     "notes": []
   },
   "point": {
-    "number": 1,
+    "number": 4,
     "study": {
-      "id": "b439357c-9f07-4943-806f-6c586c8ed847",
-      "name": "조건_두바디_두재료",
-      "method": "factorial",
+      "id": "119dbba5-7ca0-4d47-8e64-dcd4684354a1",
+      "name": "조건_전단이음",
+      "method": "table",
       "seed": 1
     },
     "params": {
-      "두께": 5.0
+      "클램프": 25.0,
+      "마찰계수": 0.3,
+      "접촉 종류": "frictional"
     },
-    "step_file": "points/p0001.step"
+    "step_file": "shapes/fb2c6278a354.step"
   },
   "conditions": {
     "schema_version": 1,
@@ -172,10 +230,23 @@
     },
     "named_selections": [
       {
+        "name": "고정단",
+        "entity": "face",
+        "select": {
+          "body": "아래판",
+          "what": "faces",
+          "normal": [
+            -1,
+            0,
+            0
+          ]
+        }
+      },
+      {
         "name": "바닥",
         "entity": "face",
         "select": {
-          "body": "받침판",
+          "body": "아래판",
           "what": "faces",
           "normal": [
             0,
@@ -185,49 +256,89 @@
         }
       },
       {
-        "name": "블록 윗면",
+        "name": "당기는 끝",
         "entity": "face",
         "select": {
-          "body": "블록",
+          "body": "위판",
           "what": "faces",
           "normal": [
+            1,
             0,
-            0,
-            1
+            0
           ]
         }
       },
       {
-        "name": "판 윗면",
+        "name": "클램프면",
         "entity": "face",
         "select": {
-          "body": "받침판",
-          "what": "faces",
-          "normal": [
-            0,
-            0,
-            1
-          ]
+          "tag": "클램프",
+          "what": "faces"
         }
       },
       {
-        "name": "블록 아랫면",
+        "name": "접합 아래판쪽",
         "entity": "face",
         "select": {
-          "body": "블록",
-          "what": "faces",
-          "normal": [
-            0,
-            0,
-            -1
-          ]
+          "tag": "아래판/위판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "접합 위판쪽",
+        "entity": "face",
+        "select": {
+          "tag": "위판/아래판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "이음 입구 위판",
+        "entity": "vertex",
+        "select": {
+          "near": [
+            60,
+            12.5,
+            5
+          ],
+          "what": "vertices",
+          "limit": 1,
+          "of_face": {
+            "body": "위판",
+            "normal": [
+              0,
+              0,
+              -1
+            ]
+          }
+        }
+      },
+      {
+        "name": "이음 입구 아래판",
+        "entity": "vertex",
+        "select": {
+          "near": [
+            60,
+            12.5,
+            5
+          ],
+          "what": "vertices",
+          "limit": 1,
+          "of_face": {
+            "body": "아래판",
+            "normal": [
+              0,
+              0,
+              1
+            ]
+          }
         }
       }
     ],
     "materials": [
       {
         "apply_to": [
-          "받침판"
+          "아래판"
         ],
         "ref": {
           "source": "matnexus",
@@ -424,7 +535,7 @@
       },
       {
         "apply_to": [
-          "블록"
+          "위판"
         ],
         "ref": {
           "source": "matnexus",
@@ -672,8 +783,26 @@
     ],
     "constraints": [
       {
-        "name": "바닥 고정",
+        "name": "고정단 고정",
         "type": "fixed_support",
+        "on": "고정단",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": null,
+        "y": null,
+        "z": null,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      },
+      {
+        "name": "바닥 받침",
+        "type": "frictionless",
         "on": "바닥",
         "cs": "global",
         "location": "centroid",
@@ -688,15 +817,33 @@
         "radial": "fixed",
         "axial": "fixed",
         "tangential": "fixed"
+      },
+      {
+        "name": "당김",
+        "type": "displacement",
+        "on": "당기는 끝",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": 0.04,
+        "y": 0.0,
+        "z": 0.0,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
       }
     ],
     "loads": [
       {
-        "name": "누름",
+        "name": "클램프",
         "type": "pressure",
-        "on": "블록 윗면",
+        "on": "클램프면",
         "cs": "global",
-        "magnitude": 1.5,
+        "magnitude": 25.0,
         "unit": "MPa",
         "direction": "normal",
         "preload": null
@@ -704,11 +851,11 @@
     ],
     "contacts": [
       {
-        "name": "블록-판",
-        "type": "bonded",
-        "source": "블록 아랫면",
-        "target": "판 윗면",
-        "friction": null,
+        "name": "이음",
+        "type": "frictional",
+        "source": "접합 위판쪽",
+        "target": "접합 아래판쪽",
+        "friction": 0.3,
         "formulation": "program_controlled",
         "behavior": "program_controlled",
         "pinball": null,
@@ -726,9 +873,17 @@
     "mesh_hints": [
       {
         "on": "전체",
-        "element_size": 4.0,
+        "element_size": 2.5,
         "method": "automatic",
         "order": "quadratic",
+        "inflation_layers": null,
+        "defeature_size": null
+      },
+      {
+        "on": "접합 위판쪽",
+        "element_size": 1.25,
+        "method": "automatic",
+        "order": "program_controlled",
         "inflation_layers": null,
         "defeature_size": null
       }

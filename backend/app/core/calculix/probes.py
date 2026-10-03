@@ -20,7 +20,7 @@ import logging
 import math
 from typing import Any
 
-from app.core.probes import FAR_MM, row, wanted
+from app.core.probes import FAR_MM, body_of, row, wanted
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +45,25 @@ def read(
     values: dict[int, float],
     *,
     unit: str,
+    vectors: dict[int, list[float]] | None = None,
+    body_nodes: dict[str, set[int]] | None = None,
 ) -> list[dict[str, Any]]:
     """측정점마다 `{이름, 좌표, 값, 절점, 떨어진 거리}`. 점 그룹이 없으면 빈 목록.
 
     `values` 는 절점 → 값이다(변위 크기 · 응력 …). 값이 없는 절점이면 그 점을 건너뛴다 —
     0 으로 적으면 「그 자리는 안 움직였다」 로 읽힌다.
+
+    `body_nodes` 를 주면 **그 측정점의 바디 안에서만** 찾는다(지문의 `body`). 같은 자리에 두
+    바디의 꼭짓점이 겹치는 이음 입구에서, 안 가르면 두 측정점이 같은 절점을 잡아 미끄럼이 늘 0
+    으로 나온다. `vectors` 를 주면 성분도 싣는다 — 미끄럼은 X 성분의 차다.
     """
     made: list[dict[str, Any]] = []
     for name, point in wanted(topology).items():
-        hit = nearest(nodes, point)
+        body = body_of(topology, name)
+        pool = nodes
+        if body is not None and body_nodes and body in body_nodes:
+            pool = {node: nodes[node] for node in body_nodes[body] if node in nodes}
+        hit = nearest(pool, point)
         if hit is None:
             continue
         node, distance = hit
@@ -68,6 +78,8 @@ def read(
                 distance_mm=distance,
                 value=values[node],
                 unit=unit,
+                vector=(vectors or {}).get(node),
+                body=body,
             )
         )
     return made

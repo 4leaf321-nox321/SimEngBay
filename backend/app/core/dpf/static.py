@@ -66,13 +66,16 @@ def extract(
         stress, stress_unit = _von_mises(model)
         # **측정점** — 전체 최대는 구속 모서리의 수치적 첨두일 수 있고 센서는 그 자리에 없다.
         # 실측과 견줄 수 있는 값은 이쪽이고, CalculiX 쪽과 **같은 모양**으로 적는다.
+        topology = probes.topology_of(workdir)
         spots = probes.read(
-            probes.topology_of(workdir),
+            topology,
             mesh,
             displacement,
             unit=displacement_unit,
             scale=probes.scale_for(displacement_unit),
         )
+        # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다.
+        forces = _reactions(model, mesh, topology)
     except StageFailure:
         raise
     except Exception as failure:
@@ -88,6 +91,7 @@ def extract(
         "mesh": {"nodes": nodes, "elements": elements},
         "max_displacement": max_displacement,
         **({"probes": spots} if spots else {}),
+        **({"reactions": forces} if forces else {}),
         "max_von_mises": stress,
         "material": spec.material.name,
     }
@@ -124,6 +128,30 @@ def _peak(field: Any) -> tuple[float, str]:
     if data.ndim == 2:
         return float(np.max(np.linalg.norm(data, axis=1))), str(field.unit or "")
     return float(np.max(np.abs(data))), str(field.unit or "")
+
+
+def _reactions(model: Any, mesh: Any, topology: dict[str, Any]) -> dict[str, list[float]]:
+    """변위로 당긴 영역마다 **반력 합**(N). CalculiX 쪽과 같은 열쇠(`reactions`)로 낸다."""
+    try:
+        from app.core import conditions as condition_model
+
+        given = condition_model.read(topology, recipe="static") if topology else None
+    except ValueError:
+        return {}
+    if given is None:
+        return {}
+    regions = topology.get("regions") or {}
+    found: dict[str, list[float]] = {}
+    for rule in given.constraints:
+        if rule.kind != "displacement":
+            continue
+        rows = regions.get(rule.region)
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            continue
+        total = probes.reaction(model, mesh, rows[0])
+        if total is not None:
+            found[rule.region] = total
+    return found
 
 
 def _von_mises(model: Any) -> tuple[float | None, str]:

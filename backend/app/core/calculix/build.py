@@ -72,9 +72,6 @@ def build(
 
     size = _global_size(spec, given, system)
     second_order = spec.mesh.order == "quadratic"
-    local = _local_sizes(
-        step, workdir, topology, given, system, size, second_order, timeout_seconds
-    )
     # **접촉 쌍은 정적에서만 쓴다 — CalculiX 는 고유치에 접촉을 넣지 않는다.**
     #
     # 실측 2026-10-03: TIED 접촉 쌍을 넣고 `*FREQUENCY` 를 풀었더니 강체 모드 6개(0 · 0 ·
@@ -89,6 +86,19 @@ def build(
         isinstance(spec, StaticSpec)
         and bool(given.loads)
         and any(one.kind in deck_writer.NONLINEAR_CONTACTS for one in given.contacts)
+    )
+    # 1차 통과도 **같은 쪼개기 규칙**을 따른다 — 안 그러면 접합면 두 장이 하나로 합쳐져서 한쪽
+    # 면에 걸린 메시 힌트가 「법선이 180도 틀어져 있다」 로 빠진다(실측 2026-10-03).
+    local = _local_sizes(
+        step,
+        workdir,
+        topology,
+        given,
+        system,
+        size,
+        second_order,
+        timeout_seconds,
+        fragment=not use_contact,
     )
     mesh = build_mesh(
         step,
@@ -204,6 +214,12 @@ def build(
         "recipe": spec.recipe,
         "solver": "calculix",
     }
+    if plan.reaction_sets:
+        # **반력을 읽을 자리** — 추출 단계가 `.dat` 의 합에서 영역 이름으로 되찾는다.
+        boundary["reaction_sets"] = plan.reaction_sets
+    # **측정점이 어느 바디의 것인가** — 같은 자리에 두 바디의 꼭짓점이 겹치면(이음 입구) 바디로
+    # 갈라야 미끄럼을 잴 수 있다. 추출이 그 바디의 절점 안에서만 가장 가까운 것을 찾는다.
+    boundary["bodies"] = {name: entity for name, entity in body_of.items()}
     if isinstance(spec, HarmonicSpec):
         # **실제로 쓴 감쇠비 · 범위 · 점 수.** 결과가 스펙 값을 적으면 화면이 거짓말을 한다 —
         # 봉우리 높이는 1/2ζ 로 읽히기 때문이다(Ansys 쪽과 같은 규칙).
@@ -388,6 +404,8 @@ def _local_sizes(
     size: float,
     second_order: bool,
     timeout_seconds: int,
+    *,
+    fragment: bool = True,
 ) -> dict[int, float]:
     """영역별 메시 힌트 → **면 번호 → 크기(mm)**.
 
@@ -410,6 +428,7 @@ def _local_sizes(
             second_order=second_order,
             timeout_seconds=timeout_seconds,
             surface_only=True,
+            fragment=fragment,
         )
         found = match_regions(topology, rough.faces, wanted_regions=list(wanted))
     except StageFailure:

@@ -59,7 +59,8 @@
           -0.0,
           -0.0,
           -1.0
-        ]
+        ],
+        "body": "받침판"
       }
     ],
     "블록 윗면": [
@@ -74,7 +75,8 @@
           0.0,
           0.0,
           1.0
-        ]
+        ],
+        "body": "블록"
       }
     ],
     "판 윗면": [
@@ -89,7 +91,8 @@
           0.0,
           0.0,
           1.0
-        ]
+        ],
+        "body": "받침판"
       }
     ],
     "블록 아랫면": [
@@ -104,15 +107,34 @@
           -0.0,
           -0.0,
           -1.0
-        ]
+        ],
+        "body": "블록"
       }
     ]
   },
   "unresolved": [],
+  "quality": {
+    "valid": true,
+    "solids": 2,
+    "faces": 12,
+    "edges": 24,
+    "min_wall": 5.0,
+    "min_wall_at": [
+      -33.333,
+      -20.0,
+      0.0
+    ],
+    "shortest_edge": 5.0,
+    "short_edges": 0,
+    "narrowest_face": 4.6154,
+    "narrow_faces": 0,
+    "warnings": [],
+    "notes": []
+  },
   "point": {
     "number": 4,
     "study": {
-      "id": "48135821-4b22-4dd6-91d2-72f314d53b17",
+      "id": "cc649ece-5ca5-4155-ab82-b44f6ebf23b5",
       "name": "조건_조건훑기",
       "method": "factorial",
       "seed": 1

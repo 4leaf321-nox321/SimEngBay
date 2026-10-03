@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -63,9 +64,14 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     mesh_counts = _draw(workdir, moved, magnitude, result)
     # **측정점의 변위** — 전체 최대는 구속 모서리의 수치적 첨두일 수 있고, 센서는 그 자리에
     # 없다. 실측과 견줄 수 있는 값은 이쪽이다.
-    spots = _probe(workdir, magnitude)
+    spots = _probe(workdir, magnitude, moved.values)
     if spots:
         result["probes"] = spots
+    # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다(실측: CompCore
+    # 전단 이음 μ 0.15 · 클램프 10 kN 에서 1,499.6 N — 손셈 1,500 N).
+    forces = _reactions(workdir)
+    if forces:
+        result["reactions"] = forces
     if mesh_counts:
         result["mesh"] = mesh_counts
     if max_displacement <= 0:
@@ -93,8 +99,10 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     )
 
 
-def _probe(workdir: Path, magnitude: dict[int, float]) -> list[dict[str, Any]]:
-    """측정점의 변위(mm). 점 그룹이 없으면 빈 목록."""
+def _probe(
+    workdir: Path, magnitude: dict[int, float], vectors: dict[int, list[float]]
+) -> list[dict[str, Any]]:
+    """측정점의 변위(mm) — 크기와 **성분**. 점 그룹이 없으면 빈 목록."""
     topology = workdir / "topology.json"
     msh = workdir / "model.msh"
     if not topology.is_file() or not msh.is_file():
@@ -107,7 +115,73 @@ def _probe(workdir: Path, magnitude: dict[int, float]) -> list[dict[str, Any]]:
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return []
-    return probes.read(payload, mesh.nodes, magnitude, unit="mm")
+    return probes.read(
+        payload,
+        mesh.nodes,
+        magnitude,
+        unit="mm",
+        vectors=vectors,
+        body_nodes=_body_nodes(workdir, mesh),
+    )
+
+
+def _body_nodes(workdir: Path, mesh: Any) -> dict[str, set[int]]:
+    """바디 이름 → 그 바디의 절점. 모델링이 남긴 짝(`boundary.json` 의 `bodies`)으로 찾는다."""
+    path = workdir / "boundary.json"
+    if not path.is_file():
+        return {}
+    try:
+        bodies = json.loads(path.read_text(encoding="utf-8")).get("bodies") or {}
+    except (OSError, ValueError):
+        return {}
+    found: dict[str, set[int]] = {}
+    for name, entity in bodies.items():
+        members: set[int] = set()
+        for _, ids in mesh.solids.get(int(entity), []):
+            members.update(ids)
+        if members:
+            found[str(name)] = members
+    return found
+
+
+#: `.dat` 의 반력 합 머리 — `total force (fx,fy,fz) for set HOLD2 and time  0.1E+01`.
+_TOTAL = re.compile(r"total force \(fx,fy,fz\) for set (\S+) and time\s+(\S+)")
+
+
+def _reactions(workdir: Path) -> dict[str, list[float]]:
+    """영역 이름 → **반력 합** `[Fx, Fy, Fz]`(N). 증분마다 찍히므로 **마지막 것**을 쓴다.
+
+    첫 것을 쓰면 하중의 일부만 걸린 상태다 — `.frd` 에서 이미 밟은 함정이다.
+    """
+    boundary = workdir / "boundary.json"
+    data = workdir / "model.dat"
+    if not boundary.is_file() or not data.is_file():
+        return {}
+    try:
+        sets = json.loads(boundary.read_text(encoding="utf-8")).get("reaction_sets") or {}
+    except (OSError, ValueError):
+        return {}
+    if not sets:
+        return {}
+    by_set: dict[str, list[float]] = {}
+    lines = data.read_text(encoding="utf-8", errors="replace").splitlines()
+    for index, line in enumerate(lines):
+        found = _TOTAL.search(line)
+        if not found:
+            continue
+        for follow in lines[index + 1 : index + 4]:
+            parts = follow.split()
+            if len(parts) == 3:
+                try:
+                    by_set[found.group(1).upper()] = [float(one) for one in parts]
+                except ValueError:
+                    continue
+                break
+    return {
+        region: [round(one, 6) for one in by_set[name.upper()]]
+        for region, name in sets.items()
+        if name.upper() in by_set
+    }
 
 
 def _draw(

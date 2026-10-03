@@ -1,0 +1,5 @@
+﻿point,status,접촉 종류,마찰계수,클램프,접합_넓이,클램프_넓이,step_file,point_file,unresolved,interference,warnings,error
+1,ok,bonded,0.15,12.5,1000.0,800.0,shapes/fb2c6278a354.step,points/p0001.json,,ok,,
+2,ok,frictional,0.15,12.5,1000.0,800.0,shapes/fb2c6278a354.step,points/p0002.json,,ok,,
+3,ok,frictional,0.6,12.5,1000.0,800.0,shapes/fb2c6278a354.step,points/p0003.json,,ok,,
+4,ok,frictional,0.3,25.0,1000.0,800.0,shapes/fb2c6278a354.step,points/p0004.json,,ok,,

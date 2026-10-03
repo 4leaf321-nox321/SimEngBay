@@ -212,9 +212,11 @@ def test_조건_픽스처는_이제_값을_다_들고_온다() -> None:
     그전에는 세 폴더 모두 탄성계수가 없어(`missing_structural`) CAD 물성으로는 못 돌았다 —
     그 상태를 시험으로 못 박아 두었더니, 폴더가 바뀐 날 이 줄이 먼저 알려 줬다.
 
-    `조건_원통_SI` 만 아직 그대로다(그 재료에는 탄성계수가 없다) — 거기서는 **거절해야** 한다.
+    `조건_원통_SI` 도 2026-10-03 에 값을 들고 왔다(SI 로 내보낸 알루미늄 70.3 GPa). 그날 이
+    시험의 「값이 없으면 거절」 쪽이 먼저 깨져서 알려 줬다 — 그 규칙은 이제 **값을 지운 사본**
+    으로 지킨다(폴더의 결함에 기대면 폴더가 나아지는 날 시험이 거짓말을 시작한다).
     """
-    for name in ("조건_두바디_두재료", "조건_재료훑기", "조건_조건훑기"):
+    for name in ("조건_두바디_두재료", "조건_재료훑기", "조건_조건훑기", "조건_원통_SI"):
         payload = json.loads(
             (CONDITION_FOLDERS / name / "points" / "p0001.json").read_text(encoding="utf-8")
         )
@@ -224,12 +226,20 @@ def test_조건_픽스처는_이제_값을_다_들고_온다() -> None:
             assert one.youngs_modulus_pa > 0
             assert one.density_kg_m3 > 0
 
-    # 값이 없는 폴더는 **그대로 막는다** — 조용히 넘기면 기본 물성(구조용 강)으로 풀린다.
+    # 값이 없는 재료는 **그대로 막는다** — 조용히 넘기면 기본 물성(구조용 강)으로 풀린다.
     payload = json.loads(
         (CONDITION_FOLDERS / "조건_원통_SI" / "points" / "p0001.json").read_text(
             encoding="utf-8"
         )
     )
+    for one in payload["conditions"]["materials"]:
+        # 탄성계수 줄을 지우고, CompCore 가 그럴 때 붙이는 표시를 단다.
+        one["converted"]["properties"] = [
+            row
+            for row in one["converted"].get("properties", [])
+            if row.get("key") != "mechanical.youngs_modulus"
+        ]
+        one["converted"]["missing_structural"] = ["탄성계수"]
     with pytest.raises(materials.MaterialProblem) as caught:
         materials.read(payload, units.declared_in(payload))
     assert "탄성계수" in caught.value.reason
@@ -238,8 +248,8 @@ def test_조건_픽스처는_이제_값을_다_들고_온다() -> None:
 def test_SI_로_내보낸_폴더도_같은_규칙으로_읽는다() -> None:
     """`조건_원통_SI` 는 내보내기 계가 SI 다 — 값은 Pa · kg/m³ 로 온다.
 
-    우리 리더는 값 곁의 단위 이름을 읽으므로 계가 달라도 규칙이 하나다. 탄성계수가 없어 전체는
-    거절되지만, **밀도만은 두 계에서 같은 kg/m³ 가 되어야** 한다(2,680).
+    우리 리더는 값 곁의 단위 이름을 읽으므로 계가 달라도 규칙이 하나다. **밀도는 두 계에서 같은
+    kg/m³ 가 되어야** 한다(2,680).
     """
     payload = json.loads(
         (CONDITION_FOLDERS / "조건_원통_SI" / "points" / "p0001.json").read_text(

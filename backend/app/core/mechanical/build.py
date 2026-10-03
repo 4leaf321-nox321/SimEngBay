@@ -102,6 +102,14 @@ def build(
         _use_unit_system(app, system)
         reused = _open_cached(app, cached)
         bodies = _bodies_of(app) if reused else _import_geometry(app, step)
+        if cached is not None and not reused:
+            # **깨끗할 때 남긴다 — 해석 · 조건을 걸기 전에.** 접촉 · 이름 선택 · 하중은 모델
+            # 수준 객체라서, 다 건 뒤에 남기면 **다음 점이 앞 점의 것을 물려받는다** — 접촉
+            # 종류를 훑는 DOE 에서 마찰 점이 앞 점의 접착에 덮여 조용히 접착으로 풀렸다
+            # (2026-10-03, CompCore 전단 이음으로 들켰다). 캐시는 영역별 메시 힌트가 없을 때만
+            # 쓰므로(`_cache_path`) 여기서 전역 크기로 메시해도 나중 메시와 같다.
+            _mesh(app, spec, given_conditions, system, {}, topology or {}, bodies)
+            _save_cache(app, cached)
         used = _apply_material(spec, bodies, system, given, topology)
         constrained = bool(given_conditions.constraints or spec.constraints)
         plan: HarmonicPlan | None = None
@@ -152,8 +160,6 @@ def build(
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, topology or {}, bodies
         )
-        if cached is not None and not reused:
-            _save_cache(app, cached)
 
         dat = workdir / "model.dat"
         if upstream is not None and upstream is not analysis:
@@ -1078,6 +1084,16 @@ def _apply_given_conditions(
         _one_constraint(analysis, constraint, places[constraint.region], system, frames)
         applied.append(f"{constraint.kind}:{constraint.region}")
         logger.info("구속 %s(%s) ← %s", constraint.name, constraint.kind, constraint.region)
+    if given.contacts:
+        # **CAD 가 접촉을 선언했으면 Mechanical 의 자동 접촉을 지운다.** 형상을 읽을 때
+        # Mechanical 이 맞닿은 면마다 **접착** 접촉(「Contact Region」)을 스스로 만든다. 그것을
+        # 두고 우리 마찰 접촉을 같은 면에 더하면 **접착이 이긴다** — 마찰 μ 0.15 · 클램프 10 kN
+        # 의 전단 이음이 μN = 1.5 kN 이 아니라 접착 반력 3,627 N 을 버텼다(실측 2026-10-03,
+        # CompCore 전단 이음). 선언이 없으면 남긴다 — 그때는 그 자동 접착이 조립을 붙들고 있다.
+        removed = _clear_automatic_contacts(app)
+        if removed:
+            applied.append(f"auto_contacts_removed:{removed}")
+            logger.info("자동 접촉 %s 개를 지웠습니다 — CAD 가 접촉을 선언했습니다", removed)
     for contact in given.contacts:
         _one_contact(app, contact, places[contact.source], places[contact.target])
         applied.append(f"contact:{contact.kind}")
@@ -1232,6 +1248,30 @@ def _components(
         if value is None:
             continue
         getattr(support, name).Output.DiscreteValues = [quantity(f"{value} [deg]")]
+
+
+def _clear_automatic_contacts(app: Any) -> int:
+    """지금 모델에 있는 **접촉 영역을 전부** 지운다. 지운 수를 돌려준다.
+
+    부르는 때가 정해져 있다 — CAD 의 접촉을 걸기 **바로 전**이다. 그 시점에 있는 접촉은 형상을
+    읽을 때 Mechanical 이 만든 자동 접촉뿐이다(캐시는 조건을 걸기 전에 남긴다 — 위 `build`).
+    """
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    found: list[Any] = []
+    try:
+        found = list(
+            _global("DataModel").GetObjectsByType(enums.DataModelObjectCategory.ContactRegion)
+        )
+    except Exception:  # pragma: no cover - 전역 이름이 없는 판
+        for group in list(app.Model.Connections.Children):
+            found.extend(
+                child
+                for child in list(getattr(group, "Children", []))
+                if "ContactRegion" in type(child).__name__
+            )
+    for one in found:
+        one.Delete()
+    return len(found)
 
 
 def _one_contact(app: Any, contact: condition_model.Contact, source: Any, target: Any) -> None:

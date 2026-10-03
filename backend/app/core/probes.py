@@ -33,6 +33,21 @@ def wanted(topology: dict[str, Any]) -> dict[str, tuple[float, float, float]]:
     return found
 
 
+def body_of(topology: dict[str, Any], name: str) -> str | None:
+    """그 측정점이 **어느 바디의 것인가**. 지문에 `body` 가 없으면 `None`(전체에서 찾는다).
+
+    같은 자리에 두 바디의 꼭짓점이 겹칠 수 있다 — 이음 입구가 그렇다. 바디를 가르지 않으면 두
+    측정점이 **같은 절점**을 잡고, 둘의 차(미끄럼)가 늘 0 으로 나온다. 그 0 은
+    「안 미끄러졌다」 로 읽힌다. CompCore 가 2026-10-03 부터 조립 지문에 `body` 를 붙인다.
+    """
+    rows = (topology.get("regions") or {}).get(name)
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        body = rows[0].get("body")
+        if isinstance(body, str) and body:
+            return body
+    return None
+
+
 def row(
     *,
     name: str,
@@ -41,6 +56,8 @@ def row(
     distance_mm: float,
     value: float,
     unit: str,
+    vector: list[float] | None = None,
+    body: str | None = None,
 ) -> dict[str, Any]:
     """측정점 한 줄. **멀면 그 사실을 적는다** — 그 값은 다른 자리의 값이다.
 
@@ -55,6 +72,11 @@ def row(
         "value": round(value, 10),
         "unit": unit,
     }
+    if vector is not None:
+        # **성분도 싣는다** — 크기만으로는 미끄럼(두 점의 X 차)을 못 잰다.
+        made["vector"] = [round(one, 12) for one in vector[:3]]
+    if body is not None:
+        made["body"] = body
     if distance_mm > FAR_MM:
         made["warning"] = (
             f"가장 가까운 절점이 {distance_mm:.2f} mm 떨어져 있습니다 — 메시를 그 자리에서 "

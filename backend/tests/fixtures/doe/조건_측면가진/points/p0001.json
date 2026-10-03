@@ -59,7 +59,8 @@
           -0.0,
           -0.0,
           -1.0
-        ]
+        ],
+        "body": "받침판"
       }
     ],
     "기둥 끝": [
@@ -74,7 +75,8 @@
           0.0,
           0.0,
           1.0
-        ]
+        ],
+        "body": "기둥"
       }
     ],
     "접합 판쪽": [
@@ -89,7 +91,8 @@
           0.0,
           0.0,
           1.0
-        ]
+        ],
+        "body": "받침판"
       }
     ],
     "접합 기둥쪽": [
@@ -104,7 +107,8 @@
           -0.0,
           -0.0,
           -1.0
-        ]
+        ],
+        "body": "기둥"
       }
     ],
     "측정점": [
@@ -113,15 +117,34 @@
           5.0,
           5.0,
           90.0
-        ]
+        ],
+        "body": "기둥"
       }
     ]
   },
   "unresolved": [],
+  "quality": {
+    "valid": true,
+    "solids": 2,
+    "faces": 13,
+    "edges": 28,
+    "min_wall": 10.0,
+    "min_wall_at": [
+      -26.667,
+      -26.667,
+      0.0
+    ],
+    "shortest_edge": 10.0,
+    "short_edges": 0,
+    "narrowest_face": 5.0,
+    "narrow_faces": 0,
+    "warnings": [],
+    "notes": []
+  },
   "point": {
     "number": 1,
     "study": {
-      "id": "ab5ceece-3aa9-4461-a714-8d6ebd362041",
+      "id": "8d2121bf-dcf5-4528-b28f-1902cb9489b6",
       "name": "조건_측면가진",
       "method": "factorial",
       "seed": 1

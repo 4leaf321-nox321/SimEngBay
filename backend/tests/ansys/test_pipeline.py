@@ -776,3 +776,131 @@ def test_영역_이름이_없으면_모델링에서_즉시_실패한다(workdir:
     with pytest.raises(StageFailure) as caught:
         runner.run(StageContext(stage="modeling", spec=spec, workdir=workdir))
     assert caught.value.code == "region_unresolved"
+
+
+#: CompCore 의 전단 이음(2026-10-03) — 마찰이 일을 하는지 보는 폴더.
+SHEAR_JOINT = FIXTURES / "doe" / "조건_전단이음"
+
+
+def test_전단_이음에서_마찰이_일을_한다_Ansys(workdir: Path) -> None:
+    """**마찰이 μN 에서 버티기를 멈춘다** — 클램프 10 kN · μ 0.15 → 1,500 N.
+
+    이 시험이 처음에 **떨어졌다**: 마찰 점의 반력이 접착과 7자리까지 같았다(3,627 N). 덱에
+    접촉이 두 벌 있었다 — Mechanical 이 형상을 읽을 때 맞닿은 면마다 스스로 만든 **자동 접착
+    접촉**(「Contact Region」)과, 그 위에 우리가 건 마찰 접촉. 같은 면에서 접착이 이긴다.
+
+    그래서 CAD 가 접촉을 선언하면 자동 접촉을 지운다. 실측 2026-10-03(요소 2.5 mm): 접착
+    3,627 N · 마찰 **1,483 N** · 미끄럼 0.0218 mm(CalculiX 1,499.6 N · 0.0217 mm).
+    """
+    seen: dict[int, dict[str, Any]] = {}
+    for point in (1, 2):
+        place = workdir / f"p{point:04d}"
+        place.mkdir()
+        shutil.copy(next(iter((SHEAR_JOINT / "shapes").glob("*.step"))), place / "input.step")
+        shutil.copy(SHEAR_JOINT / "points" / f"p{point:04d}.json", place / "topology.json")
+        spec = {
+            "recipe": "static",
+            "material": SPEC["material"],
+            "mesh": {"element_size_mm": 2.5},
+        }
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+        runner = _executor()
+        for stage in STAGES:
+            runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+        seen[point] = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        deck = (place / "model.dat").read_text(encoding="utf-8", errors="replace")
+        # **접촉은 CAD 가 선언한 하나뿐이어야 한다** — 자동 접촉이 남으면 그것이 이긴다.
+        assert deck.count("Create Contact") == 1, "자동 접촉이 남아 있다"
+
+    bonded = seen[1]["reactions"]["당기는 끝"][0]
+    rubbing = seen[2]["reactions"]["당기는 끝"][0]
+    assert 3200 < bonded < 3900
+    assert rubbing == pytest.approx(1500, rel=0.05), f"마찰이 접착처럼 버텼다: {rubbing} N"
+    spots = {one["name"]: one for one in seen[2]["probes"]}
+    slip = spots["이음 입구 위판"]["vector"][0] - spots["이음 입구 아래판"]["vector"][0]
+    assert 0.018 < slip < 0.026, f"미끄럼 {slip} mm"
+    assert spots["이음 입구 위판"]["body"] == "위판"
+
+
+def test_형상_캐시가_앞_점의_접촉을_물려주지_않는다(workdir: Path) -> None:
+    """**캐시는 조건을 걸기 전에 남긴다.**
+
+    전에는 해석 · 접촉 · 하중을 다 건 뒤에 남겼다. 접촉은 모델 수준 객체라서, 다음 점이 그
+    캐시를 열면 **앞 점의 접촉을 물려받는다** — 접촉 종류를 훑는 DOE(`조건_조건훑기`: 접착 ↔
+    마찰)에서 마찰 점이 앞 점의 접착에 덮여 **조용히 접착으로 풀렸다.** 운영 DOE 는 캐시를
+    켜므로 그 결과가 그대로 화면에 나갔을 것이다.
+
+    접착 점(p0001)을 먼저 풀어 캐시를 만들고, 마찰 점(p0003)이 그 캐시를 연다 — 덱에 접촉이
+    **하나**, 그리고 그것이 마찰(μ 0.2)이어야 한다.
+    """
+    cache = workdir / "cache"
+    shape = next(iter((CONDITION_SWEEP / "shapes").glob("*.step")))
+    seen: dict[int, dict[str, Any]] = {}
+    for point in (1, 3):
+        place = workdir / f"p{point:04d}"
+        place.mkdir()
+        shutil.copy(shape, place / "input.step")
+        shutil.copy(CONDITION_SWEEP / "points" / f"p{point:04d}.json", place / "topology.json")
+        spec = dict(SPEC)
+        spec["mesh"] = {"element_size_mm": 8}
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+        runner = _executor(shape_cache=cache)
+        summary: dict[str, Any] = {}
+        for stage in ("fetching", "modeling"):
+            summary.update(
+                runner.run(StageContext(stage=stage, spec=spec, workdir=place)).summary
+            )
+        seen[point] = {
+            "summary": summary,
+            "deck": (place / "model.dat").read_text(encoding="utf-8", errors="replace"),
+        }
+
+    assert seen[1]["summary"]["shape_reused"] is False
+    assert seen[3]["summary"]["shape_reused"] is True, (
+        "둘째 점이 캐시를 열어야 시험이 뜻을 갖는다"
+    )
+    deck = seen[3]["deck"]
+    assert deck.count("Create Contact") == 1, "앞 점의 접촉이 따라왔다"
+    assert "mp,mu,cid,0.2" in deck.lower(), "마찰 점인데 마찰계수가 덱에 없다"
+
+
+def test_마찰_접촉은_모달에서_접착보다_낮다(workdir: Path) -> None:
+    """Ansys 는 마찰 접촉을 모달에서 **미끄러짐을 허용해** 푼다 — 그래서 접착보다 낮다.
+
+    실측 2026-10-03(`조건_조건훑기`, 요소 8 mm · 물성은 스펙): 접착 27,940.6 Hz · 마찰
+    26,472.8 Hz(5.3% 낮다). 전에는 둘이 0.2% 밖에 안 갈렸는데, 그때는 Mechanical 의 **자동 접착
+    접촉**이 같은 면에 깔려 있어서 마찰이 할 일이 없었다 — 그 값으로 「모달에서는 접촉 종류가
+    거의 상관없다」 고 문서에 적었다. 틀린 기준이 틀린 결론을 확인해 준 자리다.
+
+    자동 접촉이 다시 남으면 이 시험이 깨진다(두 값이 같아진다).
+    """
+    shape = next(iter((CONDITION_SWEEP / "shapes").glob("*.step")))
+    seen: dict[int, float] = {}
+    for point in (1, 3):
+        place = workdir / f"p{point:04d}"
+        place.mkdir()
+        shutil.copy(shape, place / "input.step")
+        shutil.copy(CONDITION_SWEEP / "points" / f"p{point:04d}.json", place / "topology.json")
+        spec = dict(SPEC)
+        spec["material_from"] = "spec"
+        spec["mesh"] = {"element_size_mm": 8}
+        spec["modes"] = 6
+        parse_spec(spec)
+        (place / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False), encoding="utf-8"
+        )
+        runner = _executor()
+        for stage in STAGES:
+            runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+        result = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        seen[point] = result["modes"][0]["frequency_hz"]
+
+    assert seen[3] < seen[1] * 0.99, f"마찰이 접착처럼 굴었다: {seen}"
+    assert seen[1] == pytest.approx(27940.6, rel=0.02)
+    assert seen[3] == pytest.approx(26472.8, rel=0.02)

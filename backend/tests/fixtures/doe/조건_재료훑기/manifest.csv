@@ -1,3 +1,3 @@
-﻿point,status,블록 재료,step_file,point_file,unresolved,interference,error
-1,ok,AL5052H32DEMO_-_-,shapes/c3aed82c2d74.step,points/p0001.json,,ok,
-2,ok,SECC-EXAD87-DP_선언물성_0.8,shapes/c3aed82c2d74.step,points/p0002.json,,ok,
+﻿point,status,블록 재료,step_file,point_file,unresolved,interference,warnings,error
+1,ok,AL5052H32DEMO_-_-,shapes/c3aed82c2d74.step,points/p0001.json,,ok,,
+2,ok,SECC-EXAD87-DP_선언물성_0.8,shapes/c3aed82c2d74.step,points/p0002.json,,ok,,

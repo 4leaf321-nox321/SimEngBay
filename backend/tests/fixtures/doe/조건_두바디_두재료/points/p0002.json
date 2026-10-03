@@ -59,7 +59,8 @@
           -0.0,
           -0.0,
           -1.0
-        ]
+        ],
+        "body": "받침판"
       }
     ],
     "블록 윗면": [
@@ -74,7 +75,8 @@
           0.0,
           0.0,
           1.0
-        ]
+        ],
+        "body": "블록"
       }
     ],
     "판 윗면": [
@@ -89,7 +91,8 @@
           0.0,
           0.0,
           1.0
-        ]
+        ],
+        "body": "받침판"
       }
     ],
     "블록 아랫면": [
@@ -104,15 +107,34 @@
           -0.0,
           -0.0,
           -1.0
-        ]
+        ],
+        "body": "블록"
       }
     ]
   },
   "unresolved": [],
+  "quality": {
+    "valid": true,
+    "solids": 2,
+    "faces": 12,
+    "edges": 24,
+    "min_wall": 8.0,
+    "min_wall_at": [
+      -33.333,
+      -20.0,
+      0.0
+    ],
+    "shortest_edge": 8.0,
+    "short_edges": 0,
+    "narrowest_face": 7.0588,
+    "narrow_faces": 0,
+    "warnings": [],
+    "notes": []
+  },
   "point": {
     "number": 2,
     "study": {
-      "id": "b5e492c9-1b79-49b4-afb7-76385d308f9d",
+      "id": "b439357c-9f07-4943-806f-6c586c8ed847",
       "name": "조건_두바디_두재료",
       "method": "factorial",
       "seed": 1

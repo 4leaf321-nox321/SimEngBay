@@ -58,10 +58,28 @@
     ]
   },
   "unresolved": [],
+  "quality": {
+    "valid": true,
+    "solids": 1,
+    "faces": 7,
+    "edges": 15,
+    "min_wall": 10.0,
+    "min_wall_at": [
+      13.333,
+      -16.667,
+      10.0
+    ],
+    "shortest_edge": 10.0,
+    "short_edges": 0,
+    "narrowest_face": 8.3333,
+    "narrow_faces": 0,
+    "warnings": [],
+    "notes": []
+  },
   "point": {
     "number": 2,
     "study": {
-      "id": "5bd4765c-e5f1-49f9-b0e0-c1492270f7fb",
+      "id": "5762541c-aafd-4551-a07d-ee9c5fd5a8a1",
       "name": "조건_원통_SI",
       "method": "factorial",
       "seed": 1
@@ -300,6 +318,7 @@
           "properties": [
             {
               "item": "비열",
+              "key": "thermal.specific_heat",
               "unit": "J/(kg.K)",
               "points": [
                 {
@@ -310,6 +329,7 @@
             },
             {
               "item": "선팽창계수(CTE)",
+              "key": "thermal.expansion_linear",
               "unit": "1/K",
               "points": [
                 {
@@ -320,6 +340,7 @@
             },
             {
               "item": "연신율",
+              "key": "mechanical.elongation_at_break",
               "unit": "1",
               "points": [
                 {
@@ -330,6 +351,7 @@
             },
             {
               "item": "열전도율",
+              "key": "thermal.conductivity",
               "unit": "W/(m.K)",
               "points": [
                 {
@@ -340,6 +362,7 @@
             },
             {
               "item": "인장강도",
+              "key": "mechanical.tensile_strength",
               "unit": "Pa",
               "points": [
                 {
@@ -350,6 +373,7 @@
             },
             {
               "item": "탄성계수",
+              "key": "mechanical.youngs_modulus",
               "unit": "Pa",
               "points": [
                 {
@@ -360,6 +384,7 @@
             },
             {
               "item": "항복강도",
+              "key": "mechanical.yield_strength",
               "unit": "Pa",
               "points": [
                 {
@@ -368,9 +393,6 @@
                 }
               ]
             }
-          ],
-          "missing_structural": [
-            "탄성계수"
           ]
         }
       }

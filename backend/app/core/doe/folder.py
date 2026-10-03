@@ -64,6 +64,11 @@ FIXED_COLUMNS = frozenset(
         "unresolved",
         "interference",
         "error",
+        # CompCore v0.6.0 이 더한 열들. 인자 판정의 정본은 `study.json` 의 `factors` 라서
+        # (`_factors`) 보통은 여기까지 안 오지만, 선언이 없는 옛 폴더의 뒷길에서는 이 집합이
+        # 「인자가 아닌 것」 을 가른다 — 없으면 경고 글이 설계 인자로 둔갑한다.
+        "warnings",
+        "mid_file",
     }
 )
 

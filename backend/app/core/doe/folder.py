@@ -162,8 +162,7 @@ def read_folder(path: Path) -> DoeFolder:
     if not rows:
         raise FolderProblem(f"{MANIFEST} 에 설계점이 없습니다.")
 
-    columns = [name for name in rows[0] if name]
-    factors = [name for name in columns if name not in FIXED_COLUMNS]
+    factors = _factors(study, [name for name in rows[0] if name])
 
     points = [_point(path, row, factors) for row in rows]
     return DoeFolder(
@@ -175,6 +174,27 @@ def read_folder(path: Path) -> DoeFolder:
         seed=study.get("seed"),
         method=str(study.get("method") or ""),
     )
+
+
+def _factors(study: dict[str, Any], columns: list[str]) -> list[str]:
+    """어느 열이 **바꾼 변수**인가.
+
+    **`study.json` 의 선언이 정본이다.** 전에는 「고정 열이 아닌 것은 전부 인자」 로 봤는데,
+    CAD 가 표에 열을 더하면(CompCore v0.6.0 의 `warnings` · 측정값 열) 그것들이 설계 인자로
+    둔갑한다 —
+    화면의 「바꾼 변수」 와 설계점 비교 축에 엉뚱한 것이 끼고, 그 그림은 오류 없이 그럴듯하다.
+
+    선언이 없는 옛 폴더는 전처럼 본다(그때는 표에 인자만 있었다).
+    """
+    declared = [
+        str(one.get("name") or "").strip()
+        for one in (study.get("factors") or [])
+        if isinstance(one, dict) and one.get("name")
+    ]
+    if declared:
+        # 표에 있는 것만 — 선언됐어도 열이 없으면 읽을 값이 없다.
+        return [name for name in columns if name in set(declared)]
+    return [name for name in columns if name not in FIXED_COLUMNS]
 
 
 def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:

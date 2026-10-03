@@ -229,3 +229,33 @@ def test_조건과_배율도_인자가_된다() -> None:
     ]
     # 바뀌는 것이 조건 · 물성뿐이라 네 점이 형상 한 벌을 나눠 쓴다.
     assert len({one.shape_key for one in doe.usable}) == 1
+
+
+def test_표에_열이_늘어도_바꾼_변수로_오해하지_않는다(tmp_path: Path) -> None:
+    """**CAD 가 표에 열을 더한다**(CompCore v0.6.0: `warnings` · 고른 측정값 열).
+
+    전에는 「고정 열이 아닌 것은 전부 인자」 로 봤다 — 그러면 새 열이 **설계 인자로 둔갑**해서
+    화면의 「바꾼 변수」 와 설계점 비교 축에 끼어든다. 그 그림은 오류 없이 그럴듯하게 나온다.
+
+    정본은 `study.json` 의 `factors` 선언이다. 그리고 열은 **이름으로** 읽으므로(`DictReader`)
+    순서가 바뀌어도 안 깨진다 — 그쪽이 확인을 부탁한 자리다.
+    """
+    import shutil
+
+    copy = tmp_path / FOLDER.name
+    shutil.copytree(FOLDER, copy)
+    manifest = copy / "manifest.csv"
+    lines = manifest.read_text(encoding="utf-8-sig").splitlines()
+    # **순서까지 바꿔 둔다** — 이름으로 읽는다면 이것도 아무 일 없어야 한다.
+    head = lines[0].split(",")
+    lines[0] = ",".join(["warnings", "최소벽두께", *head])
+    for index in range(1, len(lines)):
+        if lines[index].strip():
+            lines[index] = ",".join(["", "3.2", *lines[index].split(",")])
+    manifest.write_text("﻿" + "\n".join(lines) + "\n", encoding="utf-8")
+
+    doe = read_folder(copy)
+
+    assert doe.factors == ["두께"], "새 열이 인자로 끼면 안 된다"
+    assert [one.params["두께"] for one in doe.usable] == [6.0, 12.0, 20.0]
+    assert all("최소벽두께" not in one.params for one in doe.points)

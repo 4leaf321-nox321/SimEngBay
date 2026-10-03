@@ -21,6 +21,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from app.core import probes as core_probes
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes
 from app.core.calculix.mesh import read_mesh
@@ -69,8 +70,7 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
         }
         if spots:
             row["probes"] = {
-                name: round(_at_node(real[value], other, node), 10)
-                for name, node in spots.items()
+                spot.name: round(_at_node(real[value], other, spot.node), 10) for spot in spots
             }
         points.append(row)
     if not points:
@@ -92,6 +92,10 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
         "material": spec.material.name,
         **({"mesh": _mesh(workdir)} if _mesh(workdir) else {}),
     }
+    # **측정점마다 그 자리의 봉우리 한 줄** — 절점 거리와 「멀다」 경고가 여기 실린다.
+    tops = core_probes.peaks(spots, points, unit="mm")
+    if tops:
+        result["probes"] = tops
     if worst["max_displacement"] > SUSPICIOUS_DISPLACEMENT:
         result["warning"] = (
             f"공진 응답이 {worst['max_displacement']:.3g} 로 큽니다 — "
@@ -116,34 +120,26 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
     )
 
 
-def _spots(workdir: Path) -> dict[str, int]:
-    """측정점 이름 → **가장 가까운 절점**. 점 그룹이 없으면 빈 것.
+def _spots(workdir: Path) -> list[probes.Spot]:
+    """측정점마다 **가장 가까운 절점**. 점 그룹이 없으면 빈 것.
 
     절점을 한 번만 찾아 둔다 — 주파수마다 다시 찾으면 같은 일을 수백 번 한다.
     """
     topology = workdir / TOPOLOGY_NAME
     msh = workdir / MSH_NAME
     if not topology.is_file() or not msh.is_file():
-        return {}
+        return []
     try:
         payload = json.loads(topology.read_text(encoding="utf-8"))
-        asked = probes.wanted(payload)
-        if not asked:
-            return {}
+        if not probes.wanted(payload):
+            return []
         mesh = read_mesh(msh)
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
-        return {}
-    found: dict[str, int] = {}
-    for name, point in asked.items():
-        hit = probes.nearest(mesh.nodes, point)
-        if hit is not None:
-            found[name] = hit[0]
-            if hit[1] > probes.FAR_MM:
-                logger.warning(
-                    "측정점 %s: 가장 가까운 절점이 %.2f mm 떨어져 있습니다", name, hit[1]
-                )
-    return found
+        return []
+    return probes.locate(
+        payload, mesh.nodes, body_nodes=probes.body_nodes(workdir, mesh.solids)
+    )
 
 
 def _at_node(real: frd_reader.Block, imaginary: frd_reader.Block, node: int) -> float:

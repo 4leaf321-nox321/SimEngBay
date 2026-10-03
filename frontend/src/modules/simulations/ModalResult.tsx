@@ -18,6 +18,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { simulationApi } from '@/modules/simulations/api'
 import type { Artifact, ModeResult, SimulationResult } from '@/modules/simulations/api'
 import { ModeCharts } from '@/modules/simulations/ModeCharts'
+import { ModalProbeTable } from '@/modules/simulations/ProbeTables'
 import { ModeThumbnail } from '@/modules/simulations/ModeThumbnail'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { Pagination } from '@/shared/components/Pagination'
@@ -260,6 +261,9 @@ export function ModalResult({ simulationId, result, artifacts }: Props) {
           </details>
         )}
       </section>
+
+      {/* **센서를 붙이는 자리에서 어느 모드가 보이나** — 실측과 견주는 첫 자리다. */}
+      <ModalProbeTable probes={result.probes ?? []} modes={result.modes} />
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium">모드 형상</h2>

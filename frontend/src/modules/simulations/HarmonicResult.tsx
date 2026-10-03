@@ -13,16 +13,41 @@
  * 「봉우리 31 kHz」 를 읽었다가 실제 공진이 60 kHz 였던 일을 그대로 겪었다.
  */
 
-import type { HarmonicResult as HarmonicResultData } from '@/modules/simulations/api'
+import type { HarmonicResult as HarmonicResultData, ProbeRow } from '@/modules/simulations/api'
+import { shownValue as shown } from '@/modules/simulations/format'
 import { Chart } from '@/shared/charts'
 
 type Props = {
   result: HarmonicResultData
 }
 
-function shown(value: number, unit?: string): string {
-  const digits = Math.abs(value) >= 1 ? 4 : 6
-  return `${Number(value.toPrecision(digits))}${unit ? ` ${unit}` : ''}`
+/** 표에 열로 세울 측정점 수 상한 — 그보다 많으면 곡선과 봉우리 줄로만 본다. */
+const TABLE_PROBES = 4
+
+/**
+ * 측정점마다 **그 자리 곡선의 봉우리**. 결과가 한 줄씩 적어 보내면(절점 거리 · 경고 포함) 그것을,
+ * 옛 결과면 곡선에서 직접 찾는다.
+ */
+function probePeaks(result: HarmonicResultData, names: string[]): ProbeRow[] {
+  if (result.probes?.length) return result.probes
+  return names.flatMap((name) => {
+    const curve = result.points.filter((one) => typeof one.probes?.[name] === 'number')
+    if (curve.length === 0) return []
+    const top = curve.reduce((best, one) =>
+      (one.probes?.[name] ?? 0) > (best.probes?.[name] ?? 0) ? one : best,
+    )
+    return [
+      {
+        name,
+        point: [0, 0, 0],
+        node: 0,
+        distance_mm: Number.NaN,
+        value: top.probes?.[name] ?? 0,
+        unit: result.units.displacement ?? '',
+        frequency_hz: top.frequency_hz,
+      } satisfies ProbeRow,
+    ]
+  })
 }
 
 export function HarmonicResult({ result }: Props) {
@@ -35,6 +60,11 @@ export function HarmonicResult({ result }: Props) {
   const gain = floor > 0 && peak ? peak.max_displacement / floor : null
   const displacement = result.units.displacement
   const frequency = result.units.frequency || 'Hz'
+  // 측정점 이름은 CAD 가 준 아무 글자다(「이음 입구 위판」) — **그대로 데이터 열쇠로 쓰지
+  // 않는다**(점이 든 이름을 차트가 중첩 경로로 읽는다). 열쇠는 번호, 이름은 범례에.
+  const names = [...new Set(points.flatMap((one) => Object.keys(one.probes ?? {})))]
+  const peaks = probePeaks(result, names)
+  const tabled = names.slice(0, TABLE_PROBES)
 
   return (
     <section className="space-y-3">
@@ -75,14 +105,41 @@ export function HarmonicResult({ result }: Props) {
         </p>
       )}
 
+      {peaks.length > 0 && (
+        // **센서 자리의 봉우리** — 전체 봉우리와 주파수가 다를 수 있다(최대가 나는 자리가
+        // 주파수마다 옮겨 다닌다). 실측 FRF 와 견줄 값은 이쪽이다.
+        <div className="space-y-1 rounded-md border p-3 text-sm">
+          <p className="text-muted-foreground text-xs">측정점 봉우리</p>
+          <ul className="space-y-1">
+            {peaks.map((one) => (
+              <li key={one.name}>
+                <span className="font-medium">{one.name}</span>{' '}
+                {one.frequency_hz !== undefined && shown(one.frequency_hz, frequency)} ·{' '}
+                {shown(one.value, displacement)}
+                {Number.isFinite(one.distance_mm) && (
+                  <span className="text-muted-foreground"> · 절점 거리 {shown(one.distance_mm, 'mm')}</span>
+                )}
+                {one.warning && (
+                  <span className="block text-xs text-amber-700 dark:text-amber-400">{one.warning}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <Chart
         kind="line"
         data={points.map((one) => ({
           frequency: one.frequency_hz,
           최대변위: one.max_displacement,
+          ...Object.fromEntries(names.map((name, index) => [`p${index}`, one.probes?.[name] ?? null])),
         }))}
         x="frequency"
-        series={[{ key: '최대변위' }]}
+        series={[
+          { key: '최대변위', label: '최대 변위' },
+          ...names.map((name, index) => ({ key: `p${index}`, label: `측정점: ${name}` })),
+        ]}
         height={280}
       />
 
@@ -93,6 +150,11 @@ export function HarmonicResult({ result }: Props) {
             <th className="py-1 text-right font-normal">
               최대 변위{displacement ? ` (${displacement})` : ''}
             </th>
+            {tabled.map((name) => (
+              <th key={name} className="py-1 text-right font-normal">
+                {name}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -103,6 +165,11 @@ export function HarmonicResult({ result }: Props) {
             >
               <td className="py-1">{shown(one.frequency_hz)}</td>
               <td className="py-1 text-right">{shown(one.max_displacement)}</td>
+              {tabled.map((name) => (
+                <td key={name} className="py-1 text-right">
+                  {shown(one.probes?.[name])}
+                </td>
+              ))}
             </tr>
           ))}
         </tbody>

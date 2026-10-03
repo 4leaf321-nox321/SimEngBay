@@ -73,6 +73,7 @@ def extract(
             displacement,
             unit=displacement_unit,
             scale=probes.scale_for(displacement_unit),
+            strains=_strains(model) if probes.wanted(topology) else None,
         )
         # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다.
         forces = _reactions(model, mesh, topology)
@@ -87,6 +88,8 @@ def extract(
             "system": system,
             "displacement": displacement_unit,
             "stress": stress_unit,
+            # 반력의 단위 — 이 플랫폼이 쓰는 두 계(MKS · mm-t-s)의 힘은 모두 N 이다.
+            "force": "N",
         },
         "mesh": {"nodes": nodes, "elements": elements},
         "max_displacement": max_displacement,
@@ -128,6 +131,29 @@ def _peak(field: Any) -> tuple[float, str]:
     if data.ndim == 2:
         return float(np.max(np.linalg.norm(data, axis=1))), str(field.unit or "")
     return float(np.max(np.abs(data))), str(field.unit or "")
+
+
+def _strains(model: Any) -> Any:
+    """탄성 변형률(절점 평균). **못 읽으면 `None`** — 측정점에 변형률이 빠질 뿐이다.
+
+    Mechanical 의 기본 출력에 변형률이 들어 있다. 판마다 부르는 길이 달라 차례로 해 본다
+    (`_von_mises` 와 같은 이유).
+    """
+    from ansys.dpf import core as dpf
+
+    attempts: tuple[Any, ...] = (
+        lambda: model.results.elastic_strain.on_location(dpf.locations.nodal).eval()[0],
+        lambda: dpf.operators.result.elastic_strain(
+            data_sources=model.metadata.data_sources, requested_location="Nodal"
+        ).eval()[0],
+    )
+    for attempt in attempts:
+        try:
+            return attempt()
+        except Exception:
+            continue
+    logger.warning("탄성 변형률을 못 읽었습니다 — 측정점에 변형률 없이 갑니다")
+    return None
 
 
 def _reactions(model: Any, mesh: Any, topology: dict[str, Any]) -> dict[str, list[float]]:

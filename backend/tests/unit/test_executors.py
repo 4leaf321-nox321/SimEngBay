@@ -61,6 +61,29 @@ def test_windows_bridge_는_경로를_윈도우_표기로_바꾼다(
     assert "--ansys-version" in command and "252" in command
 
 
+def test_windows_bridge_도_CalculiX_는_이_기계에서_푼다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**다리 건너 Windows 파이썬은 리눅스의 gmsh · ccx 를 못 부른다** — 개발 PC 의 워커 하나가
+    두 솔버를 다 집으려면 CalculiX 단계는 WSL 의 파이썬으로 띄워야 한다(실측: 「ccx 를 찾지
+    못했습니다」 로 멈췄다)."""
+    monkeypatch.setattr(
+        bridge,
+        "to_windows_path",
+        lambda path: "C:\\" + str(path).strip("/").replace("/", "\\"),
+    )
+    runner = executors.resolve(
+        "windows-bridge", python=Path("/mnt/c/py/python.exe"), ansys_version=252
+    )
+    ctx = StageContext(stage="solving", spec={**SPEC, "solver": "calculix"}, workdir=tmp_path)
+    command = runner.command(ctx)  # type: ignore[attr-defined]
+    assert command[0] == sys.executable
+    assert str(tmp_path) in command
+    assert not any(one.startswith("C:\\") for one in command), command
+    # Ansys 작업은 그대로 다리를 건넌다.
+    assert runner.command(_ctx("solving", tmp_path))[0] == "/mnt/c/py/python.exe"  # type: ignore[attr-defined]
+
+
 def test_단계마다_다른_상한을_준다(tmp_path: Path) -> None:
     """솔브만 유난히 길다. 한 값으로 묶으면 모델링이 하루 종일 매달린다."""
     runner = executors.resolve("local")

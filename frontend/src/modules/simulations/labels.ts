@@ -10,6 +10,22 @@ export const STAGE_LABELS: Record<string, string> = {
 export const RECIPE_LABELS: Record<string, string> = {
   modal: '모달(고유진동수)',
   static: '정적',
+  harmonic: '조화 응답',
+}
+
+/**
+ * 솔버 이름표. **어느 솔버로 풀었나**가 안 보이면 「왜 어제와 값이 다르냐」 를 아무도 설명할
+ * 수 없다 — 두 솔버의 수는 몇 % 갈린다(1차 굽힘 Ansys 1,266.4 · CalculiX 1,263.5 Hz).
+ */
+export const SOLVER_LABELS: Record<string, string> = {
+  ansys: 'Ansys',
+  calculix: 'CalculiX (오픈소스)',
+}
+
+/** 솔버 칸이 없는 옛 작업은 Ansys 로 돌았다(서버의 `COALESCE(spec->>'solver','ansys')` 와 같다). */
+export function solverOf(spec: Record<string, unknown> | null | undefined): string {
+  const value = spec?.solver
+  return typeof value === 'string' && value ? value : 'ansys'
 }
 
 export const ARTIFACT_LABELS: Record<string, string> = {

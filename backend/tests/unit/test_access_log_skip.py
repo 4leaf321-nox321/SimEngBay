@@ -13,5 +13,7 @@ def test_폴링_경로만_비껴간다() -> None:
     """**「/status 로 끝나면 전부」 가 아니다** — 나중에 생기는 다른 `/status` 까지 삼킨다."""
     assert is_skipped("/api/simulations/8a02556d-6334-4a35-928d-0259bcd88d41/status")
     assert is_skipped("/api/health")
+    # 서버 화면이 10초마다 묻는 워커 상태 — 하루 8,640 줄이 된다.
+    assert is_skipped("/api/simulations/workers")
     assert not is_skipped("/api/server/status")
     assert not is_skipped("/api/simulations")

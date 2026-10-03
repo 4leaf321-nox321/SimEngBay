@@ -72,10 +72,36 @@ const STAGE: Record<string, { label: string; tone: Tone }> = {
   canceled: { label: '취소됨', tone: 'neutral' },
 }
 
+/**
+ * 해석 워커. **응답 없음만 나쁨이다** — 멈춤은 사람이 내린 것이고, 기다림은 할 일이 없는 것이다.
+ * 응답 없음은 서버가 판정한다(신호가 2분 끊김) — 죽은 워커는 「죽었다」 고 적을 수 없다.
+ */
+const WORKER: Record<string, { label: string; tone: Tone }> = {
+  idle: { label: '기다림', tone: 'neutral' },
+  busy: { label: '작업 중', tone: 'good' },
+  stopping: { label: '끝내는 중', tone: 'warn' },
+  stopped: { label: '멈춤', tone: 'neutral' },
+  lost: { label: '응답 없음', tone: 'bad' },
+}
+
+/**
+ * 메시 수렴 판정. **발산은 나쁨이 아니라 주의다** — 첨두응력이 특이점에 있으면 늘 그렇고, 그것은
+ * 고장이 아니라 「그 값으로 판단하지 말라」 는 뜻이다.
+ */
+const CONVERGENCE: Record<string, { label: string; tone: Tone }> = {
+  converged: { label: '수렴', tone: 'good' },
+  not_converged: { label: '미수렴', tone: 'warn' },
+  oscillating: { label: '판정 보류', tone: 'neutral' },
+  diverging: { label: '발산', tone: 'warn' },
+  insufficient: { label: '수준 부족', tone: 'neutral' },
+}
+
 const TABLES = {
   account: ACCOUNT,
+  convergence: CONVERGENCE,
   simulation: SIMULATION,
   stage: STAGE,
+  worker: WORKER,
   object: OBJECT,
   notice: NOTICE,
   workspace: WORKSPACE,

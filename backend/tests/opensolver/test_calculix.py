@@ -86,6 +86,8 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     summary = _run(tmp_path, SPEC)
 
     assert summary["solver"] == "calculix"
+    # **실제로 쓴 전역 요소 크기** — 메시 수렴 점검이 이것을 기준으로 줄인다.
+    assert summary["element_size_mm"] == 5
     assert summary["bodies"] == 2, "솔리드 둘이 들어와야 한다(받침판 · 기둥)"
     # **면 지문이 풀렸는가** — 이것이 깨지면 구속을 걸 자리를 못 찾는다.
     assert summary["constrained_regions"][:2] == ["material:받침판", "material:기둥"]
@@ -108,6 +110,11 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert spot["distance_mm"] == 0.0
     assert "warning" not in spot
     assert spot["value"] > 0
+    # **탄성 모드 전부에서 읽는다** — 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는
+    # 모드는 실측에 안 보인다」 가 첫 거름망이다. 성분도 싣는다(어느 방향으로 움직이나).
+    elastic = {one["number"] for one in result["modes"] if not one["rigid_body"]}
+    assert {one["mode"] for one in result["probes"]} == elastic
+    assert all(len(one["vector"]) == 3 for one in result["probes"])
 
     first = result["modes"][0]["frequency_hz"]
     # **Ansys 1,266.4 Hz 와 맞는가.** 메시가 같지 않으므로(gmsh 가 더 촘촘하다) 2% 로 본다.
@@ -318,6 +325,11 @@ def test_조화_응답이_공진에서_솟고_CAD_감쇠를_쓴다(ready: None, 
     assert all("측정점" in one["probes"] for one in result["points"])
     spot_peak = max(result["points"], key=lambda one: one["probes"]["측정점"])
     assert spot_peak["frequency_hz"] == pytest.approx(1263.5, rel=0.02)
+    # 측정점마다 **그 자리의 봉우리 한 줄** — 절점 거리 · 경고가 곡선 대신 여기 실린다.
+    top = next(one for one in result["probes"] if one["name"] == "측정점")
+    assert top["frequency_hz"] == spot_peak["frequency_hz"]
+    assert top["value"] == spot_peak["probes"]["측정점"]
+    assert top["distance_mm"] == 0.0 and top["unit"] == "mm"
 
     peak = result["peak"]
     assert peak["frequency_hz"] == pytest.approx(1263.5, rel=0.02)
@@ -614,3 +626,40 @@ def test_전단_이음에서_마찰이_일을_한다(ready: None, tmp_path: Path
     assert spots["이음 입구 위판"]["body"] == "위판"
     assert spots["이음 입구 아래판"]["body"] == "아래판"
     assert spots["이음 입구 위판"]["node"] != spots["이음 입구 아래판"]["node"]
+    # **변형률도 그 자리에서** — 스트레인 게이지와 견주는 값이다(수직 셋, 무차원). 당기는 방향
+    # (X)으로 위판이 늘어난다. 크기는 응력/E 의 자릿수다(수백 마이크로).
+    strain = spots["이음 입구 위판"]["strain"]
+    assert len(strain) == 3
+    assert 1e-6 < abs(strain[0]) < 1e-2, f"εxx {strain[0]}"
+
+
+def test_메시를_줄이면_1차_주파수가_수렴하고_GCI_가_그만큼을_말한다(
+    ready: None, tmp_path: Path
+) -> None:
+    """**진짜 메시로** 메시 수렴 판정을 돌린다 — `조건_측면가진`(바닥 고정 기둥)의 1차 굽힘을
+    요소 크기 4 · 2.8 · 2.0 mm 로 푼다.
+
+    2차 사면체라 1차 주파수는 빠르게 자리를 잡는다 — 관측 차수가 양수이고 GCI 가 1% 아래여야
+    한다. 이것이 깨지면 판정 코드(`app/core/convergence.py`)나 메시 크기 전달 중 하나가 틀렸다.
+    """
+    from app.core.convergence import judge
+
+    levels: list[tuple[int, float]] = []
+    for size in (4.0, 2.8, 2.0):
+        work = tmp_path / f"h{size}"
+        work.mkdir()
+        shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
+        shutil.copy(SIDE_SHAKE / "points" / "p0001.json", work / "topology.json")
+        spec = {**SPEC, "mesh": {"element_size_mm": size}, "modes": 2}
+        summary = _run(work, spec)
+        assert summary["element_size_mm"] == size
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        first = next(one for one in result["modes"] if not one["rigid_body"])
+        levels.append((int(summary["nodes"]), float(first["frequency_hz"])))
+
+    nodes = [one[0] for one in levels]
+    assert nodes == sorted(nodes), f"크기를 줄이면 절점이 늘어야 한다: {nodes}"
+    verdict = judge(levels, tolerance=0.01)
+    assert verdict.status == "converged", (levels, verdict)
+    assert verdict.gci is not None and verdict.gci < 0.01
+    assert verdict.extrapolated == pytest.approx(levels[-1][1], rel=0.01)

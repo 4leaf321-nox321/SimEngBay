@@ -107,9 +107,11 @@ def extract(
     # 「이 모드가 어느 축으로 · 전체가 함께 움직이나」 는 표의 모든 줄이 필요로 한다 —
     # 자유-자유에서는 유효질량비가 0 이라 이것 말고는 모드를 설명할 말이 없다.
     _describe_modes(rst, modes)
-    # **측정점은 1차 탄성 모드 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
-    # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다).
-    spots = _probe_modes(rst, workdir, elastic[:1])
+    # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
+    # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
+    # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
+    # 안 보인다」 가 첫 거름망이다.
+    spots = _probe_modes(rst, workdir, elastic)
     artifacts = _draw_modes(
         rst, workdir, [one["number"] for one in elastic[:visual_modes]], modes
     )
@@ -164,9 +166,10 @@ def extract(
 def _probe_modes(
     rst: Path, workdir: Path, wanted: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """1차 탄성 모드의 변위를 **측정점**에서 읽는다. 점 그룹이 없으면 빈 목록.
+    """탄성 모드마다 **측정점**의 변위. 점 그룹이 없으면 빈 목록. 줄마다 `mode` 가 붙는다.
 
-    **실패해도 해석은 끝난 것이다** — 측정점이 빠질 뿐 고유진동수는 이미 나왔다.
+    자리는 한 번만 찾는다(모드가 마흔 개여도 센서 자리는 하나다). **실패해도 해석은 끝난
+    것이다** — 측정점이 빠질 뿐 고유진동수는 이미 나왔다.
     """
     if not wanted:
         return []
@@ -178,18 +181,19 @@ def _probe_modes(
 
         model = dpf.Model(str(rst))
         mesh = model.metadata.meshed_region
-        number = int(wanted[0]["number"])
-        field = model.results.displacement.on_time_scoping([number]).eval()[0]
+        spots = probes.locate(topology, mesh, scale=probes.scale_for(str(mesh.unit or "")))
+        made: list[dict[str, Any]] = []
+        for mode in wanted:
+            number = int(mode["number"])
+            field = model.results.displacement.on_time_scoping([number]).eval()[0]
+            # 모드 형상은 질량 정규화된 값이다 — 절대 크기가 아니라 단위를 `정규화` 로.
+            for one in probes.rows(spots, field, unit="정규화"):
+                one["mode"] = number
+                made.append(one)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return []
-    # 모드 형상은 질량 정규화된 값이다 — 절대 크기가 아니라서 단위를 `정규화` 로 적는다.
-    rows = probes.read(
-        topology, mesh, field, unit="정규화", scale=probes.scale_for(str(field.unit or ""))
-    )
-    for row in rows:
-        row["mode"] = number
-    return rows
+    return made
 
 
 def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:

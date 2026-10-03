@@ -15,24 +15,31 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
+from app.core import measured as core_measured
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.simulations import services
 from app.modules.simulations.schemas import (
+    ConvergenceOut,
+    ConvergenceRequest,
     DoeImportOut,
     DoeImportRequest,
     DoeListingOut,
     DoePreviewOut,
+    MeasurementOut,
     RecipeOut,
     SimulationOut,
     SimulationSummaryOut,
+    SolverAvailabilityOut,
+    StudyMeasurementOut,
     StudyOut,
     StudySummaryOut,
+    WorkersOut,
 )
-from app.shared.auth import current_user
+from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import AppError, code
 from app.shared.pagination import Page, clamp_limit
 
@@ -77,6 +84,84 @@ def create(
     return services.to_out(db, simulation)
 
 
+@router.get("/workers", response_model=WorkersOut)
+def workers(
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> WorkersOut:
+    """워커 · 솔버별 줄 · Ansys 라이선스를 쥔 작업 — 서버 화면이 10초마다 묻는다(폴링이라
+    접근 로그에 안 남는다).
+
+    **시스템 관리자만.** 워커의 호스트 · 설치 경로가 실린다."""
+    return services.workers_overview(db)
+
+
+@router.get("/solvers", response_model=list[SolverAvailabilityOut])
+def solvers(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[SolverAvailabilityOut]:
+    """솔버마다 **집을 워커가 살아 있나** — 작업을 거는 화면이 경고에 쓴다. 집을 워커가 없는
+    솔버로 걸면 작업은 대기에서 영원히 안 움직이고, 그 사실을 아무도 말해 주지 않는다."""
+    return services.solver_availability(db)
+
+
+@router.get("/measurements/template.csv", include_in_schema=False)
+def measurement_template(user: User = Depends(current_user)) -> Response:
+    """실측 양식 — 종류 넷(공진 · FRF · 변위 · 변형률)을 한 표에. 장비 파일은 이 모양으로
+    옮긴다. BOM 을 붙인다(Excel)."""
+    disposition = "attachment; filename=\"measurement.csv\"; filename*=UTF-8''" + quote(
+        "실측양식.csv"
+    )
+    return Response(
+        content="\ufeff" + core_measured.TEMPLATE,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@router.delete("/measurements/{measurement_id}", status_code=204)
+def remove_measurement(
+    measurement_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """실측을 내린다 — 지우지 않고 `deleted_at` 만 채운다."""
+    services.remove_measurement(db, user=user, measurement_id=measurement_id)
+    return Response(status_code=204)
+
+
+@router.get("/studies/{study_id}/measurements", response_model=list[StudyMeasurementOut])
+def study_measurements(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[StudyMeasurementOut]:
+    """스터디에 붙은 실측 — 설계점마다 견준 점수와 **가장 가까운 설계점.**"""
+    return services.study_measurements(db, user=user, study_id=study_id)
+
+
+@router.post(
+    "/studies/{study_id}/measurements", response_model=StudyMeasurementOut, status_code=201
+)
+def add_study_measurement(
+    study_id: str,
+    upload_file: UploadFile = File(alias="file"),
+    label: str | None = Form(default=None, max_length=120),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StudyMeasurementOut:
+    """스터디에 실측을 붙인다(CSV · 탭 · JSON)."""
+    return services.add_study_measurement(
+        db,
+        user=user,
+        study_id=study_id,
+        name=upload_file.filename or "measurement.csv",
+        raw=upload_file.file.read(services.MAX_MEASUREMENT_BYTES + 1),
+        label=label,
+    )
+
+
 @router.get("/studies", response_model=list[StudySummaryOut])
 def list_studies(
     user: User = Depends(current_user),
@@ -94,6 +179,27 @@ def get_study(
 ) -> StudyOut:
     """설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다."""
     return services.get_study(db, user=user, study_id=study_id)
+
+
+@router.get("/studies/{study_id}/export.csv", include_in_schema=False)
+def export_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """스터디를 CSV 로 — **화면과 같은 값 · 같은 단위**(mm · MPa · N · Hz).
+
+    BOM 을 붙인다 — 안 붙이면 Excel 이 한글을 깬다. 스키마에 안 싣는다 — 파일을 내려받는
+    자리지 데이터를 읽는 자리가 아니다(부서 CSV 와 같은 이유).
+    """
+    name, text = services.study_csv(db, user=user, study_id=study_id)
+    # 파일 이름은 둘로 낸다 — ASCII 는 옛 브라우저용, UTF-8 은 한글 이름용.
+    disposition = "attachment; filename=\"study.csv\"; filename*=UTF-8''" + quote(name)
+    return Response(
+        content="\ufeff" + text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @router.get("/doe/browse", response_model=DoeListingOut)
@@ -198,6 +304,59 @@ def get_result(
     정본이다. 화면은 필요한 칸만 읽는다.
     """
     return services.result_json(db, user=user, simulation_id=simulation_id)
+
+
+@router.get("/{simulation_id}/measurements", response_model=list[MeasurementOut])
+def measurements(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[MeasurementOut]:
+    """그 작업(과 그 작업의 스터디)에 붙은 실측 — **이 결과와 견준 것**을 함께."""
+    return services.measurements_of(db, user=user, simulation_id=simulation_id)
+
+
+@router.post("/{simulation_id}/measurements", response_model=MeasurementOut, status_code=201)
+def add_measurement(
+    simulation_id: uuid.UUID,
+    upload_file: UploadFile = File(alias="file"),
+    label: str | None = Form(default=None, max_length=120),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> MeasurementOut:
+    """작업에 실측을 붙인다(CSV · 탭 · JSON) — 표 모양은 양식(`/measurements/template.csv`)."""
+    return services.add_measurement(
+        db,
+        user=user,
+        simulation_id=simulation_id,
+        name=upload_file.filename or "measurement.csv",
+        raw=upload_file.file.read(services.MAX_MEASUREMENT_BYTES + 1),
+        label=label,
+    )
+
+
+@router.get("/{simulation_id}/convergence", response_model=ConvergenceOut)
+def get_convergence(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ConvergenceOut:
+    """메시 수렴 — 크기마다 값과 값마다 판정. 원래 작업이나 수준 작업 어느 쪽으로 물어도
+    같다."""
+    return services.convergence(db, user=user, simulation_id=simulation_id)
+
+
+@router.post("/{simulation_id}/convergence", response_model=ConvergenceOut, status_code=201)
+def request_convergence(
+    simulation_id: uuid.UUID,
+    body: ConvergenceRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ConvergenceOut:
+    """끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 크기마다 작업 하나."""
+    return services.request_convergence(
+        db, user=user, simulation_id=simulation_id, sizes_mm=body.sizes_mm, solver=body.solver
+    )
 
 
 @router.post("/{simulation_id}/retry", response_model=SimulationOut)

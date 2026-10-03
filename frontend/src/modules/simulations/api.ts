@@ -23,6 +23,15 @@ export type StudySummary = components['schemas']['StudySummaryOut']
 export type Study = components['schemas']['StudyOut']
 export type StudyPoint = components['schemas']['StudyPointOut']
 export type ModeTrack = components['schemas']['ModeTrackOut']
+export type WorkersOverview = components['schemas']['WorkersOut']
+export type WorkerRow = components['schemas']['WorkerOut']
+export type SolverAvailability = components['schemas']['SolverAvailabilityOut']
+export type Convergence = components['schemas']['ConvergenceOut']
+export type Measurement = components['schemas']['MeasurementOut']
+export type StudyMeasurement = components['schemas']['StudyMeasurementOut']
+export type Comparison = components['schemas']['ComparisonOut']
+export type FrfComparison = components['schemas']['FrfComparisonOut']
+export type ConvergenceMetric = components['schemas']['ConvergenceMetricOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -56,16 +65,45 @@ export interface ModeResult {
   local_mode?: boolean
 }
 
+/**
+ * **측정점 한 줄** — CAD 가 점 그룹으로 보낸 자리(센서를 붙이는 자리)의 값. 두 솔버가 같은
+ * 모양을 낸다(`backend/app/core/probes.py` 의 `row`).
+ *
+ * `vector` · `body` · `warning` 은 **없을 수 있다** — 옛 결과에는 성분이 없고, 바디는 그 바디
+ * 안에서만 찾았을 때만 적힌다. `point` 와 `distance_mm` 는 늘 mm 지만 `value` 는 `unit` 의
+ * 단위다(Ansys 가 SI 로 돌면 m).
+ */
+export interface ProbeRow {
+  name: string
+  point: [number, number, number]
+  node: number
+  distance_mm: number
+  value: number
+  unit: string
+  vector?: [number, number, number]
+  body?: string
+  /** 가장 가까운 절점이 1 mm 넘게 떨어졌을 때 백엔드가 적는 문장 — 그대로 보여 준다. */
+  warning?: string
+  /** 모달 — 그 값을 읽은 모드의 **전체** 번호(`modes[].number`). */
+  mode?: number
+  /** 조화 — 그 자리 곡선의 봉우리 주파수. */
+  frequency_hz?: number
+}
+
 /** 조화 응답의 결과 — **주파수 점마다 최대 변위**, 곧 곡선이다. */
 export interface HarmonicResult {
   recipe: 'harmonic'
+  solver?: string
   units: { frequency: string; displacement?: string; system?: string }
   mesh?: { nodes: number; elements: number }
   /** 감쇠비. **봉우리 높이를 거의 이 값이 정한다**(1/2ζ) — 그래서 곡선과 같이 보여 준다. */
   damping_ratio: number
-  points: { frequency_hz: number; max_displacement: number }[]
+  /** `probes` 는 측정점 이름 → 그 주파수에서의 진폭(단위는 `units.displacement`). */
+  points: { frequency_hz: number; max_displacement: number; probes?: Record<string, number> }[]
   /** 가장 크게 흔들린 점. 창 끝에 붙어 있으면 공진의 옆구리만 본 것이다. */
-  peak: { frequency_hz: number; max_displacement: number }
+  peak: { frequency_hz: number; max_displacement: number; probes?: Record<string, number> }
+  /** 측정점마다 **그 자리 곡선의 봉우리** 한 줄(절점 거리 · 경고가 여기 실린다). 옛 결과엔 없다. */
+  probes?: ProbeRow[]
   material?: string
   warning?: string
   fake?: boolean
@@ -74,18 +112,24 @@ export interface HarmonicResult {
 /** 정적 해석의 결과 — **모드가 아니라 변형 · 응력**이다. */
 export interface StaticResult {
   recipe: 'static'
-  units: { system?: string; displacement?: string; stress?: string }
+  solver?: string
+  units: { system?: string; displacement?: string; stress?: string; force?: string }
   mesh?: { nodes: number; elements: number }
   max_displacement: number
   max_von_mises: number | null
   material?: string
   shape?: { vtp: string; png?: string; points?: number }
+  /** 측정점의 변위 — 크기(`value`)와 성분(`vector`). */
+  probes?: ProbeRow[]
+  /** 변위로 당긴 영역 → 그 자리가 버틴 **반력 합** `[Fx, Fy, Fz]`(단위는 `units.force`). */
+  reactions?: Record<string, [number, number, number]>
   warning?: string
   fake?: boolean
 }
 
 export interface SimulationResult {
   recipe: string
+  solver?: string
   boundary: 'free-free' | 'constrained'
   units: { frequency: string; system?: string }
   normalization: string
@@ -93,6 +137,11 @@ export interface SimulationResult {
   mesh?: { nodes: number; elements: number }
   modes: ModeResult[]
   participation?: Record<string, Record<string, number>>
+  /**
+   * 측정점마다 · **탄성 모드마다** 한 줄(`mode` 로 가른다). 질량 정규화된 값이라 절대 크기가
+   * 아니다 — 같은 측정점 안에서 모드끼리 견준다. 옛 결과는 1차 탄성 모드 한 줄뿐이다.
+   */
+  probes?: ProbeRow[]
   warning?: string
   fake?: boolean
 }
@@ -211,6 +260,41 @@ export const simulationApi = {
   /** 모드 형상(VTP). vtk.js 가 ArrayBuffer 를 그대로 읽는다. */
   mesh: (simulationId: string, artifactId: string) =>
     fetchBytes(`/simulations/${simulationId}/artifacts/${artifactId}/content`),
+  /** 그 작업(과 그 스터디)에 붙은 실측 — 이 결과와 견준 것을 함께. */
+  measurements: (id: string) => api.get<Measurement[]>(`/simulations/${id}/measurements`),
+  addMeasurement: (id: string, file: File, label: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (label.trim()) form.append('label', label.trim())
+    return api.postForm<Measurement>(`/simulations/${id}/measurements`, form)
+  },
+  studyMeasurements: (studyId: string) =>
+    api.get<StudyMeasurement[]>(`/simulations/studies/${encodeURIComponent(studyId)}/measurements`),
+  addStudyMeasurement: (studyId: string, file: File, label: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (label.trim()) form.append('label', label.trim())
+    return api.postForm<StudyMeasurement>(
+      `/simulations/studies/${encodeURIComponent(studyId)}/measurements`,
+      form,
+    )
+  },
+  removeMeasurement: (measurementId: string) =>
+    api.delete<void>(`/simulations/measurements/${measurementId}`),
+  /** 실측 양식 — 종류 넷(공진 · FRF · 변위 · 변형률)을 한 표에. */
+  measurementTemplate: () => downloadFile('/simulations/measurements/template.csv', '실측양식.csv'),
+  /** 메시 수렴 묶음 — 원래 작업이나 수준 작업 어느 쪽으로 물어도 같다. */
+  convergence: (id: string) => api.get<Convergence>(`/simulations/${id}/convergence`),
+  /** 끝난 작업을 요소 크기만 바꿔 다시 건다 — 크기마다 작업 하나. */
+  requestConvergence: (id: string, body: { sizes_mm: number[]; solver?: string | null }) =>
+    api.post<Convergence>(`/simulations/${id}/convergence`, body),
+  /** 워커 · 솔버별 줄 · 라이선스를 쥔 작업(시스템 관리자). 서버 화면이 10초마다 묻는다. */
+  workers: () => api.get<WorkersOverview>('/simulations/workers'),
+  /** 솔버마다 집을 워커가 살아 있나 — 작업을 거는 창이 경고에 쓴다. */
+  solvers: () => api.get<SolverAvailability[]>('/simulations/solvers'),
+  /** 스터디를 CSV 로 — 화면과 같은 값 · 같은 단위(mm · MPa · N · Hz). */
+  exportStudy: (studyId: string, filename: string) =>
+    downloadFile(`/simulations/studies/${encodeURIComponent(studyId)}/export.csv`, filename),
   download: (simulationId: string, artifact: Artifact) =>
     downloadFile(`/simulations/${simulationId}/artifacts/${artifact.id}/content`, artifact.filename),
 }

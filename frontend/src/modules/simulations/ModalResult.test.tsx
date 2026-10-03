@@ -138,4 +138,30 @@ describe('모드가 많을 때', () => {
     expect(screen.queryByText('21차')).toBeNull()
     expect(screen.getByText(/45개 모드/)).toBeDefined()
   })
+  it('측정점에서 어느 모드가 잘 보이는지 보여 준다', () => {
+    // **센서를 붙이는 자리에서 안 움직이는 모드는 실측에 안 보인다** — 짝을 지을 때 첫 거름망.
+    // 모드 형상은 질량 정규화라 절대 크기가 아니므로 같은 측정점 안에서 견준다.
+    const spot = { name: '측정점', point: [5, 5, 90] as [number, number, number], node: 7, distance_mm: 0, unit: '정규화', body: '기둥' }
+    render(
+      <ModalResult
+        simulationId="sim"
+        result={result({
+          probes: [
+            { ...spot, mode: 3, value: 430.96, vector: [0, 430.96, 1.2] },
+            { ...spot, mode: 4, value: 4.1, vector: [3.9, 0.1, 1.2] },
+          ],
+        })}
+        artifacts={[]}
+      />,
+    )
+    expect(screen.getByText('측정점에서 본 모드')).toBeDefined()
+    expect(screen.getByText('100%')).toBeDefined()
+    // 1% 밖에 안 움직이는 2차는 「안 보이는 모드」 로 센다.
+    expect(screen.getByText(/안 보이는 모드 1개/)).toBeDefined()
+  })
+
+  it('측정점이 없는 결과는 그 표를 그리지 않는다', () => {
+    render(<ModalResult simulationId="sim" result={result()} artifacts={[]} />)
+    expect(screen.queryByText('측정점에서 본 모드')).toBeNull()
+  })
 })

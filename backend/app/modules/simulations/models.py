@@ -159,3 +159,87 @@ class SimulationArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class SimulationWorker(Base):
+    """워커 하나 — **살아 있다는 신호**와 무엇을 집는지 · 지금 하는 일.
+
+    워커는 작업을 하는 동안에도(솔브 하나가 몇 시간) 따로 도는 줄에서 15초마다 신호를 적는다.
+    신호가 2분 끊기면 그 워커는 죽은 것이고, 잡고 있던 작업은 다른 워커가 되살린다
+    (`services.requeue_stale`). CompCore 의 `workers` 표와 같은 계약이다.
+
+    **집는 솔버와 깔린 도구는 워커가 적는다.** `SIMULATION_SOLVERS` 는 워커마다 다른 환경
+    파일에서 오고(`worker-<N>.env`), 도구는 워커의 기계 · 이미지에 있다 — API 프로세스가 제
+    설정이나 제 `PATH` 로 답하면 그것은 그 워커의 사실이 아니다.
+    """
+
+    __tablename__ = "simulation_workers"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    """`호스트:pid` — 작업의 `worker_id` 와 같은 이름."""
+    hostname: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    pid: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    version: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    executor: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    """fake · local · windows-bridge — 그 워커가 단계를 어디서 돌리나."""
+    solvers: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    """집는 솔버. **비면 전부** 집는다(`SIMULATION_SOLVERS` 를 안 준 워커)."""
+    tools: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """그 워커가 기동 때 찾은 도구 — `{gmsh, ccx, ansys}`(`app/core/toolcheck.py`)."""
+    state: Mapped[str] = mapped_column(String(20), default="idle", server_default="idle")
+    """idle(기다림) · busy(작업 중) · stopping(끝내는 중) · stopped(멈춤)."""
+    current_simulation_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("simulations.id", ondelete="SET NULL"), nullable=True
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class SimulationMeasurement(Base):
+    """실측 한 벌 — **센서 자리의 값**(공진 · FRF · 변위 · 변형률)을 작업이나 스터디에 붙인다.
+
+    해석 결과와 견주는 일은 저장하지 않고 **읽을 때 한다**(`app/core/measured.py`) — 결과가
+    다시 돌면(재시도 · 수렴 점검) 견준 값도 따라 바뀌어야 하는데, 저장해 두면 옛 결과와 견준
+    수가 남는다. 여기에는 사람이 올린 실측만 둔다(기준 단위로 옮긴 줄들).
+
+    **작업 하나 또는 스터디 하나**에 붙는다(둘 중 하나). 스터디에 붙이면 설계점마다 견주어
+    「실측에 가장 가까운 설계점」 을 고른다 — 물성 · 감쇠를 훑은 DOE 라면 그것이 곧 차이를
+    변수로 설명하는 일이다.
+    """
+
+    __tablename__ = "simulation_measurements"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    simulation_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("simulations.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    study_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    """스터디는 행이 아니다 — 작업의 `source_meta.study_id`(없으면 이름)와 같은 글자."""
+    owner_workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    label: Mapped[str] = mapped_column(String(120))
+    original_name: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    """기준 단위(mm · mm/s · mm/s² · 무차원)로 옮긴 실측 줄들."""
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )

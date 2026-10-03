@@ -121,25 +121,32 @@ class SubprocessExecutor:
 
     # --- 명령 만들기 --------------------------------------------------------
 
-    def _python(self) -> str:
-        if self.options.python is not None:
+    def _here(self, ctx: StageContext) -> bool:
+        """**CalculiX 는 이 기계에서 푼다** — 다리 건너 Windows 파이썬은 리눅스의 gmsh · ccx 를
+        못 부른다. 개발 PC 의 워커 하나가 두 솔버를 다 집으려면 솔버마다 자식을 다르게 띄워야
+        한다(Ansys 는 Windows 에만 있고 CalculiX 는 WSL 에만 있다)."""
+        return self.windows and str((ctx.spec or {}).get("solver") or "ansys") == "calculix"
+
+    def _python(self, here: bool = False) -> str:
+        if self.options.python is not None and not here:
             return str(self.options.python)
         import sys
 
         return sys.executable
 
-    def _paths(self, workdir: Path) -> tuple[str, str]:
+    def _paths(self, workdir: Path, here: bool = False) -> tuple[str, str]:
         """(자식이 볼 작업 폴더, 자식이 볼 backend 폴더)."""
-        if self.windows:
+        if self.windows and not here:
             return to_windows_path(workdir), to_windows_path(BACKEND_DIR)
         return str(workdir), str(BACKEND_DIR)
 
     def command(self, ctx: StageContext) -> list[str]:
         """띄울 명령. **시험이 이것만 본다** — Ansys 없이 확인할 수 있는 부분이다."""
-        workdir, backend = self._paths(ctx.workdir)
+        here = self._here(ctx)
+        workdir, backend = self._paths(ctx.workdir, here)
         command = [
-            *self.options.wrapper,
-            self._python(),
+            *([] if here else self.options.wrapper),
+            self._python(here),
             # **자식의 stdout 을 UTF-8 로 고정한다.** 한국어 Windows 의 파이썬은 콘솔
             # 코드페이지(cp949)로 찍는데, 그것을 UTF-8 로 읽으면 부르는 쪽이
             # `UnicodeDecodeError` 로 죽는다 — 실측: 단계가 성공했는데 워커가 터졌다.
@@ -160,6 +167,9 @@ class SubprocessExecutor:
             "--visual-modes",
             str(self.options.visual_modes),
         ]
+        if here:
+            # CalculiX 는 형상 캐시 · Ansys 경로를 쓰지 않는다.
+            return command
         if self.options.shape_cache is not None:
             # **형상 캐시는 작업 폴더 밖에 있다** — 설계점마다 폴더가 다르므로, 같은 형상을
             # 나눠 쓰려면 한 자리에 모아야 한다.

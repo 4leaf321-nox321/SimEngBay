@@ -12,14 +12,18 @@ import { useParams } from 'react-router-dom'
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
 import type { Artifact, Simulation, Stage } from '@/modules/simulations/api'
 import { ConditionList } from '@/modules/simulations/ConditionList'
+import { ConvergencePanel } from '@/modules/simulations/ConvergencePanel'
+import { MeasurementsPanel } from '@/modules/simulations/MeasurementsPanel'
 import { ResultPanel } from '@/modules/simulations/ResultPanel'
 import {
   ARTIFACT_LABELS,
   FAILURE_LABELS,
   RECIPE_LABELS,
+  SOLVER_LABELS,
   STAGE_LABELS,
   shownDuration,
   shownSize,
+  solverOf,
 } from '@/modules/simulations/labels'
 import { ApiError } from '@/shared/api/client'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -77,6 +81,9 @@ const SUMMARY_LABELS: Record<string, string> = {
   frequency_points: '주파수 점',
   peak_hz: '봉우리 주파수',
   peak_displacement: '봉우리 변위',
+  // 메시 수렴 점검이 줄일 기준 — 비면 Mechanical 기본 크기로 돌았다.
+  element_size_mm: '전역 요소 크기',
+  contact_pairs: '비선형 접촉',
 }
 
 function shownSummary(key: string, value: unknown): string {
@@ -87,9 +94,11 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
   if (key === 'material_from' || key === 'settings_from')
     return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
-  if (key === 'solver') return value === 'calculix' ? 'CalculiX (오픈소스)' : 'Ansys'
+  if (key === 'solver') return SOLVER_LABELS[String(value)] ?? String(value)
   if (key === 'damping_ratio' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
+  if (key === 'element_size_mm' && typeof value === 'number') return `${value} mm`
+  if (key === 'contact_pairs') return value ? '있음' : '없음'
   if (key === 'density_kg_m3' && typeof value === 'number')
     return `${value.toLocaleString()} kg/m³`
   // 버전 번호는 자릿수를 구분하지 않는다 — 252 가 「252」 여야지 「252」 에 쉼표가 붙으면 안 된다.
@@ -208,6 +217,8 @@ export default function SimulationDetailPage() {
         description={
           <>
             {RECIPE_LABELS[simulation.recipe] ?? simulation.recipe} ·{' '}
+            {/* **스펙에서 읽는다** — 요약의 솔버 도장은 CalculiX 만 찍고, 끝나기 전에는 없다. */}
+            {SOLVER_LABELS[solverOf(simulation.spec)] ?? solverOf(simulation.spec)} ·{' '}
             {simulation.owner_workspace_name ?? '전역'} · {simulation.requested_by_name ?? '—'} ·{' '}
             {shownDateTime(simulation.created_at)} · 소요{' '}
             {shownDuration(simulation.started_at, simulation.finished_at)}
@@ -308,6 +319,16 @@ export default function SimulationDetailPage() {
         simulationId={id}
         status={simulation.status}
         artifacts={simulation.artifacts}
+      />
+
+      {/* **센서 자리의 실측과 같은 자리에서 견준다** — 차이를 변수(영률 · 감쇠)로 설명한다. */}
+      <MeasurementsPanel simulationId={id} status={simulation.status} />
+
+      {/* **이 값이 메시에 얼마나 기대나** — 요소 크기만 바꿔 다시 풀어 본다. */}
+      <ConvergencePanel
+        simulationId={id}
+        status={simulation.status}
+        solver={solverOf(simulation.spec)}
       />
 
       <section className="space-y-2">

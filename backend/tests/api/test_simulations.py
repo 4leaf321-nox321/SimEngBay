@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import uuid
@@ -17,11 +18,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.stages import StageContext, StageFailure, StageResult
 from app.modules.simulations import services
+from app.modules.simulations.models import Simulation
 from tests.api.conftest import Signed, maintenance_counts
 
 STEP = b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"
@@ -432,6 +435,61 @@ def test_DOE_폴더를_걸기_전에_보여_준다(client: TestClient, member: S
     assert "벽이 판을 넘습니다" in skipped["skip_reason"]
 
 
+SHEAR_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_전단이음"
+
+
+def test_미리보기가_CAD_가_적은_해석_종류와_요소_크기를_알려_준다(
+    client: TestClient, member: Signed
+) -> None:
+    """**해석 종류는 점 파일의 `conditions.analysis.type` 이다** — 화면이 모달로 못 박아
+    두면 전단 이음(정적)이 하중을 건너뛴 채 모달로 돈다. 요소 크기는 CalculiX 가 꼭 받아야 하는
+    값이라 「전체」 힌트를 mm 로 옮겨 함께 낸다."""
+    got = client.get(
+        f"/api/simulations/doe/preview?path={SHEAR_FOLDER}", headers=member.headers
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["suggested_recipe"] == "static"
+    assert got.json()["suggested_element_size_mm"] == 2.5
+
+    # 아무것도 안 적은 옛 폴더는 **비워 둔다** — 「CAD 가 모달이라 했다」 로 채우면 거짓이다.
+    bare = client.get(
+        f"/api/simulations/doe/preview?path={DOE_FOLDER}", headers=member.headers
+    )
+    assert bare.json()["suggested_recipe"] is None
+    assert bare.json()["suggested_element_size_mm"] is None
+
+
+MATERIAL_SWEEP_FOLDER = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_재료훑기"
+)
+SIDE_SHAKE_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_측면가진"
+
+
+def test_DOE_를_CalculiX_로_가져오면_점마다_그_솔버가_적힌다(
+    client: TestClient, member: Signed
+) -> None:
+    """솔버는 **스펙에 실려** 점마다 저장된다 — CalculiX 만 집는 워커가 그것으로 고른다."""
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(MATERIAL_SWEEP_FOLDER),
+            "spec": {
+                "recipe": "static",
+                "solver": "calculix",
+                "material": MODAL["material"],
+            },
+            "workspace_slug": member.workspace,
+            "numbers": [1],
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    first = created.json()["created"][0]
+    one = client.get(f"/api/simulations/{first}", headers=member.headers).json()
+    assert one["spec"]["solver"] == "calculix"
+    assert one["recipe"] == "static"
+
+
 def test_공용_폴더_밖은_아예_못_본다(client: TestClient, member: Signed) -> None:
     """**아무 경로나 받으면 그 칸이 서버의 모든 폴더를 여는 문이 된다** — 데이터 소스 폴더에
     이미 적혀 있는 규칙이다. 설정이 비어 있는 것과 밖을 가리킨 것은 다른 말로 답한다."""
@@ -589,6 +647,127 @@ def test_같은_DOE_를_두_번_가져와도_두_벌이_안_생긴다(
     body = again.json()
     assert body["created"] == []
     assert any("이미 가져온 점" in one["skip_reason"] for one in body["skipped"])
+
+
+def test_정적_DOE_비교에_반력과_측정점이_실린다(client: TestClient, member: Signed) -> None:
+    """**정적 DOE 는 모드가 아니라 힘과 변위를 견준다** — 전단 이음이면 「μ 를 바꾸면 반력과
+    미끄럼이 어떻게 변하나」 가 그 물음이다. 값은 늘 mm · N 이다(솔버마다 단위가 달라도)."""
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(SHEAR_FOLDER),
+            "spec": {"recipe": "static", "material": MODAL["material"]},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    study_id = created.json()["study_id"]
+
+    body = client.get(f"/api/simulations/studies/{study_id}", headers=member.headers).json()
+    assert body["recipe"] == "static"
+    assert body["solvers"] == ["ansys"]
+    done = [one for one in body["points"] if one["status"] == "done"]
+    assert len(done) == 4, [one["status"] for one in body["points"]]
+    first = done[0]
+    assert first["max_displacement_mm"] > 0
+    assert first["max_von_mises_mpa"] > 0
+    assert set(first["reactions_n"]) == {"당기는 끝"}
+    assert set(first["probes_mm"]) == {"이음 입구 위판", "이음 입구 아래판"}
+    assert len(first["probe_vectors_mm"]["이음 입구 위판"]) == 3
+    # **같은 자리 두 바디의 차가 미끄럼이다** — 화면과 CSV 가 그 값을 따로 셈하지 않는다.
+    slip = first["relative_mm"]["이음 입구 위판 - 이음 입구 아래판"]
+    upper = first["probe_vectors_mm"]["이음 입구 위판"]
+    lower = first["probe_vectors_mm"]["이음 입구 아래판"]
+    assert slip[0] == pytest.approx(upper[0] - lower[0])
+    # 모드가 없는 레시피에 모드 칸을 채우지 않는다.
+    assert first["frequencies"] == [] and body["tracks"] == []
+
+    listed = client.get("/api/simulations/studies", headers=member.headers).json()
+    row = next(one for one in listed if one["study_id"] == study_id)
+    assert row["recipe"] == "static" and row["solvers"] == ["ansys"]
+
+    # **CSV 는 화면과 같은 값이다** — 두 길이 따로 계산하면 언젠가 갈린다.
+    exported = client.get(
+        f"/api/simulations/studies/{study_id}/export.csv", headers=member.headers
+    )
+    assert exported.status_code == 200, exported.text
+    assert exported.headers["content-type"].startswith("text/csv")
+    text = exported.content.decode("utf-8")
+    assert text.startswith("\ufeff"), "BOM 이 없으면 Excel 이 한글을 깬다"
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    head = rows[0]
+    assert len(rows) == 1 + len(body["points"])
+    assert "반력 당기는 끝 Fx (N)" in head
+    assert "측정점 이음 입구 위판 X (mm)" in head
+    assert "상대 변위 이음 입구 위판 - 이음 입구 아래판 X (mm)" in head
+    column = head.index("최대 변형 (mm)")
+    line = next(one for one in rows[1:] if one[-1] == first["simulation_id"])
+    assert float(line[column]) == pytest.approx(first["max_displacement_mm"], rel=1e-5)
+
+
+def test_조화_DOE_비교에_측정점의_봉우리가_실린다(client: TestClient, member: Signed) -> None:
+    """조화 DOE 는 **봉우리**를 견준다 — 전체 봉우리와 센서 자리의 봉우리를 따로."""
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(SIDE_SHAKE_FOLDER),
+            "spec": {"recipe": "harmonic", "material": MODAL["material"]},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    study_id = created.json()["study_id"]
+    body = client.get(f"/api/simulations/studies/{study_id}", headers=member.headers).json()
+    assert body["recipe"] == "harmonic"
+    done = [one for one in body["points"] if one["status"] == "done"]
+    assert len(done) == 2
+    for one in done:
+        assert one["peak_hz"] > 0 and one["peak_displacement_mm"] > 0
+        assert one["probes_mm"]["측정점"] > 0
+        # CAD 가 적은 범위(200~2000 Hz) 안의 봉우리다 — 스펙 기본값(0~2000)이 아니라.
+        assert 200 <= one["probe_peaks_hz"]["측정점"] <= 2000
+
+    exported = client.get(
+        f"/api/simulations/studies/{study_id}/export.csv", headers=member.headers
+    )
+    head = next(csv.reader(io.StringIO(exported.content.decode("utf-8").lstrip("\ufeff"))))
+    assert "봉우리 주파수 (Hz)" in head
+    assert "측정점 측정점 봉우리 진폭 (mm)" in head
+
+
+def test_이름으로_묶인_옛_스터디도_상세가_열린다(
+    client: TestClient, member: Signed, db: Session
+) -> None:
+    """**목록과 상세가 같은 열쇠로 모은다.** `study_id` 가 없는 옛 가져오기는 목록이 이름으로
+    묶는데, 상세가 `study_id` 만 보면 목록에는 있고 열면 404 다."""
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            # 다른 시험이 안 쓰는 폴더 — 이미 가져온 점은 다시 만들지 않으므로 겹치면 빈손이다.
+            "path": str(DOE_FOLDER.parent / "조건_조건훑기"),
+            "spec": MODAL,
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    ids = [uuid.UUID(one) for one in created.json()["created"]]
+    assert ids, "가져온 점이 없다 — 다른 시험이 같은 폴더를 먼저 가져갔다"
+    name = "옛-이름만-있는-스터디"
+    for row in db.scalars(select(Simulation).where(Simulation.id.in_(ids))):
+        meta = dict(row.source_meta)
+        meta.pop("study_id", None)
+        meta["study_name"] = name
+        row.source_meta = meta
+    db.commit()
+
+    listed = client.get("/api/simulations/studies", headers=member.headers).json()
+    assert any(one["study_id"] == name for one in listed)
+    detail = client.get(f"/api/simulations/studies/{name}", headers=member.headers)
+    assert detail.status_code == 200, detail.text
+    assert len(detail.json()["points"]) == len(ids)
 
 
 def test_가져온_DOE_가_비교_목록에_뜬다(client: TestClient, member: Signed) -> None:

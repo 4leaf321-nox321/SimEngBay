@@ -2406,6 +2406,189 @@
         }
       }
     },
+    "/api/simulations/workers": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Workers",
+        "description": "워커 · 솔버별 줄 · Ansys 라이선스를 쥔 작업 — 서버 화면이 10초마다 묻는다(폴링이라\n접근 로그에 안 남는다).\n\n**시스템 관리자만.** 워커의 호스트 · 설치 경로가 실린다.",
+        "operationId": "workers_api_simulations_workers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkersOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/solvers": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Solvers",
+        "description": "솔버마다 **집을 워커가 살아 있나** — 작업을 거는 화면이 경고에 쓴다. 집을 워커가 없는\n솔버로 걸면 작업은 대기에서 영원히 안 움직이고, 그 사실을 아무도 말해 주지 않는다.",
+        "operationId": "solvers_api_simulations_solvers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SolverAvailabilityOut"
+                  },
+                  "type": "array",
+                  "title": "Response Solvers Api Simulations Solvers Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/measurements/{measurement_id}": {
+      "delete": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Remove Measurement",
+        "description": "실측을 내린다 — 지우지 않고 `deleted_at` 만 채운다.",
+        "operationId": "remove_measurement_api_simulations_measurements__measurement_id__delete",
+        "parameters": [
+          {
+            "name": "measurement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Measurement Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/{study_id}/measurements": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Study Measurements",
+        "description": "스터디에 붙은 실측 — 설계점마다 견준 점수와 **가장 가까운 설계점.**",
+        "operationId": "study_measurements_api_simulations_studies__study_id__measurements_get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudyMeasurementOut"
+                  },
+                  "title": "Response Study Measurements Api Simulations Studies  Study Id  Measurements Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Add Study Measurement",
+        "description": "스터디에 실측을 붙인다(CSV · 탭 · JSON).",
+        "operationId": "add_study_measurement_api_simulations_studies__study_id__measurements_post",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_study_measurement_api_simulations_studies__study_id__measurements_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyMeasurementOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/studies": {
       "get": {
         "tags": [
@@ -2726,6 +2909,202 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Result Api Simulations  Simulation Id  Result Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/{simulation_id}/measurements": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Measurements",
+        "description": "그 작업(과 그 작업의 스터디)에 붙은 실측 — **이 결과와 견준 것**을 함께.",
+        "operationId": "measurements_api_simulations__simulation_id__measurements_get",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MeasurementOut"
+                  },
+                  "title": "Response Measurements Api Simulations  Simulation Id  Measurements Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Add Measurement",
+        "description": "작업에 실측을 붙인다(CSV · 탭 · JSON) — 표 모양은 양식(`/measurements/template.csv`).",
+        "operationId": "add_measurement_api_simulations__simulation_id__measurements_post",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_measurement_api_simulations__simulation_id__measurements_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/{simulation_id}/convergence": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Get Convergence",
+        "description": "메시 수렴 — 크기마다 값과 값마다 판정. 원래 작업이나 수준 작업 어느 쪽으로 물어도\n같다.",
+        "operationId": "get_convergence_api_simulations__simulation_id__convergence_get",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConvergenceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Request Convergence",
+        "description": "끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 크기마다 작업 하나.",
+        "operationId": "request_convergence_api_simulations__simulation_id__convergence_post",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvergenceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConvergenceOut"
                 }
               }
             }
@@ -3426,6 +3805,58 @@
         "title": "BackupOut",
         "description": "마지막 백업이 언제였나. **「없다」 와 「설정이 없다」 를 구별한다** —\n같게 말하면 사람은 안 해도 되는 일을 하러 간다."
       },
+      "Body_add_measurement_api_simulations__simulation_id__measurements_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_add_measurement_api_simulations__simulation_id__measurements_post"
+      },
+      "Body_add_study_measurement_api_simulations_studies__study_id__measurements_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_add_study_measurement_api_simulations_studies__study_id__measurements_post"
+      },
       "Body_create_api_simulations_post": {
         "properties": {
           "spec": {
@@ -3552,6 +3983,65 @@
         ],
         "title": "ChangePasswordRequest"
       },
+      "ComparisonOut": {
+        "properties": {
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "frequency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrequencyComparisonOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "frf": {
+            "items": {
+              "$ref": "#/components/schemas/FrfComparisonOut"
+            },
+            "type": "array",
+            "title": "Frf"
+          },
+          "static": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaticComparisonOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped"
+          },
+          "score_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe"
+        ],
+        "title": "ComparisonOut",
+        "description": "실측 한 벌과 작업 하나의 결과를 견준 것 — **읽을 때 견준다**(저장하지 않는다)."
+      },
       "ConditionLine": {
         "properties": {
           "kind": {
@@ -3615,6 +4105,250 @@
         "type": "object",
         "title": "ConditionsOut",
         "description": "작업 하나에 딸린 조건 전부.\n\n**없으면 `lines` 가 비어 있다** — 사람이 준 스펙으로 돈 것이다."
+      },
+      "ConvergenceLevelOut": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "element_size_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Element Size Mm"
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodes"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver"
+          },
+          "is_original": {
+            "type": "boolean",
+            "title": "Is Original",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_id",
+          "status",
+          "solver"
+        ],
+        "title": "ConvergenceLevelOut",
+        "description": "수준 하나 = 요소 크기 하나 = 작업 하나."
+      },
+      "ConvergenceMetricOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Values"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "converged",
+              "not_converged",
+              "oscillating",
+              "diverging",
+              "insufficient"
+            ],
+            "title": "Status"
+          },
+          "tolerance_pct": {
+            "type": "number",
+            "title": "Tolerance Pct"
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Pct"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order"
+          },
+          "gci_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gci Pct"
+          },
+          "extrapolated": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extrapolated"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "unit",
+          "values",
+          "status",
+          "tolerance_pct"
+        ],
+        "title": "ConvergenceMetricOut",
+        "description": "견준 값 하나와 그 판정(`app/core/convergence.py`)."
+      },
+      "ConvergenceOut": {
+        "properties": {
+          "original_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Original Id"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "base_size_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Size Mm"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/ConvergenceLevelOut"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ConvergenceMetricOut"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "original_id",
+          "recipe",
+          "levels",
+          "metrics"
+        ],
+        "title": "ConvergenceOut"
+      },
+      "ConvergenceRequest": {
+        "properties": {
+          "sizes_mm": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Sizes Mm"
+          },
+          "solver": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ansys",
+                  "calculix"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solver"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sizes_mm"
+        ],
+        "title": "ConvergenceRequest",
+        "description": "같은 설계점을 **요소 크기만 바꿔** 다시 푼다 — 크기마다 작업 하나."
       },
       "CreateAccountRequest": {
         "properties": {
@@ -3958,6 +4692,28 @@
             "type": "array",
             "title": "Materials",
             "default": []
+          },
+          "suggested_recipe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Recipe"
+          },
+          "suggested_element_size_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Element Size Mm"
           }
         },
         "type": "object",
@@ -3972,6 +4728,188 @@
         ],
         "title": "DoePreviewOut",
         "description": "폴더를 훑어 본 결과.\n\n**먼저 보여 주고 나서 건다** — 200개를 잘못 걸면 되돌리기 어렵다."
+      },
+      "FrequencyComparisonOut": {
+        "properties": {
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/ResonanceMatchOut"
+            },
+            "type": "array",
+            "title": "Matches"
+          },
+          "mean_abs_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Abs Pct"
+          },
+          "max_abs_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Abs Pct"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation",
+            "default": ""
+          },
+          "suggested_modulus_gpa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Modulus Gpa"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matches"
+        ],
+        "title": "FrequencyComparisonOut"
+      },
+      "FrfComparisonOut": {
+        "properties": {
+          "probe": {
+            "type": "string",
+            "title": "Probe"
+          },
+          "quantity": {
+            "type": "string",
+            "title": "Quantity"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "measured": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Measured"
+          },
+          "analysis": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Analysis"
+          },
+          "measured_peak_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Peak Hz"
+          },
+          "analysis_peak_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Peak Hz"
+          },
+          "peak_diff_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Diff Pct"
+          },
+          "amplitude_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amplitude Ratio"
+          },
+          "measured_damping": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Damping"
+          },
+          "analysis_damping": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Damping"
+          },
+          "suggested_damping": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Damping"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "probe",
+          "quantity",
+          "unit",
+          "measured",
+          "analysis"
+        ],
+        "title": "FrfComparisonOut",
+        "description": "측정점 하나의 FRF — 실측과 해석을 **같은 물리량 · 같은 단위**로 겹친다."
       },
       "HTTPValidationError": {
         "properties": {
@@ -4001,6 +4939,54 @@
         ],
         "title": "HomeWorkspaceRequest",
         "description": "대표 소속을 정한다.\n\n**비우는 길은 두지 않는다.** 대표 소속이 없으면 로그인이 소속 중 첫 부서로\n떨어지는데 그것은 사람이 정한 값이 아니다. 지우고 싶은 상황은 실제로는\n\"다른 부서로 옮긴다\" 이므로 그때도 새 값을 준다."
+      },
+      "LicenseHolderOut": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_id",
+          "name",
+          "status"
+        ],
+        "title": "LicenseHolderOut",
+        "description": "Ansys 라이선스를 쥐고 있을 작업 — **모델링(Mechanical) · 솔버 단계**."
       },
       "LoginRequest": {
         "properties": {
@@ -4086,6 +5072,101 @@
         ],
         "title": "MaintenanceItemOut",
         "description": "남은 일 하나. **홈이 이것을 보여 준다** — 관리 화면에 들어가야만 보이면\n아무도 안 본다."
+      },
+      "MeasurementOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "original_name": {
+            "type": "string",
+            "title": "Original Name"
+          },
+          "simulation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulation Id"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "probes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Probes"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name"
+          },
+          "comparison": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComparisonOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "original_name",
+          "kinds",
+          "probes",
+          "rows",
+          "created_at"
+        ],
+        "title": "MeasurementOut"
       },
       "MemberAddRequest": {
         "properties": {
@@ -4667,6 +5748,91 @@
         ],
         "title": "RejectRequest"
       },
+      "ResonanceMatchOut": {
+        "properties": {
+          "probe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe"
+          },
+          "measured_hz": {
+            "type": "number",
+            "title": "Measured Hz"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "elastic_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elastic Number"
+          },
+          "analysis_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Hz"
+          },
+          "diff_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Pct"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          },
+          "ambiguous": {
+            "type": "boolean",
+            "title": "Ambiguous",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "measured_hz"
+        ],
+        "title": "ResonanceMatchOut",
+        "description": "실측 공진 하나와 그 짝 — **센서 자리에서 움직이는 모드 중** 가장 가까운 것."
+      },
       "ServerStatusOut": {
         "properties": {
           "app_name": {
@@ -5166,6 +6332,70 @@
         "title": "SimulationSummaryOut",
         "description": "목록 한 줄. 스펙 · 단계 · 산출물은 싣지 않는다 — 50줄에 그것까지 실으면 목록이\n무겁다."
       },
+      "SolverAvailabilityOut": {
+        "properties": {
+          "solver": {
+            "type": "string",
+            "title": "Solver"
+          },
+          "workers_alive": {
+            "type": "integer",
+            "title": "Workers Alive"
+          },
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "solver",
+          "workers_alive",
+          "queued"
+        ],
+        "title": "SolverAvailabilityOut",
+        "description": "솔버 하나를 지금 쓸 수 있나 — 작업을 거는 화면이 묻는다(관리자가 아니어도)."
+      },
+      "SolverQueueOut": {
+        "properties": {
+          "solver": {
+            "type": "string",
+            "title": "Solver"
+          },
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running"
+          },
+          "oldest_queued_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Queued Seconds"
+          },
+          "workers_alive": {
+            "type": "integer",
+            "title": "Workers Alive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "solver",
+          "queued",
+          "running",
+          "workers_alive"
+        ],
+        "title": "SolverQueueOut",
+        "description": "솔버 하나의 줄 — **기다리는 작업이 있는데 집을 워커가 없으면** 영원히 안 움직인다."
+      },
       "StageOut": {
         "properties": {
           "name": {
@@ -5235,6 +6465,284 @@
         ],
         "title": "StageOut"
       },
+      "StaticComparisonOut": {
+        "properties": {
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/StaticMatchOut"
+            },
+            "type": "array",
+            "title": "Matches"
+          },
+          "mean_abs_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Abs Pct"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation",
+            "default": ""
+          },
+          "suggested_modulus_gpa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Modulus Gpa"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matches"
+        ],
+        "title": "StaticComparisonOut"
+      },
+      "StaticMatchOut": {
+        "properties": {
+          "probe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "component": {
+            "type": "string",
+            "title": "Component"
+          },
+          "measured": {
+            "type": "number",
+            "title": "Measured"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "diff_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Pct"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "component",
+          "measured",
+          "unit"
+        ],
+        "title": "StaticMatchOut"
+      },
+      "StudyMatchOut": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "score_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_id",
+          "number",
+          "params",
+          "status"
+        ],
+        "title": "StudyMatchOut",
+        "description": "설계점 하나가 실측에 얼마나 가까운가."
+      },
+      "StudyMeasurementOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "original_name": {
+            "type": "string",
+            "title": "Original Name"
+          },
+          "simulation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulation Id"
+          },
+          "study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Id"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "probes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Probes"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name"
+          },
+          "comparison": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComparisonOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/StudyMatchOut"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "best_point": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Point"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "original_name",
+          "kinds",
+          "probes",
+          "rows",
+          "created_at"
+        ],
+        "title": "StudyMeasurementOut"
+      },
       "StudyOut": {
         "properties": {
           "study_id": {
@@ -5251,6 +6759,18 @@
             },
             "type": "array",
             "title": "Factors"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe",
+            "default": "modal"
+          },
+          "solvers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Solvers"
           },
           "points": {
             "items": {
@@ -5327,6 +6847,16 @@
             ],
             "title": "Error Code"
           },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe",
+            "default": "modal"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver",
+            "default": "ansys"
+          },
           "first_elastic_hz": {
             "anyOf": [
               {
@@ -5366,6 +6896,94 @@
             },
             "type": "array",
             "title": "Frequencies"
+          },
+          "max_displacement_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Displacement Mm"
+          },
+          "max_von_mises_mpa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Von Mises Mpa"
+          },
+          "peak_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Hz"
+          },
+          "peak_displacement_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Displacement Mm"
+          },
+          "reactions_n": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Reactions N"
+          },
+          "probes_mm": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probes Mm"
+          },
+          "probe_vectors_mm": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Probe Vectors Mm"
+          },
+          "probe_peaks_hz": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probe Peaks Hz"
+          },
+          "relative_mm": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Relative Mm"
           }
         },
         "type": "object",
@@ -5394,6 +7012,18 @@
             },
             "type": "array",
             "title": "Factors"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe",
+            "default": "modal"
+          },
+          "solvers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Solvers"
           },
           "points": {
             "type": "integer",
@@ -5632,6 +7262,183 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WorkerJobOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "cancelling": {
+            "type": "boolean",
+            "title": "Cancelling",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "recipe",
+          "solver"
+        ],
+        "title": "WorkerJobOut",
+        "description": "워커가 지금 붙든 작업."
+      },
+      "WorkerOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname"
+          },
+          "pid": {
+            "type": "integer",
+            "title": "Pid"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "executor": {
+            "type": "string",
+            "title": "Executor"
+          },
+          "solvers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Solvers"
+          },
+          "tools": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Tools"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "busy",
+              "stopping",
+              "stopped",
+              "lost"
+            ],
+            "title": "State"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "silent_seconds": {
+            "type": "number",
+            "title": "Silent Seconds"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkerJobOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "hostname",
+          "pid",
+          "version",
+          "executor",
+          "solvers",
+          "tools",
+          "state",
+          "started_at",
+          "last_seen_at",
+          "silent_seconds"
+        ],
+        "title": "WorkerOut",
+        "description": "워커 하나 — 살아 있나 · 무엇을 집나 · 무엇이 깔렸나 · 지금 무엇을 하나."
+      },
+      "WorkersOut": {
+        "properties": {
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerOut"
+            },
+            "type": "array",
+            "title": "Workers"
+          },
+          "queues": {
+            "items": {
+              "$ref": "#/components/schemas/SolverQueueOut"
+            },
+            "type": "array",
+            "title": "Queues"
+          },
+          "license_holders": {
+            "items": {
+              "$ref": "#/components/schemas/LicenseHolderOut"
+            },
+            "type": "array",
+            "title": "License Holders"
+          },
+          "alive": {
+            "type": "integer",
+            "title": "Alive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workers",
+          "queues",
+          "license_holders",
+          "alive"
+        ],
+        "title": "WorkersOut",
+        "description": "서버 화면의 「워커 · 솔버」 — 워커 · 솔버별 줄 · 라이선스를 쥔 작업."
       },
       "WorkspaceContentOut": {
         "properties": {

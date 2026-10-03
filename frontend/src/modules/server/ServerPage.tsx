@@ -7,6 +7,7 @@
  * "지금 서버 버전이 뭐냐" 와 "어느 DB 를 보고 있냐" 다.
  */
 
+import { WorkersCard } from '@/modules/simulations/WorkersCard'
 import { api } from '@/shared/api/client'
 import type { ServerStatus } from '@/shared/api/types'
 import { missingExtensions } from '@/extensions'
@@ -23,7 +24,14 @@ function gib(bytes: number): string {
 export default function ServerPage() {
   const status = useResource(() => api.get<ServerStatus>('/server/status'), [])
 
-  if (status.error) return <ErrorNotice error={status.error} />
+  // **워커 카드는 상태와 따로 뜬다** — 상태가 오류여도(뒤처진 DB) 「워커가 살아 있나」 는 보여야 한다.
+  if (status.error)
+    return (
+      <div className="space-y-6">
+        <ErrorNotice error={status.error} />
+        <WorkersCard />
+      </div>
+    )
   if (!status.data) return null
 
   const one = status.data
@@ -147,6 +155,8 @@ export default function ServerPage() {
           ))}
         </ul>
       </section>
+
+      <WorkersCard />
     </div>
   )
 }

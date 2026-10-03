@@ -81,8 +81,10 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
 
     shapes = _draw_modes(workdir, [one["number"] for one in elastic[:VISUAL_MODES]], modes)
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
-    # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다).
-    spots = _probe_modes(workdir, elastic[:1])
+    # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
+    # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
+    # 안 보인다」 가 첫 거름망이다.
+    spots = _probe_modes(workdir, elastic)
 
     result: dict[str, Any] = {
         "recipe": "modal",
@@ -137,10 +139,10 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
 
 
 def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """1차 탄성 모드의 변위를 **측정점**에서 읽는다. 점 그룹이 없으면 빈 목록.
+    """탄성 모드마다 **측정점**의 변위. 점 그룹이 없으면 빈 목록. 줄마다 `mode` 가 붙는다.
 
     모드 형상은 질량 정규화된 값이라 절대 크기가 아니다 — 그래서 단위를 `정규화` 로 적는다.
-    「그 자리가 이 모드에서 움직이나」 가 이 값으로 답할 물음이다.
+    「그 자리가 이 모드에서 움직이나」 가 이 값으로 답할 물음이다. 자리는 한 번만 찾는다.
     """
     topology = workdir / "topology.json"
     result = workdir / "model.frd"
@@ -156,15 +158,24 @@ def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, 
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return []
-    number = int(wanted[0]["number"])
-    if number > len(blocks):
-        return []
-    rows = probes.read(
-        payload, mesh.nodes, frd_reader.magnitudes(blocks[number - 1]), unit="정규화"
+    spots = probes.locate(
+        payload, mesh.nodes, body_nodes=probes.body_nodes(workdir, mesh.solids)
     )
-    for row in rows:
-        row["mode"] = number
-    return rows
+    made: list[dict[str, Any]] = []
+    for mode in wanted:
+        number = int(mode["number"])
+        if number > len(blocks):
+            continue
+        block = blocks[number - 1]
+        for one in probes.rows(
+            spots,
+            frd_reader.magnitudes(block),
+            unit="정규화",
+            vectors={node: values[:3] for node, values in block.values.items()},
+        ):
+            one["mode"] = number
+            made.append(one)
+    return made
 
 
 def _draw_modes(workdir: Path, wanted: list[int], modes: list[dict[str, Any]]) -> list[str]:

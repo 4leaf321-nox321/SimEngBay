@@ -11,10 +11,25 @@ CAD 가 선택 그룹에 점(vertex)을 담아 보낸다(`{"point": [5, 5, 90]}`
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 #: 이보다 멀면 「그 자리 값이 아니다」 를 적는다(mm). 요소 크기보다 작게 잡을 이유가 없다.
 FAR_MM = 1.0
+
+
+@dataclass(frozen=True)
+class Spot:
+    """측정점 하나가 메시에서 잡은 자리 — **한 번 찾아 두고** 값마다 다시 찾지 않는다."""
+
+    name: str
+    point: tuple[float, float, float]
+    node: int
+    distance_mm: float
+    body: str | None = None
+    """**그 바디 안에서만 찾았을 때만** 적는다 — 전체에서 찾고 이름표만 붙이면 같은 자리의
+    두 측정점이 같은 절점을 잡은 채 다른 바디로 보인다(미끄럼 0 이 「안 미끄러짐」 으로
+    읽힌다)."""
 
 
 def wanted(topology: dict[str, Any]) -> dict[str, tuple[float, float, float]]:
@@ -58,6 +73,7 @@ def row(
     unit: str,
     vector: list[float] | None = None,
     body: str | None = None,
+    strain: list[float] | None = None,
 ) -> dict[str, Any]:
     """측정점 한 줄. **멀면 그 사실을 적는다** — 그 값은 다른 자리의 값이다.
 
@@ -77,9 +93,47 @@ def row(
         made["vector"] = [round(one, 12) for one in vector[:3]]
     if body is not None:
         made["body"] = body
+    if strain is not None:
+        # **수직 변형률 `[εxx, εyy, εzz]`**(무차원) — 축 방향 스트레인 게이지와 견주는 값이다.
+        # 전단 성분은 싣지 않는다: 솔버마다 공학 · 텐서 전단의 약속이 달라 같은 칸에 다른 뜻이
+        # 들어간다.
+        made["strain"] = [round(one, 12) for one in strain[:3]]
     if distance_mm > FAR_MM:
         made["warning"] = (
             f"가장 가까운 절점이 {distance_mm:.2f} mm 떨어져 있습니다 — 메시를 그 자리에서 "
             f"촘촘하게 하거나 측정점을 절점에 맞추세요."
         )
+    return made
+
+
+def peaks(
+    spots: list[Spot], points: list[dict[str, Any]], *, unit: str
+) -> list[dict[str, Any]]:
+    """조화 응답 — 측정점마다 **그 자리 곡선의 봉우리**를 한 줄로(`row` 모양 + `frequency_hz`).
+
+    전체 봉우리(`peak`)는 모델 어디서든 가장 크게 흔들린 자리의 것이라, 센서 자리의 봉우리와
+    주파수가 다를 수 있다. 실측 FRF 와 견줄 값은 이쪽이다. **거리 · 경고도 여기 실린다** —
+    곡선의 점마다 적을 수는 없으니 측정점마다 한 번.
+    """
+    made: list[dict[str, Any]] = []
+    for spot in spots:
+        curve: list[tuple[float, float]] = []
+        for one in points:
+            amplitude = (one.get("probes") or {}).get(spot.name)
+            if isinstance(amplitude, int | float):
+                curve.append((float(one["frequency_hz"]), float(amplitude)))
+        if not curve:
+            continue
+        frequency, top = max(curve, key=lambda pair: pair[1])
+        line = row(
+            name=spot.name,
+            point=spot.point,
+            node=spot.node,
+            distance_mm=spot.distance_mm,
+            value=top,
+            unit=unit,
+            body=spot.body,
+        )
+        line["frequency_hz"] = frequency
+        made.append(line)
     return made

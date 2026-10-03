@@ -4,7 +4,7 @@ Mechanical 의 모든 기능을 노출하지 않는다. 오케스트레이터(�
 받는 칸뿐이고, 그 밖의 것은 여기서 거절된다 — 워커가 집어 들고 나서 모르는 칸 때문에 실패하면
 사람은 「왜 실패했나」 를 목록에서 찾아야 한다.
 
-지금은 `modal` 하나다. `static` 은 스펙만 자리를 잡아 두고 실행기는 없다(계획서 「그 뒤」).
+레시피는 셋이다 — `modal` · `static` · `harmonic`. 솔버도 둘이다(`ansys` · `calculix`).
 
 ## 단위
 
@@ -100,7 +100,7 @@ class StaticSpec(BaseModel):
 
     recipe: Literal["static"] = "static"
     solver: Literal["ansys", "calculix"] = "ansys"
-    """무엇으로 풀까 — `ModalSpec.solver` 참고. 이 레시피는 아직 `ansys` 만 된다."""
+    """무엇으로 풀까 — `ModalSpec.solver` 참고."""
     material: MaterialSpec
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"
@@ -123,7 +123,7 @@ class HarmonicSpec(BaseModel):
 
     recipe: Literal["harmonic"] = "harmonic"
     solver: Literal["ansys", "calculix"] = "ansys"
-    """무엇으로 풀까 — `ModalSpec.solver` 참고. 이 레시피는 아직 `ansys` 만 된다."""
+    """무엇으로 풀까 — `ModalSpec.solver` 참고."""
     material: MaterialSpec
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"

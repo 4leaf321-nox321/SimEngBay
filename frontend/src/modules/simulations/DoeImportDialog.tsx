@@ -15,12 +15,30 @@
  *
  * 200개를 잘못 걸면 되돌리기 어렵고, 그 사이 Mechanical 라이선스를 계속 문다. 그래서 폴더를
  * 고르면 **훑어 본 결과**(점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개와 그 이유)를 먼저 보인다.
+ *
+ * ## 해석 종류와 솔버
+ *
+ * **해석 종류는 CAD 가 점 파일에 적어 보낸다**(`conditions.analysis.type`) — 미리 고르고 사람이
+ * 바꾸게 한다. 모달로 못 박아 두면 전단 이음 같은 정적 DOE 가 하중을 건너뛴 채 모달로 돈다.
+ * 솔버는 모든 점에 같다: 설계점끼리 견주려고 DOE 를 돌리는데 솔버가 섞이면 그 차이(몇 %)가
+ * 변수의 효과로 읽힌다.
  */
+
+type Recipe = 'modal' | 'static' | 'harmonic'
+
+const RECIPES: Recipe[] = ['modal', 'static', 'harmonic']
+
+function isRecipe(value: string | null | undefined): value is Recipe {
+  return RECIPES.includes(value as Recipe)
+}
 
 import { useEffect, useState } from 'react'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { DoeImport, DoeListing, DoePreview } from '@/modules/simulations/api'
+import { RECIPE_LABELS } from '@/modules/simulations/labels'
+import { SolverSelect } from '@/modules/simulations/SolverSelect'
+import type { Solver } from '@/modules/simulations/SolverSelect'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -61,18 +79,35 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
   const [fromCad, setFromCad] = useState(true)
   const [modes, setModes] = useState('10')
   const [region, setRegion] = useState('bolt_holes')
+  const [recipe, setRecipe] = useState<Recipe>('modal')
+  const [solver, setSolver] = useState<Solver>('ansys')
+  // 비워 두면 **점마다 CAD 의 「전체」 크기**로 돈다 — 미리 채우면 그 값이 모든 점을 덮는다.
+  const [elementSize, setElementSize] = useState('')
   const [busy, setBusy] = useState(false)
+  // **폴더를 읽는 중과 작업을 만드는 중은 다르다** — 같은 글자를 띄우면 탐색만 해도 「생성
+  // 중」 으로 보인다.
+  const [creating, setCreating] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const workspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const cadMaterials = preview?.materials ?? []
   const suggestedModes = preview?.suggested_modes ?? null
+  const suggestedRecipe = isRecipe(preview?.suggested_recipe) ? preview.suggested_recipe : null
+  const suggestedSize = preview?.suggested_element_size_mm ?? null
+  // **CalculiX 는 요소 크기 없이 돌지 않는다**(gmsh 가 제 나름으로 잡으면 같은 형상이 실행마다
+  // 다른 메시가 된다). 미리 막는다 — 안 막으면 설계점 수만큼 메시 실패가 쌓인다.
+  const needsSize = solver === 'calculix' && !elementSize.trim() && suggestedSize === null
 
   // **CAD 가 적은 모드 수를 미리 채운다** — 조용히 쓰면 그쪽 기본값이 우리 것을 말없이
   // 덮는다. 채워 두고 사람이 고치게 한다.
   useEffect(() => {
     if (suggestedModes) setModes(String(suggestedModes))
   }, [suggestedModes])
+
+  // **CAD 가 적은 해석 종류를 미리 고른다.** 안 적었으면 모달이다.
+  useEffect(() => {
+    setRecipe(suggestedRecipe ?? 'modal')
+  }, [suggestedRecipe])
 
   // 창을 열면 첫 뿌리부터 보여 준다 — 사람이 아무것도 안 쳐도 고를 것이 있어야 한다.
   useEffect(() => {
@@ -99,33 +134,43 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
     }
   }
 
+  /** **모든 점에 같은 스펙을 쓴다** — 그래야 결과를 견줄 수 있다(그러려고 DOE 를 돌린다). */
+  function specOf(): Record<string, unknown> {
+    const spec: Record<string, unknown> = {
+      recipe,
+      solver,
+      material: {
+        name: material.trim(),
+        youngs_modulus_gpa: 200,
+        poisson_ratio: 0.3,
+        density_kg_m3: 7850,
+      },
+      material_from: fromCad ? 'cad' : 'spec',
+      mesh: elementSize.trim() ? { element_size_mm: Number(elementSize) } : {},
+      constraints: region.trim() ? [{ region: region.trim(), kind: 'fixed' }] : [],
+    }
+    // **정적에는 모드 수 칸이 없다** — 스펙이 모르는 칸은 서버가 통째로 거절한다.
+    if (recipe !== 'static') spec.modes = Number(modes)
+    return spec
+  }
+
   async function run() {
     if (!preview) return
     setBusy(true)
+    setCreating(true)
     setError(null)
     try {
       const result = await simulationApi.importDoe({
         path: preview.path,
         workspace_slug: workspace,
-        spec: {
-          recipe: 'modal',
-          material: {
-            name: material.trim(),
-            youngs_modulus_gpa: 200,
-            poisson_ratio: 0.3,
-            density_kg_m3: 7850,
-          },
-          material_from: fromCad ? 'cad' : 'spec',
-          modes: Number(modes),
-          // **모든 점에 같은 스펙을 쓴다** — 그래야 결과를 견줄 수 있다(그러려고 DOE 를 돌린다).
-          constraints: region.trim() ? [{ region: region.trim(), kind: 'fixed' }] : [],
-        },
+        spec: specOf(),
       })
       onImported(result)
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('가져오지 못했습니다.'))
     } finally {
       setBusy(false)
+      setCreating(false)
     }
   }
 
@@ -227,7 +272,7 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
                   {preview.seed != null ? ` · 시드 ${preview.seed}` : ''}
                 </p>
                 <p className="mt-1">
-                  걸 수 있는 점 <b>{preview.usable}</b>개
+                  실행할 수 있는 점 <b>{preview.usable}</b>개
                   {preview.skipped > 0 && (
                     <span className="text-amber-700 dark:text-amber-400">
                       {' '}
@@ -261,7 +306,7 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
                         ))}
                         <TableCell>
                           {point.usable ? (
-                            <span className="text-muted-foreground">걸 수 있음</span>
+                            <span className="text-muted-foreground">실행 가능</span>
                           ) : (
                             // **왜 못 거는지 그대로 보여 준다** — 「절반이 실패」 를 로그에서
                             // 찾게 하지 않는다.
@@ -296,41 +341,103 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
                     </span>
                   </span>
                 </label>
-                <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="doe-material">재료</Label>
-                  <Input
-                    id="doe-material"
-                    value={material}
-                    onChange={(event) => setMaterial(event.target.value)}
-                    disabled={fromCad && cadMaterials.length > 0}
-                  />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="doe-recipe">해석 종류</Label>
+                    <select
+                      id="doe-recipe"
+                      className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+                      value={recipe}
+                      onChange={(event) => setRecipe(event.target.value as Recipe)}
+                    >
+                      {RECIPES.map((one) => (
+                        <option key={one} value={one}>
+                          {RECIPE_LABELS[one] ?? one}
+                        </option>
+                      ))}
+                    </select>
+                    {suggestedRecipe === null ? (
+                      <p className="text-muted-foreground text-xs">
+                        이 폴더는 해석 종류를 적지 않았습니다.
+                      </p>
+                    ) : suggestedRecipe === recipe ? (
+                      <p className="text-muted-foreground text-xs">CAD 가 적은 해석입니다.</p>
+                    ) : (
+                      // **다르게 실행하는 것은 막지 않는다** — 다만 무엇이 빠지는지 말한다.
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        CAD 가 적은 해석: {RECIPE_LABELS[suggestedRecipe]} — CAD 의 하중 · 해석
+                        설정 일부가 반영되지 않습니다.
+                      </p>
+                    )}
+                  </div>
+                  <SolverSelect id="doe-solver" value={solver} onChange={setSolver} />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="doe-modes">모드 수</Label>
-                  <Input
-                    id="doe-modes"
-                    type="number"
-                    min={1}
-                    value={modes}
-                    onChange={(event) => setModes(event.target.value)}
-                  />
-                  {suggestedModes !== null && (
-                    <p className="text-muted-foreground text-xs">
-                      CAD 가 적은 값 {suggestedModes}
-                    </p>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="doe-material">재료</Label>
+                    <Input
+                      id="doe-material"
+                      value={material}
+                      onChange={(event) => setMaterial(event.target.value)}
+                      disabled={fromCad && cadMaterials.length > 0}
+                    />
+                  </div>
+                  {recipe !== 'static' && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="doe-modes">모드 수</Label>
+                      <Input
+                        id="doe-modes"
+                        type="number"
+                        min={1}
+                        value={modes}
+                        onChange={(event) => setModes(event.target.value)}
+                      />
+                      {suggestedModes !== null && (
+                        <p className="text-muted-foreground text-xs">
+                          CAD 가 적은 값 {suggestedModes}
+                        </p>
+                      )}
+                    </div>
                   )}
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="doe-region">구속 영역</Label>
-                  <Input
-                    id="doe-region"
-                    value={region}
-                    onChange={(event) => setRegion(event.target.value)}
-                    placeholder="비우면 자유-자유"
-                    className="font-mono"
-                  />
-                </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="doe-element">요소 크기 (mm)</Label>
+                    <Input
+                      id="doe-element"
+                      type="number"
+                      step="any"
+                      min={0}
+                      value={elementSize}
+                      onChange={(event) => setElementSize(event.target.value)}
+                      placeholder={
+                        suggestedSize !== null
+                          ? `CAD 값 ${suggestedSize}`
+                          : solver === 'calculix'
+                            ? '필수'
+                            : '비우면 자동'
+                      }
+                    />
+                    {suggestedSize !== null && !elementSize.trim() && (
+                      <p className="text-muted-foreground text-xs">
+                        비우면 점마다 CAD 가 적은 크기를 사용합니다.
+                      </p>
+                    )}
+                    {needsSize && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        CalculiX 는 요소 크기가 필요합니다 — 이 폴더는 「전체」 크기를 보내지
+                        않았습니다.
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="doe-region">구속 영역</Label>
+                    <Input
+                      id="doe-region"
+                      value={region}
+                      onChange={(event) => setRegion(event.target.value)}
+                      placeholder="비우면 자유-자유"
+                      className="font-mono"
+                    />
+                  </div>
                 </div>
               </fieldset>
             </>
@@ -341,8 +448,8 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
           <Button variant="outline" onClick={onClose} disabled={busy}>
             취소
           </Button>
-          <Button onClick={run} disabled={!preview || preview.usable === 0 || busy}>
-            {busy ? '거는 중…' : `${preview?.usable ?? 0}건 실행`}
+          <Button onClick={run} disabled={!preview || preview.usable === 0 || busy || needsSize}>
+            {creating ? '생성 중…' : `${preview?.usable ?? 0}건 실행`}
           </Button>
         </DialogFooter>
       </DialogContent>

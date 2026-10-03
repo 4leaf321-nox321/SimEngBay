@@ -241,6 +241,12 @@ def build(
             "elements": mesh.element_count,
             **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
             "mesh_order": "quadratic" if mesh.second_order else "linear",
+            # **실제로 쓴 전역 요소 크기**(mm) — 메시 수렴 점검이 이것을 기준으로 줄인다.
+            "element_size_mm": round(size, 6),
+            # 비선형 접촉을 넣었나 — **그때 접촉 강성이 요소 크기를 따라간다**
+            # (`contact_stiffness`). 크기를 바꾸면 메시와 접촉 모델이 함께 바뀐다 — 수렴
+            # 점검이 그 사실을 적는다.
+            **({"contact_pairs": True} if use_contact else {}),
             "constrained_regions": plan.applied,
             "mass_kg": mass,
             "unit_system": system.key,

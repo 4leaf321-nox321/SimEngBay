@@ -36,7 +36,7 @@ SUPPORTED_CONSTRAINTS = ("fixed_support", "cylindrical", "displacement", "fricti
 #: 걸 수 있는 접촉 — **본딩은 절점 공유로 이미 걸려 있다**(`mesh.py` 의 `BooleanFragments`).
 #: 마찰 · 무마찰도 모달에서는 처음 붙어 있으면 같은 답이라, 「붙은 것으로 풀었다」 고 적는다.
 LINEARIZED_CONTACTS = ("bonded", "no_separation", "frictional", "frictionless", "rough")
-#: 지금 풀 수 있는 레시피. 정적 · 조화는 2단계다.
+#: 풀 수 있는 레시피 — 모달 · 정적 · 조화 셋 다(`tests/opensolver` 가 끝까지 돌린다).
 SUPPORTED_RECIPES = ("modal", "static", "harmonic")
 
 
@@ -292,9 +292,10 @@ def write_static(
     lines += [
         "*NODE FILE",
         "U",
-        # 응력은 요소에서 나와 절점으로 외삽된다 — `.frd` 의 STRESS 블록이 그것이다.
+        # 응력 · 변형률은 요소에서 나와 절점으로 외삽된다 — `.frd` 의 STRESS · TOSTRAIN
+        # 블록이 그것이다. 변형률은 **측정점에서 스트레인 게이지와 견주는 값**이다.
         "*EL FILE",
-        "S",
+        "S, E",
         "*END STEP",
     ]
     plan.text = "\n".join(lines) + "\n"

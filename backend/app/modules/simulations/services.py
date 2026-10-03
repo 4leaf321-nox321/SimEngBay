@@ -15,22 +15,29 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import logging
 import uuid
+from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 from pydantic import ValidationError
-from sqlalchemy import Select, func, select, text, update
+from sqlalchemy import Select, and_, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core import cleanup, executors, materials, units
 from app.core import conditions as condition_model
+from app.core import convergence as core_convergence
+from app.core import measured as core_measured
+from app.core import values as core_values
 from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_inside
 from app.core.doe.browse import OutsideRoots
 from app.core.doe.folder import FolderProblem
@@ -49,24 +56,40 @@ from app.modules.simulations.models import (
     RUNNING_STATUSES,
     Simulation,
     SimulationArtifact,
+    SimulationMeasurement,
+    SimulationWorker,
 )
 from app.modules.simulations.schemas import (
     ArtifactOut,
+    ComparisonOut,
     ConditionLine,
     ConditionsOut,
+    ConvergenceLevelOut,
+    ConvergenceMetricOut,
+    ConvergenceOut,
     DoeEntryOut,
     DoeImportOut,
     DoeListingOut,
     DoePointPreview,
     DoePreviewOut,
+    LicenseHolderOut,
+    MeasurementOut,
     ModeTrackOut,
     RecipeOut,
     SimulationOut,
     SimulationSummaryOut,
+    SolverAvailabilityOut,
+    SolverQueueOut,
     StageOut,
+    StudyMatchOut,
+    StudyMeasurementOut,
     StudyOut,
     StudyPointOut,
     StudySummaryOut,
+    WorkerJobOut,
+    WorkerOut,
+    WorkersOut,
+    WorkerState,
 )
 from app.modules.workspaces.models import Workspace
 from app.shared import extensions
@@ -77,6 +100,7 @@ from app.shared.permissions import (
     require_owner_edit,
     workspace_by_slug,
 )
+from app.shared.tabular import TabularError, parse_rows
 from app.shared.text import clean
 
 logger = logging.getLogger(__name__)
@@ -94,6 +118,14 @@ CHUNK = 1024 * 1024
 #: 단계가 바뀔 때마다 heartbeat 를 찍으므로 이 값은 「한 단계」 의 상한이다.
 STALE_AFTER = timedelta(hours=3)
 MAX_ATTEMPTS = 2
+#: 워커가 신호를 적는 간격과, 끊겼다고 보는 때. 솔브 하나가 몇 시간이어도 신호는 따로 돈다.
+BEAT_EVERY = 15.0
+WORKER_LOST_AFTER = timedelta(minutes=2)
+#: 서버 화면에 보이는 워커 — 이보다 오래 소식이 없고 멈춘 워커는 목록에서 뺀다.
+SHOWN_FOR = timedelta(days=1)
+#: Ansys 라이선스를 쥐는 단계 — 모델링(Mechanical)과 솔버. 형상 준비 · 추출(DPF)은 안 쥔다.
+LICENSED_STATUSES = ("modeling", "solving")
+SOLVERS = ("ansys", "calculix")
 
 
 def _now() -> datetime:
@@ -678,6 +710,7 @@ def _read_doe(path_text: str) -> DoeFolder:
 def preview_doe(path_text: str) -> DoePreviewOut:
     """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유."""
     doe = _read_doe(path_text)
+    analysis = _doe_analysis(doe)
     return DoePreviewOut(
         path=str(doe.path),
         study_id=doe.study_id,
@@ -689,21 +722,57 @@ def preview_doe(path_text: str) -> DoePreviewOut:
         usable=len(doe.usable),
         skipped=len(doe.skipped),
         materials=_doe_materials(doe),
-        suggested_modes=_doe_modes(doe),
+        suggested_modes=analysis.modes,
+        suggested_recipe=analysis.recipe,
+        suggested_element_size_mm=analysis.element_size_mm,
     )
 
 
-def _doe_modes(doe: DoeFolder) -> int | None:
-    """CAD 가 적은 모드 수 — 첫 점에서 읽는다(스터디 전체에 같다)."""
+@dataclass(frozen=True)
+class _DoeAnalysis:
+    """CAD 가 적어 보낸 해석 설정 — **미리 채우고 사람이 고친다.**"""
+
+    recipe: str | None = None
+    modes: int | None = None
+    element_size_mm: float | None = None
+
+
+def _doe_analysis(doe: DoeFolder) -> _DoeAnalysis:
+    """첫 점에서 읽는다(스터디 전체에 같다).
+
+    **해석 종류는 점 파일의 `conditions.analysis.type` 이다** — `study.json` 의 `recipe` 는
+    형상 레시피(상자 · 구멍 노드)라 해석과 상관이 없다. 적혀 있지 않으면 비워 둔다: 조건
+    읽기는 없을 때 모달로 채우는데, 그것을 「CAD 가 모달이라 했다」 로 보여 주면 거짓이다.
+
+    요소 크기는 「전체」 힌트를 **mm 로 옮겨** 낸다(SI 폴더면 m 로 온다) — CalculiX 모델링이
+    같은 셈을 한다(`calculix/build.py` 의 `_global_size`).
+    """
     for point in doe.usable:
         if point.point_file is None or not point.has_conditions:
             continue
         try:
             payload = json.loads(point.point_file.read_text(encoding="utf-8"))
-            return condition_model.read(payload).analysis.modes
+            system = units.declared_in(payload)
+            given = condition_model.read(payload)
         except (OSError, ValueError):
-            return None
-    return None
+            return _DoeAnalysis()
+        block = payload.get("conditions") if isinstance(payload, dict) else None
+        declared = (block or {}).get("analysis") if isinstance(block, dict) else None
+        kind = declared.get("type") if isinstance(declared, dict) else None
+        whole = next(
+            (
+                one.element_size
+                for one in given.mesh_hints
+                if one.region in ("전체", "all") and one.element_size is not None
+            ),
+            None,
+        )
+        return _DoeAnalysis(
+            recipe=kind if kind in RUNNABLE_RECIPES else None,
+            modes=given.analysis.modes,
+            element_size_mm=round(whole * system.length_mm, 6) if whole is not None else None,
+        )
+    return _DoeAnalysis()
 
 
 def _doe_materials(doe: DoeFolder) -> list[str]:
@@ -830,13 +899,34 @@ COMPARE_MODES = 10
 
 
 def _study_points(db: Session, user: User, study_id: str) -> list[Simulation]:
+    """그 스터디의 점들. **목록과 같은 열쇠로 모은다** — `study_id` 가 없는 옛 가져오기는
+    목록이 `study_name` 으로 묶으므로 여기서도 그렇게 찾는다. 안 그러면 목록에는 있는데 상세는
+    404 다."""
     return list(
         db.scalars(
             _visible(user)
-            .where(Simulation.source_meta["study_id"].astext == study_id)
+            .where(
+                Simulation.source_kind == "doe_point",
+                or_(
+                    Simulation.source_meta["study_id"].astext == study_id,
+                    and_(
+                        Simulation.source_meta["study_id"].astext.is_(None),
+                        Simulation.source_meta["study_name"].astext == study_id,
+                    ),
+                ),
+            )
             .order_by(Simulation.created_at)
         )
     )
+
+
+def solver_of(simulation: Simulation) -> str:
+    """그 작업의 솔버. 칸이 없는 옛 작업은 Ansys 다(`claim_next` 의 `COALESCE` 와 같다)."""
+    return str((simulation.spec or {}).get("solver") or "ansys")
+
+
+def _most(values: list[str], default: str) -> str:
+    return Counter(values).most_common(1)[0][0] if values else default
 
 
 def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
@@ -874,6 +964,8 @@ def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
                 study_id=study_id,
                 name=str(first.source_meta.get("study_name") or study_id),
                 factors=factors,
+                recipe=_most([one.recipe for one in points], "modal"),
+                solvers=list(dict.fromkeys(solver_of(one) for one in points)),
                 points=len(points),
                 done=sum(1 for one in points if one.status == "done"),
                 failed=sum(1 for one in points if one.status == "failed"),
@@ -887,19 +979,19 @@ def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
     return out
 
 
-def _elastic_modes(simulation: Simulation) -> list[dict[str, Any]]:
-    """그 점의 탄성 모드들. **결과 파일이 정본이다**(요약에는 1차만 있다)."""
+def result_of(simulation: Simulation) -> dict[str, Any]:
+    """그 작업의 결과 파일. **결과 파일이 정본이다**(요약에는 몇 칸만 있다). 끝나지 않았거나
+    못 읽으면 빈 것 — 비교 화면은 그 점을 빈칸으로 둔다."""
     if simulation.status != "done" or simulation.work_dir is None:
-        return []
+        return {}
     artifact = db_result_path(simulation)
     if artifact is None:
-        return []
+        return {}
     try:
         loaded = json.loads(artifact.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
-    elastic = [one for one in loaded.get("modes", []) if not one.get("rigid_body")]
-    return elastic[:COMPARE_MODES]
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _tracks(
@@ -951,36 +1043,185 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
             if name not in factors:
                 factors.append(name)
 
+    # **결과 파일은 점마다 한 번만 연다** — 모드 잇기와 정적 · 조화 값이 같은 파일에서 나온다.
+    results = {int(one.source_meta.get("point") or 0): result_of(one) for one in points}
     modes_by_point = {
-        int(one.source_meta.get("point") or 0): _elastic_modes(one) for one in points
+        number: core_values.elastic_modes(loaded)[:COMPARE_MODES]
+        for number, loaded in results.items()
     }
     reference, tracks = _tracks(points, modes_by_point)
     return StudyOut(
         study_id=study_id,
         name=str(points[0].source_meta.get("study_name") or study_id),
         factors=factors,
+        recipe=_most([one.recipe for one in points], "modal"),
+        solvers=list(dict.fromkeys(solver_of(one) for one in points)),
         reference_point=reference,
         tracks=tracks,
         points=[
-            StudyPointOut(
-                simulation_id=one.id,
-                number=int(one.source_meta.get("point") or 0),
-                # **숫자로 못 읽는 값도 그대로 낸다**(재료 이름 같은 것). 버리면 두 설계점이
-                # 화면에서 똑같아 보이고, 사람은 왜 결과가 다른지 알 수 없다.
-                params=dict(one.source_meta.get("params") or {}),
-                status=one.status,
-                error_code=one.error_code,
-                first_elastic_hz=(one.summary or {}).get("first_elastic_hz"),
-                mass_kg=(one.summary or {}).get("mass_kg"),
-                nodes=(one.summary or {}).get("nodes"),
-                frequencies=[
-                    float(mode["frequency_hz"])
-                    for mode in modes_by_point[int(one.source_meta.get("point") or 0)]
-                ],
-            )
+            _study_point(one, results[int(one.source_meta.get("point") or 0)])
             for one in points
         ],
     )
+
+
+def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOut:
+    number = int(simulation.source_meta.get("point") or 0)
+    summary = simulation.summary or {}
+    found = core_values.read(loaded) if loaded else None
+    return StudyPointOut(
+        simulation_id=simulation.id,
+        number=number,
+        # **숫자로 못 읽는 값도 그대로 낸다**(재료 이름 같은 것). 버리면 두 설계점이 화면에서
+        # 똑같아 보이고, 사람은 왜 결과가 다른지 알 수 없다.
+        params=dict(simulation.source_meta.get("params") or {}),
+        status=simulation.status,
+        error_code=simulation.error_code,
+        recipe=simulation.recipe,
+        solver=solver_of(simulation),
+        first_elastic_hz=summary.get("first_elastic_hz"),
+        mass_kg=summary.get("mass_kg"),
+        nodes=summary.get("nodes"),
+        frequencies=[
+            float(mode["frequency_hz"])
+            for mode in core_values.elastic_modes(loaded)[:COMPARE_MODES]
+        ],
+        max_displacement_mm=found.max_displacement_mm if found else None,
+        max_von_mises_mpa=found.max_von_mises_mpa if found else None,
+        peak_hz=found.peak_hz if found else None,
+        peak_displacement_mm=found.peak_displacement_mm if found else None,
+        reactions_n=found.reactions_n if found else {},
+        probes_mm=found.probes_mm if found else {},
+        probe_vectors_mm=found.probe_vectors_mm if found else {},
+        probe_peaks_hz=found.probe_peaks_hz if found else {},
+        relative_mm=found.relative_mm if found else {},
+    )
+
+
+# --- CSV ---------------------------------------------------------------------
+
+
+def _number(value: float | None, digits: int = 6) -> str:
+    """CSV 칸 하나. **없는 값은 빈칸** — 0 으로 적으면 「0 이었다」 로 읽힌다."""
+    if value is None:
+        return ""
+    return f"{value:.{digits}g}"
+
+
+def _keys_in(points: list[StudyPointOut], pick: Any) -> list[str]:
+    """점들에 나온 이름(영역 · 측정점)을 **처음 나온 순서**로."""
+    seen: dict[str, None] = {}
+    for one in points:
+        for name in pick(one):
+            seen.setdefault(str(name), None)
+    return list(seen)
+
+
+def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
+    """스터디 → CSV 머리와 줄. **화면과 같은 값**(`StudyOut`)에서 만든다 — 두 길이 따로
+    계산하면 언젠가 갈리고, 그때 화면과 엑셀이 다른 말을 한다.
+
+    단위는 머리에 붙인다(늘 mm · MPa · N · Hz). 모드는 **형상으로 이은 열**만 낸다 — 이은 것이
+    없으면(지문 없는 작업) 그 점의 k 번째 탄성 모드를 「순번」 이라고 밝혀 적는다.
+    """
+    points = study.points
+    head = ["설계점", *study.factors, "상태", "해석 종류", "솔버"]
+    picks: list[Any] = []
+
+    if study.recipe == "static":
+        head += ["최대 변형 (mm)", "최대 상당응력 (MPa)"]
+        picks += [lambda one: one.max_displacement_mm, lambda one: one.max_von_mises_mpa]
+        for region in _keys_in(points, lambda one: one.reactions_n):
+            for axis, label in enumerate(("Fx", "Fy", "Fz")):
+                head.append(f"반력 {region} {label} (N)")
+                picks.append(
+                    lambda one, r=region, a=axis: (one.reactions_n.get(r) or [None] * 3)[a]
+                )
+            head.append(f"반력 {region} 크기 (N)")
+            picks.append(
+                lambda one, r=region: (
+                    sum(value**2 for value in one.reactions_n[r]) ** 0.5
+                    if r in one.reactions_n
+                    else None
+                )
+            )
+        for name in _keys_in(points, lambda one: one.probes_mm):
+            head.append(f"측정점 {name} 변위 (mm)")
+            picks.append(lambda one, n=name: one.probes_mm.get(n))
+            for axis, label in enumerate(("X", "Y", "Z")):
+                head.append(f"측정점 {name} {label} (mm)")
+                picks.append(
+                    lambda one, n=name, a=axis: (one.probe_vectors_mm.get(n) or [None] * 3)[a]
+                )
+        for pair in _keys_in(points, lambda one: one.relative_mm):
+            for axis, label in enumerate(("X", "Y", "Z")):
+                head.append(f"상대 변위 {pair} {label} (mm)")
+                picks.append(
+                    lambda one, n=pair, a=axis: (one.relative_mm.get(n) or [None] * 3)[a]
+                )
+    elif study.recipe == "harmonic":
+        head += ["봉우리 주파수 (Hz)", "봉우리 변위 (mm)"]
+        picks += [lambda one: one.peak_hz, lambda one: one.peak_displacement_mm]
+        for name in _keys_in(points, lambda one: one.probes_mm):
+            head += [f"측정점 {name} 봉우리 주파수 (Hz)", f"측정점 {name} 봉우리 진폭 (mm)"]
+            picks += [
+                lambda one, n=name: one.probe_peaks_hz.get(n),
+                lambda one, n=name: one.probes_mm.get(n),
+            ]
+    else:
+        head.append("1차 고유진동수 (Hz)")
+        picks.append(lambda one: one.first_elastic_hz)
+        if study.tracks:
+            base = f"p{(study.reference_point or 0):04d}"
+            for track in study.tracks:
+                head.append(f"모드 {track.reference}차 (Hz · 기준 {base} 에서 형상으로 이음)")
+                picks.append(
+                    lambda one, t=track: (
+                        one.frequencies[t.numbers[one.number] - 1]
+                        if one.number in t.numbers
+                        and t.numbers[one.number] - 1 < len(one.frequencies)
+                        else None
+                    )
+                )
+        else:
+            for index in range(max((len(one.frequencies) for one in points), default=0)):
+                head.append(f"탄성 {index + 1}번째 (Hz · 순번 — 같은 모드라는 보장이 없다)")
+                picks.append(
+                    lambda one, i=index: (
+                        one.frequencies[i] if i < len(one.frequencies) else None
+                    )
+                )
+    # 끝의 세 칸은 레시피와 무관하다 — 아래 줄도 같은 순서로 채운다.
+    head += ["질량 (kg)", "절점", "작업 ID"]
+
+    rows: list[list[str]] = []
+    for one in points:
+        line = [f"p{one.number:04d}"]
+        line += [str(one.params.get(factor, "")) for factor in study.factors]
+        line += [
+            one.status,
+            study.recipe if one.recipe == study.recipe else one.recipe,
+            one.solver,
+        ]
+        line += [_number(pick(one)) for pick in picks]
+        line += [
+            _number(one.mass_kg),
+            "" if one.nodes is None else str(one.nodes),
+            str(one.simulation_id),
+        ]
+        rows.append(line)
+    return head, rows
+
+
+def study_csv(db: Session, *, user: User, study_id: str) -> tuple[str, str]:
+    """스터디를 CSV 로 — `(파일 이름, 본문)`. 화면과 같은 권한 · 같은 값이다."""
+    study = get_study(db, user=user, study_id=study_id)
+    head, rows = study_table(study)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(head)
+    writer.writerows(rows)
+    return f"{study.name}.csv", buffer.getvalue()
 
 
 def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
@@ -1035,6 +1276,13 @@ def _cancel_requested(db: Session, simulation_id: uuid.UUID) -> bool:
     db.expire_all()
     found = db.get(Simulation, simulation_id)
     return found is not None and found.cancel_requested_at is not None
+
+
+def _still_mine(db: Session, simulation_id: uuid.UUID, worker_id: str) -> bool:
+    """**아직 내 작업인가.** 신호가 끊긴 사이(DB 가 몇 분 끊겼다 돌아온 때) 다른 워커가 이
+    작업을 되살려 집어 갔으면 손을 뗀다 — 안 그러면 두 워커가 같은 작업에 결과를 덮어쓴다."""
+    owner = db.scalar(select(Simulation.worker_id).where(Simulation.id == simulation_id))
+    return owner == worker_id
 
 
 def cancel(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
@@ -1122,17 +1370,46 @@ def claim_next(
 
 def requeue_stale(db: Session) -> int:
     """워커가 죽어 도는 상태에 갇힌 작업을 되살린다. 시도 한도를 넘긴 것은 `worker_lost` 로
-    적는다."""
-    cutoff = _now() - STALE_AFTER
-    stale = list(
+    적는다.
+
+    죽은 것을 아는 길은 둘이다 — 그 워커의 **신호가 끊겼거나**(`simulation_workers`, 2분),
+    신호를 안 적는 워커(옛 워커 · 인라인)면 **단계가 너무 오래 멈췄거나**(3시간). 앞의 길이
+    없으면 죽은 워커의 작업이 3시간 동안 「도는 중」 으로 보인다. 취소를 요청받은 채 죽었으면
+    되살리지 않고 취소로 끝낸다 — 되살리면 사람이 멈춘 작업이 다시 돈다.
+    """
+    now = _now()
+    lost = set(
         db.scalars(
-            select(Simulation).where(
-                Simulation.status.in_(RUNNING_STATUSES), Simulation.heartbeat_at < cutoff
+            select(SimulationWorker.id).where(
+                SimulationWorker.last_seen_at < now - WORKER_LOST_AFTER,
+                SimulationWorker.state != "stopped",
             )
         )
     )
+    seen = set(db.scalars(select(SimulationWorker.id)))
+    # **세션이 들고 있던 사본을 믿지 않는다** — 취소는 다른 요청이 적는다. 묵은 사본으로
+    # 판정하면 사람이 멈춘 작업을 되살린다.
+    running = db.scalars(
+        select(Simulation)
+        .where(Simulation.status.in_(RUNNING_STATUSES))
+        .execution_options(populate_existing=True)
+    )
+    stale = [
+        one
+        for one in running
+        if one.worker_id in lost
+        or (
+            one.worker_id not in seen
+            and one.heartbeat_at is not None
+            and one.heartbeat_at < now - STALE_AFTER
+        )
+    ]
     for simulation in stale:
-        if simulation.attempts >= MAX_ATTEMPTS:
+        if simulation.cancel_requested_at is not None:
+            simulation.status = "canceled"
+            simulation.error_message = "취소를 요청받은 채 워커가 멈췄습니다."
+            simulation.finished_at = now
+        elif simulation.attempts >= MAX_ATTEMPTS:
             simulation.status = "failed"
             simulation.error_code = "worker_lost"
             simulation.error_message = "워커가 응답하지 않아 중단됐습니다(재시도 한도)."
@@ -1145,6 +1422,818 @@ def requeue_stale(db: Session) -> int:
             simulation.heartbeat_at = None
     db.commit()
     return len(stale)
+
+
+# --- 메시 수렴 ---------------------------------------------------------------------
+
+#: 수준(작업) 수 상한 — 원래 작업 + 새 크기 넷. 그 너머는 정련보다 다른 원인을 볼 때다.
+MAX_LEVELS = 5
+#: 판정 문턱(상대). 주파수는 좁게, 크기는 조금 넓게 — 실측과 견주는 자릿수에 맞춘다.
+FREQUENCY_TOLERANCE = 0.01
+SIZE_TOLERANCE = 0.02
+
+
+def _original_of(db: Session, user: User, simulation: Simulation) -> Simulation:
+    """수렴 묶음의 **원래 작업** — 수준 작업을 가리켜도 원래 것으로 간다."""
+    parent = (simulation.source_meta or {}).get("convergence_of")
+    if simulation.source_kind == "mesh_check" and parent:
+        return get_visible(db, user=user, simulation_id=uuid.UUID(str(parent)))
+    return simulation
+
+
+def _levels_of(db: Session, user: User, original: Simulation) -> list[Simulation]:
+    rows = list(
+        db.scalars(
+            _visible(user).where(
+                Simulation.source_kind == "mesh_check",
+                Simulation.source_meta["convergence_of"].astext == str(original.id),
+            )
+        )
+    )
+    return [original, *rows]
+
+
+def _size_of(simulation: Simulation) -> float | None:
+    """그 작업이 쓴 전역 요소 크기(mm) — 모델링 요약이 정본, 없으면 스펙."""
+    found = (simulation.summary or {}).get("element_size_mm")
+    if isinstance(found, int | float):
+        return float(found)
+    asked = ((simulation.spec or {}).get("mesh") or {}).get("element_size_mm")
+    return float(asked) if isinstance(asked, int | float) else None
+
+
+def request_convergence(
+    db: Session,
+    *,
+    user: User,
+    simulation_id: uuid.UUID,
+    sizes_mm: list[float],
+    solver: str | None,
+) -> ConvergenceOut:
+    """끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 크기마다 작업 하나.
+
+    작업 셋으로 두는 까닭: 상태 기계 · 단계 파일 · 재시도 · 취소 · 정리가 작업 단위로 이미
+    되고, CalculiX 워커 여럿이 크기들을 **동시에** 푼다. 한 작업 안에서 크기를 돌리면 그 전부를
+    새로 뚫어야 하고 한 워커가 직렬로 푼다.
+    """
+    original = _original_of(db, user, get_visible(db, user=user, simulation_id=simulation_id))
+    if original.status != "done":
+        raise AppError(
+            code("SIMULATIONS", 22),
+            "끝난 작업에서만 메시 수렴을 점검할 수 있습니다 — 기준이 될 결과가 있어야 합니다.",
+            status=409,
+            details={"status": original.status},
+        )
+    existing = _levels_of(db, user, original)
+    asked = {round(float(one), 6) for one in sizes_mm if one > 0}
+    if not asked:
+        raise AppError(code("SIMULATIONS", 23), "요소 크기는 0 보다 커야 합니다.", status=400)
+    base = _size_of(original)
+    if solver and solver != solver_of(original) and base is not None:
+        # **솔버를 바꾸면 원래 크기도 그 솔버로 다시 푼다** — 원래 작업은 다른 솔버라 판정에서
+        # 빠지므로, 안 그러면 그 솔버의 수준이 하나 모자라 차수를 못 잰다.
+        asked.add(round(base, 6))
+    taken = {
+        (round(size, 6), solver_of(one))
+        for one in existing
+        if (size := _size_of(one)) is not None
+    }
+    wanted = sorted(
+        (size for size in asked if (size, solver or solver_of(original)) not in taken),
+        reverse=True,
+    )
+    if not wanted:
+        raise AppError(
+            code("SIMULATIONS", 23),
+            "그 크기들은 이미 풀었습니다 — 다른 크기를 주세요.",
+            status=400,
+        )
+    if len(existing) + len(wanted) > MAX_LEVELS:
+        raise AppError(
+            code("SIMULATIONS", 23),
+            f"수준은 원래 작업을 포함해 {MAX_LEVELS}개까지입니다 — 지금 {len(existing)}개가 "
+            "있습니다.",
+            status=400,
+        )
+    source = (
+        resolve_work_path(f"{original.work_dir}/{INPUT_NAME}") if original.work_dir else None
+    )
+    if source is None or not source.is_file():
+        raise Forbidden(
+            code("SIMULATIONS", 24),
+            "원래 작업의 입력 형상 파일이 없습니다 — 다시 걸 수 없습니다.",
+        )
+    topology_path = resolve_work_path(f"{original.work_dir}/{TOPOLOGY_NAME}")
+    topology = (
+        topology_path.read_bytes()
+        if topology_path is not None and topology_path.is_file()
+        else None
+    )
+    workspace = (
+        db.get(Workspace, original.owner_workspace_id) if original.owner_workspace_id else None
+    )
+    for size in wanted:
+        spec = dict(original.spec or {})
+        spec["mesh"] = {**(spec.get("mesh") or {}), "element_size_mm": size}
+        if solver:
+            spec["solver"] = solver
+        with source.open("rb") as stream:
+            create(
+                db,
+                user=user,
+                spec_raw=spec,
+                workspace_slug=workspace.slug if workspace else None,
+                name=f"{original.name} · 메시 {size:g} mm",
+                filename=INPUT_NAME,
+                stream=stream,
+                topology=topology,
+                source_kind="mesh_check",
+                source_ref=f"{original.id}",
+                source_meta={
+                    "convergence_of": str(original.id),
+                    "element_size_mm": size,
+                    # 원래 작업이 DOE 점이면 그 자리를 함께 적어 둔다 — 「어느 설계점의
+                    # 점검인가」.
+                    **{
+                        key: original.source_meta[key]
+                        for key in ("study_id", "study_name", "point", "params")
+                        if key in (original.source_meta or {})
+                    },
+                },
+            )
+    return convergence(db, user=user, simulation_id=original.id)
+
+
+def _convergence_metrics(
+    recipe: str, found: list[core_values.Values | None]
+) -> list[tuple[str, str, str, float, list[float | None], bool]]:
+    """`(열쇠, 이름, 단위, 문턱, 수준별 값, 특이점일 수 있나)` — 레시피마다 견줄 값."""
+
+    def take(pick: Any) -> list[float | None]:
+        return [pick(one) if one is not None else None for one in found]
+
+    def names(pick: Any) -> list[str]:
+        seen: dict[str, None] = {}
+        for one in found:
+            if one is not None:
+                for name in pick(one):
+                    seen.setdefault(str(name), None)
+        return list(seen)
+
+    if recipe == "modal":
+        return [
+            (
+                "first_elastic_hz",
+                "1차 고유진동수",
+                "Hz",
+                FREQUENCY_TOLERANCE,
+                take(lambda one: one.first_elastic_hz),
+                False,
+            )
+        ]
+    if recipe == "harmonic":
+        made = [
+            (
+                "peak_hz",
+                "봉우리 주파수",
+                "Hz",
+                FREQUENCY_TOLERANCE,
+                take(lambda one: one.peak_hz),
+                False,
+            ),
+            (
+                "peak_mm",
+                "봉우리 변위",
+                "mm",
+                SIZE_TOLERANCE,
+                take(lambda one: one.peak_displacement_mm),
+                False,
+            ),
+        ]
+        for name in names(lambda one: one.probes_mm):
+            made.append(
+                (
+                    f"probe:{name}",
+                    f"측정점 {name} 봉우리 진폭",
+                    "mm",
+                    SIZE_TOLERANCE,
+                    take(lambda one, n=name: one.probes_mm.get(n)),
+                    False,
+                )
+            )
+        return made
+    made = [
+        (
+            "max_mm",
+            "최대 변형",
+            "mm",
+            SIZE_TOLERANCE,
+            take(lambda one: one.max_displacement_mm),
+            False,
+        ),
+        (
+            "max_mpa",
+            "최대 상당응력",
+            "MPa",
+            SIZE_TOLERANCE,
+            take(lambda one: one.max_von_mises_mpa),
+            True,
+        ),
+    ]
+    for region in names(lambda one: one.reactions_n):
+        made.append(
+            (
+                f"reaction:{region}",
+                f"반력 {region}",
+                "N",
+                SIZE_TOLERANCE,
+                take(
+                    lambda one, r=region: (
+                        sum(value**2 for value in one.reactions_n[r]) ** 0.5
+                        if r in one.reactions_n
+                        else None
+                    )
+                ),
+                False,
+            )
+        )
+    for name in names(lambda one: one.probes_mm):
+        made.append(
+            (
+                f"probe:{name}",
+                f"측정점 {name} 변위",
+                "mm",
+                SIZE_TOLERANCE,
+                take(lambda one, n=name: one.probes_mm.get(n)),
+                False,
+            )
+        )
+    return made
+
+
+def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> ConvergenceOut:
+    """수렴 묶음 — 수준(크기)마다 값과, 값마다 판정. 원래 작업이나 수준 작업 어느 쪽으로 물어도
+    같은 답이다."""
+    original = _original_of(db, user, get_visible(db, user=user, simulation_id=simulation_id))
+    rows = _levels_of(db, user, original)
+    notes: list[str] = []
+    # **솔버가 섞이면 한 솔버의 수준끼리만 판정한다** — 두 솔버의 차이(몇 %)가 메시 차이로
+    # 읽힌다. 수준이 많은 솔버를 고르고, 같으면 원래 작업의 솔버다.
+    counts = Counter(solver_of(one) for one in rows)
+    solver = max(counts, key=lambda name: (counts[name], name == solver_of(original)))
+    if len(counts) > 1:
+        notes.append(
+            f"솔버가 섞여 있습니다 — {solver} 로 푼 수준끼리만 판정합니다"
+            "(두 솔버의 값은 몇 % 갈립니다)."
+        )
+    rows = [one for one in rows if solver_of(one) == solver]
+
+    loaded = [result_of(one) for one in rows]
+    found = [core_values.read(one) if one else None for one in loaded]
+    levels = [
+        ConvergenceLevelOut(
+            simulation_id=one.id,
+            element_size_mm=_size_of(one),
+            nodes=(values.nodes if values is not None and values.nodes else None)
+            or (one.summary or {}).get("nodes"),
+            status=one.status,
+            solver=solver_of(one),
+            is_original=one is original,
+        )
+        for one, values in zip(rows, found, strict=True)
+    ]
+    order = sorted(range(len(levels)), key=lambda index: levels[index].nodes or 0)
+    levels = [levels[index] for index in order]
+    found = [found[index] for index in order]
+
+    metrics: list[ConvergenceMetricOut] = []
+    for key, label, unit, tolerance, values, singular in _convergence_metrics(
+        original.recipe, found
+    ):
+        pairs = [
+            (level.nodes, value)
+            for level, value in zip(levels, values, strict=True)
+            if level.nodes and value is not None
+        ]
+        verdict = core_convergence.judge(pairs, tolerance=tolerance)
+        note = ""
+        if singular and verdict.status in ("diverging", "not_converged", "oscillating"):
+            note = (
+                "첨두응력은 구속 모서리 · 날카로운 모서리의 특이점에 있으면 메시를 줄일수록 "
+                "커집니다 — 이 값으로 판단하지 말고 측정점 · 변형을 봅니다."
+            )
+        metrics.append(
+            ConvergenceMetricOut(
+                key=key,
+                label=label,
+                unit=unit,
+                values=values,
+                status=verdict.status,
+                tolerance_pct=round(tolerance * 100, 3),
+                change_pct=round(verdict.change * 100, 4)
+                if verdict.change is not None
+                else None,
+                order=round(verdict.order, 3) if verdict.order is not None else None,
+                gci_pct=round(verdict.gci * 100, 4) if verdict.gci is not None else None,
+                extrapolated=verdict.extrapolated,
+                note=note,
+            )
+        )
+    if solver == "calculix" and any((one.summary or {}).get("contact_pairs") for one in rows):
+        notes.append(
+            "CalculiX 의 비선형 접촉은 접촉 강성이 요소 크기를 따라갑니다 — 크기를 바꾸면 "
+            "메시와 접촉 모델이 함께 바뀐 결과입니다."
+        )
+    if any(
+        hint.region not in ("전체", "all")
+        for hint in condition_model.read(_topology_payload(original)).mesh_hints
+    ):
+        notes.append(
+            "CAD 가 영역별 요소 크기를 적었습니다 — 그 자리는 전역 크기를 바꿔도 그대로라 "
+            "정련이 고르지 않습니다."
+        )
+    return ConvergenceOut(
+        original_id=original.id,
+        recipe=original.recipe,
+        base_size_mm=_size_of(original),
+        levels=levels,
+        metrics=metrics,
+        notes=notes,
+    )
+
+
+def _topology_payload(simulation: Simulation) -> dict[str, Any]:
+    path = (
+        resolve_work_path(f"{simulation.work_dir}/{TOPOLOGY_NAME}")
+        if simulation.work_dir
+        else None
+    )
+    if path is None or not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+# --- 실측 -------------------------------------------------------------------------
+
+#: 실측 파일 상한 — FRF 수천 점 x 측정점 몇 개면 수백 KB 다.
+MAX_MEASUREMENT_BYTES = 5 * 1024 * 1024
+
+
+def _youngs_of(simulation: Simulation) -> float | None:
+    """그 작업이 **실제로 쓴** 영률(GPa) — 모델링 요약(CAD 물성)이 먼저, 없으면 스펙.
+
+    바디마다 재료가 다르면 하나로 줄일 수 없다 — 그때는 영률을 제안하지 않는다."""
+    summary = simulation.summary or {}
+    if isinstance(summary.get("youngs_modulus_gpa"), int | float):
+        return float(summary["youngs_modulus_gpa"])
+    if summary.get("material_bodies"):
+        return None
+    material = (simulation.spec or {}).get("material") or {}
+    value = material.get("youngs_modulus_gpa")
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _force_driven(simulation: Simulation) -> bool:
+    """힘으로 건 모델인가 — **변위로 당긴 구속이 있으면 아니다**(그때 변위는 1/E 를 안
+    따른다)."""
+    given = condition_model.read(_topology_payload(simulation), recipe=simulation.recipe)
+    return not any(rule.kind == "displacement" for rule in given.constraints)
+
+
+def _compare(simulation: Simulation, rows: list[dict[str, Any]]) -> ComparisonOut | None:
+    loaded = result_of(simulation)
+    if not loaded:
+        return None
+    return ComparisonOut.model_validate(
+        core_measured.compare(
+            loaded,
+            rows,
+            youngs_gpa=_youngs_of(simulation),
+            force_driven=_force_driven(simulation),
+        )
+    )
+
+
+def _measurement_out(
+    db: Session, row: SimulationMeasurement, comparison: ComparisonOut | None = None
+) -> MeasurementOut:
+    author = db.get(User, row.created_by_id) if row.created_by_id else None
+    return MeasurementOut(
+        id=row.id,
+        label=row.label,
+        original_name=row.original_name,
+        simulation_id=row.simulation_id,
+        study_id=row.study_id,
+        kinds=list(dict.fromkeys(str(one["kind"]) for one in row.rows)),
+        probes=list(dict.fromkeys(str(one["probe"]) for one in row.rows if one.get("probe"))),
+        rows=len(row.rows),
+        created_at=row.created_at,
+        created_by_name=author.display_name if author else None,
+        comparison=comparison,
+    )
+
+
+def _read_measurement(name: str, raw: bytes) -> list[dict[str, Any]]:
+    if not raw.strip():
+        raise AppError(code("SIMULATIONS", 25), "실측 파일이 비었습니다.", status=400)
+    if len(raw) > MAX_MEASUREMENT_BYTES:
+        raise AppError(
+            code("SIMULATIONS", 25),
+            f"실측 파일이 너무 큽니다 (최대 {MAX_MEASUREMENT_BYTES // 1024 // 1024}MB).",
+            status=413,
+        )
+    try:
+        table = parse_rows(name, raw)
+    except (TabularError, UnicodeDecodeError) as failure:
+        raise AppError(
+            code("SIMULATIONS", 25), f"실측 표를 읽지 못했습니다: {failure}", status=400
+        ) from failure
+    rows, errors = core_measured.parse(table)
+    if errors:
+        # **줄 번호와 함께 전부** 돌려준다 — 하나 고치고 또 올려 다음 것을 알게 하지 않는다.
+        raise AppError(
+            code("SIMULATIONS", 25),
+            f"실측 표에 고칠 곳이 {len(errors)}개 있습니다: {errors[0]}",
+            status=400,
+            details={"errors": errors[:50]},
+        )
+    return rows
+
+
+def _save_measurement(
+    db: Session,
+    *,
+    user: User,
+    workspace_id: uuid.UUID | None,
+    rows: list[dict[str, Any]],
+    label: str | None,
+    original_name: str,
+    simulation_id: uuid.UUID | None = None,
+    study_id: str | None = None,
+) -> SimulationMeasurement:
+    """**거는 사람과 같은 규칙** — 그 부서의 멤버(전역은 시스템 관리자)."""
+    if workspace_id is None:
+        if not user.is_system_admin:
+            raise Forbidden(
+                code("SIMULATIONS", 26), "전역 작업의 실측은 시스템 관리자만 올릴 수 있습니다."
+            )
+    else:
+        workspace = db.get(Workspace, workspace_id)
+        if workspace is None:
+            raise NotFound(code("SIMULATIONS", 26), "작업의 부서를 찾을 수 없습니다.")
+        require_member(db, workspace=workspace, user=user)
+    row = SimulationMeasurement(
+        simulation_id=simulation_id,
+        study_id=study_id,
+        owner_workspace_id=workspace_id,
+        label=clean(label or original_name)[:120] or "실측",
+        original_name=clean(original_name)[:255],
+        rows=rows,
+        created_by_id=user.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def add_measurement(
+    db: Session,
+    *,
+    user: User,
+    simulation_id: uuid.UUID,
+    name: str,
+    raw: bytes,
+    label: str | None,
+) -> MeasurementOut:
+    """작업 하나에 실측을 붙인다 — 올린 즉시 그 결과와 견준 것을 돌려준다."""
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    rows = _read_measurement(name, raw)
+    row = _save_measurement(
+        db,
+        user=user,
+        workspace_id=simulation.owner_workspace_id,
+        rows=rows,
+        label=label,
+        original_name=name,
+        simulation_id=simulation.id,
+    )
+    return _measurement_out(db, row, _compare(simulation, rows))
+
+
+def _study_key(simulation: Simulation) -> str | None:
+    meta = simulation.source_meta or {}
+    if simulation.source_kind != "doe_point":
+        return None
+    key = meta.get("study_id") or meta.get("study_name")
+    return str(key) if key else None
+
+
+def measurements_of(
+    db: Session, *, user: User, simulation_id: uuid.UUID
+) -> list[MeasurementOut]:
+    """그 작업에 붙은 실측과 **그 작업의 스터디에 붙은 실측** — 둘 다 이 결과와 견준다."""
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    key = _study_key(simulation)
+    scope = [SimulationMeasurement.simulation_id == simulation.id]
+    if key is not None:
+        scope.append(SimulationMeasurement.study_id == key)
+    rows = db.scalars(
+        select(SimulationMeasurement)
+        .where(SimulationMeasurement.deleted_at.is_(None), or_(*scope))
+        .order_by(SimulationMeasurement.created_at.desc())
+        .limit(50)
+    )
+    return [_measurement_out(db, row, _compare(simulation, row.rows)) for row in rows]
+
+
+def _study_measurement_out(
+    db: Session, row: SimulationMeasurement, points: list[Simulation]
+) -> StudyMeasurementOut:
+    """설계점마다 견주고 **가장 가까운 점**을 고른다 — 물성 · 감쇠를 훑은 DOE 면 그 값이
+    실측과의 차이를 설명한다."""
+    scored: list[StudyMatchOut] = []
+    for point in points:
+        comparison = _compare(point, row.rows) if point.status == "done" else None
+        scored.append(
+            StudyMatchOut(
+                simulation_id=point.id,
+                number=int(point.source_meta.get("point") or 0),
+                params=dict(point.source_meta.get("params") or {}),
+                status=point.status,
+                score_pct=comparison.score_pct if comparison is not None else None,
+            )
+        )
+    ranked = [one for one in scored if one.score_pct is not None]
+    best = min(ranked, key=lambda one: one.score_pct or 0.0) if ranked else None
+    if best is None:
+        explanation = (
+            "견줄 수 있는 설계점이 없습니다 — 끝난 점이 없거나 종류가 레시피와 다릅니다."
+        )
+    else:
+        values = " · ".join(f"{name} {value}" for name, value in best.params.items())
+        explanation = (
+            f"실측에 가장 가까운 설계점은 p{best.number:04d}({values}) — 평균 차이 "
+            f"{best.score_pct:.2f}% 입니다."
+        )
+    base = _measurement_out(db, row)
+    return StudyMeasurementOut(
+        **base.model_dump(),
+        points=scored,
+        best_point=best.number if best is not None else None,
+        explanation=explanation,
+    )
+
+
+def add_study_measurement(
+    db: Session, *, user: User, study_id: str, name: str, raw: bytes, label: str | None
+) -> StudyMeasurementOut:
+    """스터디에 실측을 붙인다 — 설계점마다 견준 점수를 돌려준다."""
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    rows = _read_measurement(name, raw)
+    row = _save_measurement(
+        db,
+        user=user,
+        workspace_id=points[0].owner_workspace_id,
+        rows=rows,
+        label=label,
+        original_name=name,
+        study_id=study_id,
+    )
+    return _study_measurement_out(db, row, points)
+
+
+def study_measurements(db: Session, *, user: User, study_id: str) -> list[StudyMeasurementOut]:
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    rows = db.scalars(
+        select(SimulationMeasurement)
+        .where(
+            SimulationMeasurement.deleted_at.is_(None),
+            SimulationMeasurement.study_id == study_id,
+        )
+        .order_by(SimulationMeasurement.created_at.desc())
+        .limit(20)
+    )
+    return [_study_measurement_out(db, row, points) for row in rows]
+
+
+def remove_measurement(db: Session, *, user: User, measurement_id: uuid.UUID) -> None:
+    """실측을 내린다 — **지우지 않고 `deleted_at` 만 채운다.** 올린 사람이거나 그 부서의
+    관리자."""
+    row = db.get(SimulationMeasurement, measurement_id)
+    if row is None or row.deleted_at is not None:
+        raise NotFound(code("SIMULATIONS", 27), "그 실측을 찾을 수 없습니다.")
+    if row.created_by_id != user.id:
+        require_owner_edit(
+            db, user, row.owner_workspace_id, what="실측", code_value=code("SIMULATIONS", 27)
+        )
+    row.deleted_at = _now()
+    db.commit()
+
+
+# --- 워커 신호 -----------------------------------------------------------------------
+
+
+def beat(
+    db: Session,
+    worker_id: str,
+    *,
+    state: str,
+    current_simulation_id: uuid.UUID | None = None,
+    hostname: str = "",
+    pid: int = 0,
+    version: str = "",
+    executor: str = "",
+    solvers: list[str] | None = None,
+    tools: dict[str, Any] | None = None,
+) -> None:
+    """워커가 살아 있다고 적는다 — 없으면 줄을 만든다. 기동 때 정한 것(실행기 · 솔버 · 도구)은
+    처음 한 번 적고, 뒤의 신호는 상태 · 지금 작업 · 시각만 바꾼다."""
+    row = db.get(SimulationWorker, worker_id)
+    if row is None:
+        row = SimulationWorker(
+            id=worker_id,
+            hostname=hostname,
+            pid=pid,
+            version=version,
+            executor=executor,
+            solvers=list(solvers or []),
+            tools=dict(tools or {}),
+        )
+        db.add(row)
+    row.state = state
+    row.current_simulation_id = current_simulation_id
+    row.last_seen_at = _now()
+    db.commit()
+
+
+def _alive(row: SimulationWorker, now: datetime) -> bool:
+    return row.state != "stopped" and now - row.last_seen_at <= WORKER_LOST_AFTER
+
+
+def _takes(row: SimulationWorker, solver: str) -> bool:
+    """이 워커가 그 솔버를 집나 — **비어 있으면 전부.**"""
+    return not row.solvers or solver in row.solvers
+
+
+def _queue_counts(db: Session) -> dict[tuple[str, str], int]:
+    """(솔버, 상태) → 건수. 솔버 칸이 없는 옛 작업은 Ansys 다(`claim_next` 와 같다)."""
+    solver = func.coalesce(Simulation.spec["solver"].astext, "ansys")
+    rows = db.execute(
+        select(solver, Simulation.status, func.count())
+        .where(
+            Simulation.deleted_at.is_(None),
+            Simulation.status.in_(("queued", *RUNNING_STATUSES)),
+        )
+        .group_by(solver, Simulation.status)
+    ).all()
+    counts: dict[tuple[str, str], int] = {}
+    for name, status, many in rows:
+        group = "queued" if status == "queued" else "running"
+        counts[(str(name), group)] = counts.get((str(name), group), 0) + int(many)
+    return counts
+
+
+def _oldest_queued(db: Session) -> dict[str, datetime]:
+    solver = func.coalesce(Simulation.spec["solver"].astext, "ansys")
+    return {
+        str(name): oldest
+        for name, oldest in db.execute(
+            select(solver, func.min(Simulation.created_at))
+            .where(Simulation.deleted_at.is_(None), Simulation.status == "queued")
+            .group_by(solver)
+        ).all()
+    }
+
+
+def workers_overview(db: Session) -> WorkersOut:
+    """서버 화면의 「워커 · 솔버」 — 워커마다 상태 · 집는 솔버 · 깔린 도구 · 하는 일, 솔버마다
+    줄(대기 · 도는 것 · 집을 워커), 그리고 **지금 Ansys 라이선스를 쥐었을 작업**."""
+    now = _now()
+    rows = list(
+        db.scalars(
+            select(SimulationWorker)
+            .where(
+                (SimulationWorker.last_seen_at > now - SHOWN_FOR)
+                | (SimulationWorker.state != "stopped")
+            )
+            .order_by(SimulationWorker.started_at.desc())
+        )
+    )
+    workers: list[WorkerOut] = []
+    for row in rows:
+        silent = (now - row.last_seen_at).total_seconds()
+        # **끊긴 것은 서버가 판정한다** — 죽은 워커는 「죽었다」 고 적을 수 없다.
+        state = cast(
+            WorkerState,
+            "lost"
+            if row.state != "stopped" and silent > WORKER_LOST_AFTER.total_seconds()
+            else row.state,
+        )
+        job = (
+            db.get(Simulation, row.current_simulation_id)
+            if row.current_simulation_id and state in ("busy", "stopping")
+            else None
+        )
+        workers.append(
+            WorkerOut(
+                id=row.id,
+                hostname=row.hostname,
+                pid=row.pid,
+                version=row.version,
+                executor=row.executor,
+                solvers=list(row.solvers or []),
+                tools=dict(row.tools or {}),
+                state=state,
+                started_at=row.started_at,
+                last_seen_at=row.last_seen_at,
+                silent_seconds=round(silent, 1),
+                job=(
+                    WorkerJobOut(
+                        id=job.id,
+                        name=job.name,
+                        status=job.status,
+                        recipe=job.recipe,
+                        solver=solver_of(job),
+                        started_at=job.started_at,
+                        cancelling=job.cancel_requested_at is not None,
+                    )
+                    if job is not None
+                    else None
+                ),
+            )
+        )
+
+    counts = _queue_counts(db)
+    oldest = _oldest_queued(db)
+    living = [row for row in rows if _alive(row, now)]
+    names = list(dict.fromkeys([*SOLVERS, *(name for name, _ in counts)]))
+    queues = [
+        SolverQueueOut(
+            solver=name,
+            queued=counts.get((name, "queued"), 0),
+            running=counts.get((name, "running"), 0),
+            oldest_queued_seconds=(
+                round((now - oldest[name]).total_seconds(), 1) if name in oldest else None
+            ),
+            workers_alive=sum(1 for row in living if _takes(row, name)),
+        )
+        for name in names
+    ]
+    holders = [
+        LicenseHolderOut(
+            simulation_id=one.id,
+            name=one.name,
+            status=one.status,
+            worker_id=one.worker_id,
+            started_at=one.started_at,
+        )
+        for one in db.scalars(
+            select(Simulation)
+            .where(
+                Simulation.deleted_at.is_(None),
+                Simulation.status.in_(LICENSED_STATUSES),
+                func.coalesce(Simulation.spec["solver"].astext, "ansys") == "ansys",
+            )
+            .order_by(Simulation.started_at)
+        )
+    ]
+    return WorkersOut(
+        workers=workers,
+        queues=queues,
+        license_holders=holders,
+        alive=len(living),
+    )
+
+
+def solver_availability(db: Session) -> list[SolverAvailabilityOut]:
+    """솔버마다 **집을 워커가 살아 있나** — 작업을 거는 화면이 경고에 쓴다.
+
+    신호를 적는 워커가 하나도 없으면(옛 워커 · 인라인 설치) 알 수 없다 — 그때는 화면이
+    경고하지 않게 `workers_alive` 를 -1 로 둔다. 「모른다」 를 「없다」 로 말하면 멀쩡한
+    설치에서 사람을 놀라게 한다.
+    """
+    now = _now()
+    rows = list(db.scalars(select(SimulationWorker)))
+    counts = _queue_counts(db)
+    known = bool(rows) and not get_settings().jobs_inline
+    living = [row for row in rows if _alive(row, now)]
+    return [
+        SolverAvailabilityOut(
+            solver=name,
+            workers_alive=sum(1 for row in living if _takes(row, name)) if known else -1,
+            queued=counts.get((name, "queued"), 0),
+        )
+        for name in SOLVERS
+    ]
 
 
 # --- 돌리기 ----------------------------------------------------------------------
@@ -1214,9 +2303,20 @@ def execute(
         )
         try:
             result = runner.run(
-                ctx, should_cancel=lambda: _cancel_requested(db, simulation.id)
+                ctx,
+                should_cancel=lambda: (
+                    _cancel_requested(db, simulation.id)
+                    or not _still_mine(db, simulation.id, worker_id)
+                ),
             )
         except StageCanceled:
+            if not _still_mine(db, simulation.id, worker_id):
+                # **다른 워커가 되살려 집어 갔다** — 아무것도 쓰지 않고 손을 뗀다.
+                db.rollback()
+                logger.warning(
+                    "해석 작업 %s 를 다른 워커가 되살렸습니다 — 손을 뗍니다", simulation.id
+                )
+                return simulation
             # **실패가 아니다.** 사람이 멈춘 것이라 「남은 일」 에 안 올리고 실패로
             # 세지도 않는다.
             _set_stage(simulation, stage, status="canceled", finished_at=_iso(_now()))
@@ -1269,6 +2369,13 @@ def execute(
                 finished_at=_iso(_now()),
                 detail=result.detail,
             )
+        if not _still_mine(db, simulation.id, worker_id):
+            # 단계가 끝나는 사이 다른 워커가 집어 갔다 — 그 워커의 기록을 덮지 않는다.
+            db.rollback()
+            logger.warning(
+                "해석 작업 %s 를 다른 워커가 되살렸습니다 — 손을 뗍니다", simulation.id
+            )
+            return simulation
         db.commit()
 
     simulation.status = "failed" if failed_at else "done"

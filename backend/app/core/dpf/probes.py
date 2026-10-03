@@ -19,11 +19,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.probes import FAR_MM, body_of, row, wanted
+from app.core.probes import FAR_MM, Spot, body_of, row, wanted
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FAR_MM", "read", "scale_for", "topology_of", "wanted"]
+__all__ = ["FAR_MM", "Spot", "locate", "read", "rows", "scale_for", "topology_of", "wanted"]
 
 TOPOLOGY_NAME = "topology.json"
 
@@ -50,19 +50,11 @@ def scale_for(unit: str) -> float:
     return 1000.0 if unit.strip().lower() in ("m", "meter", "metre") else 1.0
 
 
-def read(
-    topology: dict[str, Any],
-    mesh: Any,
-    values: Any,
-    *,
-    unit: str,
-    scale: float = 1.0,
-) -> list[dict[str, Any]]:
-    """측정점마다 `{이름, 좌표, 값, 성분, 절점, 떨어진 거리, 바디}`. 점 그룹이 없으면 빈 목록.
+def locate(topology: dict[str, Any], mesh: Any, *, scale: float = 1.0) -> list[Spot]:
+    """측정점마다 **가장 가까운 절점** — 한 번 찾아 두고 값(모드 · 주파수)마다 다시 쓴다.
 
-    `values` 는 DPF 의 필드(변위 등)다 — 절점 번호로 값을 꺼낸다. `scale` 은 좌표의 단위를
-    mm 로 옮기는 곱수다: **CAD 의 점 좌표는 늘 mm** 인데(CompCore 계약) 해석이 SI 로 돌면 메시
-    좌표가 m 다. 그 둘을 같은 자로 재야 가장 가까운 절점이 맞는다.
+    `scale` 은 좌표의 단위를 mm 로 옮기는 곱수다: **CAD 의 점 좌표는 늘 mm** 인데(CompCore
+    계약) 해석이 SI 로 돌면 메시 좌표가 m 다. 그 둘을 같은 자로 재야 가장 가까운 절점이 맞는다.
 
     지문에 `body` 가 있으면 **그 바디의 절점 안에서만** 찾는다 — 같은 자리에 두 바디의 꼭짓점이
     겹치는 이음 입구에서, 안 가르면 두 측정점이 같은 절점을 잡아 미끄럼이 늘 0 이 된다.
@@ -75,23 +67,12 @@ def read(
 
         places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
         ids = np.asarray(mesh.nodes.scoping.ids, dtype=int)
-        data = np.asarray(values.data, dtype=float)
-        value_ids = np.asarray(values.scoping.ids, dtype=int)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
-        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        logger.warning("측정점을 못 찾았습니다 — 없이 갑니다", exc_info=True)
         return []
-
-    # 벡터장이면 크기, 스칼라장이면 절댓값 — 변위는 전자, 응력은 후자다.
-    size = np.linalg.norm(data, axis=1) if data.ndim == 2 else np.abs(data)
-    by_node = dict(zip(value_ids.tolist(), size.tolist(), strict=False))
-    vectors = (
-        {int(node): data[index].tolist() for index, node in enumerate(value_ids.tolist())}
-        if data.ndim == 2
-        else {}
-    )
     owners = body_nodes(mesh, topology) if any(body_of(topology, one) for one in asked) else {}
 
-    made: list[dict[str, Any]] = []
+    found: list[Spot] = []
     for name, point in asked.items():
         body = body_of(topology, name)
         mask = np.ones(len(ids), dtype=bool)
@@ -102,23 +83,83 @@ def read(
         target = np.asarray(point, dtype=float) / scale
         gaps = np.where(mask, np.linalg.norm(places - target, axis=1), np.inf)
         index = int(gaps.argmin())
-        node = int(ids[index])
-        if node not in by_node:
-            logger.warning("측정점 %s: 절점 %s 에 값이 없습니다", name, node)
-            continue
-        made.append(
-            row(
+        found.append(
+            Spot(
                 name=name,
                 point=point,
-                node=node,
+                node=int(ids[index]),
                 distance_mm=float(gaps[index]) * scale,
-                value=by_node[node],
-                unit=unit,
-                vector=vectors.get(node),
                 body=body if body in owners else None,
             )
         )
+    return found
+
+
+def rows(
+    spots: list[Spot], values: Any, *, unit: str, strains: Any = None
+) -> list[dict[str, Any]]:
+    """잡아 둔 자리에서 DPF 필드의 값을 읽어 한 줄씩.
+
+    벡터장이면 크기와 **성분**, 스칼라장이면 절댓값 — 변위는 전자, 응력은 후자다. 값이 없는
+    절점이면 그 점을 건너뛴다(0 으로 적으면 「안 움직였다」 로 읽힌다).
+    """
+    if not spots:
+        return []
+    try:
+        import numpy as np
+
+        data = np.asarray(values.data, dtype=float)
+        value_ids = np.asarray(values.scoping.ids, dtype=int)
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        return []
+    size = np.linalg.norm(data, axis=1) if data.ndim == 2 else np.abs(data)
+    index_of = {int(node): index for index, node in enumerate(value_ids.tolist())}
+    # 변형률장(절점 평균, 성분 XX · YY · ZZ · XY · YZ · XZ) — **수직 셋만** 쓴다.
+    normal: dict[int, list[float]] = {}
+    if strains is not None:
+        try:
+            strain_ids = np.asarray(strains.scoping.ids, dtype=int).tolist()
+            strain_data = np.asarray(strains.data, dtype=float).reshape(-1, 6)
+            for node, one in zip(strain_ids, strain_data, strict=False):
+                normal[int(node)] = one[:3].tolist()
+        except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+            logger.warning("측정점 변형률을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+
+    made: list[dict[str, Any]] = []
+    for spot in spots:
+        index = index_of.get(spot.node)
+        if index is None:
+            logger.warning("측정점 %s: 절점 %s 에 값이 없습니다", spot.name, spot.node)
+            continue
+        made.append(
+            row(
+                name=spot.name,
+                point=spot.point,
+                node=spot.node,
+                distance_mm=spot.distance_mm,
+                value=float(size[index]),
+                unit=unit,
+                vector=data[index].tolist() if data.ndim == 2 else None,
+                body=spot.body,
+                strain=normal.get(spot.node),
+            )
+        )
     return made
+
+
+def read(
+    topology: dict[str, Any],
+    mesh: Any,
+    values: Any,
+    *,
+    unit: str,
+    scale: float = 1.0,
+    strains: Any = None,
+) -> list[dict[str, Any]]:
+    """측정점마다 `{이름, 좌표, 값, 성분, 절점, 떨어진 거리, 바디}` — `locate` 와
+    `rows` 를 한 번에. 점 그룹이 없으면 빈 목록."""
+    return rows(locate(topology, mesh, scale=scale), values, unit=unit, strains=strains)
 
 
 def body_nodes(mesh: Any, topology: dict[str, Any]) -> dict[str, set[int]]:

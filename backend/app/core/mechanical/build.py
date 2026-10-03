@@ -160,6 +160,7 @@ def build(
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, topology or {}, bodies
         )
+        size_mm = _global_size_mm(spec, given_conditions, system)
 
         dat = workdir / "model.dat"
         if upstream is not None and upstream is not analysis:
@@ -204,6 +205,9 @@ def build(
                 "bodies": len(bodies),
                 "nodes": nodes,
                 "elements": elements,
+                # **전역 요소 크기**(mm) — 메시 수렴 점검의 기준. 비면 Mechanical 기본값으로
+                # 돌았다.
+                **({"element_size_mm": size_mm} if size_mm is not None else {}),
                 # **실제로 요청한 수**다 — 구속이 CAD 조건에만 있으면 스펙의 수와 다르다.
                 **(
                     {"modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES)}
@@ -1300,6 +1304,18 @@ _CONTACT_TYPES = {
     "frictionless": "Frictionless",
     "rough": "Rough",
 }
+
+
+def _global_size_mm(
+    spec: AnySpec, given: condition_model.Conditions, system: units.UnitSystem
+) -> float | None:
+    """`_mesh` 가 준 전역 크기(mm) — 스펙 → CAD 「전체」 힌트 → 없으면 `None`(기본값)."""
+    if spec.mesh.element_size_mm is not None:
+        return float(spec.mesh.element_size_mm)
+    for one in given.mesh_hints:
+        if one.region in ("전체", "all") and one.element_size is not None:
+            return round(one.element_size * system.length_mm, 6)
+    return None
 
 
 def _mesh(

@@ -5,22 +5,20 @@
  * 이고, 그다음이 최대 상당응력이다. 값에 **단위를 붙여** 보여 준다 — 값만 보면 mm 와 m 가
  * 구별되지 않는다(모달에서 겪은 그대로다).
  */
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 
 import type { Artifact, StaticResult as StaticResultData } from '@/modules/simulations/api'
 import { simulationApi } from '@/modules/simulations/api'
-import MeshViewer from '@/shared/viewer/MeshViewer'
+import { shownValue as shown } from '@/modules/simulations/format'
+import { ReactionTable, StaticProbeTable } from '@/modules/simulations/ProbeTables'
+
+// **3D 뷰어는 `lazy()` 로만 받는다** — vtk.js 한 덩어리가 수백 KB 다(`shared/viewer`).
+const MeshViewer = lazy(() => import('@/shared/viewer/MeshViewer'))
 
 type Props = {
   simulationId: string
   result: StaticResultData
   artifacts: Artifact[]
-}
-
-function shown(value: number | null, unit?: string): string {
-  if (value === null) return '—'
-  const digits = Math.abs(value) >= 1 ? 4 : 6
-  return `${Number(value.toPrecision(digits))}${unit ? ` ${unit}` : ''}`
 }
 
 export function StaticResult({ simulationId, result, artifacts }: Props) {
@@ -70,8 +68,18 @@ export function StaticResult({ simulationId, result, artifacts }: Props) {
         </div>
       </dl>
 
+      {/* **센서 자리의 값과 버틴 힘** — 실측과 견줄 수 있는 것은 전체 최대가 아니라 이쪽이다. */}
+      <StaticProbeTable probes={result.probes ?? []} />
+      <ReactionTable reactions={result.reactions ?? {}} unit={result.units.force} />
+
       {/* 정적의 변형은 **실제 크기**라 과장을 작게 둔다 — 모달처럼 흔들 이유도 없다. */}
-      {mesh && <MeshViewer data={mesh} warpRatio={0.05} periodMs={0} heightClass="h-[28rem]" />}
+      {mesh && (
+        <Suspense
+          fallback={<p className="text-muted-foreground py-8 text-center text-sm">변형 그림을 불러오는 중…</p>}
+        >
+          <MeshViewer data={mesh} warpRatio={0.05} periodMs={0} heightClass="h-[28rem]" />
+        </Suspense>
+      )}
       <p className="text-muted-foreground text-xs">
         단위계 {result.units.system ?? '—'} · 변형 그림은 과장해서 그립니다
       </p>

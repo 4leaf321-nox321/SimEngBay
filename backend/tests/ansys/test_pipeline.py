@@ -683,6 +683,14 @@ def test_조화_응답이_공진에서_솟고_감쇠가_그_높이를_정한다(
     assert all("측정점" in one["probes"] for one in sharp["points"])
     spot_peak = max(sharp["points"], key=lambda one: one["probes"]["측정점"])
     assert spot_peak["frequency_hz"] == pytest.approx(1260, abs=40)
+    # 측정점마다 **그 자리의 봉우리 한 줄** — 거리 · 경고가 곡선 대신 여기 실린다(CalculiX 와
+    # 같은 모양).
+    top = next(one for one in sharp["probes"] if one["name"] == "측정점")
+    assert top["frequency_hz"] == spot_peak["frequency_hz"]
+    assert top["distance_mm"] < 1.0
+    # **실제로 쓴 전역 요소 크기**가 요약에 남는다 — 메시 수렴 점검의 기준이다(스펙의 5 mm 가
+    # CAD 의 「전체」 2 mm 를 이긴다).
+    assert sharp["summary"]["element_size_mm"] == pytest.approx(5.0)
 
     peak = sharp["peak"]
     floor = min(one["max_displacement"] for one in sharp["points"])
@@ -823,6 +831,12 @@ def test_전단_이음에서_마찰이_일을_한다_Ansys(workdir: Path) -> Non
     slip = spots["이음 입구 위판"]["vector"][0] - spots["이음 입구 아래판"]["vector"][0]
     assert 0.018 < slip < 0.026, f"미끄럼 {slip} mm"
     assert spots["이음 입구 위판"]["body"] == "위판"
+    # **반력의 단위**와 **측정점의 변형률**(수직 셋) — 실측(로드셀 · 스트레인 게이지)과 견주는
+    # 값이다. CalculiX 와 같은 자릿수여야 한다.
+    assert seen[2]["units"]["force"] == "N"
+    strain = spots["이음 입구 위판"]["strain"]
+    assert len(strain) == 3
+    assert 1e-6 < abs(strain[0]) < 1e-2, f"εxx {strain[0]}"
 
 
 def test_형상_캐시가_앞_점의_접촉을_물려주지_않는다(workdir: Path) -> None:

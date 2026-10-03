@@ -8,6 +8,7 @@
 import { Link } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
+import { RECIPE_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -44,6 +45,8 @@ export default function StudiesPage() {
           <TableHeader>
             <TableRow>
               <TableHead>이름</TableHead>
+              <TableHead>해석 종류</TableHead>
+              <TableHead>솔버</TableHead>
               <TableHead>변수</TableHead>
               <TableHead>설계점</TableHead>
               <TableHead>진행</TableHead>
@@ -61,6 +64,11 @@ export default function StudiesPage() {
                   >
                     {one.name}
                   </Link>
+                </TableCell>
+                <TableCell>{RECIPE_LABELS[one.recipe] ?? one.recipe}</TableCell>
+                <TableCell>
+                  {(one.solvers ?? []).map((solver) => SOLVER_LABELS[solver] ?? solver).join(' + ') ||
+                    '—'}
                 </TableCell>
                 <TableCell className="font-mono text-xs">{one.factors.join(' · ')}</TableCell>
                 <TableCell>{one.points}</TableCell>

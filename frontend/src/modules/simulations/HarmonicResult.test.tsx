@@ -70,4 +70,29 @@ describe('조화 응답 결과', () => {
     render(<ResultPanel simulationId="sim" status="done" artifacts={[]} />)
     await waitFor(() => expect(screen.getByText('조화 응답 결과')).toBeDefined())
   })
+  it('측정점의 곡선 봉우리를 절점 거리와 함께 보여 준다', () => {
+    // **센서 자리의 봉우리는 전체 봉우리와 다를 수 있다** — 실측 FRF 와 견줄 값은 이쪽이다.
+    const withProbes: HarmonicResultData = {
+      ...measured,
+      points: measured.points.map((one, index) => ({
+        ...one,
+        probes: { '측정점 A': [1e-3, 4e-3, 2e-3, 1e-3][index] },
+      })),
+      probes: [
+        {
+          name: '측정점 A',
+          point: [5, 5, 90],
+          node: 3,
+          distance_mm: 0,
+          value: 4e-3,
+          unit: 'mm',
+          frequency_hz: 59000,
+        },
+      ],
+    }
+    render(<HarmonicResult result={withProbes} />)
+    expect(screen.getByText('측정점 봉우리')).toBeDefined()
+    expect(screen.getByText(/59000 Hz/)).toBeDefined()
+    expect(screen.getByText(/절점 거리 0 mm/)).toBeDefined()
+  })
 })

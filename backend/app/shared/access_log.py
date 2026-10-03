@@ -32,7 +32,12 @@ _RECORDED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 #:
 #: **도메인이 폴링 경로를 더하면 여기에도 더한다.** 안 더하면 그 한 줄이 표를
 #: 가득 채우고, 그때 접근 로그는 조회할 수 없는 크기가 된다.
-_SKIP = ("/api/health", "/api/notifications/unread-count")
+_SKIP = (
+    "/api/health",
+    "/api/notifications/unread-count",
+    # 서버 화면이 10초마다 묻는 워커 상태.
+    "/api/simulations/workers",
+)
 
 #: 경로에 id 가 들어 있어 위 목록에 문자열로 못 적는 것들. **정확히 그 모양만** 적는다 —
 #: 「/status 로 끝나면 전부」 같은 규칙은 나중에 생기는 다른 `/status` 를 말없이 삼킨다.

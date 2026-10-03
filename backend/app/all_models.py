@@ -19,7 +19,12 @@ from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
-from app.modules.simulations.models import Simulation, SimulationArtifact
+from app.modules.simulations.models import (
+    Simulation,
+    SimulationArtifact,
+    SimulationMeasurement,
+    SimulationWorker,
+)
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
 __all__ = [
@@ -34,6 +39,8 @@ __all__ = [
     "RefreshToken",
     "Simulation",
     "SimulationArtifact",
+    "SimulationMeasurement",
+    "SimulationWorker",
     "User",
     "Workspace",
     "WorkspaceMember",

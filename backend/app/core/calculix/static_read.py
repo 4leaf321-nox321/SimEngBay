@@ -56,7 +56,13 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
         "recipe": "static",
         "solver": "calculix",
         # 덱을 mm · tonne · N 으로 쓴다(`calculix/deck.py`) — 그래서 mm 와 MPa 다.
-        "units": {"system": "ConsistentNMM", "displacement": "mm", "stress": "MPa"},
+        "units": {
+            "system": "ConsistentNMM",
+            "displacement": "mm",
+            "stress": "MPa",
+            # 반력의 단위 — 값만 보면 N 인지 kN 인지 모른다(mm · t · s 계의 힘은 N 이다).
+            "force": "N",
+        },
         "max_displacement": max_displacement,
         "max_von_mises": max_von_mises,
         "material": spec.material.name,
@@ -64,7 +70,14 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     mesh_counts = _draw(workdir, moved, magnitude, result)
     # **측정점의 변위** — 전체 최대는 구속 모서리의 수치적 첨두일 수 있고, 센서는 그 자리에
     # 없다. 실측과 견줄 수 있는 값은 이쪽이다.
-    spots = _probe(workdir, magnitude, moved.values)
+    # 변형률(`*EL FILE` 의 E → TOSTRAIN, 마지막 증분) — 스트레인 게이지와 견주는 값이다.
+    strained = next((one for one in reversed(blocks) if one.kind == "TOSTRAIN"), None)
+    strains = (
+        {node: values[:3] for node, values in strained.values.items() if len(values) >= 3}
+        if strained is not None
+        else None
+    )
+    spots = _probe(workdir, magnitude, moved.values, strains)
     if spots:
         result["probes"] = spots
     # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다(실측: CompCore
@@ -100,9 +113,12 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
 
 
 def _probe(
-    workdir: Path, magnitude: dict[int, float], vectors: dict[int, list[float]]
+    workdir: Path,
+    magnitude: dict[int, float],
+    vectors: dict[int, list[float]],
+    strains: dict[int, list[float]] | None = None,
 ) -> list[dict[str, Any]]:
-    """측정점의 변위(mm) — 크기와 **성분**. 점 그룹이 없으면 빈 목록."""
+    """측정점의 변위(mm) — 크기와 **성분**, 그리고 수직 변형률. 점 그룹이 없으면 빈 목록."""
     topology = workdir / "topology.json"
     msh = workdir / "model.msh"
     if not topology.is_file() or not msh.is_file():
@@ -121,27 +137,9 @@ def _probe(
         magnitude,
         unit="mm",
         vectors=vectors,
-        body_nodes=_body_nodes(workdir, mesh),
+        body_nodes=probes.body_nodes(workdir, mesh.solids),
+        strains=strains,
     )
-
-
-def _body_nodes(workdir: Path, mesh: Any) -> dict[str, set[int]]:
-    """바디 이름 → 그 바디의 절점. 모델링이 남긴 짝(`boundary.json` 의 `bodies`)으로 찾는다."""
-    path = workdir / "boundary.json"
-    if not path.is_file():
-        return {}
-    try:
-        bodies = json.loads(path.read_text(encoding="utf-8")).get("bodies") or {}
-    except (OSError, ValueError):
-        return {}
-    found: dict[str, set[int]] = {}
-    for name, entity in bodies.items():
-        members: set[int] = set()
-        for _, ids in mesh.solids.get(int(entity), []):
-            members.update(ids)
-        if members:
-            found[str(name)] = members
-    return found
 
 
 #: `.dat` 의 반력 합 머리 — `total force (fx,fy,fz) for set HOLD2 and time  0.1E+01`.

@@ -153,6 +153,13 @@ sudo journalctl -u <slug> -f
 systemctl status '<slug>-worker@1'
 ```
 
+**워커가 살아 있는지는 화면에서 본다** — 관리 → 서버의 「워커 · 솔버」 카드(v0.3.0). 워커마다
+상태(기다림 · 작업 중 · 응답 없음) · 집는 솔버 · 깔린 도구(ccx · gmsh · Ansys) · 지금 하는 일,
+솔버마다 대기 · 실행 중 · 집을 워커 수, 그리고 Ansys 라이선스를 쥔 작업이 보인다. **기다리는
+작업이 있는데 그 솔버를 집는 워커가 없으면 맨 위에 빨갛게** 적힌다. 워커는 15초마다 신호를
+적고, 2분 끊기면 「응답 없음」 이 되며 그 워커가 잡고 있던 작업은 다른 워커가 곧바로 되살린다
+(신호를 안 적는 옛 워커의 작업은 전처럼 3시간 뒤).
+
 ### 솔버를 갈라 띄우기 — CalculiX 로 설계점을 동시에 풀려면
 
 **Ansys 는 노드락 라이선스가 하나라 워커도 하나여야 한다.** CalculiX(오픈소스)는 라이선스가
@@ -170,7 +177,8 @@ journalctl -u '<slug>-worker@2' -n 5    # 「솔버 calculix」 가 찍힌다
 파일이 없는 워커는 **전부** 집는다(설정을 안 건드린 설치는 그대로 돈다). 워커 수 자체는
 `WORKER_COUNT` 로 정한다(설치 · 갱신 때).
 
-**CalculiX 가 이미지에 있는지**는 이렇게 본다:
+**CalculiX 가 이미지에 있는지**는 서버 화면의 「워커 · 솔버」 카드(깔린 도구 — 워커가 기동 때
+찾은 것)에서 보고, 셸에서는 이렇게 본다:
 
 ```bash
 apptainer exec ~/apps/<slug>/app.sif ccx -v
@@ -310,7 +318,7 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | 기동 거부: `JWT_SECRET` | 기본값 그대로다. 그것이 의도다 — `.env` 에 난수를 넣는다 |
 | `connection refused` (DB) | `systemctl status postgresql`, `.env` 의 포트 확인 |
 | 화면이 500, 로그에 "없는 컬럼" | 마이그레이션이 안 돌았다. `sudo ./deploy.sh update` |
-| **해석 작업이 「대기」 에서 안 움직인다** | 워커가 안 돈다. `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
+| **해석 작업이 「대기」 에서 안 움직인다** | 먼저 서버 화면의 「워커 · 솔버」 카드 — **그 솔버를 집는 워커가 있나**(CalculiX 작업인데 워커가 전부 `SIMULATION_SOLVERS=ansys` 면 영원히 대기한다). 워커가 아예 없으면 `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
 | 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `WORKER_COUNT` 를 낮춰 다시 설치하거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
 | **DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 없이 설치했다. 그 값을 주고 `sudo ./deploy.sh update` |
 | DOE 화면에 「폴더가 없습니다」 | `.env` 의 `DOE_ROOTS` 가 **호스트 경로**를 가리킨다. 컨테이너 안에서 보이는 이름(`/data/doe`)이어야 한다 |

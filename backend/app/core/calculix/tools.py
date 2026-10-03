@@ -39,22 +39,35 @@ CCX_ENV = "CCX_BIN"
 LD_ENV = "OPENSOLVER_LD_PATH"
 
 
+def which(env: str, *names: str) -> Path | None:
+    """환경 변수 → `PATH` 순으로 찾는다. **없으면 `None`** — 화면에 「깔렸나」 를 답할 때 쓴다.
+
+    환경 변수가 있는데 그 자리에 파일이 없으면 `None` 이다(`PATH` 로 물러서지 않는다) — 사람이
+    가리킨 자리가 틀린 것을 다른 자리의 것으로 덮으면 그 오타를 영영 모른다.
+    """
+    given = os.environ.get(env)
+    if given:
+        path = Path(given)
+        return path if path.is_file() else None
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    return None
+
+
 def _find(env: str, *names: str, what: str) -> Path:
     """환경 변수 → `PATH` 순으로 찾는다. **없으면 즉시 실패한다.**
 
     조용히 건너뛰면 그 작업은 「결과 파일이 없다」 로 끝나고, 사람은 설치 문제를 해석 실패로
     읽는다 — 무엇을 깔아야 하는지까지 말해 준다.
     """
+    found = which(env, *names)
+    if found is not None:
+        return found
     given = os.environ.get(env)
     if given:
-        path = Path(given)
-        if path.is_file():
-            return path
-        raise StageFailure("internal", f"{env} 가 가리키는 {what} 가 없습니다: {path}")
-    for name in names:
-        found = shutil.which(name)
-        if found:
-            return Path(found)
+        raise StageFailure("internal", f"{env} 가 가리키는 {what} 가 없습니다: {given}")
     raise StageFailure(
         "internal",
         f"{what} 를 찾지 못했습니다 — 이미지에 `{names[0]}` 를 깔거나 `{env}` 로 "
@@ -62,12 +75,18 @@ def _find(env: str, *names: str, what: str) -> Path:
     )
 
 
+#: 찾을 실행 파일 이름 — 단계(`gmsh_bin` · `ccx_bin`)와 화면(`app/core/toolcheck.py`)이
+#: 같이 쓴다.
+GMSH_NAMES = ("gmsh",)
+CCX_NAMES = ("ccx", "ccx_2.21")
+
+
 def gmsh_bin() -> Path:
-    return _find(GMSH_ENV, "gmsh", what="gmsh")
+    return _find(GMSH_ENV, *GMSH_NAMES, what="gmsh")
 
 
 def ccx_bin() -> Path:
-    return _find(CCX_ENV, "ccx", "ccx_2.21", what="CalculiX(ccx)")
+    return _find(CCX_ENV, *CCX_NAMES, what="CalculiX(ccx)")
 
 
 def run(

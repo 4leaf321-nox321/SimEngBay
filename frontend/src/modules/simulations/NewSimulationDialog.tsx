@@ -12,6 +12,8 @@ import { useState } from 'react'
 
 import { readTopology, simulationApi } from '@/modules/simulations/api'
 import type { Simulation, TopologyPreview } from '@/modules/simulations/api'
+import { SolverSelect } from '@/modules/simulations/SolverSelect'
+import type { Solver } from '@/modules/simulations/SolverSelect'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
@@ -69,7 +71,7 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
    * CalculiX 는 라이선스 노드락이 없어 **깔린 서버에서 바로, 여러 점을 동시에** 푼다. 대신 걸
    * 수 있는 조건이 적어서, 못 거는 것은 서버가 **까닭을 달아 거절**한다.
    */
-  const [solver, setSolver] = useState<'ansys' | 'calculix'>('ansys')
+  const [solver, setSolver] = useState<Solver>('ansys')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
@@ -296,23 +298,7 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
             </div>
           </div>
 
-          <fieldset className="space-y-1.5">
-            <Label htmlFor="sim-solver">솔버</Label>
-            <select
-              id="sim-solver"
-              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
-              value={solver}
-              onChange={(event) => setSolver(event.target.value as 'ansys' | 'calculix')}
-            >
-              <option value="ansys">Ansys (기본)</option>
-              <option value="calculix">CalculiX (오픈소스 · 서버에서 바로)</option>
-            </select>
-            <p className="text-muted-foreground text-xs">
-              {solver === 'ansys'
-                ? '라이선스가 있는 PC 에서 풉니다. 조건을 가장 많이 걸 수 있습니다.'
-                : '라이선스 없이 서버에서 바로 풉니다. 지금은 모달만 되고 요소 크기를 줘야 합니다 — 못 거는 조건은 까닭과 함께 거절합니다.'}
-            </p>
-          </fieldset>
+          <SolverSelect id="sim-solver" value={solver} onChange={setSolver} />
 
           <ErrorNotice error={error} />
         </div>

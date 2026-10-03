@@ -21,6 +21,7 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       browseDoe: vi.fn(),
       previewDoe: vi.fn(),
       importDoe: vi.fn(),
+      solvers: vi.fn(),
     },
   }
 })
@@ -75,6 +76,10 @@ describe('DOE 가져오기', () => {
     vi.mocked(simulationApi.browseDoe).mockReset().mockResolvedValue(ROOT_LISTING)
     vi.mocked(simulationApi.previewDoe).mockReset().mockResolvedValue(PREVIEW)
     vi.mocked(simulationApi.importDoe).mockReset()
+    vi.mocked(simulationApi.solvers).mockReset().mockResolvedValue([
+      { solver: 'ansys', workers_alive: 1, queued: 0 },
+      { solver: 'calculix', workers_alive: 0, queued: 2 },
+    ])
   })
 
   it('창을 열면 공용 폴더부터 보여 준다', async () => {
@@ -89,7 +94,8 @@ describe('DOE 가져오기', () => {
 
   it('고르기 전에는 실행할 수 없다', async () => {
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
-    await waitFor(() => expect(simulationApi.browseDoe).toHaveBeenCalled())
+    // 목록이 그려질 때까지 — 부르기만 하고 보면 아직 읽는 중이다.
+    await screen.findByText('브래킷_튜닝-3f9a21')
     expect(screen.getByRole('button', { name: /0건 실행/ })).toBeDisabled()
   })
 
@@ -126,6 +132,97 @@ describe('DOE 가져오기', () => {
     expect((sent.spec as Record<string, unknown>).constraints).toEqual([
       { region: 'bolt_holes', kind: 'fixed' },
     ])
+    // 아무것도 안 고르면 모달 · Ansys 다(스펙의 기본값과 같다).
+    expect((sent.spec as Record<string, unknown>).recipe).toBe('modal')
+    expect((sent.spec as Record<string, unknown>).solver).toBe('ansys')
+  })
+
+  it('CAD 가 적은 해석 종류를 미리 고르고 그 스펙을 보낸다', async () => {
+    // **모달로 못 박으면** 전단 이음 같은 정적 DOE 가 하중을 건너뛴 채 모달로 돈다.
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue({
+      ...PREVIEW,
+      suggested_recipe: 'static',
+    })
+    vi.mocked(simulationApi.importDoe).mockResolvedValue({
+      study_id: '3f9a21',
+      name: '브래킷_두께훑기',
+      created: ['a'],
+      skipped: [],
+    })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() =>
+      expect((screen.getByLabelText('해석 종류') as HTMLSelectElement).value).toBe('static'),
+    )
+    expect(screen.getByText('CAD 가 적은 해석입니다.')).toBeDefined()
+    // 정적에는 모드 수가 없다 — 칸도 안 보인다.
+    expect(screen.queryByLabelText('모드 수')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /3건 실행/ }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.importDoe).mock.calls[0][0].spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.recipe).toBe('static')
+    // **스펙이 모르는 칸은 서버가 통째로 거절한다** — 정적 스펙에 modes 를 실으면 400 이다.
+    expect('modes' in spec).toBe(false)
+  })
+
+  it('CAD 와 다른 해석 종류를 고르면 그 사실을 말한다', async () => {
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue({
+      ...PREVIEW,
+      suggested_recipe: 'harmonic',
+    })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() =>
+      expect((screen.getByLabelText('해석 종류') as HTMLSelectElement).value).toBe('harmonic'),
+    )
+    await userEvent.selectOptions(screen.getByLabelText('해석 종류'), 'modal')
+    expect(screen.getByText(/CAD 가 적은 해석: 조화 응답/)).toBeDefined()
+  })
+
+  it('CalculiX 를 고르면 모든 점이 그 솔버로 간다', async () => {
+    // 요소 크기를 비워 두면 **점마다 CAD 의 「전체」 크기**로 돈다 — 미리 채워 보내면 그 값이
+    // 점마다 다른 힌트를 덮는다.
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue({
+      ...PREVIEW,
+      suggested_element_size_mm: 2.5,
+    })
+    vi.mocked(simulationApi.importDoe).mockResolvedValue({
+      study_id: '3f9a21',
+      name: '브래킷_두께훑기',
+      created: ['a'],
+      skipped: [],
+    })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByPlaceholderText('CAD 값 2.5')).toBeDefined())
+
+    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
+    await userEvent.click(screen.getByRole('button', { name: /3건 실행/ }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.importDoe).mock.calls[0][0].spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.solver).toBe('calculix')
+    expect(spec.mesh).toEqual({})
+  })
+
+  it('요소 크기가 어디에도 없으면 CalculiX 로 실행하지 않는다', async () => {
+    // **설계점 수만큼 메시 실패가 쌓이기 전에** 막는다.
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
+
+    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
+    expect(screen.getByText(/CalculiX 는 요소 크기가 필요합니다/)).toBeDefined()
+    expect(screen.getByRole('button', { name: /3건 실행/ })).toBeDisabled()
+
+    await userEvent.type(screen.getByLabelText('요소 크기 (mm)'), '3')
+    expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled()
   })
 
   /** CAD 가 재료를 함께 보낸 폴더. */
@@ -189,5 +286,29 @@ describe('DOE 가져오기', () => {
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
     await waitFor(() => expect(screen.getByText(/물성을 보내지 않았습니다/)).toBeDefined())
     expect(screen.getByRole('checkbox')).toBeDisabled()
+  })
+  it('집을 워커가 없는 솔버를 고르면 미리 말한다', async () => {
+    // **영원히 대기하는 작업을 거는 자리에서 막는다** — 걸고 나면 아무도 그 사실을 말하지 않는다.
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
+    expect(screen.queryByText(/이 솔버를 집는 워커가 없습니다/)).toBeNull()
+
+    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
+    expect(screen.getByText(/이 솔버를 집는 워커가 없습니다/)).toBeDefined()
+    expect(screen.getByText(/이미 2건 대기 중/)).toBeDefined()
+  })
+
+  it('서버가 워커를 모르면 경고하지 않는다', async () => {
+    // 요청 안에서 도는 설치 · 옛 워커 — 「모른다」 를 「없다」 로 말하지 않는다.
+    vi.mocked(simulationApi.solvers).mockResolvedValue([
+      { solver: 'ansys', workers_alive: -1, queued: 0 },
+      { solver: 'calculix', workers_alive: -1, queued: 0 },
+    ])
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
+    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
+    expect(screen.queryByText(/이 솔버를 집는 워커가 없습니다/)).toBeNull()
   })
 })

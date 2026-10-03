@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core import probes as core_probes
 from app.core.dpf import probes
 from app.core.spec import HarmonicSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -92,7 +93,9 @@ def extract(
             if spots:
                 # **측정점의 곡선** — 주파수마다 그 자리의 응답. 전체 최대는 자리가 주파수마다
                 # 옮겨 다닐 수 있고, 센서는 한 자리에 붙어 있다.
-                row["probes"] = _at_spots(dpf, np, model, index, spots)
+                row["probes"] = _at_spots(
+                    dpf, np, model, index, {spot.name: spot.node for spot in spots}
+                )
             points.append(row)
     except StageFailure:
         raise
@@ -112,6 +115,10 @@ def extract(
         "peak": worst,
         "material": spec.material.name,
     }
+    # **측정점마다 그 자리의 봉우리 한 줄** — 절점 거리와 「멀다」 경고가 여기 실린다.
+    tops = core_probes.peaks(spots, points, unit=displacement_unit)
+    if tops:
+        result["probes"] = tops
     if worst["max_displacement"] > SUSPICIOUS_DISPLACEMENT:
         # **큰 수는 그럴듯해 보인다** — 감쇠가 모자라면 공진에서 수가 치솟는다.
         result["warning"] = (
@@ -135,30 +142,19 @@ def extract(
     )
 
 
-def _spots(mesh: Any, topology: dict[str, Any]) -> dict[str, int]:
-    """측정점 이름 → **가장 가까운 절점**. 주파수마다 다시 찾으면 같은 일을 수백 번 한다."""
-    asked = probes.wanted(topology)
-    if not asked:
-        return {}
+def _spots(mesh: Any, topology: dict[str, Any]) -> list[probes.Spot]:
+    """측정점마다 **가장 가까운 절점**. 주파수마다 다시 찾으면 같은 일을 수백 번 한다."""
     try:
-        import numpy as np
-
-        places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
-        ids = np.asarray(mesh.nodes.scoping.ids, dtype=int)
         scale = probes.scale_for(str(mesh.unit or ""))
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
-        logger.warning("측정점을 못 찾았습니다 — 없이 갑니다", exc_info=True)
-        return {}
-    found: dict[str, int] = {}
-    for name, point in asked.items():
-        gaps = np.linalg.norm(places - np.asarray(point, dtype=float) / scale, axis=1)
-        index = int(gaps.argmin())
-        found[name] = int(ids[index])
-        if float(gaps[index]) * scale > probes.FAR_MM:
+        scale = 1.0
+    found = probes.locate(topology, mesh, scale=scale)
+    for spot in found:
+        if spot.distance_mm > probes.FAR_MM:
             logger.warning(
                 "측정점 %s: 가장 가까운 절점이 %.2f mm 떨어져 있습니다",
-                name,
-                float(gaps[index]) * scale,
+                spot.name,
+                spot.distance_mm,
             )
     return found
 

@@ -206,8 +206,15 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
 - **릴리스는 태그에서 나온다**(`.github/workflows/release.yml`). 검증(`ci.yml`)을 통과해야 게시된다.
 - **번들에 담기는 것은 `build_bundle.sh` 가 정본이다.** `README_OPERATOR.md` 가 번들 안에서
   시키는 명령은 번들 안에 있어야 한다.
+- **문서 · 안내 문구에서 env 는 `sudo` 뒤에 쓴다** — `sudo X=… ./deploy.sh`. `X=… sudo ./deploy.sh` 는
+  우분투 기본 sudo(`env_reset`)가 값을 **조용히 버려** 그 명령이 아무 일도 안 한 것이 된다(24.04 운영
+  서버에서 확인, 2026-10-05).
 - **배포 자산에 제품 이름을 박지 않는다.** 번들은 `branding.py` 의 기본값만 `BUILD_INFO` 에
   들고, 실제 이름 · 포트 · 확장은 설치가 `deploy.sh` 에 env 로 준다.
+- **`apptainer exec` 는 `/opt/app/backend` 로 옮긴 뒤 띄운다**(`sh -c 'cd /opt/app/backend && exec …'`).
+  `run` 과 달리 이미지의 %runscript 를 거치지 않아 호스트의 작업 폴더에서 시작하고, 그러면
+  `python -m app.…` 이 `app` 을 못 찾는다 — v0.5.0 첫 운영 설치에서 워커가 10초마다 다시 떴다.
+  `test_deploy.py` 가 유닛 템플릿과 `in_container` 를 검사한다.
 - **배포가 env 로 받는 값은 `instance_save` 로 기억하고 `instance_conf_get` 으로 되읽는다**
   (env > `/etc/platform-instances/<slug>.conf` > 기본값). 유닛을 그리는 값(`DOE_ROOT_HOST_DIR` ·
   `ANSYS_HOST_DIR` · `WORKER_COUNT` 등)을 기억하지 않으면 그것을 빠뜨린 `update` 가 bind 를

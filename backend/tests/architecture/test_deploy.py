@@ -413,6 +413,25 @@ def test_유닛_템플릿의_자리표시를_전부_채운다() -> None:
             )
 
 
+def test_apptainer_exec_는_backend_폴더에서_띄운다() -> None:
+    """**`apptainer exec` 는 호스트의 작업 폴더에서 시작한다** — `run` 과 달리 이미지
+    %runscript 의 `cd /opt/app/backend` 를 거치지 않는다. 그대로 `python -m app.…` 을 하면
+    `app` 을 못 찾고 죽는다. v0.5.0 첫 운영 설치에서 워커가 그렇게 10초마다 다시 떴고,
+    설치는 「완료」 였다.
+    """
+    for template in sorted(DEPLOY.glob("*.template")):
+        text = template.read_text(encoding="utf-8")
+        for block in re.findall(
+            r"ExecStart=/usr/bin/apptainer exec.*?(?:\n\s*\n|\Z)", text, re.S
+        ):
+            assert "cd /opt/app/backend &&" in block or "--pwd /opt/app/backend" in block, (
+                f"{template.name} 의 apptainer exec 가 /opt/app/backend 로 옮기지 않습니다"
+            )
+    script = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    for line in re.findall(r"^\s*in_container .*$", script, re.M):
+        assert "cd /opt/app/backend &&" in line, line
+
+
 @_no_bash
 def test_한_번_준_CAD_폴더와_Ansys_는_다음_배포가_기억한다(tmp_path: Path) -> None:
     """**`update` 때 env 를 빠뜨려도 연결이 남아야 한다.**
@@ -471,3 +490,35 @@ def test_한_번_준_CAD_폴더와_Ansys_는_다음_배포가_기억한다(tmp_p
     conf, app, _ = render(DOE_ROOT_HOST_DIR="/mnt/nas2/cad")
     assert "DOE_ROOT_HOST_DIR=/mnt/nas2/cad" in conf
     assert "--bind /mnt/nas2/cad:/data/doe:ro" in app
+
+
+def test_문서는_env_를_sudo_뒤에_쓴다() -> None:
+    """**`X=… sudo ./deploy.sh` 는 값이 버려진다** — 우분투 기본 sudo(`env_reset`)가 sudo
+    앞의 env 를 지운다. 문서 · 안내 문구가 그 모양이면 운영자가 그대로 쳐도 스크립트에는
+    「안 줬다」 로 보여, 기억한 값이나 기본값으로 **조용히** 진행한다(24.04 운영 서버에서
+    확인, 2026-10-05). 잘못된 모양을 일부러 보여 주는 줄은 「조용히 버」 를 곁에 둔다.
+    """
+    assign = r"""[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|<[^>\n]*>|[^\s`'"|;&\\]+)?"""
+    before_sudo = re.compile(rf"(?<![\w$=/.-])(?:{assign}[ \t]+)+sudo(?=[ \t])")
+    listed = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "*.md", "deploy/*"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode != 0:  # pragma: no cover - git 이 없는 체크아웃
+        pytest.skip("git ls-files 를 못 읽었습니다")
+    found = []
+    for name in listed.stdout.splitlines():
+        path = REPO / name
+        if (
+            path.suffix not in {".md", ".sh", ".template", ".bat", ".ps1"}
+            or not path.is_file()
+        ):
+            continue
+        text = re.sub(r"\\\n[ \t]*", " ", path.read_text(encoding="utf-8"))
+        for match in before_sudo.finditer(text):
+            if "조용히 버" in text[match.start() : match.end() + 200]:
+                continue
+            found.append(f"{name}: {match.group(0)} … → sudo {match.group(0)[:-4].strip()} …")
+    assert not found, "env 를 sudo 뒤로 옮깁니다:\n" + "\n".join(found)

@@ -171,8 +171,8 @@ cd ../frontend && npm run build && npm test && npm run lint
 
 ```bash
 tar xzf simengbay-v0.1.0.tar.gz && cd simengbay-v0.1.0
-APP_SLUG=simengbay APP_NAME=SimEngBay APP_PORT=8070 sudo ./deploy.sh prepare   # 최초 1회
-APP_SLUG=simengbay sudo ./deploy.sh install                                         # 첫 설치
+sudo APP_SLUG=simengbay APP_NAME=SimEngBay APP_PORT=8070 ./deploy.sh prepare   # 최초 1회
+sudo APP_SLUG=simengbay ./deploy.sh install                                         # 첫 설치
 sudo ./deploy.sh update                                                            # 그다음부터
 ```
 

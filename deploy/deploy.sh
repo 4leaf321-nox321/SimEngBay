@@ -10,6 +10,7 @@
 #   sudo ./deploy.sh remove    이 인스턴스를 서버에서 지운다 — 유닛 · DB · 설치 폴더 (공용 폴더는 남긴다)
 #   sudo ./deploy.sh setup     **물어보고 알아서** — 이름 · 역할 · 상대 서버를 답하면 prepare → (DB 주/대기)
 #                              → install 을 순서대로. 서버 두 대 첫 설치는 이것 하나면 된다.
+#   sudo SETUP_ROLE=1 APP_SLUG=… ./deploy.sh setup --yes   같은 순서를 묻지 않고 — 원격 자동 설치(TTY 없이)
 #
 # 서버 두 대 이중화(ha.sh · pg-ha.sh — 자세한 것은 README 「이중화」):
 #   sudo ./deploy.sh db-primary | db-standby --from <IP> | db-promote | db-demote | db-status
@@ -17,7 +18,7 @@
 #
 # **번들 하나로 여러 플랫폼(인스턴스)을 설치한다.** 어느 플랫폼인지는 `APP_SLUG` 가 정한다 —
 # 처음 한 번 env 로 주면(`APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8070 EXTENSIONS=sample`)
-# /etc/platform-instances/<slug>.conf 에 남아 다음부터는 `APP_SLUG=plmhub ./deploy.sh update` 로
+# /etc/platform-instances/<slug>.conf 에 남아 다음부터는 `sudo APP_SLUG=plmhub ./deploy.sh update` 로
 # 충분하고, 이 서버에 인스턴스가 하나뿐이면 그것마저 생략된다. 안 주면 번들의 기본값
 # (BUILD_INFO — 틀의 이름)으로 뜬다. slug 하나에서 DB · 유닛 · 경로 · 주소가 전부 나온다.
 #
@@ -45,7 +46,7 @@ VERSION="$(bundle version)"
 # ───────────────────────── 사전 확인 ─────────────────────────
 # 'render' 는 아무것도 바꾸지 않는다 — root 없이 유닛 · nginx · keepalived 설정을 보여 준다.
 RENDER_ONLY=0; [[ "${1:-}" =~ ^(render|-h|--help|help)$ ]] && RENDER_ONLY=1
-[[ "${1:-}" == "setup" && "${2:-}" == "--plan" ]] && RENDER_ONLY=1
+[[ "${1:-}" == "setup" && " ${*:2} " == *" --plan "* ]] && RENDER_ONLY=1
 [[ $EUID -eq 0 || $RENDER_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
 
 OPERATOR="${OPERATOR:-${SUDO_USER:-}}"
@@ -362,7 +363,7 @@ sync_env_paths() {
 check_doe_dir() {
     [[ -n "$DOE_ROOT_HOST_DIR" ]] || {
         warn "CAD 공용 폴더를 안 정했습니다 — 「CAD 폴더에서 선택」 · DOE 가져오기가 막힙니다(파일 직접 업로드는 됩니다).
-      정하려면 한 번: DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore sudo ./deploy.sh update (그 뒤로는 기억합니다)"
+      정하려면 한 번: sudo DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore ./deploy.sh update (그 뒤로는 기억합니다)"
         return 0
     }
     if as_op test -r "$DOE_ROOT_HOST_DIR" -a -x "$DOE_ROOT_HOST_DIR" 2>/dev/null; then
@@ -373,7 +374,7 @@ check_doe_dir() {
     fi
 }
 
-# 이름 · 설명 · 확장은 배포로 바꿀 수 있다 — `EXTENSIONS=hub,bom sudo ./deploy.sh update`.
+# 이름 · 설명 · 확장은 배포로 바꿀 수 있다 — `sudo EXTENSIONS=hub,bom ./deploy.sh update`.
 # **slug 만은 못 바꾼다** — DB · 쿠키 · 토큰 · 유닛 이름이 전부 거기서 나왔다.
 sync_env_identity() {
     [[ -f "$ENV_FILE" ]] || return 0
@@ -499,6 +500,23 @@ setup_worker() {
         systemctl enable "${WORKER_SERVICE_NAME}@${i}" >/dev/null 2>&1 || true
         systemctl restart "${WORKER_SERVICE_NAME}@${i}" || warn "워커 ${i} 기동 실패"
     done
+    check_workers
+}
+
+# **떠 있는지 잠시 뒤에 본다.** Type=simple 이라 restart 는 프로세스가 시작만 하면 성공이다 —
+# 곧바로 죽어 10초마다 다시 뜨는 워커도 설치는 「완료」 로 찍혔다(v0.5.0 첫 운영 설치). 죽은
+# 워커는 「activating (auto-restart)」 에 머무므로 is-active 가 아니다.
+check_workers() {
+    local i bad=0
+    sleep "${WORKER_SETTLE_SECONDS:-6}"
+    for (( i = 1; i <= WORKER_COUNT; i++ )); do
+        systemctl is-active --quiet "${WORKER_SERVICE_NAME}@${i}" && continue
+        bad=1
+        warn "워커 ${i} 이 떠 있지 않습니다 — 죽고 다시 뜨기를 되풀이하는 중일 수 있습니다. 마지막 기록:"
+        journalctl -u "${WORKER_SERVICE_NAME}@${i}" -n 15 --no-pager >&2 || true
+    done
+    [[ $bad -eq 0 ]] && info "해석 작업 워커 $WORKER_COUNT 개가 떠 있습니다"
+    return 0
 }
 
 # ── MCP 서버 (선택) — 별도 venv + systemd. 실패는 전부 비치명적(백엔드 배포 무관). ──
@@ -706,6 +724,9 @@ cmd_install() {
     setup_lb
     check_doe_dir
 
+    # 번들에 mcp_server/ 가 없으면 위에서 「건너뜀」 이었다 — 없는 서비스를 안내하지 않는다.
+    local mcp_line=""
+    [[ -f "$MCP_SERVICE_UNIT" ]] && mcp_line=$'\n'"  MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)"
     cat <<MSG
 
 [OK] 설치 완료.
@@ -715,8 +736,7 @@ cmd_install() {
   워커   : sudo systemctl status ${WORKER_SERVICE_NAME}@1   (해석 작업 $WORKER_COUNT 개)
   CAD    : $( [[ -n "$DOE_ROOT_HOST_DIR" ]] && echo "$DOE_ROOT_HOST_DIR → $DOE_ROOT_IN_CONTAINER (읽기 전용)" || echo "안 걸림 — DOE_ROOT_HOST_DIR 를 한 번 주면 「CAD 폴더에서 선택」 이 열립니다" )
   Ansys  : $( [[ -n "$ANSYS_HOST_DIR" ]] && echo "$ANSYS_HOST_DIR → /ansys_inc (v$ANSYS_VERSION)" || echo "안 걸림 — 리눅스 Ansys 를 쓰면 ANSYS_HOST_DIR 를 한 번 줍니다" )
-  기억   : $INSTANCES_DIR/$APP_SLUG.conf — 다음 update 는 위 경로를 다시 안 줘도 됩니다
-  MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)
+  기억   : $INSTANCES_DIR/$APP_SLUG.conf — 다음 update 는 위 경로를 다시 안 줘도 됩니다$mcp_line
 
   위에 찍힌 관리자 임시 비밀번호는 **다시 표시되지 않습니다.**
   첫 로그인에서 변경이 강제됩니다.
@@ -838,18 +858,32 @@ cmd_status() {
 # 운영자가 env 이름과 순서를 외우지 않게. 답한 값은 instance · ha 설정 파일에 남아 다음 배포가
 # 기억한다. 주(A)는 끝에 B 로 넘길 파일(.env · 복제 비밀번호)을 handoff/ 에 모아 두고, 대기(B)는
 # 그것을 A 에서 scp 로 받아 제자리에 둔다 — 사람이 파일을 손으로 옮기지 않는다.
+#
+# **원격 자동 설치는 `--yes`** — 묻지 않고 env 로 준 값(없으면 [ ] 의 기본값)으로 같은 순서를 밟는다.
+# 역할만은 기본값을 두지 않는다(SETUP_ROLE=A|B|1) — 단독 서버가 이중화 주(A)로 깔리면 안 된다.
+SETUP_YES=0
 ask() {  # $1=변수 $2=질문 $3=기본값
     local answer
+    if [[ $SETUP_YES -eq 1 ]]; then
+        answer="${!1:-}"; printf -v "$1" '%s' "${answer:-$3}"
+        echo "$2: ${!1}"   # 무엇으로 깔았는지 setup.log 에 남는다
+        return 0
+    fi
     if [[ -n "$3" ]]; then read -r -p "$2 [$3]: " answer; else read -r -p "$2: " answer; fi
     printf -v "$1" '%s' "${answer:-$3}"
 }
 cmd_setup() {
-    local plan_only=0; [[ "${1:-}" == "--plan" ]] && plan_only=1
-    [[ -t 0 || $plan_only -eq 1 ]] || err "setup 은 물어보며 진행합니다 — 터미널에서 직접(원격이면 ssh -t) 실행하세요."
+    local plan_only=0 arg
+    for arg in "$@"; do
+        case "$arg" in --plan) plan_only=1 ;; --yes) SETUP_YES=1 ;; *) err "setup 이 모르는 인자: $arg (--plan · --yes)" ;; esac
+    done
+    [[ -t 0 || $plan_only -eq 1 || $SETUP_YES -eq 1 ]] || err "setup 은 물어보며 진행합니다 — 터미널에서 직접(원격이면 ssh -t) 실행하세요.
+      원격 자동 설치는 값을 env 로 주고 --yes: sudo SETUP_ROLE=1 APP_SLUG=<slug> APP_NAME=… ./deploy.sh setup --yes"
+    [[ $SETUP_YES -eq 0 || -n "${SETUP_ROLE:-}" ]] || err "--yes 에는 SETUP_ROLE=A|B|1 이 필요합니다(주 · 대기 · 단독)."
     echo
     echo "== $APP_NAME_DEFAULT 설치 안내 ($VERSION) — 물음에 답하면 나머지는 이 스크립트가 합니다. 비우면 [ ] 안의 값 =="
     echo
-    local role
+    local role="${SETUP_ROLE:-}"
     ask role "이 서버는 주(A) 입니까, 대기(B) 입니까? (A/B, 서버 한 대뿐이면 1)" "A"
     case "${role^^}" in A) HA_ROLE=master ;; B) HA_ROLE=backup ;; 1) HA_ROLE="" ;; *) err "A, B, 1 중 하나로 답하세요." ;; esac
     ask APP_SLUG "플랫폼 이름 — 기계용, 소문자·숫자만 (예: plmhub). 설치 뒤엔 못 바꿉니다" "${APP_SLUG:-}"
@@ -914,7 +948,9 @@ cmd_setup() {
 ───────────────────────────────────────────────────────
 PLAN
     [[ $plan_only -eq 1 ]] && return 0
-    local go; read -r -p "진행할까요? (y/N): " go; [[ "${go,,}" == "y" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
+    if [[ $SETUP_YES -eq 0 ]]; then
+        local go; read -r -p "진행할까요? (y/N): " go; [[ "${go,,}" == "y" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
+    fi
 
     as_op mkdir -p "$INSTALL_DIR"
     # **A 에서 받아오는 것은 로그 기록(tee) 전에.** 비밀번호를 묻는 scp 가 tee 뒤에서 터미널을
@@ -926,7 +962,9 @@ PLAN
             local handoff="$INSTALL_DIR/handoff"
             info "A($PEER_IP) 에서 .env · 복제 비밀번호 받기 — $peer_account 계정의 비밀번호를 물으면 입력하세요"
             as_op mkdir -p "$handoff"
-            as_op scp -q -P "${SSH_PORT:-22}" "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/pg-ha.replpass" \
+            # --yes 면 비밀번호를 칠 사람이 없다 — 키로만 붙고, 안 되면 기다리지 않고 멈춘다.
+            local batch=(); [[ $SETUP_YES -eq 1 ]] && batch=(-o BatchMode=yes)
+            as_op scp -q ${batch[@]+"${batch[@]}"} -P "${SSH_PORT:-22}" "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/pg-ha.replpass" \
                 "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/.env" "$handoff/" \
                 || err "A 에서 받지 못했습니다. A 에서 setup 이 끝났는지, 계정 · IP · ssh 포트가 맞는지 확인하세요."
             install -o root -g postgres -m 640 "$handoff/pg-ha.replpass" /etc/pg-ha.replpass

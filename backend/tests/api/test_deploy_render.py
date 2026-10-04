@@ -264,3 +264,38 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
         text=True,
     )
     assert bad.returncode != 0 and "소문자" in bad.stderr
+
+
+def test_setup_yes_는_묻지_않고_env_로_간다(bundle: Path, tmp_path: Path) -> None:
+    """**원격 자동 설치에는 TTY 가 없다.** `--yes` 는 env 로 준 값으로 같은 계획을 만든다 —
+    운영 첫 설치에서 setup 이 TTY 를 요구해 prepare + install 로 돌아가야 했다(2026-10-05).
+    역할만은 기본값이 없다: 단독 서버가 이중화 주(A)로 깔리면 안 된다."""
+    env = {
+        **os.environ,
+        "OPERATOR": "ops",
+        "ETC": str(tmp_path / "etc"),
+        "SELF_IP": "10.0.0.1",
+        "SETUP_ROLE": "1",
+        "APP_SLUG": "plmhub",
+        "APP_NAME": "PLM 기준정보",
+        "APP_PORT": "8050",
+        "DOE_ROOT_HOST_DIR": "/mnt/exchange/cad",
+    }
+
+    def setup(given: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(bundle / "deploy.sh"), "setup", "--yes", "--plan"],
+            cwd=bundle,
+            env=given,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+
+    done = setup(env)
+    assert done.returncode == 0, done.stderr
+    assert "PLM 기준정보 (plmhub) · 포트 8050" in done.stdout
+    assert "이 서버  : 단독" in done.stdout
+    assert "CAD /mnt/exchange/cad" in done.stdout
+    no_role = setup({key: value for key, value in env.items() if key != "SETUP_ROLE"})
+    assert no_role.returncode != 0 and "SETUP_ROLE" in no_role.stderr

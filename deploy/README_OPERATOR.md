@@ -47,19 +47,23 @@ ls
 
 ```bash
 # 처음 한 번 — 이름 · 포트 · 확장을 준다. /etc/platform-instances/<slug>.conf 에 남는다
-APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub sudo ./deploy.sh prepare
-APP_SLUG=plmhub sudo ./deploy.sh install
+sudo APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub ./deploy.sh prepare
+sudo APP_SLUG=plmhub ./deploy.sh install
 # 그다음부터 — 이 서버에 인스턴스가 하나면 APP_SLUG 를 안 줘도 그것이다
 sudo ./deploy.sh update
 ```
 
+> **env 는 `sudo` 뒤에 붙인다** — `sudo APP_NAME=… ./deploy.sh update`. `APP_NAME=… sudo ./deploy.sh`
+> 처럼 앞에 두면 우분투 기본 설정(`env_reset`)이 그 값을 **조용히 버린다**(24.04 운영 서버에서
+> 확인, 2026-10-05). 스크립트에는 「안 줬다」 로 보여 기억한 값이나 기본값으로 그대로 진행한다.
+
 | 설치 때 주는 것 | 뜻 | 나중에 |
 | --- | --- | --- |
 | `APP_SLUG` | 기계가 읽는 이름. 소문자·숫자 한 덩어리, 32자 이내 | **바꾸지 않는다** — DB · 쿠키 · 토큰 · 유닛이 다 걸린다 |
-| `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `APP_NAME=… sudo ./deploy.sh update` 로 바꿀 수 있다 |
+| `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `sudo APP_NAME=… ./deploy.sh update` 로 바꿀 수 있다 |
 | `APP_PORT` | 앱 포트. 같은 서버의 인스턴스마다 10씩 벌린다 | 바꾸면 메인 서버 조각도 다시 넣어야 한다 |
-| `EXTENSIONS` | 이 인스턴스가 켜는 확장 모듈, 쉼표로 | `EXTENSIONS=hub,bom sudo ./deploy.sh update` |
-| `DOE_ROOT_HOST_DIR` | CAD(CompCore) 공용 폴더 — 아래 「DOE 공용 폴더」 | `DOE_ROOT_HOST_DIR=… sudo ./deploy.sh update` |
+| `EXTENSIONS` | 이 인스턴스가 켜는 확장 모듈, 쉼표로 | `sudo EXTENSIONS=hub,bom ./deploy.sh update` |
+| `DOE_ROOT_HOST_DIR` | CAD(CompCore) 공용 폴더 — 아래 「DOE 공용 폴더」 | `sudo DOE_ROOT_HOST_DIR=… ./deploy.sh update` |
 | `ANSYS_HOST_DIR` · `ANSYS_VERSION` | 리눅스 Ansys 설치 폴더 · 버전(기본 252) | 같은 방식 |
 | `WORKER_COUNT` | 해석 작업 워커 수(기본 1) | 같은 방식 |
 
@@ -70,17 +74,18 @@ sudo ./deploy.sh update
 「안 줬다」 와 구별되지 않아 기억한 값이 남는다.
 
 같은 서버에 두 번째 인스턴스는 다른 `APP_SLUG` · `APP_PORT` 로 같은 명령을 한 번 더. 인스턴스가
-여럿이면 `update` · `status` 에도 `APP_SLUG=<slug>` 를 붙인다(안 붙이면 어느 것인지 묻는다).
+여럿이면 `update` · `status` 에도 붙인다 — `sudo APP_SLUG=<slug> ./deploy.sh update`(안 붙이면 어느 것인지 묻는다).
 
-### SSH 로만 붙는 서버라면 — 미리 알아 둘 넷
+### SSH 로만 붙는 서버라면 — 미리 알아 둘 다섯
 
 이 스크립트들은 **서버 콘솔 앞에 앉아 있든 SSH 로 붙든 똑같이 돈다.** 다만 원격일
-때만 걸리는 것이 넷 있다.
+때만 걸리는 것이 다섯 있다.
 
 | | |
 | --- | --- |
 | **`root` 로 바로 ssh 했다면** | 운영 계정을 알 수 없어 멈춘다(`sudo` 를 거치지 않아 `SUDO_USER` 가 없다). `OPERATOR=<계정> ./deploy.sh install` 로 준다 |
 | **임시 비밀번호는 한 번만 찍힌다** | 세션이 끊기면 잃는다. `sudo ./deploy.sh install 2>&1 \| tee ~/install-<태그>.log` 로 받아 둔다 |
+| **`setup` 은 묻는다 — TTY 가 없으면 멈춘다** | 원격 자동 설치는 값을 env 로 주고 `--yes`: `sudo SETUP_ROLE=1 APP_SLUG=simengbay DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore ./deploy.sh setup --yes`. 묻는 대신 env(없으면 기본값)를 쓰고 무엇을 썼는지 찍는다. **역할(`SETUP_ROLE=A\|B\|1`)은 꼭 준다** — 기본값이 없다. 먼저 `setup --yes --plan` 으로 계획만 본다. 대기(B)가 A 에서 파일을 받는 단계는 ssh 키로만 된다(비밀번호를 칠 사람이 없다) |
 | **`reset` 은 되묻는다** | `ssh <서버> 'sudo ./deploy.sh reset'` 은 TTY 가 없어 그 물음에서 실패한다. `ssh -t` 로 붙는다 |
 | **`prepare` 는 apt 를 쓴다** | 서버가 우분투 저장소(또는 사내 미러)에 닿아야 한다. apptainer 는 번들에 동봉한 `.deb` 로 깔리므로 PPA 에 닿을 필요는 없다. 그래도 못 깔면 `prepare` 가 DB·폴더까지 만든 뒤 **무엇을 먼저 깔지 말하고 멈춘다** — 해결 뒤 `prepare` 를 다시 돌린다(앞 단계는 멱등하다) |
 
@@ -204,7 +209,7 @@ CAD 플랫폼(CompCore)이 설계점 묶음(DOE) · 설계 하나를 폴더로 �
 컨테이너는 걸어 준 폴더만 보므로 **한 번** 알려 준다(그 뒤로는 기억한다 — 위 표):
 
 ```bash
-DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore sudo ./deploy.sh update   # 설치 때라면 install
+sudo DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore ./deploy.sh update   # 설치 때라면 install
 ```
 
 `install` · `update` 는 끝에 그 폴더를 **운영 계정으로 읽어 본다** — 읽히면 「CAD 공용 폴더 읽기
@@ -232,7 +237,7 @@ sudo mount -a && mount | grep exchange
 > **공유 스토리지가 없는 배치라면** 폴더로는 주고받을 수 없다. 그때는 CAD 쪽에 번들 내려받기
 > API 를 두고 이 서버가 받아 오는 방식이 필요하다 — 아직 없다(정해지면 이 자리에 설정이 는다).
 
-> **워커 수는 한 번 정하면 기억한다** — `WORKER_COUNT=4 sudo ./deploy.sh update`(기본 1).
+> **워커 수는 한 번 정하면 기억한다** — `sudo WORKER_COUNT=4 ./deploy.sh update`(기본 1).
 > 워커 하나가 한 번에 작업 하나를 돌린다. 1.5단계에서 진짜 Mechanical 이 붙으면
 > **라이선스 수를 넘기지 않는다** — 넘긴 워커는 라이선스 오류로 실패한다.
 > 줄여서 다시 깔면 남는 인스턴스는 `deploy.sh` 가 내린다.
@@ -272,7 +277,7 @@ sudo systemctl start <slug>
 **DB 와 첨부를 같은 시각에 함께 받는다.** 둘 중 하나만 받으면 복구되지 않는다.
 
 매일 받게 하려면 systemd 타이머로 건다 — `deploy.sh` 가 백업 폴더를 알면(`DATA_DIR`, 또는
-`BACKUP_HOST_DIR=<폴더> sudo ./deploy.sh update`) `<slug>-backup.timer` 를 스스로 건다(매일 03:00,
+`sudo BACKUP_HOST_DIR=<폴더> ./deploy.sh update`) `<slug>-backup.timer` 를 스스로 건다(매일 03:00,
 이중화의 대기 서버는 03:30 — 그날 것이 이미 있으면 건너뛴다). 손으로 걸려면 `backup.sh` 머리말에
 유닛 예시가 있다. **앱 프로세스에 넣지 않는다** — 앱이 죽은 날 백업도 조용히 죽는다.
 
@@ -343,8 +348,9 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | `connection refused` (DB) | `systemctl status postgresql`, `.env` 의 포트 확인 |
 | 화면이 500, 로그에 "없는 컬럼" | 마이그레이션이 안 돌았다. `sudo ./deploy.sh update` |
 | **해석 작업이 「대기」 에서 안 움직인다** | 먼저 서버 화면의 「워커 · 솔버」 카드 — **그 솔버를 집는 워커가 있나**(CalculiX 작업인데 워커가 전부 `SIMULATION_SOLVERS=ansys` 면 영원히 대기한다). 워커가 아예 없으면 `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
-| 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `WORKER_COUNT=1 sudo ./deploy.sh update` 로 낮추거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
-| **「CAD 폴더에서 선택」 · DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 를 한 번도 안 줬다. `DOE_ROOT_HOST_DIR=… sudo ./deploy.sh update` — 그 뒤로는 기억한다 |
+| **워커가 10초마다 다시 뜬다**(`journalctl` 에 `No module named app`) | v0.5.0 이하의 워커 유닛이 `/opt/app/backend` 로 옮기지 않고 띄웠다. v0.5.1 이상 번들로 `sudo ./deploy.sh update` — 유닛을 다시 그린다. 손으로 고친 유닛(`--pwd`)도 그때 덮이는데, 새 템플릿이 같은 일을 하므로 괜찮다. 지금은 install · update 끝에 「워커 N 이 떠 있지 않습니다」 와 마지막 기록이 찍힌다 |
+| 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `sudo WORKER_COUNT=1 ./deploy.sh update` 로 낮추거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
+| **「CAD 폴더에서 선택」 · DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 를 한 번도 안 줬다. `sudo DOE_ROOT_HOST_DIR=… ./deploy.sh update` — 그 뒤로는 기억한다 |
 | **어제까지 되던 「CAD 폴더에서 선택」 이 폴더를 못 읽는다** | 대개 NAS 가 빠졌다(재부팅 뒤 등). `mount \| grep exchange` — 비었으면 `/etc/fstab` 에 `_netdev` 로 넣고 `sudo mount -a`. `sudo ./deploy.sh status` 의 「CAD 공용 폴더」 칸도 같은 것을 본다. v0.4.0 이하에서 `update` 를 했다면 연결 자체가 빠졌을 수 있다 — 값을 다시 주고 `update` |
 | DOE 화면에 「폴더가 없습니다」 | `.env` 의 `DOE_ROOTS` 가 **호스트 경로**를 가리킨다. 컨테이너 안에서 보이는 이름(`/data/doe`)이어야 한다 |
 | 폴더는 보이는데 DOE 표시가 안 붙는다 | 그 폴더에 `manifest.csv` 가 없다 — CAD 가 내보내기를 끝내지 않았거나 상위 폴더를 보고 있다 |
@@ -413,16 +419,16 @@ sudo ./deploy.sh setup           # A 에서 .env · 복제 비밀번호를 scp �
 
 ```bash
 # ── 서버 A (주) ──
-APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
-HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
-  sudo ./deploy.sh prepare         # 패키지(postgresql-16 · keepalived) · DB 역할
+sudo APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
+  HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
+  ./deploy.sh prepare              # 패키지(postgresql-16 · keepalived) · DB 역할
 sudo ./deploy.sh db-primary        # 복제 계정 · pg_hba · 감시 훅 · 원복 잠금. 비밀번호를 /data/…/db/ 에 둔다
 sudo ./deploy.sh install           # .env(/data 에) · SIF · 마이그레이션 · 시드 · 유닛 · 메인 서버용 nginx 조각
 
 # ── 서버 B (대기) ──  (같은 APP_* 값으로)
-APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
-HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
-  sudo ./deploy.sh prepare
+sudo APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
+  HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
+  ./deploy.sh prepare
 sudo ./deploy.sh db-standby        # A 에서 pg_basebackup — 기존 로컬 DB 는 옆으로 치운다
 sudo ./deploy.sh install           # .env 는 /data 의 것을 그대로(만들지 않는다) · 마이그레이션은 이미 돼 있어 통과
 
@@ -444,7 +450,7 @@ DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다.
 | 없는 것 | 대신 |
 | --- | --- |
 | **DB VIP** | `DB_VIP` 를 안 주면 keepalived 도 자동 승격도 없다. 앱은 A 의 IP 로 DB 에 붙는다. 승격은 손으로(8.3 「DB VIP 없이」). guard 는 VIP 없이도 상대에게 물어 동작한다. 받으면 8.5 |
-| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 와 복제 비밀번호는 A 의 것**이어야 한다 — `setup` 이 A 의 `~/apps/<slug>/handoff/` 에서 scp 로 받아 온다(손으로 하면 `scp <A>:~/apps/<slug>/handoff/.env ~/apps/<slug>/.env`, 복제 비밀번호는 `/etc/pg-ha.replpass` 에 root:postgres 640). 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `DATA_DIR=/data/<slug> sudo ./deploy.sh update` — 양쪽 |
+| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 와 복제 비밀번호는 A 의 것**이어야 한다 — `setup` 이 A 의 `~/apps/<slug>/handoff/` 에서 scp 로 받아 온다(손으로 하면 `scp <A>:~/apps/<slug>/handoff/.env ~/apps/<slug>/.env`, 복제 비밀번호는 `/etc/pg-ha.replpass` 에 root:postgres 640). 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `sudo DATA_DIR=/data/<slug> ./deploy.sh update` — 양쪽 |
 
 리허설에서 볼 수 있는 것: 복제(`db-status` 의 지연), 손 승격 · demote · `db-standby` 재구성, guard(옛 주 부팅), 두 앱 동시 운영(동시 편집), B→A 업데이트, 재부팅. 못 보는 것: 자동 승격, 공용 첨부, 백업 폴더, 메인 서버 경유.
 
@@ -498,7 +504,7 @@ DB VIP 가 없을 때는 각 단계 사이에 `/data/…/.env` 의 `DATABASE_URL
 
 ```bash
 # 양쪽 모두
-DB_VIP=<주소> sudo ./deploy.sh lb           # keepalived 에 DB VIP 인스턴스 · 감시 · 자동 승격
+sudo DB_VIP=<주소> ./deploy.sh lb           # keepalived 에 DB VIP 인스턴스 · 감시 · 자동 승격
 # 주 서버에서
 sudo ./deploy.sh db-primary                  # /etc/pg-ha.conf 에 VIP 를 적는다(감시가 그것을 본다)
 # /data/…/.env 의 DATABASE_URL 호스트를 VIP 로 → 양쪽 sudo systemctl restart <slug>

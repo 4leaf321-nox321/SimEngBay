@@ -2851,6 +2851,74 @@
         }
       }
     },
+    "/api/simulations/doe/point": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Preview Doe Point",
+        "description": "폴더의 설계점 하나를 읽어 준다 — 새 작업 창이 「설계점 하나 고르기」 에 쓴다(점 파일을\n올렸을 때와 같은 미리보기).",
+        "operationId": "preview_doe_point_api_simulations_doe_point_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "number",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "recipe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Recipe"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConditionsPreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/{simulation_id}": {
       "get": {
         "tags": [
@@ -4804,6 +4872,18 @@
               }
             ],
             "title": "Numbers"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           }
         },
         "type": "object",
@@ -4921,6 +5001,11 @@
             },
             "type": "array",
             "title": "Factors"
+          },
+          "single": {
+            "type": "boolean",
+            "title": "Single",
+            "default": false
           },
           "method": {
             "type": "string",

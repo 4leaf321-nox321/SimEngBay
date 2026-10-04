@@ -849,6 +849,55 @@ def test_쉘_파트가_있으면_중간면_형상을_함께_싣는다(
     assert "중간면" in bare.json()["error"]["message"]
 
 
+SINGLE_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "설계하나_측면가진"
+
+
+def test_설계_하나를_폴더에서_골라_작업으로_만든다(client: TestClient, member: Signed) -> None:
+    """CompCore v0.9.0 「해석용으로 내보내기」 — 인자 0개 DOE 폴더(`factors: []`)가 설계
+    하나다.
+
+    폴더는 CompCore 공식 픽스처다(커밋 2b7d78d — 측면가진 · 기둥 높이 100). 새 작업 창이
+    폴더에서 설계점 하나를 고르는 길이다: 미리보기는 그 점 파일을 올렸을 때와 같고, 만든 작업은
+    **스터디가 아니다**(출처 `design`) — 스터디 목록 · 비교에 섞이지 않는다.
+    """
+    folder = client.get(
+        f"/api/simulations/doe/preview?path={SINGLE_FOLDER}", headers=member.headers
+    ).json()
+    assert folder["single"] is True and folder["factors"] == []
+    assert [one["number"] for one in folder["points"]] == [1]
+
+    point = client.get(
+        f"/api/simulations/doe/point?path={SINGLE_FOLDER}&number=1", headers=member.headers
+    )
+    assert point.status_code == 200, point.text
+    parts = {row["name"]: row["material"] for row in point.json()["bodies"]}
+    assert set(parts) == {"받침판", "기둥"} and all(parts.values())
+    assert point.json()["suggested_recipe"] == "harmonic"
+    missing = client.get(
+        f"/api/simulations/doe/point?path={SINGLE_FOLDER}&number=7", headers=member.headers
+    )
+    assert missing.status_code == 400
+
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(SINGLE_FOLDER),
+            "spec": {"recipe": "modal", "modes": 4},
+            "workspace_slug": member.workspace,
+            "numbers": [1],
+            "name": "기둥 받침 확인",
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    (made,) = created.json()["created"]
+    one = client.get(f"/api/simulations/{made}", headers=member.headers).json()
+    assert one["name"] == "기둥 받침 확인"
+    assert one["source_kind"] == "design"
+    studies = client.get("/api/simulations/studies", headers=member.headers).json()
+    assert all(row["study_id"] != folder["study_id"] for row in studies)
+
+
 SHARED_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "재료훑기-7c1d3a44"
 
 

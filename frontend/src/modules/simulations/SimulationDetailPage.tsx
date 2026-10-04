@@ -407,6 +407,14 @@ function SourceLine({ simulation }: { simulation: Simulation }) {
       </p>
     )
   }
+  if (simulation.source_kind === 'design') {
+    // 설계 하나(CompCore 「해석용으로 내보내기」) — 스터디가 아니라 링크가 없다. 폴더 이름이 그 설계다.
+    return (
+      <p className="text-muted-foreground text-sm">
+        CAD 설계 <span className="font-medium">{String(meta.study_name ?? '—')}</span>
+      </p>
+    )
+  }
   if (simulation.source_kind === 'mesh_check' && typeof meta.convergence_of === 'string') {
     return (
       <p className="text-muted-foreground text-sm">

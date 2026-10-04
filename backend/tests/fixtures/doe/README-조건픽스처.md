@@ -85,6 +85,20 @@ Al5052-H32 ↔ SECC 로(`study.json` 의 `factors` — `{"mode": "material", "bo
 - **점 그룹** `측정점` — 기둥 끝 꼭짓점 하나, 지문은 `{"point": [5, 5, 10 + 높이]}`(점 그룹의
   지문은 자리뿐이다. 면의 `centroid` · `area` · `normal` 이 없다). 응답을 읽을 자리로 쓴다.
 
+## 설계하나_측면가진 — 설계 하나(인자 없음)
+
+「조건_측면가진」 과 **같은 형상 · 조건**에서 인자만 비웠다 — CompCore v0.9.0 의 「해석용으로
+내보내기」(`factors: []`). 지금 도면 그대로(기둥 높이 **100**) 설계점 하나다. 폴더 계약은 DOE 와 같다.
+
+- `study.json`: `factors: []`, `method: "factorial"`, `samples: 1`. 따로 표시는 없다 — 설계 하나인지는
+  `factors == []` 로 판별한다.
+- `points/p0001.json`: `point.params` 가 `{}`. 나머지(`bodies` · `regions` · `conditions` · `units` ·
+  `length_units` · `quality` · `unresolved`)는 DOE 점 파일과 같다. 값은 「조건_측면가진」 의 2 번 점
+  (높이 100)과 같다 — `측정점` (5, 5, 110), 기둥 부피 10000 mm³, 첫 굽힘 모드 어림 약 830 Hz.
+- `manifest.csv`: 한 줄. **변수 열이 없다** — `point, status, step_file, point_file, unresolved,
+  interference, warnings, error`. 설계 변수는 manifest 의 열이 아니라 `study.json.factors[].name`
+  으로만 읽는다(측정값 · `mid_file` 도 열로 붙을 수 있다).
+
 ## 조건_전단이음 — 마찰이 할 일이 있는 이음 (전단 · 변위 제어)
 
 지금까지의 픽스처는 이음이 **압축만** 받았다 — 마찰이 할 일이 없어 두 솔버가 「마찰은 차이

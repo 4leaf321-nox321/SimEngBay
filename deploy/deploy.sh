@@ -101,6 +101,10 @@ EXTENSIONS=$EXTENSIONS
 INSTALL_DIR=$INSTALL_DIR
 DATA_DIR=${DATA_DIR:-}
 BACKUP_HOST_DIR=${BACKUP_HOST_DIR:-}
+DOE_ROOT_HOST_DIR=${DOE_ROOT_HOST_DIR:-}
+ANSYS_HOST_DIR=${ANSYS_HOST_DIR:-}
+ANSYS_VERSION=${ANSYS_VERSION:-}
+WORKER_COUNT=${WORKER_COUNT:-}
 EOF
     chmod 644 "$INSTANCES_DIR/$APP_SLUG.conf"
 }
@@ -147,17 +151,22 @@ SYNC_ENABLED="${SYNC_ENABLED:-1}"                      # 0 으로 두면 타이�
 MCP_SERVICE_NAME="${APP_SLUG}-mcp"
 WORKER_SERVICE_NAME="${APP_SLUG}-worker"
 WORKER_SERVICE_UNIT="/etc/systemd/system/${WORKER_SERVICE_NAME}@.service"
+# **아래 넷은 한 번 주면 기억한다**(CompCore 와 같은 방식) — env > /etc/platform-instances/<slug>.conf
+# (지난 배포가 남긴 것) > 기본값. 전에는 기억하지 않아서 `update` 때 빠뜨리면 공용 폴더 · Ansys 의
+# bind 가 **조용히 빠지고**, 워커는 1 개로 줄었다(2026-10-04). 바꿀 때만 새 값으로 `update` 한다.
 #: 띄울 해석 작업 워커 수. **Mechanical 라이선스 수를 넘기지 않는다**(1.5단계부터).
+WORKER_COUNT="${WORKER_COUNT:-$(instance_conf_get "$APP_SLUG" WORKER_COUNT)}"
 WORKER_COUNT="${WORKER_COUNT:-1}"
 #: 호스트(또는 공용 스토리지)의 Ansys 설치 폴더. 주면 워커 유닛이 /ansys_inc 에 건다.
 #: **이미지에 굽지 않는다** — 수십 GB 이고 버전을 올릴 때마다 다시 구워야 한다.
-ANSYS_HOST_DIR="${ANSYS_HOST_DIR:-}"
+ANSYS_HOST_DIR="${ANSYS_HOST_DIR:-$(instance_conf_get "$APP_SLUG" ANSYS_HOST_DIR)}"
 #: Ansys 버전 번호(252 = 2025 R2). 임베디드가 찾는 환경변수 이름(AWP_ROOT252)에 들어간다.
+ANSYS_VERSION="${ANSYS_VERSION:-$(instance_conf_get "$APP_SLUG" ANSYS_VERSION)}"
 ANSYS_VERSION="${ANSYS_VERSION:-252}"
 #: CAD(CompCore)가 DOE 를 내보내는 공용 폴더. 주면 컨테이너의 /data/doe 에 **읽기 전용**으로
-#: 걸고 .env 의 DOE_ROOTS 를 그 경로로 채운다. 안 주면 DOE 가져오기가 막힌다(그것이 기본값 —
-#: 아무 경로나 읽게 두면 그 화면이 서버의 모든 폴더를 여는 문이 된다).
-DOE_ROOT_HOST_DIR="${DOE_ROOT_HOST_DIR:-}"
+#: 걸고 .env 의 DOE_ROOTS 를 그 경로로 채운다. 안 주면 「CAD 폴더에서 선택」 · DOE 가져오기가
+#: 막힌다(그것이 기본값 — 아무 경로나 읽게 두면 그 화면이 서버의 모든 폴더를 여는 문이 된다).
+DOE_ROOT_HOST_DIR="${DOE_ROOT_HOST_DIR:-$(instance_conf_get "$APP_SLUG" DOE_ROOT_HOST_DIR)}"
 #: 컨테이너 안에서 그 폴더가 보이는 이름. 앱의 DOE_ROOTS 가 이 값이다.
 DOE_ROOT_IN_CONTAINER="/data/doe"
 MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
@@ -320,6 +329,48 @@ EOF
     # 비밀키가 들어 있다. 남이 읽을 이유가 없다.
     chmod 600 "$ENV_FILE"
     warn "$ENV_FILE 를 만들었습니다 — 공개 전에 CORS·백업 경로를 확인하세요."
+}
+
+# **`.env` 의 경로는 유닛이 거는 자리와 같아야 한다** — 공용 폴더 · 백업 폴더를 설치 뒤에 정해도
+# 맞춘다(CompCore 와 같은 장치). 이 값들은 `.env` 를 처음 만들 때만 채워졌다. 그래서 나중에
+# `DOE_ROOT_HOST_DIR=… update` 를 하면 유닛은 폴더를 거는데 앱은 DOE_ROOTS 가 비어 「CAD 폴더에서
+# 선택」 이 막혔다. 비밀키 · DB 같은 다른 줄은 건드리지 않는다.
+set_env_key() {  # $1=key $2=value — 있으면 바꾸고, 주석으로만 있으면 풀고, 없으면 덧붙인다
+    local key="$1" value="$2" current
+    current="$(sed -n "s|^$key=||p" "$ENV_FILE" | tail -n1)"
+    [[ "$current" == "$value" ]] && return 0
+    if grep -q "^$key=" "$ENV_FILE"; then
+        warn ".env 의 $key 를 바꿉니다: ${current:-(빈 값)} → $value (유닛이 거는 자리와 같아야 합니다)"
+        sed -i "s|^$key=.*|$key=$(sed_escape "$value")|" "$ENV_FILE"
+    elif grep -q "^# *$key=" "$ENV_FILE"; then
+        sed -i "0,/^# *$key=/{s|^# *$key=.*|$key=$(sed_escape "$value")|}" "$ENV_FILE"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+    fi
+    info ".env: $key=$value"
+}
+
+sync_env_paths() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    if [[ -n "$DOE_ROOT_HOST_DIR" ]]; then set_env_key DOE_ROOTS "$DOE_ROOT_IN_CONTAINER"; fi
+    if [[ -n "$BACKUP_HOST_DIR" ]]; then set_env_key BACKUP_DIR /data/backup; fi
+    return 0
+}
+
+# ── CAD 공용 폴더 — **읽을 수 있는지 지금 본다.** 마운트가 빠지면 연결할 폴더 자체가 없고, 그 사실은
+# 누군가 「CAD 폴더에서 선택」 을 연 날에야 드러난다. ──
+check_doe_dir() {
+    [[ -n "$DOE_ROOT_HOST_DIR" ]] || {
+        warn "CAD 공용 폴더를 안 정했습니다 — 「CAD 폴더에서 선택」 · DOE 가져오기가 막힙니다(파일 직접 업로드는 됩니다).
+      정하려면 한 번: DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore sudo ./deploy.sh update (그 뒤로는 기억합니다)"
+        return 0
+    }
+    if as_op test -r "$DOE_ROOT_HOST_DIR" -a -x "$DOE_ROOT_HOST_DIR" 2>/dev/null; then
+        info "CAD 공용 폴더 읽기 확인: $DOE_ROOT_HOST_DIR (폴더 $(as_op find "$DOE_ROOT_HOST_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l) 개)"
+    else
+        warn "CAD 공용 폴더를 읽을 수 없습니다: $DOE_ROOT_HOST_DIR (계정 $OPERATOR)
+      마운트부터 보세요: mount | grep exchange — 재부팅 뒤에도 붙게 /etc/fstab 에 _netdev 로 넣습니다."
+    fi
 }
 
 # 이름 · 설명 · 확장은 배포로 바꿀 수 있다 — `EXTENSIONS=hub,bom sudo ./deploy.sh update`.
@@ -638,6 +689,7 @@ cmd_install() {
     ensure_dirs
     generate_env_if_missing
     sync_env_identity
+    sync_env_paths
     place_sif
     run_migrations
     run_seed
@@ -652,6 +704,7 @@ cmd_install() {
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
     setup_lb
+    check_doe_dir
 
     cat <<MSG
 
@@ -660,7 +713,9 @@ cmd_install() {
   접속   : $( [[ -n "$HA_ROLE" ]] && echo "https://$PUBLIC_HOST/$APP_SLUG/  (직접: http://$SELF_IP:$APP_PORT/)" || echo "http://<서버주소>:$APP_PORT/" )
   자료   : 첨부 $FILESTORE_HOST_DIR · 설정 $ENV_FILE · 로그 $LOG_HOST_DIR$( [[ -n "$BACKUP_HOST_DIR" ]] && echo " · 백업 $BACKUP_HOST_DIR" )
   워커   : sudo systemctl status ${WORKER_SERVICE_NAME}@1   (해석 작업 $WORKER_COUNT 개)
-  DOE    : $( [[ -n "$DOE_ROOT_HOST_DIR" ]] && echo "$DOE_ROOT_HOST_DIR → $DOE_ROOT_IN_CONTAINER (읽기 전용)" || echo "안 걸림 — DOE_ROOT_HOST_DIR 를 주면 가져오기 화면이 열립니다" )
+  CAD    : $( [[ -n "$DOE_ROOT_HOST_DIR" ]] && echo "$DOE_ROOT_HOST_DIR → $DOE_ROOT_IN_CONTAINER (읽기 전용)" || echo "안 걸림 — DOE_ROOT_HOST_DIR 를 한 번 주면 「CAD 폴더에서 선택」 이 열립니다" )
+  Ansys  : $( [[ -n "$ANSYS_HOST_DIR" ]] && echo "$ANSYS_HOST_DIR → /ansys_inc (v$ANSYS_VERSION)" || echo "안 걸림 — 리눅스 Ansys 를 쓰면 ANSYS_HOST_DIR 를 한 번 줍니다" )
+  기억   : $INSTANCES_DIR/$APP_SLUG.conf — 다음 update 는 위 경로를 다시 안 줘도 됩니다
   MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)
 
   위에 찍힌 관리자 임시 비밀번호는 **다시 표시되지 않습니다.**
@@ -674,6 +729,7 @@ cmd_update() {
     info "$APP_NAME ($APP_SLUG) $VERSION — 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
     ensure_dirs
     sync_env_identity
+    sync_env_paths
 
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
@@ -699,6 +755,7 @@ cmd_update() {
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
     setup_lb
+    check_doe_dir
 
     cat <<MSG
 
@@ -747,6 +804,7 @@ cmd_status() {
     echo "  설치 경로 : $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo "  · 공용 $DATA_DIR" )"
     echo "  DB        : $DB_NAME @ $DB_HOST"
     echo "  포트      : $APP_PORT"
+    echo "  워커      : $WORKER_COUNT 개 · Ansys $( [[ -n "$ANSYS_HOST_DIR" ]] && echo "$ANSYS_HOST_DIR (v$ANSYS_VERSION)" || echo "안 걸림" )"
     [[ -f "$INSTALL_DIR/app.sif" ]] && echo "  SIF       : $(stat -c '%y' "$INSTALL_DIR/app.sif")"
     echo
     systemctl --no-pager --lines=10 status "$SERVICE_NAME" || true
@@ -769,6 +827,9 @@ cmd_status() {
         systemctl --no-pager list-timers "${BACKUP_SERVICE_NAME}.timer" || true
         [[ -f "$BACKUP_HOST_DIR/LAST_BACKUP.txt" ]] && head -n1 "$BACKUP_HOST_DIR/LAST_BACKUP.txt"
     fi
+    echo
+    echo "== CAD 공용 폴더 (${DOE_ROOT_HOST_DIR:-안 정함} → $DOE_ROOT_IN_CONTAINER) =="
+    check_doe_dir
     echo
     ha_status
 }
@@ -805,6 +866,12 @@ cmd_setup() {
         APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
         ask EXTENSIONS "켤 확장 모듈, 쉼표로 (없으면 그냥 Enter)" "$(instance_conf_get "$APP_SLUG" EXTENSIONS)"
     fi
+    # CAD 공용 폴더 · Ansys 는 **서버마다** 마운트하는 자리라 A · B 모두 묻는다. 비우면 그 기능만 꺼진다.
+    local remembered
+    remembered="$(instance_conf_get "$APP_SLUG" DOE_ROOT_HOST_DIR)"
+    ask DOE_ROOT_HOST_DIR "CAD(CompCore) 공용 폴더 — 「CAD 폴더에서 선택」 이 읽는 곳 (예: /mnt/exchange/CompCore, 없으면 Enter)" "${remembered:-$DOE_ROOT_HOST_DIR}"
+    remembered="$(instance_conf_get "$APP_SLUG" ANSYS_HOST_DIR)"
+    ask ANSYS_HOST_DIR "리눅스 Ansys 설치 폴더 (예: /opt/ansys_inc, 안 쓰면 Enter)" "${remembered:-$ANSYS_HOST_DIR}"
     local peer_account=""
     if [[ -n "$HA_ROLE" ]]; then
         ask PEER_IP "상대 서버의 IP ($( [[ "$HA_ROLE" == master ]] && echo 'B' || echo 'A' ))" "$PEER_IP"
@@ -841,6 +908,7 @@ cmd_setup() {
   이 서버  : $( case "$HA_ROLE" in master) echo "주(A) $SELF_IP — 상대 B $PEER_IP";; backup) echo "대기(B) $SELF_IP — 주 A $PEER_IP";; *) echo "단독";; esac )
   DB       : 이름 $DB_NAME · 앱이 붙는 곳 $DB_HOST
   파일     : 설치 $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo " · 공용 $DATA_DIR" )
+  연결     : CAD ${DOE_ROOT_HOST_DIR:-안 함} · Ansys ${ANSYS_HOST_DIR:-안 함} — 다음 배포부터 기억합니다
   순서     : 1) 패키지 · DB 역할 (prepare)$( case "$HA_ROLE" in master) echo "  2) PostgreSQL 주 (db-primary)  3) 앱 (install)  4) B 에 넘길 파일 모으기";; backup) echo "  2) A 에서 .env · 복제 비밀번호 받기  3) PostgreSQL 대기 (db-standby)  4) 앱 (install)";; *) echo "  2) 앱 (install)";; esac )
   기록     : $INSTALL_DIR/setup.log (임시 관리자 비밀번호도 여기 남습니다)
 ───────────────────────────────────────────────────────

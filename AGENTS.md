@@ -208,6 +208,11 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
   시키는 명령은 번들 안에 있어야 한다.
 - **배포 자산에 제품 이름을 박지 않는다.** 번들은 `branding.py` 의 기본값만 `BUILD_INFO` 에
   들고, 실제 이름 · 포트 · 확장은 설치가 `deploy.sh` 에 env 로 준다.
+- **배포가 env 로 받는 값은 `instance_save` 로 기억하고 `instance_conf_get` 으로 되읽는다**
+  (env > `/etc/platform-instances/<slug>.conf` > 기본값). 유닛을 그리는 값(`DOE_ROOT_HOST_DIR` ·
+  `ANSYS_HOST_DIR` · `WORKER_COUNT` 등)을 기억하지 않으면 그것을 빠뜨린 `update` 가 bind 를
+  **조용히** 뺀다(v0.4.0 까지 실제로 그랬다). 새 값을 더하면 두 곳을 함께 고치고, 그 값이 `.env` 의
+  경로와 짝이면 `sync_env_paths` 에도 둔다. `test_deploy.py` 의 「기억한다」 시험이 지킨다.
 - `deploy.sh` 에는 MCP 서버 · 동기화 타이머 자리가 남아 있다 — 번들에 `mcp_server/` 나
   `sync.*.template` 이 없으면 **건너뛴다.** 나중에 AI 가 해석을 거는 MCP 서버를 두게 되면
   그 자리를 그대로 쓴다(StandardPlatform 의 `mcp_server/` 가 본보기).
@@ -288,6 +293,10 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
   굽힘이 빠진다). 중간면이 없거나 CompCore 가 못 만들었으면 `refused` 다 — 솔리드로 풀지 않는다.
   메시 힌트는 「국부 메시」(「전체」 · 면 · 엣지)이고
   바디 그룹에 건 옛 힌트는 파트 메시로 옮겨 읽는다(`conditions._legacy_body_hint`).
+- **새 작업 창의 기본은 CAD 폴더에서 설계점 하나다** — 짝이 맞아야 하는 파일(STEP · 점 파일 · 중간면)을
+  사람이 따로 고르게 하지 않는다. 탐색기는 DOE 창과 같은 것(`FolderBrowser.tsx`), 작업은 같은 길
+  (`doe/import` 의 `numbers`)이다. 설계 하나(`study.json` 의 `factors: []`)로 만든 작업은 출처가 `design`
+  이라 스터디가 아니다. 업로드는 공용 폴더에 없는 파일용이다.
 - **작업 창의 칸과 스펙은 한 곳에서** — `SpecFields.tsx`(해석 종류 · 물성 · 메시 · 조화)와
   `spec.ts`(`buildSpec`)를 새 작업 창 · DOE 창이 함께 쓴다. 두 벌일 때 DOE 창은 재료 이름만 받고
   영률 · 밀도를 강으로 못 박아 보냈다.

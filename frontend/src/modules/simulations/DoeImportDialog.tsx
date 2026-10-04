@@ -41,6 +41,7 @@ import { useEffect, useState } from 'react'
 import { simulationApi } from '@/modules/simulations/api'
 import type { DoeImport, DoeListing, DoePreview } from '@/modules/simulations/api'
 import { ConditionList } from '@/modules/simulations/ConditionList'
+import { FolderBrowser } from '@/modules/simulations/FolderBrowser'
 import { buildSpec, HARMONIC_DEFAULTS, isOrder, isRecipe, specProblem } from '@/modules/simulations/spec'
 import type { HarmonicInput, MeshOrder, RecipeName } from '@/modules/simulations/spec'
 import { HarmonicFields, MeshFields, RecipeSelect } from '@/modules/simulations/SpecFields'
@@ -60,7 +61,6 @@ import {
 } from '@/shared/components/ui/dialog'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
-import { Folder, FolderOpen, ChevronUp } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -225,79 +225,8 @@ export function DoeImportDialog({ open, onClose, onImported }: Props) {
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* 탐색기 — 뿌리 아래를 눌러 들어간다. 「고를 수 있는 폴더」 는 표시가 다르다. */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label>공용 폴더</Label>
-              {(listing?.roots?.length ?? 0) > 1 && (
-                <div className="flex gap-1">
-                  {(listing?.roots ?? []).map((root) => (
-                    <Button
-                      key={root}
-                      variant={listing?.path.startsWith(root) ? 'secondary' : 'ghost'}
-                      size="sm"
-                      onClick={() => void browse(root)}
-                      className="font-mono text-xs"
-                    >
-                      {root}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                className="size-8 shrink-0"
-                disabled={!listing?.parent || busy}
-                onClick={() => listing?.parent && void browse(listing.parent)}
-                aria-label="한 칸 위"
-              >
-                <ChevronUp className="size-4" />
-              </Button>
-              <p className="text-muted-foreground truncate font-mono text-xs" title={listing?.path}>
-                {listing?.path ?? '…'}
-              </p>
-            </div>
-            <div className="max-h-48 overflow-y-auto rounded-md border">
-              {listing && listing.entries.length === 0 ? (
-                <p className="text-muted-foreground p-3 text-sm">
-                  {listing.is_study
-                    ? '이 폴더가 DOE 입니다. 아래에서 확인하고 실행하세요.'
-                    : '하위 폴더가 없습니다.'}
-                </p>
-              ) : (
-                <ul className="divide-y">
-                  {(listing?.entries ?? []).map((entry) => (
-                    <li key={entry.path}>
-                      <button
-                        type="button"
-                        onClick={() => void browse(entry.path)}
-                        className="hover:bg-muted/50 flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm"
-                      >
-                        {entry.is_study ? (
-                          <FolderOpen className="size-4 shrink-0 text-emerald-600" />
-                        ) : (
-                          <Folder className="text-muted-foreground size-4 shrink-0" />
-                        )}
-                        <span className="truncate">{entry.name}</span>
-                        {/* **눌러 보고 알게 하지 않는다** — 가져올 수 있는 폴더를 미리 표시한다. */}
-                        {entry.is_study && (
-                          <span className="text-muted-foreground ml-auto text-xs">DOE</span>
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            {listing?.truncated && (
-              <p className="text-muted-foreground text-xs">
-                폴더가 너무 많아 일부만 보여 줍니다. 하위 폴더로 들어가 좁히세요.
-              </p>
-            )}
-          </div>
+          {/* 탐색기 — 뿌리 아래를 눌러 들어간다. CAD 폴더는 표시가 다르다. */}
+          <FolderBrowser listing={listing} busy={busy} onBrowse={(path) => void browse(path)} />
 
           <ErrorNotice error={error} />
 

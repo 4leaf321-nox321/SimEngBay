@@ -118,6 +118,9 @@ class DoeFolder:
     points: list[DoePoint]
     seed: int | None = None
     method: str = ""
+    single: bool = False
+    """**설계 하나**(CompCore v0.9.0) — 인자가 0개인 DOE 다. `study.json` 의 `factors == []` 로
+    판별한다(CompCore 가 그렇게 하라고 했다 — 따로 표시하지 않는다)."""
 
     @property
     def usable(self) -> list[DoePoint]:
@@ -180,26 +183,36 @@ def read_folder(path: Path) -> DoeFolder:
         points=points,
         seed=study.get("seed"),
         method=str(study.get("method") or ""),
+        single=isinstance(study.get("factors"), list) and not study["factors"],
     )
 
 
 def _factors(study: dict[str, Any], columns: list[str]) -> list[str]:
     """어느 열이 **바꾼 변수**인가.
 
-    **`study.json` 의 선언이 정본이다.** 전에는 「고정 열이 아닌 것은 전부 인자」 로 봤는데,
-    CAD 가 표에 열을 더하면(CompCore v0.6.0 의 `warnings` · 측정값 열) 그것들이 설계 인자로
-    둔갑한다 —
-    화면의 「바꾼 변수」 와 설계점 비교 축에 엉뚱한 것이 끼고, 그 그림은 오류 없이 그럴듯하다.
+    **`study.json` 의 선언이 정본이다**(CompCore 계약, 2026-10-04 확인). `factors` 는 늘 있고,
+    설계 변수는 그 목록의 `name` 뿐이다(고정 인자 포함). `[]` 는 인자가 없다는 뜻이다(설계
+    하나). manifest 의 열은
 
-    선언이 없는 옛 폴더는 전처럼 본다(그때는 표에 인자만 있었다).
+        point, status, <factors…>, <measures…>, step_file, [mid_file], point_file,
+        unresolved, interference, warnings, error
+
+    라서 설계 하나라도 측정값을 고르면 이름 있는 열이 생긴다 — 표의 열로 변수를 짐작하지
+    않는다. 전에는 「고정 열이 아닌 것은 전부 인자」 로 봤고, 그러면 측정값 · `warnings` 열이
+    설계 인자로 둔갑했다(화면의 「바꾼 변수」 와 비교 축에 끼고, 그 그림은 오류 없이
+    그럴듯하다).
+
+    선언이 없는 옛 폴더만 전처럼 본다(그때는 표에 인자만 있었다).
     """
+    raw = study.get("factors")
     declared = [
         str(one.get("name") or "").strip()
-        for one in (study.get("factors") or [])
+        for one in (raw if isinstance(raw, list) else [])
         if isinstance(one, dict) and one.get("name")
     ]
-    if declared:
-        # 표에 있는 것만 — 선언됐어도 열이 없으면 읽을 값이 없다.
+    if declared or raw == []:
+        # 표에 있는 것만 — 선언됐어도 열이 없으면 읽을 값이 없다. **빈 목록도 선언이다**(설계
+        # 하나, CompCore v0.9.0) — 「선언이 없다」 로 읽으면 표의 다른 열이 인자로 둔갑한다.
         return [name for name in columns if name in set(declared)]
     return [name for name in columns if name not in FIXED_COLUMNS]
 

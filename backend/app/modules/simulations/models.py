@@ -61,7 +61,8 @@ class Simulation(Base):
     source_kind: Mapped[str] = mapped_column(
         String(20), default="upload", server_default="upload"
     )
-    """입력 형상이 어디서 왔나 — upload · part_version · doe_point (뒤 둘은 5단계)."""
+    """입력 형상이 어디서 왔나 — upload · part_version · doe_point · design(설계 하나 —
+    인자 0개인 CAD 폴더, CompCore v0.9.0) · mesh_check."""
     source_ref: Mapped[str] = mapped_column(String(300), default="", server_default="")
     """업로드면 원본 파일 이름, DOE 면 `<스터디 이름>/pNNNN`."""
     source_meta: Mapped[dict[str, Any]] = mapped_column(

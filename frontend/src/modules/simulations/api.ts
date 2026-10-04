@@ -238,7 +238,14 @@ export const simulationApi = {
     spec: Record<string, unknown>
     workspace_slug?: string | null
     numbers?: number[] | null
+    /** 작업 이름 — 설계점 하나를 고를 때만 쓴다(비우면 폴더 이름). */
+    name?: string | null
   }) => api.post<DoeImport>('/simulations/doe/import', body),
+  /** 폴더의 **설계점 하나**를 점 파일을 올렸을 때와 똑같이 읽어 준다(새 작업 창). */
+  previewDoePoint: (path: string, number: number, recipe?: string) =>
+    api.get<ConditionsPreview>(
+      `/simulations/doe/point?path=${encodeURIComponent(path)}&number=${number}${recipe ? `&recipe=${recipe}` : ''}`,
+    ),
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
   result: (id: string) =>
     api.get<SimulationResult | StaticResult | HarmonicResult>(`/simulations/${id}/result`),

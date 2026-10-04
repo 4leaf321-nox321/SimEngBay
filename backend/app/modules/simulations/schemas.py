@@ -180,6 +180,8 @@ class DoePreviewOut(BaseModel):
     study_id: str
     name: str
     factors: list[str]
+    single: bool = False
+    """설계 하나 — 인자가 0개인 폴더(CompCore v0.9.0 「해석용으로 내보내기」)."""
     method: str = ""
     seed: int | None = None
     points: list[DoePointPreview]
@@ -237,6 +239,9 @@ class DoeImportRequest(BaseModel):
     workspace_slug: str | None = None
     numbers: list[int] | None = None
     """고른 점만. 비우면 걸 수 있는 전부."""
+    name: str | None = Field(default=None, max_length=120)
+    """작업 이름 — 비우면 폴더 이름(설계 하나) · 「폴더 pNNNN (변수 값)」. 새 작업 창이 설계점
+    하나를 고를 때 쓴다."""
 
 
 class DoeImportOut(BaseModel):

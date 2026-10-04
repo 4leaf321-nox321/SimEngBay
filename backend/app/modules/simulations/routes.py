@@ -258,7 +258,21 @@ def import_doe(
         spec_raw=body.spec,
         workspace_slug=body.workspace_slug,
         numbers=body.numbers,
+        name=body.name,
     )
+
+
+@router.get("/doe/point", response_model=ConditionsPreviewOut)
+def preview_doe_point(
+    path: str,
+    number: int,
+    recipe: str | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ConditionsPreviewOut:
+    """폴더의 설계점 하나를 읽어 준다 — 새 작업 창이 「설계점 하나 고르기」 에 쓴다(점 파일을
+    올렸을 때와 같은 미리보기)."""
+    return services.preview_doe_point(path, number, recipe=recipe)
 
 
 @router.get("", response_model=Page[SimulationSummaryOut])

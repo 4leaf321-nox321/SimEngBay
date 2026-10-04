@@ -411,3 +411,63 @@ def test_유닛_템플릿의_자리표시를_전부_채운다() -> None:
                 f"{template.name} 의 {marker} 를 deploy.sh 가 채우지 않습니다 — "
                 f"그 줄이 유닛에 그대로 남아 서비스가 안 뜹니다"
             )
+
+
+@_no_bash
+def test_한_번_준_CAD_폴더와_Ansys_는_다음_배포가_기억한다(tmp_path: Path) -> None:
+    """**`update` 때 env 를 빠뜨려도 연결이 남아야 한다.**
+
+    전에는 `DOE_ROOT_HOST_DIR` · `ANSYS_HOST_DIR` · `WORKER_COUNT` 를 기억하지 않아서, 그것을
+    빠뜨린 `update` 가 유닛을 다시 그리며 bind 를 **조용히** 뺐다(워커는 1 개로 줄었다).
+    증상은 며칠 뒤 「CAD 폴더에서 선택」 이 막히는 것이고 배포 로그에는 아무것도 안 남는다 —
+    CompCore 가 같은 일을 겪고 instance 설정 파일에 기억하는 식으로 고쳤다(2026-10-04).
+    """
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    for path in [DEPLOY / "deploy.sh", DEPLOY / "ha.sh", *DEPLOY.glob("*.template")]:
+        shutil.copy(path, bundle / path.name)
+    (bundle / "BUILD_INFO").write_text(
+        "version=test\napp_name=SimEngBay\napp_slug=simengbay\n", encoding="utf-8"
+    )
+    etc = tmp_path / "etc"
+    units = etc / "etc/systemd/system"
+    base = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DOE_ROOT_HOST_DIR", "ANSYS_HOST_DIR", "ANSYS_VERSION", "WORKER_COUNT"}
+    }
+    base |= {"OPERATOR": "seb", "ETC": str(etc), "APP_SLUG": "sebtest"}
+
+    def render(**given: str) -> tuple[str, str, str]:
+        shutil.rmtree(units, ignore_errors=True)
+        subprocess.run(
+            ["bash", "deploy.sh", "render"],
+            cwd=bundle,
+            env={**base, **given},
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        return (
+            (etc / "etc/platform-instances/sebtest.conf").read_text(encoding="utf-8"),
+            (units / "sebtest.service").read_text(encoding="utf-8"),
+            (units / "sebtest-worker@.service").read_text(encoding="utf-8"),
+        )
+
+    render(
+        DOE_ROOT_HOST_DIR="/mnt/exchange/cad",
+        ANSYS_HOST_DIR="/opt/ansys_inc",
+        WORKER_COUNT="4",
+    )
+    conf, app, worker = render()  # update 처럼 — 아무것도 안 붙인다
+    assert "DOE_ROOT_HOST_DIR=/mnt/exchange/cad" in conf
+    assert "WORKER_COUNT=4" in conf
+    assert "--bind /mnt/exchange/cad:/data/doe:ro" in app
+    assert "--bind /mnt/exchange/cad:/data/doe:ro" in worker
+    assert "--bind /opt/ansys_inc:/ansys_inc" in worker
+    assert "AWP_ROOT252=" in worker
+
+    # 바꿀 때는 새 값을 붙인다 — env 가 기억한 값을 이긴다.
+    conf, app, _ = render(DOE_ROOT_HOST_DIR="/mnt/nas2/cad")
+    assert "DOE_ROOT_HOST_DIR=/mnt/nas2/cad" in conf
+    assert "--bind /mnt/nas2/cad:/data/doe:ro" in app

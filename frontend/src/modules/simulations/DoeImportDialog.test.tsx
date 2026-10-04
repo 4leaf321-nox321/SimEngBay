@@ -35,6 +35,7 @@ const PREVIEW = {
   study_id: '3f9a21',
   name: '브래킷_두께훑기',
   factors: ['두께'],
+  single: false,
   method: 'full',
   seed: 1,
   usable: 3,

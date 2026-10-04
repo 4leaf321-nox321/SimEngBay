@@ -59,6 +59,15 @@ sudo ./deploy.sh update
 | `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `APP_NAME=… sudo ./deploy.sh update` 로 바꿀 수 있다 |
 | `APP_PORT` | 앱 포트. 같은 서버의 인스턴스마다 10씩 벌린다 | 바꾸면 메인 서버 조각도 다시 넣어야 한다 |
 | `EXTENSIONS` | 이 인스턴스가 켜는 확장 모듈, 쉼표로 | `EXTENSIONS=hub,bom sudo ./deploy.sh update` |
+| `DOE_ROOT_HOST_DIR` | CAD(CompCore) 공용 폴더 — 아래 「DOE 공용 폴더」 | `DOE_ROOT_HOST_DIR=… sudo ./deploy.sh update` |
+| `ANSYS_HOST_DIR` · `ANSYS_VERSION` | 리눅스 Ansys 설치 폴더 · 버전(기본 252) | 같은 방식 |
+| `WORKER_COUNT` | 해석 작업 워커 수(기본 1) | 같은 방식 |
+
+**이 표의 값은 전부 그 파일이 기억한다** — 한 번 주면 `update` 때 다시 안 붙여도 된다. 바꿀 때만
+새 값을 붙인다. (v0.4.0 까지는 위의 새 세 줄을 기억하지 않아서 `update` 때 빠뜨리면 공용 폴더 · Ansys
+연결이 **조용히 빠지고** 워커가 1 개로 줄었다.) 기억한 값은 `cat /etc/platform-instances/<slug>.conf`
+로 본다. 연결을 **끊을** 때는 그 파일의 줄을 비우고 `sudo ./deploy.sh update` — 빈 env 는
+「안 줬다」 와 구별되지 않아 기억한 값이 남는다.
 
 같은 서버에 두 번째 인스턴스는 다른 `APP_SLUG` · `APP_PORT` 로 같은 명령을 한 번 더. 인스턴스가
 여럿이면 `update` · `status` 에도 `APP_SLUG=<slug>` 를 붙인다(안 붙이면 어느 것인지 묻는다).
@@ -175,7 +184,7 @@ journalctl -u '<slug>-worker@2' -n 5    # 「솔버 calculix」 가 찍힌다
 ```
 
 파일이 없는 워커는 **전부** 집는다(설정을 안 건드린 설치는 그대로 돈다). 워커 수 자체는
-`WORKER_COUNT` 로 정한다(설치 · 갱신 때).
+`WORKER_COUNT` 로 정한다(한 번 주면 기억한다).
 
 **CalculiX 가 이미지에 있는지**는 서버 화면의 「워커 · 솔버」 카드(깔린 도구 — 워커가 기동 때
 찾은 것)에서 보고, 셸에서는 이렇게 본다:
@@ -190,25 +199,40 @@ apptainer exec ~/apps/<slug>/app.sif gmsh -info | head -3
 
 ### DOE 공용 폴더 — CAD 가 내보낸 것을 읽으려면
 
-CAD 플랫폼(CompCore)이 설계점 묶음을 폴더로 내보내고, 이 서버가 **그 폴더를 읽어** 해석을
-건다. 컨테이너는 걸어 준 폴더만 보므로 설치할 때 알려 준다:
+CAD 플랫폼(CompCore)이 설계점 묶음(DOE) · 설계 하나를 폴더로 내보내고, 이 서버가 **그 폴더를
+읽어** 해석을 건다 — 「새 해석 작업」 의 「CAD 폴더에서 선택」 과 「DOE 가져오기」 가 여기를 본다.
+컨테이너는 걸어 준 폴더만 보므로 **한 번** 알려 준다(그 뒤로는 기억한다 — 위 표):
 
 ```bash
-DOE_ROOT_HOST_DIR=/shared/doe sudo ./deploy.sh install
+DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore sudo ./deploy.sh update   # 설치 때라면 install
+```
+
+`install` · `update` 는 끝에 그 폴더를 **운영 계정으로 읽어 본다** — 읽히면 「CAD 공용 폴더 읽기
+확인 … (폴더 N 개)」, 아니면 경고가 찍힌다. 나중에는 `sudo ./deploy.sh status` 의 「CAD 공용 폴더」
+칸에서 같은 것을 본다.
+
+**공유 스토리지(NAS)는 재부팅 뒤에도 붙어 있어야 한다** — `/etc/fstab` 에 `_netdev` 로 넣는다.
+빠지면 증상은 「CAD 폴더에서 선택」 이 폴더를 못 읽는 것이고, 원인은 배포가 아니라 마운트다:
+
+```bash
+mount | grep exchange          # 아무것도 안 나오면 안 붙어 있다
+# /etc/fstab 예 (NFS) — _netdev: 네트워크가 올라온 뒤에 붙인다
+# nas01:/exchange  /mnt/exchange  nfs  defaults,_netdev  0  0
+sudo mount -a && mount | grep exchange
 ```
 
 | | |
 | --- | --- |
 | 무엇을 거나 | 호스트의 그 폴더 → 컨테이너의 `/data/doe`, **읽기 전용** |
 | `.env` | `DOE_ROOTS=/data/doe` 를 자동으로 채운다(컨테이너 안에서 보는 경로) |
-| 안 주면 | DOE 가져오기 화면이 「공용 폴더가 설정돼 있지 않습니다」 라고 말한다. 단건 업로드는 그대로 된다 |
+| 안 주면 | 「CAD 폴더에서 선택」 · DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」 라고 말한다. 「파일 직접 업로드」 는 그대로 된다 |
 | 권한 | **읽기만 하면 된다.** 가져올 때 STEP 을 작업 폴더로 복사하므로 원본은 손대지 않는다 |
 | CAD 쪽과의 관계 | CompCore 의 `DOE_EXPORT_ROOT` 와 **같은 실제 폴더**여야 한다. 두 서버가 다른 기계면 공유 스토리지(NFS · SMB)를 양쪽에 마운트한다 — 경로 이름은 서로 달라도 된다 |
 
 > **공유 스토리지가 없는 배치라면** 폴더로는 주고받을 수 없다. 그때는 CAD 쪽에 번들 내려받기
 > API 를 두고 이 서버가 받아 오는 방식이 필요하다 — 아직 없다(정해지면 이 자리에 설정이 는다).
 
-> **워커 수는 설치할 때 정한다** — `WORKER_COUNT=4 sudo ./deploy.sh install`(기본 1).
+> **워커 수는 한 번 정하면 기억한다** — `WORKER_COUNT=4 sudo ./deploy.sh update`(기본 1).
 > 워커 하나가 한 번에 작업 하나를 돌린다. 1.5단계에서 진짜 Mechanical 이 붙으면
 > **라이선스 수를 넘기지 않는다** — 넘긴 워커는 라이선스 오류로 실패한다.
 > 줄여서 다시 깔면 남는 인스턴스는 `deploy.sh` 가 내린다.
@@ -319,8 +343,9 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | `connection refused` (DB) | `systemctl status postgresql`, `.env` 의 포트 확인 |
 | 화면이 500, 로그에 "없는 컬럼" | 마이그레이션이 안 돌았다. `sudo ./deploy.sh update` |
 | **해석 작업이 「대기」 에서 안 움직인다** | 먼저 서버 화면의 「워커 · 솔버」 카드 — **그 솔버를 집는 워커가 있나**(CalculiX 작업인데 워커가 전부 `SIMULATION_SOLVERS=ansys` 면 영원히 대기한다). 워커가 아예 없으면 `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
-| 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `WORKER_COUNT` 를 낮춰 다시 설치하거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
-| **DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 없이 설치했다. 그 값을 주고 `sudo ./deploy.sh update` |
+| 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `WORKER_COUNT=1 sudo ./deploy.sh update` 로 낮추거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
+| **「CAD 폴더에서 선택」 · DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 를 한 번도 안 줬다. `DOE_ROOT_HOST_DIR=… sudo ./deploy.sh update` — 그 뒤로는 기억한다 |
+| **어제까지 되던 「CAD 폴더에서 선택」 이 폴더를 못 읽는다** | 대개 NAS 가 빠졌다(재부팅 뒤 등). `mount \| grep exchange` — 비었으면 `/etc/fstab` 에 `_netdev` 로 넣고 `sudo mount -a`. `sudo ./deploy.sh status` 의 「CAD 공용 폴더」 칸도 같은 것을 본다. v0.4.0 이하에서 `update` 를 했다면 연결 자체가 빠졌을 수 있다 — 값을 다시 주고 `update` |
 | DOE 화면에 「폴더가 없습니다」 | `.env` 의 `DOE_ROOTS` 가 **호스트 경로**를 가리킨다. 컨테이너 안에서 보이는 이름(`/data/doe`)이어야 한다 |
 | 폴더는 보이는데 DOE 표시가 안 붙는다 | 그 폴더에 `manifest.csv` 가 없다 — CAD 가 내보내기를 끝내지 않았거나 상위 폴더를 보고 있다 |
 | 포트가 이미 쓰인다 | 같은 서버의 다른 플랫폼과 겹쳤다. `ss -ltnp 'sport = :<포트>'` |
@@ -378,9 +403,9 @@ sudo systemctl restart <slug>
 `sudo ./deploy.sh update` 만** 치면 된다. 처음 하는 사람은 [번들의 「쉬운 설치」](쉬운-설치.md)를 본다.
 
 ```bash
-# ── 서버 A ──   물음: 주(A) · 플랫폼 이름 · 화면 이름 · 포트 · 확장 · B 의 IP · 호스트명 · 공용 폴더
+# ── 서버 A ──   물음: 주(A) · 플랫폼 이름 · 화면 이름 · 포트 · 확장 · CAD 공용 폴더 · Ansys · B 의 IP · 호스트명 · 공용 폴더
 sudo ./deploy.sh setup
-# ── 서버 B ──   물음: 대기(B) · 플랫폼 이름 · A 의 IP · 호스트명 · 공용 폴더 · A 의 계정
+# ── 서버 B ──   물음: 대기(B) · 플랫폼 이름 · CAD 공용 폴더 · Ansys · A 의 IP · 호스트명 · 공용 폴더 · A 의 계정
 sudo ./deploy.sh setup           # A 에서 .env · 복제 비밀번호를 scp 로 받아 온다(A 계정 비밀번호를 한 번 묻는다)
 ```
 

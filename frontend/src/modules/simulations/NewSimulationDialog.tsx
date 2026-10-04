@@ -1,5 +1,17 @@
 /**
- * 새 해석 작업 — STEP 형상 하나와 **CAD 점 파일**(CompCore 의 `pNNNN.json`).
+ * 새 해석 작업 — **CAD 폴더의 설계점 하나**(기본) 또는 직접 올린 STEP · 점 파일.
+ *
+ * ## CAD 폴더에서 선택(기본)
+ *
+ * CompCore 는 설계 하나도 DOE 와 같은 폴더로 내보낸다(v0.9.0 「해석용으로 내보내기」 — 인자
+ * 0개). 그래서 이 창도 DOE 창과 같은 탐색기로 폴더를 열고 설계점 하나를 고른다 — STEP · 점
+ * 파일 · 중간면이 **폴더에서 짝이 맞게 따라온다.** 파일 셋을 손으로 고르면 p0001.step 에
+ * p0002.json 을 섞어도 올리는 자리에서는 모른다. 작업은 DOE 가져오기와 같은 길(`doe/import` 의
+ * `numbers`)로 만든다.
+ *
+ * ## 파일 직접 업로드
+ *
+ * 공용 폴더(`DOE_ROOTS`)에 없는 파일용이다 — 서버는 그 폴더 아래만 볼 수 있다.
  *
  * 점 파일에는 영역 지문(형상의 어느 면이 무엇인가)과 함께 **CAD 가 정한 해석 조건** — 구속 ·
  * 접촉 · 하중 · 물성 · 메시 힌트 · 해석 설정 — 이 들어 있다. 서버는 그 파일을 받으면 **CAD 가
@@ -13,11 +25,19 @@
  * 물성이 없는 점 파일이나 재료가 빠진 파트가 있으면 실행을 막는다(모델링이 그 자리에서 멈춘다).
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { simulationApi } from '@/modules/simulations/api'
-import type { CadBody, CadMaterial, ConditionsPreview, Simulation } from '@/modules/simulations/api'
+import type {
+  CadBody,
+  CadMaterial,
+  ConditionsPreview,
+  DoeListing,
+  DoePreview,
+  Simulation,
+} from '@/modules/simulations/api'
 import { ConditionList } from '@/modules/simulations/ConditionList'
+import { FolderBrowser } from '@/modules/simulations/FolderBrowser'
 import { buildSpec, HARMONIC_DEFAULTS, isOrder, isRecipe, specProblem } from '@/modules/simulations/spec'
 import type { HarmonicInput, MeshOrder, RecipeName } from '@/modules/simulations/spec'
 import { HarmonicFields, MeshFields, RecipeSelect } from '@/modules/simulations/SpecFields'
@@ -49,6 +69,13 @@ import {
 /** 전역(부서 없음)을 뜻하는 Select 값. 빈 문자열은 Select 가 못 받는다. */
 const GLOBAL = '__global__'
 
+/** 어디서 가져오나 — CAD 폴더(기본) · 파일 직접 업로드. */
+type Source = 'folder' | 'upload'
+
+function pointName(number: number): string {
+  return `p${String(number).padStart(4, '0')}`
+}
+
 interface Props {
   open: boolean
   onClose: () => void
@@ -60,6 +87,11 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
   const admin = isSystemAdmin(user)
   const memberships = user?.memberships ?? []
 
+  const [source, setSource] = useState<Source>('folder')
+  // CAD 폴더 — 지금 보는 폴더, 고른 CAD 폴더(DOE · 설계 하나), 고른 설계점.
+  const [listing, setListing] = useState<DoeListing | null>(null)
+  const [folder, setFolder] = useState<DoePreview | null>(null)
+  const [number, setNumber] = useState<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [pointFile, setPointFile] = useState<File | null>(null)
   // **쉘 파트가 있으면 중간면 형상도** — CAD 가 점마다 pNNNN_mid.step 으로 낸다.
@@ -92,7 +124,8 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
   // 해석에서 뺀 파트는 물성이 없어도 된다(메시에도 안 나온다).
   const bare = bodies.filter((one) => !one.material && !one.suppressed)
   const shellParts = bodies.filter((one) => one.shell)
-  const needsMid = shellParts.length > 0 && midFile === null
+  // 폴더에서 고르면 중간면이 폴더에서 따라온다 — 올릴 때만 따로 받는다.
+  const needsMid = source === 'upload' && shellParts.length > 0 && midFile === null
   const hasMaterials = cadMaterials.length > 0 && bare.length === 0
   const faceRegions = (preview?.regions ?? []).filter((one) => one.kind === 'face')
   const probes = (preview?.regions ?? []).filter((one) => one.kind === 'point')
@@ -114,8 +147,9 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
     harmonic,
   }
   const problem = specProblem(input)
+  const picked = source === 'folder' ? folder !== null && number !== null : file !== null
   const ready =
-    file !== null && preview !== null && hasMaterials && !needsMid && !busy && problem === null && !needsSize
+    picked && preview !== null && hasMaterials && !needsMid && !busy && problem === null && !needsSize
 
   async function read(next: File, asked?: RecipeName): Promise<ConditionsPreview | null> {
     try {
@@ -124,6 +158,28 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
       setError(caught instanceof Error ? caught : new Error('CAD 점 파일을 읽지 못했습니다.'))
       return null
     }
+  }
+
+  async function readPoint(
+    path: string,
+    point: number,
+    asked?: RecipeName,
+  ): Promise<ConditionsPreview | null> {
+    try {
+      return await simulationApi.previewDoePoint(path, point, asked)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('설계점을 읽지 못했습니다.'))
+      return null
+    }
+  }
+
+  /** 서버가 읽은 점 — **CAD 가 적은 것을 미리 채운다**(조용히 쓰면 그쪽 값이 우리 것을 덮는다). */
+  function adopt(found: ConditionsPreview) {
+    setPreview(found)
+    if (isRecipe(found.suggested_recipe)) setRecipe(found.suggested_recipe)
+    if (found.suggested_modes) setModes(String(found.suggested_modes))
+    if (isOrder(found.suggested_order)) setOrder(found.suggested_order)
+    setConditionsFromCad(true)
   }
 
   async function pickPoint(next: File | null) {
@@ -137,28 +193,94 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
       setPointFile(null)
       return
     }
-    setPreview(found)
-    // **CAD 가 적은 것을 미리 채운다** — 조용히 쓰면 그쪽 값이 우리 것을 말없이 덮는다.
-    if (isRecipe(found.suggested_recipe)) setRecipe(found.suggested_recipe)
-    if (found.suggested_modes) setModes(String(found.suggested_modes))
-    if (isOrder(found.suggested_order)) setOrder(found.suggested_order)
-    setConditionsFromCad(true)
+    adopt(found)
+  }
+
+  async function choosePoint(path: string, next: number) {
+    setNumber(next)
+    setPreview(null)
+    setRegions([])
+    setError(null)
+    const found = await readPoint(path, next)
+    if (found) adopt(found)
+  }
+
+  async function browse(path?: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      const next = await simulationApi.browseDoe(path)
+      setListing(next)
+      setFolder(null)
+      setNumber(null)
+      setPreview(null)
+      if (next.is_study) {
+        // **CAD 폴더로 들어갔으면 곧바로 첫 설계점을 읽는다** — 설계 하나면 그것뿐이다.
+        const study = await simulationApi.previewDoe(next.path)
+        setFolder(study)
+        const first = study.points.find((one) => one.usable)
+        if (first) await choosePoint(study.path, first.number)
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('폴더를 읽지 못했습니다.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 창을 열면 첫 뿌리부터 보여 준다 — 사람이 아무것도 안 쳐도 고를 것이 있어야 한다.
+  useEffect(() => {
+    if (open && source === 'folder' && listing === null) void browse()
+    // 창이 열릴 때 · 폴더 쪽으로 돌아올 때 한 번.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, source])
+
+  function switchSource(next: Source) {
+    if (next === source) return
+    setSource(next)
+    setPreview(null)
+    setRegions([])
+    setError(null)
   }
 
   async function changeRecipe(next: RecipeName) {
     setRecipe(next)
     // 조건이 어떻게 다뤄지나는 해석 종류에 달렸다(모달이면 하중을 넘긴다) — 다시 묻는다.
-    if (pointFile) {
+    if (source === 'folder' && folder && number !== null) {
+      const found = await readPoint(folder.path, number, next)
+      if (found) setPreview(found)
+    } else if (pointFile) {
       const found = await read(pointFile, next)
       if (found) setPreview(found)
     }
   }
 
+  async function submitFolder() {
+    if (!folder || number === null) return
+    const result = await simulationApi.importDoe({
+      path: folder.path,
+      spec: buildSpec(input),
+      workspace_slug: workspace === GLOBAL ? null : workspace,
+      numbers: [number],
+      name: name.trim() || null,
+    })
+    const made = result.created[0]
+    if (!made) {
+      // **걸지 못한 까닭을 그대로 보인다**(이미 가져온 점 · 물성이 빠진 점 …).
+      throw new Error(result.skipped[0]?.skip_reason || '작업을 만들지 못했습니다.')
+    }
+    onCreated(await simulationApi.get(made))
+  }
+
   async function submit() {
-    if (!file) return
     setBusy(true)
     setError(null)
     try {
+      if (source === 'folder') {
+        await submitFolder()
+        return
+      }
+      if (!file) return
       const created = await simulationApi.create({
         file,
         topology: pointFile,
@@ -181,12 +303,78 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
         <DialogHeader>
           <DialogTitle>새 해석 작업</DialogTitle>
           <DialogDescription>
-            STEP 형상과 CompCore 가 내보낸 CAD 점 파일(pNNNN.json)로 해석 작업 하나를 실행합니다. 물성 ·
-            조건 · 해석 설정은 점 파일에서 옵니다. 설계점 묶음은 「DOE 가져오기」 를 사용합니다.
+            CompCore 가 내보낸 폴더에서 설계점 하나를 선택해 해석 작업을 실행합니다. 물성 · 조건 · 해석
+            설정은 그 설계점의 점 파일에서 옵니다. 설계점 여러 개는 「DOE 가져오기」 를 사용합니다.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="flex gap-1" role="tablist" aria-label="가져올 곳">
+            <Button
+              role="tab"
+              aria-selected={source === 'folder'}
+              variant={source === 'folder' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => switchSource('folder')}
+            >
+              CAD 폴더에서 선택
+            </Button>
+            <Button
+              role="tab"
+              aria-selected={source === 'upload'}
+              variant={source === 'upload' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => switchSource('upload')}
+            >
+              파일 직접 업로드
+            </Button>
+          </div>
+
+          {source === 'folder' && (
+            <div className="space-y-3">
+              <FolderBrowser
+                listing={listing}
+                busy={busy}
+                onBrowse={(path) => void browse(path)}
+                badge="CAD"
+                studyNote="이 폴더가 CAD 폴더입니다. 아래에서 설계점을 확인하세요."
+              />
+              {folder && (
+                <div className="space-y-2 rounded-md border p-3 text-sm">
+                  <p>
+                    <span className="font-medium">{folder.name}</span>{' '}
+                    <span className="text-muted-foreground text-xs">
+                      {folder.single ? '설계 하나' : `설계점 ${folder.points.length}개 · 변수 ${folder.factors.join(' · ')}`}
+                    </span>
+                  </p>
+                  {!folder.single && (
+                    <div className="max-h-40 space-y-1 overflow-y-auto" role="radiogroup" aria-label="설계점">
+                      {folder.points.map((point) => (
+                        <label key={point.number} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="radio"
+                            name="design-point"
+                            checked={number === point.number}
+                            disabled={!point.usable || busy}
+                            onChange={() => void choosePoint(folder.path, point.number)}
+                          />
+                          <span className="font-mono">{pointName(point.number)}</span>
+                          <span className="text-muted-foreground text-xs">
+                            {Object.entries(point.params)
+                              .map(([key, value]) => `${key} ${value}`)
+                              .join(' · ')}
+                            {!point.usable && ` — ${point.skip_reason}`}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {source === 'upload' && (
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="sim-file">형상 파일 (STEP)</Label>
@@ -208,7 +396,9 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
             </div>
           </div>
 
-          {shellParts.length > 0 && (
+          )}
+
+          {source === 'upload' && shellParts.length > 0 && (
             <div className="space-y-1.5">
               <Label htmlFor="sim-mid">중간면 형상 (pNNNN_mid.step)</Label>
               <Input
@@ -224,9 +414,10 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
             </div>
           )}
 
-          {!pointFile && (
+          {source === 'upload' && !pointFile && (
             <p className="text-muted-foreground text-xs">
-              CAD 점 파일이 있어야 실행합니다 — 파트마다 재료 · 조건 · 해석 설정이 그 파일에서 옵니다.
+              CAD 점 파일이 있어야 실행합니다 — 파트마다 재료 · 조건 · 해석 설정이 그 파일에서 옵니다. 공용
+              폴더에 있는 파일이면 「CAD 폴더에서 선택」 이 짝을 맞춰 줍니다.
             </p>
           )}
 
@@ -264,7 +455,15 @@ export function NewSimulationDialog({ open, onClose, onCreated }: Props) {
                 id="sim-name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder={file?.name ?? '비우면 파일 이름'}
+                placeholder={
+                  source === 'folder'
+                    ? folder
+                      ? folder.single
+                        ? folder.name
+                        : `${folder.name} ${pointName(number ?? 1)}`
+                      : '비우면 폴더 이름'
+                    : (file?.name ?? '비우면 파일 이름')
+                }
               />
             </div>
             <div className="space-y-1.5">

@@ -24,6 +24,11 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       previewConditions: vi.fn(),
       create: vi.fn(),
       solvers: vi.fn(),
+      browseDoe: vi.fn(),
+      previewDoe: vi.fn(),
+      previewDoePoint: vi.fn(),
+      importDoe: vi.fn(),
+      get: vi.fn(),
     },
   }
 })
@@ -76,9 +81,33 @@ function point(): File {
   return new File(['{"regions": {}}'], 'p0002.json', { type: 'application/json' })
 }
 
+/** 파일 직접 업로드 쪽 — 공용 폴더에 없는 파일용. */
 async function open() {
   render(<NewSimulationDialog open onClose={() => {}} onCreated={() => {}} />)
+  await userEvent.click(screen.getByRole('tab', { name: '파일 직접 업로드' }))
   await userEvent.upload(screen.getByLabelText('형상 파일 (STEP)'), step())
+}
+
+const ROOT = { path: '/data/doe', parent: null, roots: ['/data/doe'], truncated: false, is_study: false, entries: [] }
+
+function folderOf(single: boolean) {
+  return {
+    path: '/data/doe/브래킷_해석-1a2b',
+    study_id: '1a2b',
+    name: '브래킷_해석',
+    factors: single ? [] : ['두께'],
+    single,
+    method: 'factorial',
+    usable: single ? 1 : 2,
+    skipped: 0,
+    materials: ['SS400'],
+    points: single
+      ? [{ number: 1, params: {}, usable: true, skip_reason: '' }]
+      : [
+          { number: 1, params: { 두께: 2 }, usable: true, skip_reason: '' },
+          { number: 2, params: { 두께: 3 }, usable: true, skip_reason: '' },
+        ],
+  }
 }
 
 async function openWithPoint() {
@@ -92,6 +121,63 @@ describe('새 해석 작업', () => {
     vi.mocked(simulationApi.previewConditions).mockReset().mockResolvedValue(SHEAR)
     vi.mocked(simulationApi.create).mockReset().mockResolvedValue({ id: 'new' } as never)
     vi.mocked(simulationApi.solvers).mockReset().mockResolvedValue([])
+    vi.mocked(simulationApi.browseDoe).mockReset().mockResolvedValue(ROOT)
+    vi.mocked(simulationApi.previewDoePoint).mockReset().mockResolvedValue(SHEAR)
+    vi.mocked(simulationApi.importDoe)
+      .mockReset()
+      .mockResolvedValue({ study_id: '1a2b', name: '브래킷_해석', created: ['made'], skipped: [] })
+    vi.mocked(simulationApi.get).mockReset().mockResolvedValue({ id: 'made' } as never)
+  })
+
+  it('CAD 폴더의 설계 하나를 선택해 실행한다 — 파일 셋이 폴더에서 짝이 맞게 따라온다', async () => {
+    // CompCore v0.9.0 「해석용으로 내보내기」 — 인자 0개 폴더가 설계 하나다.
+    vi.mocked(simulationApi.browseDoe).mockResolvedValue({ ...ROOT, path: folderOf(true).path, is_study: true })
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue(folderOf(true) as never)
+    const created = vi.fn()
+    render(<NewSimulationDialog open onClose={() => {}} onCreated={created} />)
+    await waitFor(() => expect(screen.getByText('설계 하나')).toBeDefined())
+    await waitFor(() => expect(screen.getByText('클램프')).toBeDefined())
+    expect(simulationApi.previewDoePoint).toHaveBeenCalledWith(folderOf(true).path, 1, undefined)
+    // 폴더에서 오면 파일 칸이 없다.
+    expect(screen.queryByLabelText('형상 파일 (STEP)')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '실행' }))
+    await waitFor(() => expect(created).toHaveBeenCalled())
+    const sent = vi.mocked(simulationApi.importDoe).mock.calls[0][0]
+    expect(sent.path).toBe(folderOf(true).path)
+    expect(sent.numbers).toEqual([1])
+    expect('material' in sent.spec).toBe(false)
+    expect(simulationApi.get).toHaveBeenCalledWith('made')
+  })
+
+  it('DOE 폴더면 설계점 하나를 선택한다', async () => {
+    vi.mocked(simulationApi.browseDoe).mockResolvedValue({ ...ROOT, path: folderOf(false).path, is_study: true })
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue(folderOf(false) as never)
+    render(<NewSimulationDialog open onClose={() => {}} onCreated={() => {}} />)
+    await waitFor(() => expect(screen.getByText('클램프')).toBeDefined())
+    await userEvent.click(screen.getByRole('radio', { name: /p0002/ }))
+    await waitFor(() => expect(simulationApi.previewDoePoint).toHaveBeenLastCalledWith(folderOf(false).path, 2, undefined))
+    await waitFor(() => expect(screen.getByRole('button', { name: '실행' })).toBeEnabled())
+    await userEvent.type(screen.getByLabelText('이름'), '두께 3 확인')
+    await userEvent.click(screen.getByRole('button', { name: '실행' }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    const sent = vi.mocked(simulationApi.importDoe).mock.calls[0][0]
+    expect(sent.numbers).toEqual([2])
+    expect(sent.name).toBe('두께 3 확인')
+  })
+
+  it('가져오지 못하면 그 까닭을 보인다', async () => {
+    vi.mocked(simulationApi.browseDoe).mockResolvedValue({ ...ROOT, path: folderOf(true).path, is_study: true })
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue(folderOf(true) as never)
+    vi.mocked(simulationApi.importDoe).mockResolvedValue({
+      study_id: '1a2b',
+      name: '브래킷_해석',
+      created: [],
+      skipped: [{ number: 1, params: {}, usable: false, skip_reason: '이미 가져온 점입니다.' }],
+    })
+    render(<NewSimulationDialog open onClose={() => {}} onCreated={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '실행' })).toBeEnabled())
+    await userEvent.click(screen.getByRole('button', { name: '실행' }))
+    await waitFor(() => expect(screen.getByText(/이미 가져온 점입니다/)).toBeDefined())
   })
 
   it('점 파일이 없으면 실행하지 않는다 — 물성이 거기서 온다', async () => {

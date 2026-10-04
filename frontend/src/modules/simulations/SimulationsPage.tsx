@@ -64,6 +64,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
 /** 출처 — 어디서 만든 작업인가. 업로드는 따로 표시하지 않는다(가장 흔하다). */
 const SOURCE_LABELS: Record<string, string> = {
   doe_point: 'DOE 설계점',
+  design: 'CAD 설계',
   mesh_check: '메시 수렴 점검',
 }
 

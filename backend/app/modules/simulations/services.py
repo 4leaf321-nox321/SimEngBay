@@ -765,6 +765,25 @@ def _read_doe(path_text: str) -> DoeFolder:
         raise AppError(code("SIMULATIONS", 14), str(failure), status=400) from failure
 
 
+def preview_doe_point(
+    path_text: str, number: int, *, recipe: str | None = None
+) -> ConditionsPreviewOut:
+    """폴더의 **설계점 하나**를 새 작업 창이 올린 점 파일처럼 읽어 준다 — 파트 · 재료 · 조건.
+    같은 코드(`preview_conditions`)를 지나므로 두 창이 같은 것을 보인다."""
+    doe = _read_doe(path_text)
+    point = next((one for one in doe.points if one.number == number), None)
+    if point is None:
+        raise AppError(code("SIMULATIONS", 15), "고른 설계점이 폴더에 없습니다.", status=400)
+    if point.point_file is None:
+        raise AppError(
+            code("SIMULATIONS", 15),
+            f"설계점 p{number:04d} 에 점 파일이 없습니다 — "
+            f"{point.skip_reason or 'CAD 폴더를 보세요'}",
+            status=400,
+        )
+    return preview_conditions(point.point_file.read_bytes(), recipe=recipe)
+
+
 def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
     """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유, 그리고 **첫 점의
     조건이 그 해석 종류에서 어떻게 다뤄지나**(반영 · 넘김 · 막음)."""
@@ -778,6 +797,7 @@ def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
         study_id=doe.study_id,
         name=doe.name,
         factors=doe.factors,
+        single=doe.single,
         method=doe.method,
         seed=doe.seed,
         points=[_preview_point(one) for one in doe.points],
@@ -987,6 +1007,7 @@ def import_doe(
     spec_raw: dict[str, Any],
     workspace_slug: str | None,
     numbers: list[int] | None = None,
+    name: str | None = None,
 ) -> DoeImportOut:
     """폴더 한 벌 → 해석 작업 N 개.
 
@@ -1011,7 +1032,7 @@ def import_doe(
         for one in db.scalars(
             select(Simulation).where(
                 Simulation.deleted_at.is_(None),
-                Simulation.source_kind == "doe_point",
+                Simulation.source_kind.in_(("doe_point", "design")),
                 Simulation.source_meta["study_id"].astext == doe.study_id,
             )
         )
@@ -1071,14 +1092,21 @@ def import_doe(
                 user=user,
                 spec_raw=spec_raw,
                 workspace_slug=workspace_slug,
-                name=f"{doe.name} p{point.number:04d}" + (f" ({label})" if label else ""),
+                # 이름을 줬으면 그것(설계점 하나를 고른 새 작업 창), 설계 하나면 폴더 이름.
+                name=(name or "").strip()
+                or (
+                    doe.name
+                    if doe.single
+                    else f"{doe.name} p{point.number:04d}" + (f" ({label})" if label else "")
+                ),
                 filename=point.step.name,
                 stream=stream,
                 # 점 파일 하나에 영역 · 바디 · 조건이 다 있다. 작업 폴더에는 지금 이름
                 # (`topology.json`)으로 둔다 — 모델링이 `regions` 를 읽는 자리라 그대로 맞는다.
                 topology=topology,
                 midsurface=point.mid_step.read_bytes() if point.mid_step else None,
-                source_kind="doe_point",
+                # **설계 하나는 스터디가 아니다** — 비교 · 스터디 목록에 섞이지 않게 가른다.
+                source_kind="design" if doe.single else "doe_point",
                 source_ref=f"{doe.name}/p{point.number:04d}",
                 source_meta=meta,
             )

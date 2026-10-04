@@ -259,3 +259,30 @@ def test_표에_열이_늘어도_바꾼_변수로_오해하지_않는다(tmp_pat
     assert doe.factors == ["두께"], "새 열이 인자로 끼면 안 된다"
     assert [one.params["두께"] for one in doe.usable] == [6.0, 12.0, 20.0]
     assert all("최소벽두께" not in one.params for one in doe.points)
+
+
+SINGLE = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "설계하나_측면가진"
+
+
+def test_인자가_없는_폴더는_설계_하나다(tmp_path: Path) -> None:
+    """CompCore v0.9.0 — `study.json` 의 `factors: []` 가 설계 하나다(따로 표시하지 않는다).
+
+    **빈 목록도 선언이다.** 「선언이 없다」 로 읽으면 표의 다른 열(측정값 등)이 인자로
+    둔갑한다 — 그래서 표에 열을 하나 더해 본다.
+    """
+    found = read_folder(SINGLE)
+    assert found.single and found.factors == []
+    assert [one.number for one in found.points] == [1] and found.points[0].params == {}
+
+    copy = tmp_path / SINGLE.name
+    import shutil
+
+    shutil.copytree(SINGLE, copy)
+    manifest = copy / "manifest.csv"
+    rows = manifest.read_text(encoding="utf-8-sig").splitlines()
+    manifest.write_text(
+        "\n".join([rows[0] + ",무게"] + [row + ",0.52" for row in rows[1:]]) + "\n",
+        encoding="utf-8",
+    )
+    widened = read_folder(copy)
+    assert widened.factors == [] and widened.points[0].params == {}

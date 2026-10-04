@@ -1,6 +1,6 @@
 [project]
 name = "simengbay-backend"
-version = "0.5.0"
+version = "0.5.1"
 requires-python = ">=3.12,<3.13"
 
 # 의존성 정본은 requirements.txt 다. 폐쇄망 배포가 `pip wheel -r requirements.txt`

@@ -225,7 +225,8 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     거기서 멈춘다."""
     etc = tmp_path / "etc"
     env = {**os.environ, "OPERATOR": "ops", "ETC": str(etc), "SELF_IP": "10.0.0.1"}
-    answers = "A\nplmhub\nPLM 기준정보\n8050\nsample\n10.0.0.2\n\n\n"
+    # 답: 역할 · slug · 이름 · 포트 · 확장 · CAD 폴더 · Ansys · 상대 IP · 호스트 · 공용 폴더
+    answers = "A\nplmhub\nPLM 기준정보\n8050\nsample\n/mnt/exchange/cad\n\n10.0.0.2\n\n\n"
     out = subprocess.run(
         ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],
         cwd=bundle,
@@ -238,8 +239,10 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     assert "PLM 기준정보 (plmhub) · 포트 8050 · 확장 sample" in out
     assert "주(A) 10.0.0.1 — 상대 B 10.0.0.2" in out
     assert "db-primary" in out and "B 에 넘길 파일" in out
+    assert "CAD /mnt/exchange/cad · Ansys 안 함" in out
     # 대기는 이름 · 포트를 다시 묻지 않는다 — A 의 .env 를 그대로 받는다.
-    answers_b = "B\nplmhub\n10.0.0.1\n\n\nops\n\n"
+    # CAD 폴더 · Ansys 는 서버마다 마운트하는 자리라 B 도 묻는다.
+    answers_b = "B\nplmhub\n/mnt/exchange/cad\n\n10.0.0.1\n\n\nops\n\n"
     out_b = subprocess.run(
         ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],
         cwd=bundle,

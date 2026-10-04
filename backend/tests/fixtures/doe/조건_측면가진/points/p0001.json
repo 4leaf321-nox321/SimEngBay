@@ -144,7 +144,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "8d2121bf-dcf5-4528-b28f-1902cb9489b6",
+      "id": "ae4d3091-4d3f-424d-b740-c462f09cda41",
       "name": "조건_측면가진",
       "method": "factorial",
       "seed": 1
@@ -764,11 +764,13 @@
         "defeature_size": null
       }
     ],
+    "body_settings": [],
     "coordinate_systems": []
   },
   "length_units": {
     "geometry": "mm",
     "regions": "mm",
+    "midsurface": "mm",
     "coordinate_systems": "mm"
   }
 }

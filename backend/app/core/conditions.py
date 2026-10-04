@@ -19,6 +19,18 @@ CompCore 는 점 파일에 조건 한 벌을 실어 보낸다: 구속 7종 · �
 버그가 아니라 해석의 성질이므로 `skipped` 에 넣고 말해 준다. 반면 못 거는 구속은 `refused`
 다: 구속이 빠지면 모드가 통째로 달라진다.
 
+## 파트별 설정(`body_settings`, CompCore 2026-10-04)
+
+파트(바디)마다 **거동 · 표현 · 해석 제외 · 메시**를 정한다. 이름은 점 파일 `bodies[].name`
+(단품은 「전체」)이고, 해석 쪽 바디와는 부피 · 무게중심으로 짝짓는다(`app/core/bodies.py`).
+적지 않은 파트는 기본값(변형체 · 솔리드 · 포함 · 메시는 위로 미룸)이다.
+
+**쉘 파트**는 점 파일의 `midsurface`(파트마다 두께 · 넓이 · 무게중심, CompCore v0.8.1)와
+`<형상>_mid.step` 의 중간면으로 푼다. 중간면이 없거나 CompCore 가 못 만들었으면(`failed[]`)
+`refused` 다 — 솔리드로 풀면 다른 모델이 된다. 쉘 파트에 걸린 영역은 지문의 `mid`(중간면의
+면 · 모서리 · 점)로 짝짓는다(`shell_view`). 파트 메시의 요소 형상 · 차수는 메시 힌트와 같이
+**바람**이다 — 솔버가 못 따르면 `skipped` 에 적는다.
+
 ## 영역은 면만 안다
 
 조건은 선택 그룹 이름으로 자리를 가리키고, 그 자리는 점 파일의 `regions` 에 설계점마다
@@ -29,7 +41,7 @@ CompCore 는 점 파일에 조건 한 벌을 실어 보낸다: 구속 7종 · �
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 #: 우리가 Mechanical 에 걸 수 있는 구속 — CompCore 의 7종 그대로.
@@ -57,6 +69,16 @@ _INERT_IN_MODAL = (
     "acceleration",
     "rotational_velocity",
 )
+
+#: 파트 거동 · 표현 · 메시 — CompCore `BodySetting` · `BodyMesh` 의 값 그대로.
+BODY_BEHAVIORS = ("deformable", "rigid")
+BODY_REPRESENTATIONS = ("solid", "shell")
+MESH_METHODS = ("automatic", "tetrahedrons", "hex_dominant", "sweep", "multizone")
+MESH_ORDERS = ("program_controlled", "linear", "quadratic")
+#: 「모든 파트」 — 단품이면 파트 이름이 이것이다(`materials.ALL_BODIES` 와 같은 말).
+ALL_BODIES = "전체"
+#: 메시 힌트가 「모델 전체」 를 가리키는 이름.
+WHOLE_REGIONS = ("전체", "all")
 
 Hold = Literal["fixed", "free"]
 
@@ -136,13 +158,76 @@ class Load:
 
 @dataclass(frozen=True)
 class MeshHint:
-    """메시는 우리가 만든다 — 이것은 **바람**이다."""
+    """메시는 우리가 만든다 — 이것은 **바람**이다.
+
+    CompCore 2026-10-04 부터 「국부 메시」 다: 「전체」 또는 **면 · 엣지** 그룹만 가리키고,
+    요소 형상 · 차수는 「전체」 에만 온다. 파트 하나 전체는 `body_settings` 가 든다.
+    """
 
     region: str
     """`전체` 또는 선택 그룹 이름."""
     element_size: float | None = None
     """선언된 단위계의 길이. SI 폴더면 m 로 온다."""
     order: str = ""
+    method: str = ""
+
+    @property
+    def whole(self) -> bool:
+        return self.region in WHOLE_REGIONS
+
+
+@dataclass(frozen=True)
+class BodySetting:
+    """파트(바디) 하나를 해석에서 어떻게 다루나 — CompCore `body_settings[]` 한 줄.
+
+    **강체**는 변형하지 않는 것으로 푼다(질량 · 관성은 남는다). **해석 제외**는 형상에는 남기고
+    해석에서만 뺀다 — 물성도 필요 없다. 메시 칸은 그 파트 전체의 요소 크기 · 형상 · 차수다.
+    """
+
+    name: str
+    rigid: bool = False
+    suppressed: bool = False
+    shell: bool = False
+    """중간면 + 두께로 쉘 요소를 짓는다."""
+    thickness: float | None = None
+    """쉘 두께(mm, 점 파일 `midsurface.bodies[].thickness`)."""
+    element_size: float | None = None
+    """선언된 단위계의 길이(SI 폴더면 m). 비면 위(전역 크기)로 미룬다."""
+    method: str = "automatic"
+    order: str = "program_controlled"
+
+    @property
+    def meshed(self) -> bool:
+        """메시 칸을 하나라도 정했나."""
+        return (
+            self.element_size is not None
+            or self.method != "automatic"
+            or self.order != "program_controlled"
+        )
+
+    def describe(self) -> str:
+        """사람이 읽는 한 줄 — 「강체 · 요소 4 mm」."""
+        if self.suppressed:
+            return "해석 제외"
+        parts = ["강체" if self.rigid else "변형체"]
+        if self.shell:
+            parts.append(f"쉘 {self.thickness:g} mm" if self.thickness else "쉘")
+        if self.element_size is not None:
+            parts.append(f"요소 {self.element_size:g}")
+        if self.method != "automatic":
+            parts.append(_METHOD_LABELS.get(self.method, self.method))
+        if self.order != "program_controlled":
+            parts.append(_ORDER_LABELS.get(self.order, self.order))
+        return " · ".join(parts)
+
+
+_METHOD_LABELS = {
+    "tetrahedrons": "사면체",
+    "hex_dominant": "육면체 우세",
+    "sweep": "스윕",
+    "multizone": "멀티존",
+}
+_ORDER_LABELS = {"linear": "1차", "quadratic": "2차"}
 
 
 @dataclass(frozen=True)
@@ -179,6 +264,8 @@ class Conditions:
     loads: list[Load] = field(default_factory=list)
     """**선응력 모달에서만 쓴다.** 그냥 모달이면 `skipped` 에 적고 여기는 비운다."""
     mesh_hints: list[MeshHint] = field(default_factory=list)
+    body_settings: list[BodySetting] = field(default_factory=list)
+    """파트별 설정 — 적힌 파트만. 쉘 파트는 여기 오지 않고 `refused` 에 있다."""
     analysis: Analysis = field(default_factory=Analysis)
     skipped: list[Note] = field(default_factory=list)
     """이 레시피에서 답을 바꾸지 않는 것 — 하중처럼."""
@@ -187,7 +274,37 @@ class Conditions:
 
     @property
     def empty(self) -> bool:
-        return not (self.constraints or self.contacts or self.mesh_hints or self.loads)
+        return not (
+            self.constraints
+            or self.contacts
+            or self.mesh_hints
+            or self.loads
+            or self.body_settings
+        )
+
+    @property
+    def suppressed(self) -> set[str]:
+        """해석에서 뺀 파트 이름."""
+        return {one.name for one in self.body_settings if one.suppressed}
+
+    @property
+    def rigid(self) -> set[str]:
+        """강체로 푸는 파트 이름(뺀 파트는 빼고)."""
+        return {one.name for one in self.body_settings if one.rigid and not one.suppressed}
+
+    @property
+    def shells(self) -> dict[str, float]:
+        """쉘로 푸는 파트 → 두께(mm)."""
+        return {
+            one.name: float(one.thickness or 0.0)
+            for one in self.body_settings
+            if one.shell and not one.suppressed
+        }
+
+    @property
+    def whole_mesh(self) -> MeshHint | None:
+        """「전체」 메시 힌트 — 전역 크기 · 요소 형상 · 차수."""
+        return next((one for one in self.mesh_hints if one.whole), None)
 
     @property
     def prestressed(self) -> bool:
@@ -219,16 +336,70 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
             )
         )
     made.frames = _frames(payload, block)
+    # **파트별 설정을 먼저 읽는다** — 뺀 파트에 걸린 조건을 가려야 한다.
+    middle = _midsurface(payload)
+    for row in _rows(block, "body_settings"):
+        _body_setting(row, made, middle)
+    gone = _on_suppressed(payload, made.suppressed)
+    flat = _off_midsurface(payload, set(made.shells))
     known = {one.name for one in made.frames}
     for row in _rows(block, "constraints"):
         _needs_frame(row, known, made)
     for row in _rows(block, "constraints"):
+        place = str(row.get("on") or "")
+        if place in gone:
+            made.refused.append(
+                Note(
+                    f"구속 「{row.get('name') or '이름 없는 구속'}」",
+                    f"해석에서 뺀 파트({gone[place]})에 걸려 있습니다 — 거기에는 형상이 "
+                    "없습니다",
+                )
+            )
+            continue
+        if place in flat:
+            made.refused.append(
+                Note(f"구속 「{row.get('name') or '이름 없는 구속'}」", flat[place])
+            )
+            continue
         _constraint(row, regions, made)
     for row in _rows(block, "contacts"):
+        ends = [str(row.get(key) or "") for key in ("source", "target")]
+        hit = next((gone[one] for one in ends if one in gone), None)
+        if hit is not None:
+            # 한쪽 파트가 없으면 접촉도 없다 — Ansys 도 그 접촉을 스스로 끈다(실측).
+            made.skipped.append(
+                Note(
+                    f"접촉 「{row.get('name') or '이름 없는 접촉'}」",
+                    f"해석에서 뺀 파트({hit})의 접촉이라 뺐습니다",
+                )
+            )
+            continue
+        stuck = next((flat[one] for one in ends if one in flat), None)
+        if stuck is not None:
+            made.refused.append(Note(f"접촉 「{row.get('name') or '이름 없는 접촉'}」", stuck))
+            continue
         _contact(row, regions, made)
+    entities = {
+        str(one.get("name") or ""): str(one.get("entity") or "face")
+        for one in _rows(block, "named_selections")
+    }
     for row in _rows(block, "mesh_hints"):
-        _mesh_hint(row, made)
+        _mesh_hint(row, made, _dict(_dict(payload).get("regions")), entities)
     for row in _rows(block, "loads"):
+        place = str(row.get("on") or "")
+        if place in gone:
+            what = f"하중 「{row.get('name') or '이름 없는 하중'}」"
+            why = f"해석에서 뺀 파트({gone[place]})에 걸려 있습니다"
+            if recipe == "modal" and not made.analysis.prestressed:
+                made.skipped.append(Note(what, why + " — 모달이라 답과 상관없습니다"))
+            else:
+                made.refused.append(Note(what, why + " — 거기에는 형상이 없습니다"))
+            continue
+        if place in flat and not (recipe == "modal" and not made.analysis.prestressed):
+            made.refused.append(
+                Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", flat[place])
+            )
+            continue
         _load(row, recipe, made)
     for row in _rows(block, "initial"):
         _initial(row, recipe, made)
@@ -362,13 +533,277 @@ def _contact(row: dict[str, Any], regions: set[str], made: Conditions) -> None:
     )
 
 
-def _mesh_hint(row: dict[str, Any], made: Conditions) -> None:
+def _mesh_hint(
+    row: dict[str, Any],
+    made: Conditions,
+    regions: dict[str, Any],
+    entities: dict[str, str],
+) -> None:
+    """국부 메시 한 줄. **「전체」 · 면 그룹은 걸고, 바디 그룹(옛 파일)은 파트 메시로 옮기고,
+    엣지 그룹은 아직 못 걸어 적는다** — 메시는 바람이라 멈추지 않는다."""
     region = str(row.get("on") or "전체")
     size = _number(row.get("element_size"))
     order = str(row.get("order") or "")
-    if size is None and not order:
+    method = str(row.get("method") or "")
+    if order == "program_controlled":
+        order = ""
+    if method == "automatic":
+        method = ""
+    if region in WHOLE_REGIONS:
+        if size is not None or order or method:
+            made.mesh_hints.append(
+                MeshHint(region=region, element_size=size, order=order, method=method)
+            )
         return
-    made.mesh_hints.append(MeshHint(region=region, element_size=size, order=order))
+    what = f"국부 메시 「{region}」"
+    rows = [one for one in regions.get(region) or [] if isinstance(one, dict)]
+    if entities.get(region) == "body":
+        _legacy_body_hint(region, size, rows, made)
+        return
+    if rows and all("midpoint" in one for one in rows):
+        made.skipped.append(
+            Note(
+                f"{what}(엣지)",
+                "엣지 그룹의 요소 크기는 아직 못 겁니다 — 그 둘레는 이웃 크기로 풉니다",
+            )
+        )
+        return
+    if order or method:
+        made.skipped.append(
+            Note(
+                f"{what} 요소 형상 · 차수",
+                "「전체」 와 파트에만 겁니다 — 면에는 뜻이 없습니다",
+            )
+        )
+    if size is not None:
+        made.mesh_hints.append(MeshHint(region=region, element_size=size))
+
+
+def _legacy_body_hint(
+    region: str, size: float | None, rows: list[dict[str, Any]], made: Conditions
+) -> None:
+    """**바디 그룹에 건 옛 힌트** — 그 파트의 파트 메시(`body_settings` 크기)로 읽는다
+    (CompCore 2026-10-04 요청). 파트별 설정에 크기가 따로 있으면 그것이 이긴다(새 길이다)."""
+    if size is None:
+        return
+    names = {str(one.get("body") or "") for one in rows} - {""} or {ALL_BODIES}
+    for name in sorted(names):
+        found = next((one for one in made.body_settings if one.name == name), None)
+        if found is not None and found.element_size is not None:
+            made.skipped.append(
+                Note(
+                    f"국부 메시 「{region}」",
+                    f"파트 「{name}」 의 파트 메시 크기가 따로 있어 그것으로 풉니다",
+                )
+            )
+            continue
+        if found is not None:
+            index = made.body_settings.index(found)
+            made.body_settings[index] = replace(found, element_size=size)
+        else:
+            made.body_settings.append(BodySetting(name=name, element_size=size))
+
+
+def whole_order_note(given: Conditions, wanted: str) -> Note | None:
+    """CAD 가 「전체」 요소 차수를 적었는데 작업 스펙과 다르면 그 사실 — **작업 스펙으로 푼다**
+    (새 작업 · DOE 창이 CAD 값을 미리 채우고 사람이 고친 것이 스펙이다)."""
+    whole = given.whole_mesh
+    if whole is None or not whole.order or whole.order == wanted:
+        return None
+    return Note(
+        "메시 「전체」 요소 차수",
+        f"CAD 는 {_ORDER_LABELS.get(whole.order, whole.order)} 를 적었습니다 — 작업에서 고른 "
+        f"{_ORDER_LABELS.get(wanted, wanted)} 로 풉니다",
+    )
+
+
+def _on_suppressed(payload: Any, off: set[str]) -> dict[str, str]:
+    """뺀 파트에**만** 있는 선택 그룹 → 그 파트 이름. 그룹의 면 지문마다 `body` 가 있을 때만
+    안다(CompCore 의 바디 그룹 · 파트로 거른 그룹) — 좌표만 적힌 그룹은 모른다."""
+    if not off:
+        return {}
+    found: dict[str, str] = {}
+    for name, rows in _dict(_dict(payload).get("regions")).items():
+        bodies = (
+            {str(one.get("body") or "") for one in rows if isinstance(one, dict)}
+            if isinstance(rows, list)
+            else set()
+        )
+        if bodies and "" not in bodies and bodies <= off:
+            found[str(name)] = " · ".join(sorted(bodies))
+    return found
+
+
+@dataclass(frozen=True)
+class _Middle:
+    """점 파일의 `midsurface` — 쉘 파트의 두께와 못 만든 까닭."""
+
+    thickness: dict[str, float] = field(default_factory=dict)
+    failed: dict[str, str] = field(default_factory=dict)
+
+
+def _midsurface(payload: Any) -> _Middle:
+    block = _dict(_dict(payload).get("midsurface"))
+    thickness: dict[str, float] = {}
+    for row in block.get("bodies") or []:
+        if isinstance(row, dict) and _number(row.get("thickness")):
+            thickness[str(row.get("name") or "")] = float(row["thickness"])
+    failed = {
+        str(row.get("name") or ""): str(row.get("error") or "까닭이 적혀 있지 않습니다")
+        for row in block.get("failed") or []
+        if isinstance(row, dict)
+    }
+    if block.get("error"):
+        # 옛 내보내기 — 점 전체가 한 줄로 실패했다.
+        failed.setdefault("", str(block["error"]))
+    return _Middle(thickness=thickness, failed=failed)
+
+
+def _off_midsurface(payload: Any, shells: set[str]) -> dict[str, str]:
+    """쉘 파트에 걸린 영역 중 **중간면의 면 · 점으로 못 옮긴 것** → 까닭.
+
+    두께 쪽 면(끝면 · 옆면 · 구멍 벽)은 중간면의 **모서리**가 되는데, 우리 매처는 아직 면 ·
+    점만 안다. CompCore 가 못 옮긴 것은 `mid: []` 다.
+    """
+    if not shells:
+        return {}
+    found: dict[str, str] = {}
+    for name, rows in _dict(_dict(payload).get("regions")).items():
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or str(row.get("body") or ALL_BODIES) not in shells:
+                continue
+            part = row.get("body") or ALL_BODIES
+            mid = row.get("mid")
+            if not mid:
+                found[str(name)] = (
+                    f"쉘 파트({part})의 이 자리를 CompCore 가 중간면으로 옮기지 못했습니다"
+                )
+                break
+            if any(isinstance(one, dict) and "edge" in one for one in mid):
+                found[str(name)] = (
+                    f"쉘 파트({part})의 두께 쪽 면 — 중간면의 모서리에 거는 조건은 아직 "
+                    "못 겁니다"
+                )
+                break
+    return found
+
+
+def shell_view(payload: dict[str, Any], shells: set[str]) -> dict[str, Any]:
+    """쉘 파트의 영역 지문을 **중간면의 것으로** 바꾼 점 파일 — 쉘 모델에서 짝지을 때 쓴다.
+
+    겉면은 중간면의 면(`two_sided` — 쉘은 앞뒤가 없다. 원래 겉면의 바깥 법선은
+    `outer_normal` 로 남겨 하중이 미는 쪽을 안다), 점은 중간면 위로 내린 점이다. 쉘이 아닌
+    파트의 지문은 그대로 둔다.
+    """
+    if not shells or not isinstance(payload.get("regions"), dict):
+        return payload
+    regions: dict[str, Any] = {}
+    for name, rows in payload["regions"].items():
+        if not isinstance(rows, list):
+            regions[name] = rows
+            continue
+        made: list[Any] = []
+        for row in rows:
+            body = str(row.get("body") or ALL_BODIES) if isinstance(row, dict) else ""
+            if not isinstance(row, dict) or body not in shells:
+                made.append(row)
+                continue
+            for one in row.get("mid") or []:
+                if not isinstance(one, dict):
+                    continue
+                if isinstance(one.get("face"), dict):
+                    face = one["face"]
+                    made.append(
+                        {
+                            **face,
+                            "body": body,
+                            "two_sided": True,
+                            "outer_normal": face.get("normal"),
+                        }
+                    )
+                elif one.get("point") is not None:
+                    made.append({"point": one["point"], "body": body})
+                elif isinstance(one.get("edge"), dict):
+                    made.append({**one["edge"], "body": body})
+        regions[name] = made
+    return {**payload, "regions": regions}
+
+
+def _body_setting(
+    row: dict[str, Any], made: Conditions, middle: _Middle | None = None
+) -> None:
+    """파트별 설정 한 줄. **모르는 값은 멈춘다** — 거동 · 표현은 답을 바꾼다."""
+    name = str(row.get("name") or "").strip()
+    if not name:
+        made.refused.append(Note("파트별 설정", "파트 이름이 비어 있습니다"))
+        return
+    what = f"파트 「{name}」"
+    if any(one.name == name for one in made.body_settings):
+        made.refused.append(Note(what, "설정이 두 줄입니다 — 파트마다 하나만 받습니다"))
+        return
+    behavior = str(row.get("behavior") or "deformable")
+    representation = str(row.get("representation") or "solid")
+    suppressed = bool(row.get("suppressed"))
+    if behavior not in BODY_BEHAVIORS:
+        made.refused.append(Note(what, f"모르는 거동입니다: {behavior}"))
+        return
+    if representation not in BODY_REPRESENTATIONS:
+        made.refused.append(Note(what, f"모르는 표현입니다: {representation}"))
+        return
+    thickness: float | None = None
+    if representation == "shell" and not suppressed:
+        # **솔리드로 풀지 않는다** — 판을 쉘로 둔 모델과 솔리드 모델은 강성이 다르고, 사람은
+        # 쉘로 풀었다고 읽는다. 중간면이 없으면 그 까닭을 단다.
+        middle = middle or _Middle()
+        if behavior == "rigid":
+            made.refused.append(Note(f"{what} 쉘 표현", "강체는 쉘로 풀 수 없습니다"))
+            return
+        thickness = middle.thickness.get(name)
+        if thickness is None:
+            why = middle.failed.get(name) or middle.failed.get("")
+            made.refused.append(
+                Note(
+                    f"{what} 쉘 표현",
+                    f"CompCore 가 중간면을 못 만들었습니다: {why}"
+                    if why
+                    else "점 파일에 이 파트의 중간면(midsurface)이 없습니다",
+                )
+            )
+            return
+    mesh = _dict(row.get("mesh"))
+    method = str(mesh.get("method") or "automatic")
+    order = str(mesh.get("order") or "program_controlled")
+    if method not in MESH_METHODS:
+        made.skipped.append(
+            Note(f"{what} 요소 형상", f"모르는 값이라 자동으로 둡니다: {method}")
+        )
+        method = "automatic"
+    if order not in MESH_ORDERS:
+        made.skipped.append(
+            Note(f"{what} 요소 차수", f"모르는 값이라 전체를 따릅니다: {order}")
+        )
+        order = "program_controlled"
+    size = _number(mesh.get("element_size"))
+    if mesh.get("element_size") is not None and (size is None or size <= 0):
+        made.skipped.append(
+            Note(
+                f"{what} 요소 크기",
+                f"수가 아니라 전체 크기를 따릅니다: {mesh['element_size']}",
+            )
+        )
+        size = None
+    made.body_settings.append(
+        BodySetting(
+            name=name,
+            rigid=behavior == "rigid",
+            suppressed=suppressed,
+            shell=thickness is not None,
+            thickness=thickness,
+            element_size=size,
+            method=method,
+            order=order,
+        )
+    )
 
 
 def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:

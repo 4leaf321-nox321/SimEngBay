@@ -141,3 +141,147 @@ def von_mises(block: Block) -> dict[int, float]:
             * ((xx - yy) ** 2 + (yy - zz) ** 2 + (zz - xx) ** 2 + 6 * (xy**2 + yz**2 + zx**2))
         ) ** 0.5
     return found
+
+
+# --- 쉘 접기 ---------------------------------------------------------------------
+
+
+def read_folded(workdir: Path, path: Path) -> list[Block]:
+    """`read` 에 **쉘 접기**를 얹은 것 — 쉘이 없으면 `read` 와 같다.
+
+    모델링이 `boundary.json` 의 `shells`(중간면의 면 번호 · 접을 거리)를 남긴다. 그 면의
+    절점이 원래 쉘 절점이다(`model.msh`).
+    """
+    from app.core import boundary
+    from app.core.calculix.mesh import read_mesh
+
+    blocks = read(path)
+    info = boundary.read(workdir).get("shells")
+    msh = workdir / "model.msh"
+    if not isinstance(info, dict) or not msh.is_file():
+        return blocks
+    mesh = read_mesh(
+        msh,
+        require_solid=False,
+        shell_surfaces=frozenset(int(one) for one in info["surfaces"]),
+    )
+    shell_nodes = {
+        node: mesh.nodes[node]
+        for rows in mesh.shells.values()
+        for _, ids in rows
+        for node in ids
+    }
+    return fold_shells(
+        blocks, read_nodes(path), shell_nodes, set(mesh.nodes), float(info["reach"])
+    )
+
+
+def read_nodes(path: Path) -> dict[int, tuple[float, float, float]]:
+    """`.frd` 의 절점 좌표(`2C` 블록). 쉘을 펼친 절점의 자리를 알 때 쓴다."""
+    found: dict[int, tuple[float, float, float]] = {}
+    inside = False
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith("    2C"):
+                inside = True
+                continue
+            if not inside:
+                continue
+            if line.startswith(" -3"):
+                break
+            if line.startswith(" -1"):
+                numbers = _numbers(line[_NODE_END:])
+                if len(numbers) >= 3:
+                    found[int(line[3:_NODE_END])] = (numbers[0], numbers[1], numbers[2])
+    return found
+
+
+def fold_shells(
+    blocks: list[Block],
+    coordinates: dict[int, tuple[float, float, float]],
+    shell_nodes: dict[int, tuple[float, float, float]],
+    keep: set[int],
+    reach: float,
+) -> list[Block]:
+    """CalculiX 가 **두께 방향으로 펼친** 쉘 결과를 원래 쉘 절점으로 접는다.
+
+    ccx 는 쉘 요소를 두께 방향 입체로 펼쳐 풀고(`OUTPUT=3D`), 결과를 펼친 절점(새 번호)에
+    낸다. 그대로면 우리 메시의 쉘 절점에는 값이 없어 측정점 · 변형 그림이 빈다. 그래서 쉘 절점
+    마다 **두께의 절반 안**에 있는 펼친 절점을 모아 — 변위는 평균(중간면), 응력 · 변형률은
+    상당응력이 큰 쪽(겉면 — 굽힘이 실리는 자리)의 값을 싣는다. `OUTPUT=2D` 로 내면 응력이
+    중간면 값이라 굽힘이 빠졌다(실측 2026-10-04: 29.7 MPa · 겉면 91.1 MPa).
+
+    `keep` 은 우리 메시의 절점이다 — 그 밖(펼친 절점 · 강체 기준점)은 결과에서 뺀다.
+    """
+    if not shell_nodes:
+        return blocks
+    spread = [
+        (node, place)
+        for node, place in coordinates.items()
+        if node not in keep and node not in shell_nodes
+    ]
+    cell = max(reach, 1e-9)
+    grid: dict[tuple[int, int, int], list[tuple[int, tuple[float, float, float]]]] = {}
+    for node, place in spread:
+        key = tuple(int(place[axis] // cell) for axis in range(3))
+        grid.setdefault(key, []).append((node, place))  # type: ignore[arg-type]
+    near: dict[int, list[int]] = {}
+    for node, place in shell_nodes.items():
+        base = [int(place[axis] // cell) for axis in range(3)]
+        hits: list[int] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for other, where in grid.get(
+                        (base[0] + dx, base[1] + dy, base[2] + dz), []
+                    ):
+                        if (
+                            sum((where[axis] - place[axis]) ** 2 for axis in range(3))
+                            <= reach**2
+                        ):
+                            hits.append(other)
+        near[node] = hits
+
+    # 겉면은 **응력 블록에서** 고른다 — 같은 단계의 변형률 · 오차도 그 절점을 쓴다(따로 고르면
+    # 겉면 둘이 섞인다).
+    picks: dict[tuple[int, float], dict[int, int]] = {}
+    for block in blocks:
+        if block.kind != "STRESS":
+            continue
+        chosen: dict[int, int] = {}
+        for node, hits in near.items():
+            present = [one for one in hits if one in block.values]
+            if present:
+                chosen[node] = max(present, key=lambda one: _tensor_size(block.values[one]))
+        picks[(block.step, block.value)] = chosen
+
+    folded: list[Block] = []
+    for block in blocks:
+        values = {node: row for node, row in block.values.items() if node in keep}
+        pick = picks.get((block.step, block.value), {})
+        for node, hits in near.items():
+            if block.kind in ("STRESS", "TOSTRAIN", "ERROR"):
+                one = pick.get(node)
+                if one is not None and one in block.values:
+                    values[node] = block.values[one]
+                continue
+            rows = [block.values[one] for one in hits if one in block.values]
+            if rows:
+                width = min(len(row) for row in rows)
+                values[node] = [
+                    sum(row[index] for row in rows) / len(rows) for index in range(width)
+                ]
+        folded.append(
+            Block(kind=block.kind, value=block.value, step=block.step, values=values)
+        )
+    return folded
+
+
+def _tensor_size(row: list[float]) -> float:
+    """겉면을 고르는 잣대 — 상당 크기(6성분이면 폰 미세스 꼴, 아니면 첫 값)."""
+    if len(row) >= 6:
+        xx, yy, zz, xy, yz, zx = row[:6]
+        return 0.5 * ((xx - yy) ** 2 + (yy - zz) ** 2 + (zz - xx) ** 2) + 3 * (
+            xy**2 + yz**2 + zx**2
+        )
+    return abs(row[0]) if row else 0.0

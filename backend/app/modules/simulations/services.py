@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import Any, BinaryIO, Literal, cast
 
 from pydantic import ValidationError
 from sqlalchemy import Select, and_, func, or_, select, text, update
@@ -42,8 +42,15 @@ from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_insi
 from app.core.doe.browse import OutsideRoots
 from app.core.doe.folder import FolderProblem
 from app.core.modes import track_modes
-from app.core.spec import RUNNABLE_RECIPES, ModalSpec, StaticSpec, parse_spec
+from app.core.spec import (
+    RUNNABLE_RECIPES,
+    HarmonicSpec,
+    ModalSpec,
+    StaticSpec,
+    parse_spec,
+)
 from app.core.stages import (
+    MIDSURFACE_NAME,
     STAGES,
     ArtifactSpec,
     StageCanceled,
@@ -61,9 +68,12 @@ from app.modules.simulations.models import (
 )
 from app.modules.simulations.schemas import (
     ArtifactOut,
+    CadBodyOut,
+    CadMaterialOut,
     ComparisonOut,
     ConditionLine,
     ConditionsOut,
+    ConditionsPreviewOut,
     ConvergenceLevelOut,
     ConvergenceMetricOut,
     ConvergenceOut,
@@ -76,6 +86,7 @@ from app.modules.simulations.schemas import (
     MeasurementOut,
     ModeTrackOut,
     RecipeOut,
+    RegionOut,
     SimulationOut,
     SimulationSummaryOut,
     SolverAvailabilityOut,
@@ -205,6 +216,7 @@ def to_summary(db: Session, simulation: Simulation) -> SimulationSummaryOut:
         source_kind=simulation.source_kind,
         source_ref=simulation.source_ref,
         source_meta=simulation.source_meta,
+        solver=solver_of(simulation),
         owner_workspace_id=simulation.owner_workspace_id,
         owner_workspace_name=workspace_name,
         requested_by_id=simulation.requested_by_id,
@@ -312,14 +324,19 @@ def conditions_out(payload: dict[str, Any], *, recipe: str) -> ConditionsOut:
             )
         )
     for hint in found.mesh_hints:
-        if hint.element_size is not None:
-            lines.append(
-                ConditionLine(
-                    kind="mesh",
-                    label=f"메시 {hint.region}",
-                    detail=f"요소 {hint.element_size:g}",
-                )
-            )
+        parts = [f"요소 {hint.element_size:g}"] if hint.element_size is not None else []
+        parts += [
+            one
+            for one in (_METHOD_WORDS.get(hint.method), _ORDER_WORDS.get(hint.order))
+            if one
+        ]
+        lines.append(
+            ConditionLine(kind="mesh", label=f"메시 {hint.region}", detail=" · ".join(parts))
+        )
+    for one in found.body_settings:
+        lines.append(
+            ConditionLine(kind="body", label=f"파트 {one.name}", detail=one.describe())
+        )
     for note in found.skipped:
         lines.append(
             ConditionLine(kind="load", label=note.what, status="skipped", why=note.why)
@@ -329,6 +346,16 @@ def conditions_out(payload: dict[str, Any], *, recipe: str) -> ConditionsOut:
             ConditionLine(kind="constraint", label=note.what, status="refused", why=note.why)
         )
     return ConditionsOut(lines=lines, unit_system=system.key, prestressed=found.prestressed)
+
+
+#: 메시 칸의 값 → 사람의 말(조건 줄).
+_METHOD_WORDS = {
+    "tetrahedrons": "사면체",
+    "hex_dominant": "육면체 우세",
+    "sweep": "스윕",
+    "multizone": "멀티존",
+}
+_ORDER_WORDS = {"linear": "1차", "quadratic": "2차"}
 
 
 def recipes() -> list[RecipeOut]:
@@ -496,6 +523,46 @@ def _register_artifact(
     )
 
 
+def parse_topology(raw: bytes) -> dict[str, Any]:
+    """CAD 점 파일(영역 지문) 한 장을 읽는다 — **작업을 거는 길과 미리보는 길이 같은
+    검사**를 한다."""
+    if len(raw) > MAX_TOPOLOGY_BYTES:
+        raise AppError(
+            code("SIMULATIONS", 12),
+            f"영역 지문 파일이 너무 큽니다 (최대 {MAX_TOPOLOGY_BYTES // 1024 // 1024}MB).",
+            status=413,
+        )
+    try:
+        parsed = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as failure:
+        raise AppError(
+            code("SIMULATIONS", 13),
+            f"영역 지문이 JSON 이 아닙니다: {failure}",
+            status=400,
+        ) from failure
+    if not isinstance(parsed, dict) or "regions" not in parsed:
+        raise AppError(
+            code("SIMULATIONS", 13),
+            "영역 지문에 regions 가 없습니다 — "
+            f"CAD 가 낸 점 파일({TOPOLOGY_NAME})인지 확인하세요.",
+            status=400,
+        )
+    return parsed
+
+
+def _parsed_spec(spec_raw: dict[str, Any]) -> ModalSpec | StaticSpec | HarmonicSpec:
+    try:
+        return parse_spec(spec_raw)
+    except ValidationError as failure:
+        raise AppError(
+            code("SIMULATIONS", 1),
+            f"스펙이 올바르지 않습니다: {describe_validation(failure.errors())}",
+            status=400,
+            # `json()` 을 거친다 — 검증기가 던진 예외(`ctx.error`)가 글자로 바뀐다.
+            details={"errors": json.loads(failure.json(include_url=False))},
+        ) from failure
+
+
 def create(
     db: Session,
     *,
@@ -506,6 +573,7 @@ def create(
     filename: str,
     stream: BinaryIO,
     topology: bytes | None = None,
+    midsurface: bytes | None = None,
     source_kind: str = "upload",
     source_ref: str | None = None,
     source_meta: dict[str, Any] | None = None,
@@ -516,15 +584,7 @@ def create(
     한다. 구속이 있는데 영역 지문이 없는 것도 같은 부류라 여기서 막는다: 그대로 보내면
     1분 뒤 모델링 단계에서 같은 말을 듣는다.
     """
-    try:
-        spec = parse_spec(spec_raw)
-    except ValidationError as failure:
-        raise AppError(
-            code("SIMULATIONS", 1),
-            f"스펙이 올바르지 않습니다: {describe_validation(failure.errors())}",
-            status=400,
-            details={"errors": failure.errors(include_url=False)},
-        ) from failure
+    spec = _parsed_spec(spec_raw)
     if spec.recipe not in RUNNABLE_RECIPES:
         raise AppError(
             code("SIMULATIONS", 2),
@@ -542,28 +602,19 @@ def create(
             status=400,
             details={"regions": [one.region for one in spec.constraints]},
         )
-    if topology is not None:
-        if len(topology) > MAX_TOPOLOGY_BYTES:
-            raise AppError(
-                code("SIMULATIONS", 12),
-                f"영역 지문 파일이 너무 큽니다 (최대 {MAX_TOPOLOGY_BYTES // 1024 // 1024}MB).",
-                status=413,
-            )
-        try:
-            parsed = json.loads(topology.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as failure:
-            raise AppError(
-                code("SIMULATIONS", 13),
-                f"영역 지문이 JSON 이 아닙니다: {failure}",
-                status=400,
-            ) from failure
-        if not isinstance(parsed, dict) or "regions" not in parsed:
-            raise AppError(
-                code("SIMULATIONS", 13),
-                "영역 지문에 regions 가 없습니다 — "
-                f"CAD 가 낸 {TOPOLOGY_NAME} 인지 확인하세요.",
-                status=400,
-            )
+    payload = parse_topology(topology) if topology is not None else None
+    gap = material_gap(spec, payload)
+    if gap:
+        raise AppError(code("SIMULATIONS", 28), gap, status=400)
+    shells = condition_model.read(payload).shells if payload else {}
+    if shells and not midsurface:
+        # **쉘 파트는 중간면으로 푼다** — 없으면 모델링이 멈춘다. 만들 때 말한다.
+        raise AppError(
+            code("SIMULATIONS", 29),
+            f"쉘 파트({' · '.join(sorted(shells))})가 있습니다 — CAD 가 낸 중간면 형상"
+            "(pNNNN_mid.step)을 함께 올려야 합니다.",
+            status=400,
+        )
     if workspace_slug is None:
         if not user.is_system_admin:
             raise Forbidden(
@@ -612,6 +663,9 @@ def create(
     topology_path = workdir / TOPOLOGY_NAME
     if topology is not None:
         topology_path.write_bytes(topology)
+    mid_path = workdir / MIDSURFACE_NAME
+    if midsurface:
+        mid_path.write_bytes(midsurface)
 
     simulation.input_sha256 = sha256
     simulation.work_dir = relative_to_root(workdir)
@@ -622,6 +676,10 @@ def create(
     if topology is not None:
         _register_artifact(
             db, simulation, stage="input", spec=ArtifactSpec("topology", topology_path)
+        )
+    if midsurface:
+        _register_artifact(
+            db, simulation, stage="input", spec=ArtifactSpec("input_mid_step", mid_path)
         )
     db.commit()
     db.refresh(simulation)
@@ -707,11 +765,15 @@ def _read_doe(path_text: str) -> DoeFolder:
         raise AppError(code("SIMULATIONS", 14), str(failure), status=400) from failure
 
 
-def preview_doe(path_text: str) -> DoePreviewOut:
-    """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유."""
+def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
+    """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유, 그리고 **첫 점의
+    조건이 그 해석 종류에서 어떻게 다뤄지나**(반영 · 넘김 · 막음)."""
     doe = _read_doe(path_text)
     analysis = _doe_analysis(doe)
+    payload = _first_payload(doe)
+    wanted = recipe if recipe in RUNNABLE_RECIPES else (analysis.recipe or "modal")
     return DoePreviewOut(
+        conditions=conditions_out(payload, recipe=wanted) if payload is not None else None,
         path=str(doe.path),
         study_id=doe.study_id,
         name=doe.name,
@@ -725,6 +787,7 @@ def preview_doe(path_text: str) -> DoePreviewOut:
         suggested_modes=analysis.modes,
         suggested_recipe=analysis.recipe,
         suggested_element_size_mm=analysis.element_size_mm,
+        suggested_order=analysis.order,
     )
 
 
@@ -735,44 +798,163 @@ class _DoeAnalysis:
     recipe: str | None = None
     modes: int | None = None
     element_size_mm: float | None = None
+    order: str | None = None
+    """「전체」 요소 차수(`linear` · `quadratic`) — 적혀 있을 때만."""
 
 
-def _doe_analysis(doe: DoeFolder) -> _DoeAnalysis:
-    """첫 점에서 읽는다(스터디 전체에 같다).
+def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
+    """점 파일 한 장에서 CAD 가 적은 해석 설정을 읽는다.
 
-    **해석 종류는 점 파일의 `conditions.analysis.type` 이다** — `study.json` 의 `recipe` 는
-    형상 레시피(상자 · 구멍 노드)라 해석과 상관이 없다. 적혀 있지 않으면 비워 둔다: 조건
-    읽기는 없을 때 모달로 채우는데, 그것을 「CAD 가 모달이라 했다」 로 보여 주면 거짓이다.
+    **해석 종류는 `conditions.analysis.type` 이다** — `study.json` 의 `recipe` 는 형상
+    레시피(상자 · 구멍 노드)라 해석과 상관이 없다. 적혀 있지 않으면 비워 둔다: 조건 읽기는 없을
+    때 모달로 채우는데, 그것을 「CAD 가 모달이라 했다」 로 보여 주면 거짓이다.
 
     요소 크기는 「전체」 힌트를 **mm 로 옮겨** 낸다(SI 폴더면 m 로 온다) — CalculiX 모델링이
     같은 셈을 한다(`calculix/build.py` 의 `_global_size`).
     """
+    try:
+        system = units.declared_in(payload)
+        given = condition_model.read(payload)
+    except ValueError:
+        return _DoeAnalysis()
+    block = payload.get("conditions")
+    declared = block.get("analysis") if isinstance(block, dict) else None
+    kind = declared.get("type") if isinstance(declared, dict) else None
+    hint = given.whole_mesh
+    whole = hint.element_size if hint is not None else None
+    return _DoeAnalysis(
+        recipe=kind if kind in RUNNABLE_RECIPES else None,
+        modes=given.analysis.modes,
+        element_size_mm=round(whole * system.length_mm, 6) if whole is not None else None,
+        order=hint.order if hint is not None and hint.order else None,
+    )
+
+
+def _first_payload(doe: DoeFolder) -> dict[str, Any] | None:
+    """조건이 든 첫 점의 파일 — 스터디 전체에 같은 것(해석 설정 · 조건 모양)을 여기서
+    읽는다."""
     for point in doe.usable:
         if point.point_file is None or not point.has_conditions:
             continue
         try:
-            payload = json.loads(point.point_file.read_text(encoding="utf-8"))
-            system = units.declared_in(payload)
-            given = condition_model.read(payload)
+            loaded = json.loads(point.point_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return _DoeAnalysis()
-        block = payload.get("conditions") if isinstance(payload, dict) else None
-        declared = (block or {}).get("analysis") if isinstance(block, dict) else None
-        kind = declared.get("type") if isinstance(declared, dict) else None
-        whole = next(
-            (
-                one.element_size
-                for one in given.mesh_hints
-                if one.region in ("전체", "all") and one.element_size is not None
-            ),
-            None,
+            return None
+        return loaded if isinstance(loaded, dict) else None
+    return None
+
+
+def _doe_analysis(doe: DoeFolder) -> _DoeAnalysis:
+    """첫 점에서 읽는다(스터디 전체에 같다)."""
+    payload = _first_payload(doe)
+    return _analysis_of(payload) if payload is not None else _DoeAnalysis()
+
+
+def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOut:
+    """CAD 점 파일 한 장을 **작업을 만들기 전에** 읽어 준다 — 영역 · 바디 · 물성 · 해석 설정과,
+    그 해석 종류에서 조건이 어떻게 다뤄지나. 화면이 파일을 따로 해석하지 않는다(두 벌이 되면
+    언젠가 갈린다 — 작업을 거는 길과 같은 코드를 지난다)."""
+    payload = parse_topology(raw)
+    analysis = _analysis_of(payload)
+    wanted = recipe if recipe in RUNNABLE_RECIPES else (analysis.recipe or "modal")
+    regions: list[RegionOut] = []
+    for name, group in (payload.get("regions") or {}).items():
+        rows = group if isinstance(group, list) else []
+        first = rows[0] if rows and isinstance(rows[0], dict) else {}
+        kind: Literal["face", "point", "other"] = (
+            "point" if "point" in first else "face" if "centroid" in first else "other"
         )
-        return _DoeAnalysis(
-            recipe=kind if kind in RUNNABLE_RECIPES else None,
-            modes=given.analysis.modes,
-            element_size_mm=round(whole * system.length_mm, 6) if whole is not None else None,
+        regions.append(RegionOut(name=str(name), count=len(rows), kind=kind))
+    found: list[materials.Material] = []
+    problem = ""
+    try:
+        found = materials.read(payload, units.declared_in(payload))
+    except ValueError as failure:
+        problem = str(failure)
+    names = materials.body_names(payload)
+    settings = {one.name: one for one in condition_model.read(payload).body_settings}
+    off = {name for name, one in settings.items() if one.suppressed}
+    on_body = (
+        materials.assigned(found, [one for one in names if one not in off]) if found else {}
+    )
+    unresolved = payload.get("unresolved")
+    return ConditionsPreviewOut(
+        recipe=wanted,
+        regions=regions,
+        unresolved=[str(one) for one in unresolved] if isinstance(unresolved, list) else [],
+        bodies=[
+            CadBodyOut(
+                name=name,
+                volume_mm3=_volume_of(payload, name),
+                material=chosen.name if (chosen := on_body.get(name)) else None,
+                suppressed=name in off,
+                shell=name in settings and settings[name].shell and name not in off,
+                setting=settings[name].describe() if name in settings else "",
+            )
+            for name in names
+        ],
+        materials=[
+            CadMaterialOut(
+                name=one.name,
+                bodies=list(one.bodies),
+                youngs_modulus_gpa=round(one.youngs_modulus_pa / 1e9, 6),
+                poisson_ratio=one.poisson_ratio,
+                density_kg_m3=round(one.density_kg_m3, 6),
+            )
+            for one in found
+        ],
+        material_error=problem,
+        suggested_recipe=analysis.recipe,
+        suggested_modes=analysis.modes,
+        suggested_element_size_mm=analysis.element_size_mm,
+        suggested_order=analysis.order,
+        conditions=conditions_out(payload, recipe=wanted),
+    )
+
+
+def _volume_of(payload: dict[str, Any], name: str) -> float | None:
+    for one in payload.get("bodies") or []:
+        if isinstance(one, dict) and str(one.get("name") or "").strip() == name:
+            volume = one.get("volume")
+            return float(volume) if isinstance(volume, int | float) else None
+    return None
+
+
+def material_gap(
+    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
+) -> str | None:
+    """물성이 빠지는 자리가 있나 — 있으면 까닭, 없으면 `None`.
+
+    **작업을 만들 때 막는다.** 그대로 두면 워커가 집어 들고 모델링에서야 같은 말을 한다 —
+    DOE 200점이면 200번. 규칙은 모델링과 같다(`materials.assigned`).
+    """
+    if spec.material_from == "spec":
+        return None  # 스펙 검증이 `material` 이 있는지 봤다.
+    found: list[materials.Material] = []
+    if payload:
+        try:
+            found = materials.read(payload, units.declared_in(payload))
+        except ValueError as failure:
+            return f"CAD 가 보낸 물성을 읽지 못했습니다: {failure}"
+    if not found:
+        if spec.material is not None:
+            return None
+        return (
+            "CAD 점 파일에 물성이 없습니다 — CompCore 에서 재료를 지정한 뒤 다시 내보내세요."
+            if payload
+            else "물성이 없습니다 — CompCore 가 내보낸 CAD 점 파일이 함께 있어야 합니다."
         )
-    return _DoeAnalysis()
+    # **해석에서 뺀 파트는 물성이 없어도 된다** — 메시에도 안 나온다.
+    off = condition_model.read(payload).suppressed
+    missing = materials.uncovered(
+        found, [one for one in materials.body_names(payload) if one not in off]
+    )
+    if missing:
+        return (
+            f"CAD 가 재료를 지정하지 않은 파트가 있습니다: {', '.join(missing)} — "
+            "CompCore 에서 재료를 지정하세요."
+        )
+    return None
 
 
 def _doe_materials(doe: DoeFolder) -> list[str]:
@@ -815,6 +997,7 @@ def import_doe(
     로그에서 찾게 하지 않는다.
     """
     doe = _read_doe(path_text)
+    spec = _parsed_spec(spec_raw)
     wanted = set(numbers) if numbers else None
     chosen = [one for one in doe.points if wanted is None or one.number in wanted]
     if not chosen:
@@ -853,6 +1036,16 @@ def import_doe(
             )
             continue
         assert point.step is not None  # usable 이 보장한다
+        topology = point.point_file.read_bytes() if point.point_file else None
+        # **물성이 빠지는 점은 걸지 않는다** — 재료를 훑는 DOE 는 점마다 붙는 재료가 다르다.
+        gap = material_gap(spec, parse_topology(topology) if topology is not None else None)
+        if gap:
+            skipped.append(
+                DoePointPreview(
+                    number=point.number, params=point.params, usable=False, skip_reason=gap
+                )
+            )
+            continue
         meta = {
             "study_id": doe.study_id,
             "study_name": doe.name,
@@ -883,7 +1076,8 @@ def import_doe(
                 stream=stream,
                 # 점 파일 하나에 영역 · 바디 · 조건이 다 있다. 작업 폴더에는 지금 이름
                 # (`topology.json`)으로 둔다 — 모델링이 `regions` 를 읽는 자리라 그대로 맞는다.
-                topology=point.point_file.read_bytes() if point.point_file else None,
+                topology=topology,
+                midsurface=point.mid_step.read_bytes() if point.mid_step else None,
                 source_kind="doe_point",
                 source_ref=f"{doe.name}/p{point.number:04d}",
                 source_meta=meta,
@@ -1744,13 +1938,21 @@ def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> Converg
             "CalculiX 의 비선형 접촉은 접촉 강성이 요소 크기를 따라갑니다 — 크기를 바꾸면 "
             "메시와 접촉 모델이 함께 바뀐 결과입니다."
         )
-    if any(
-        hint.region not in ("전체", "all")
-        for hint in condition_model.read(_topology_payload(original)).mesh_hints
-    ):
+    declared = condition_model.read(_topology_payload(original))
+    if any(hint.region not in ("전체", "all") for hint in declared.mesh_hints):
         notes.append(
             "CAD 가 영역별 요소 크기를 적었습니다 — 그 자리는 전역 크기를 바꿔도 그대로라 "
             "정련이 고르지 않습니다."
+        )
+    sized = sorted(
+        one.name
+        for one in declared.body_settings
+        if one.element_size is not None and not one.suppressed
+    )
+    if sized:
+        notes.append(
+            f"CAD 가 파트 요소 크기를 적었습니다({' · '.join(sized)}) — 그 파트는 전역 크기를 "
+            "바꿔도 그대로라 정련이 고르지 않습니다."
         )
     return ConvergenceOut(
         original_id=original.id,

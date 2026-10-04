@@ -30,6 +30,7 @@ export function solverOf(spec: Record<string, unknown> | null | undefined): stri
 
 export const ARTIFACT_LABELS: Record<string, string> = {
   input_step: '입력 형상',
+  input_mid_step: '중간면 형상(쉘)',
   spec: '스펙',
   topology: '영역 지문(CAD)',
   mechdb: 'Mechanical DB',

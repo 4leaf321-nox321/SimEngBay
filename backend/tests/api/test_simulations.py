@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import shutil
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -488,6 +489,198 @@ def test_DOE_를_CalculiX_로_가져오면_점마다_그_솔버가_적힌다(
     one = client.get(f"/api/simulations/{first}", headers=member.headers).json()
     assert one["spec"]["solver"] == "calculix"
     assert one["recipe"] == "static"
+    # 목록 줄에도 솔버가 실린다 — 스펙을 다 싣지 않고도 가를 수 있게.
+    listed = client.get("/api/simulations?limit=200", headers=member.headers).json()["items"]
+    assert next(row for row in listed if row["id"] == first)["solver"] == "calculix"
+
+
+def test_CAD_점_파일을_걸기_전에_읽어_준다(client: TestClient, member: Signed) -> None:
+    """**새 작업 창이 점 파일을 따로 해석하지 않는다** — 작업을 거는 길과 같은 코드가 읽어,
+    무엇이 들었고(영역 · 물성 · 해석 설정) 그 해석 종류에서 조건이 어떻게 다뤄지나를 준다."""
+    point = SHEAR_FOLDER / "points" / "p0002.json"
+    got = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("p0002.json", point.read_bytes(), "application/json")},
+        headers=member.headers,
+    )
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["suggested_recipe"] == "static" and body["recipe"] == "static"
+    assert body["suggested_element_size_mm"] == 2.5
+    # 「전체」 요소 차수도 제안한다 — 창이 미리 채운다.
+    assert body["suggested_order"] == "quadratic"
+    # **파트가 여럿이면 파트마다 붙을 재료를 보여 준다** — 모델링과 같은 규칙으로 짝짓는다.
+    assert [(one["name"], one["material"]) for one in body["bodies"]] == [
+        ("아래판", "SECC-EXAD87-DP_선언물성_0.8"),
+        ("위판", "AL5052H32DEMO_-_-"),
+    ]
+    steel = body["materials"][0]
+    assert steel["bodies"] == ["아래판"] and 150 < steel["youngs_modulus_gpa"] < 250
+    assert body["material_error"] == ""
+    kinds = {one["name"]: one["kind"] for one in body["regions"]}
+    assert kinds["이음 입구 위판"] == "point"
+    lines = body["conditions"]["lines"]
+    assert any(one["kind"] == "load" and one["status"] == "applied" for one in lines)
+
+    # 모달로 물으면 하중을 **넘긴다**고 말한다 — 조용히 버리지 않는다.
+    modal = client.post(
+        "/api/simulations/conditions/preview",
+        data={"recipe": "modal"},
+        files={"file": ("p0002.json", point.read_bytes(), "application/json")},
+        headers=member.headers,
+    ).json()
+    assert any(one["status"] == "skipped" for one in modal["conditions"]["lines"])
+
+    bad = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("x.json", b'{"nope": 1}', "application/json")},
+        headers=member.headers,
+    )
+    assert bad.status_code == 400
+    assert "regions" in bad.json()["error"]["message"]
+
+
+TWO_BODY_FOLDER = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_두바디_두재료"
+)
+
+
+def _create_with_point(
+    client: TestClient, who: Signed, spec: dict[str, Any], point: bytes | None
+) -> Response:
+    files: dict[str, Any] = {"file": ("조립.step", io.BytesIO(STEP), "model/step")}
+    if point is not None:
+        files["topology"] = ("p0001.json", io.BytesIO(point), "application/json")
+    response: Response = client.post(
+        "/api/simulations",
+        data={"spec": json.dumps(spec), "workspace_slug": who.workspace},
+        files=files,
+        headers=who.headers,
+    )
+    return response
+
+
+def test_CAD_가_물성을_보내면_스펙에_물성이_없어도_된다(
+    client: TestClient, member: Signed
+) -> None:
+    """**물성은 CompCore 가 파트마다 정한다.** 화면은 물성을 받지 않는다 — 한 벌을 모든 파트에
+    붙이는 것은 조립품에서 뜻이 없다. 점 파일의 재료가 파트마다 붙는다."""
+    point = (TWO_BODY_FOLDER / "points" / "p0001.json").read_bytes()
+    created = _create_with_point(client, member, {"recipe": "modal", "modes": 5}, point)
+    assert created.status_code == 201, created.text
+    assert created.json()["spec"]["material"] is None
+
+
+def test_물성이_아무_데도_없으면_만들_때_거절한다(client: TestClient, member: Signed) -> None:
+    """워커가 집어 들고 모델링에서야 「물성이 없다」 고 하면, 사람은 1분 뒤 목록에서 그 말을
+    찾는다. 만들 때 막는다."""
+    bare = _create_with_point(client, member, {"recipe": "modal"}, None)
+    assert bare.status_code == 400
+    assert "물성" in bare.json()["error"]["message"]
+
+    # 점 파일이 있어도 물성을 안 보냈으면 마찬가지다(옛 영역 지문).
+    old = (TOPOLOGY_FIXTURES / "plate_holes.topology.json").read_bytes()
+    no_material = _create_with_point(client, member, {"recipe": "modal"}, old)
+    assert no_material.status_code == 400
+    assert "CompCore 에서 재료를 지정" in no_material.json()["error"]["message"]
+
+    # **재료가 빠진 파트**가 있으면 — 모델링이 멈출 자리다. 사람이 준 한 벌로 메우지 않는다.
+    payload = json.loads((TWO_BODY_FOLDER / "points" / "p0001.json").read_text("utf-8"))
+    payload["conditions"]["materials"] = payload["conditions"]["materials"][:1]
+    half = _create_with_point(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL},
+        json.dumps(payload, ensure_ascii=False).encode(),
+    )
+    assert half.status_code == 400
+    assert "블록" in half.json()["error"]["message"]
+
+    # 「내 값으로」 를 골랐는데 값이 없으면 스펙에서 거절한다.
+    mine = _create_with_point(
+        client, member, {"recipe": "modal", "material_from": "spec"}, None
+    )
+    assert mine.status_code == 400
+
+
+def test_파트별_설정을_미리보기에_싣고_뺀_파트는_물성을_안_묻는다(
+    client: TestClient, member: Signed
+) -> None:
+    """CompCore `body_settings`(2026-10-04) — **뺀 파트는 메시에도 안 나오므로 물성이 필요
+    없다.** 강체 · 메시는 파트 표의 한 줄로, 쉘은 막은 조건으로 보인다."""
+    payload = json.loads((TWO_BODY_FOLDER / "points" / "p0001.json").read_text("utf-8"))
+    payload["conditions"]["materials"] = payload["conditions"]["materials"][
+        :1
+    ]  # 블록 재료 없음
+    payload["conditions"]["body_settings"] = [
+        {"name": "받침판", "behavior": "rigid", "mesh": {"element_size": 4}},
+        {"name": "블록", "suppressed": True},
+    ]
+    raw = json.dumps(payload, ensure_ascii=False).encode()
+    body = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("p0001.json", raw, "application/json")},
+        headers=member.headers,
+    ).json()
+    parts = {one["name"]: one for one in body["bodies"]}
+    assert parts["받침판"]["setting"] == "강체 · 요소 4"
+    assert parts["블록"]["suppressed"] is True and parts["블록"]["material"] is None
+    assert ("body", "파트 받침판") in {
+        (one["kind"], one["label"]) for one in body["conditions"]["lines"]
+    }
+
+    created = _create_with_point(client, member, {"recipe": "modal", "modes": 5}, raw)
+    assert created.status_code == 201, created.text
+
+    payload["conditions"]["body_settings"] = [{"name": "블록", "representation": "shell"}]
+    shell = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("p0001.json", json.dumps(payload).encode(), "application/json")},
+        headers=member.headers,
+    ).json()
+    refused = [one for one in shell["conditions"]["lines"] if one["status"] == "refused"]
+    assert refused and "쉘" in refused[0]["label"]
+
+
+TOPOLOGY_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "topology"
+
+
+def test_조건_없는_옛_지문도_영역과_면_수를_읽는다(client: TestClient, member: Signed) -> None:
+    """CompCore 가 제 코드로 낸 옛 영역 지문(조건 없음) — 영역 이름 · 면 수 · 바디만 있다.
+    화면이 고를 영역이 이것이다(전에는 브라우저가 따로 읽었다 — 이제 거는 길과 같은 코드가
+    읽는다)."""
+    raw = (TOPOLOGY_FIXTURES / "plate_holes.topology.json").read_bytes()
+    body = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("plate_holes.topology.json", raw, "application/json")},
+        headers=member.headers,
+    ).json()
+    assert [(one["name"], one["count"], one["kind"]) for one in body["regions"]] == [
+        ("fixed_base", 1, "face"),
+        ("bolt_holes", 4, "face"),
+    ]
+    # 옛 지문은 물성을 안 보낸다 — 파트 이름만 있고 붙을 재료가 없다(사람이 지정한다).
+    assert [(one["name"], one["material"]) for one in body["bodies"]] == [("전체", None)]
+    assert body["materials"] == []
+    assert body["unresolved"] == []
+    assert body["conditions"]["lines"] == []
+    assert body["suggested_recipe"] is None
+
+
+def test_DOE_미리보기가_첫_점의_조건을_해석_종류별로_보여_준다(
+    client: TestClient, member: Signed
+) -> None:
+    got = client.get(
+        f"/api/simulations/doe/preview?path={SHEAR_FOLDER}&recipe=modal",
+        headers=member.headers,
+    ).json()
+    lines = got["conditions"]["lines"]
+    assert any(one["kind"] == "constraint" for one in lines)
+    assert any(one["status"] == "skipped" for one in lines), "모달이면 하중을 넘긴다"
+    bare = client.get(
+        f"/api/simulations/doe/preview?path={DOE_FOLDER}", headers=member.headers
+    )
+    assert bare.json()["conditions"] is None
 
 
 def test_공용_폴더_밖은_아예_못_본다(client: TestClient, member: Signed) -> None:
@@ -570,6 +763,90 @@ def test_DOE_를_가져오면_설계점마다_작업이_생긴다(client: TestCl
     # 점마다의 영역 지문이 함께 실린다 — 구속을 걸 수 있다.
     assert "topology" in {artifact["kind"] for artifact in one["artifacts"]}
     assert "두께 6" in one["name"]
+
+
+def test_DOE_는_물성이_빠지는_점을_걸지_않고_까닭을_단다(
+    client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """화면에서 물성을 안 받았으면 **CAD 가 보낸 물성으로만** 돈다 — 물성을 안 보낸 폴더의
+    점은 걸지 않고 까닭을 단다(200점이 모델링에서 하나씩 실패하게 두지 않는다)."""
+    # 다른 시험이 이미 가져간 폴더다 — 스터디 id 를 바꾼 사본으로 「이미 가져온 점」 을 피한다.
+    folder = tmp_path / "브래킷_물성없음"
+    shutil.copytree(DOE_FOLDER, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["id"] = "0" * 32
+    (folder / "study.json").write_text(json.dumps(study), encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
+    bare = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "modal"},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert bare.status_code == 201, bare.text
+    assert bare.json()["created"] == []
+    reasons = [one["skip_reason"] for one in bare.json()["skipped"]]
+    assert sum("물성이 없습니다" in one for one in reasons) == 3, reasons
+    monkeypatch.undo()
+
+    with_cad = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(TWO_BODY_FOLDER),
+            "spec": {"recipe": "modal"},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert with_cad.status_code == 201, with_cad.text
+    assert len(with_cad.json()["created"]) == 2
+
+
+SHELL_FOLDER = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_강체지그_쉘브래킷"
+)
+
+
+def test_쉘_파트가_있으면_중간면_형상을_함께_싣는다(
+    client: TestClient, member: Signed
+) -> None:
+    """CompCore v0.8.1 — 쉘 파트가 있으면 설계점마다 `pNNNN_mid.step` 이 나간다. DOE 를
+    가져오면 그것이 작업에 함께 실리고(`input_mid_step`), 하나씩 올릴 때 빠뜨리면 만들 때
+    막는다(모델링이 1분 뒤 같은 말을 하게 두지 않는다)."""
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(SHELL_FOLDER),
+            "spec": {"recipe": "static", "solver": "calculix"},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    assert len(created.json()["created"]) == 2
+    one = client.get(
+        f"/api/simulations/{created.json()['created'][0]}", headers=member.headers
+    ).json()
+    assert "input_mid_step" in {artifact["kind"] for artifact in one["artifacts"]}
+
+    point = (SHELL_FOLDER / "points" / "p0001.json").read_bytes()
+    preview = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("p0001.json", point, "application/json")},
+        headers=member.headers,
+    ).json()
+    parts = {row["name"]: row for row in preview["bodies"]}
+    assert parts["브래킷"]["shell"] and parts["브래킷"]["setting"].startswith(
+        "변형체 · 쉘 2 mm"
+    )
+    assert parts["명판"]["suppressed"] and not parts["지그블록"]["shell"]
+
+    bare = _create_with_point(client, member, {"recipe": "static"}, point)
+    assert bare.status_code == 400
+    assert "중간면" in bare.json()["error"]["message"]
 
 
 SHARED_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "재료훑기-7c1d3a44"

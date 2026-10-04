@@ -176,6 +176,10 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
     normal = _triple(wanted.get("normal"))
     if normal is not None and face.normal is not None:
         angle = _angle_degrees(normal, face.normal)
+        if wanted.get("two_sided"):
+            # **쉘의 면은 앞뒤가 없다** — 중간면의 법선은 메시마다 어느 쪽으로든 설 수 있다.
+            # 원래 겉면의 법선은 「어느 쪽에서 눌렀나」 를 말할 뿐이다(하중이 따로 읽는다).
+            angle = min(angle, 180 - angle)
         if angle > NORMAL_TOLERANCE_DEGREES:
             return False, distance, f"법선이 {angle:.0f}도 틀어져 있습니다"
 

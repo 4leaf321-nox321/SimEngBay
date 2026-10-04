@@ -46,6 +46,8 @@ class SimulationSummaryOut(BaseModel):
     source_ref: str
     source_meta: dict[str, Any]
     """DOE 면 스터디 · 점 번호 · 바꾼 변수. 비교 화면이 이것으로 묶는다."""
+    solver: str = "ansys"
+    """스펙의 솔버 — 칸이 없는 옛 작업은 Ansys 다(`claim_next` 와 같다)."""
     owner_workspace_id: uuid.UUID | None
     owner_workspace_name: str | None
     requested_by_id: uuid.UUID | None
@@ -61,7 +63,7 @@ class ConditionLine(BaseModel):
     """CAD 가 보낸 조건 한 줄 — **반영하나 안 하나**를 화면이 그대로 읽는다."""
 
     kind: str
-    """`constraint` · `contact` · `load` · `mesh` · `frame` · `analysis`."""
+    """`constraint` · `contact` · `load` · `mesh` · `body` · `frame` · `analysis`."""
     label: str
     detail: str = ""
     status: Literal["applied", "skipped", "refused"] = "applied"
@@ -78,6 +80,65 @@ class ConditionsOut(BaseModel):
     lines: list[ConditionLine] = []
     unit_system: str = ""
     prestressed: bool = False
+
+
+class RegionOut(BaseModel):
+    """점 파일의 선택 그룹 하나."""
+
+    name: str
+    count: int
+    kind: Literal["face", "point", "other"]
+    """face(면 지문) · point(점 — 측정점) · other."""
+
+
+class CadMaterialOut(BaseModel):
+    """CAD 가 보낸 물성 한 벌 — 사람이 읽는 단위로."""
+
+    name: str
+    bodies: list[str]
+    """붙는 파트 이름. **비면 모든 파트**(「전체」)."""
+    youngs_modulus_gpa: float
+    poisson_ratio: float
+    density_kg_m3: float
+
+
+class CadBodyOut(BaseModel):
+    """CAD 가 이름 붙인 파트 하나와 거기 붙을 물성."""
+
+    name: str
+    volume_mm3: float | None = None
+    material: str | None = None
+    """붙을 물성 이름. **없으면 모델링이 멈춘다** — CompCore 에서 재료를 지정해야 한다(해석에서
+    뺀 파트는 빼고)."""
+    suppressed: bool = False
+    """해석에서 뺀 파트 — 물성이 없어도 되고 메시에도 안 나온다."""
+    shell: bool = False
+    """쉘로 푸는 파트 — 중간면 형상(`pNNNN_mid.step`)이 함께 있어야 한다."""
+    setting: str = ""
+    """파트별 설정 한 줄(「강체 · 요소 4」). 적히지 않은 파트는 빈 글자(기본값)."""
+
+
+class ConditionsPreviewOut(BaseModel):
+    """CAD 점 파일 한 장을 **작업을 만들기 전에** 읽은 것 — 무엇이 들었고 어떻게 다뤄지나."""
+
+    recipe: str
+    """조건 줄을 편 해석 종류(물은 것, 없으면 CAD 가 적은 것, 그것도 없으면 모달)."""
+    regions: list[RegionOut]
+    unresolved: list[str] = Field(default_factory=list)
+    """CAD 가 형상에서 못 푼 이름 — 그 이름으로는 자리가 없다."""
+    bodies: list[CadBodyOut] = Field(default_factory=list)
+    """CAD 가 이름 붙인 파트들 — 형상 하나에 파트가 여럿일 수 있다."""
+    materials: list[CadMaterialOut] = Field(default_factory=list)
+    """CAD 가 보낸 물성. **비면 사람이 지정한 한 벌이 모든 파트에 붙는다.**"""
+    material_error: str = ""
+    """CAD 가 보낸 물성을 읽지 못한 까닭 — 그대로 걸면 모델링이 멈춘다."""
+    suggested_recipe: str | None = None
+    suggested_modes: int | None = None
+    suggested_element_size_mm: float | None = None
+    suggested_order: str | None = None
+    """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
+    conditions: ConditionsOut
+    """그 해석 종류에서 조건이 어떻게 다뤄지나 — 반영 · 넘김 · 막음."""
 
 
 class SimulationOut(SimulationSummaryOut):
@@ -135,8 +196,13 @@ class DoePreviewOut(BaseModel):
     """CAD 가 적은 해석 종류(`modal` · `static` · `harmonic`). 화면이 레시피를 미리 고른다 —
     모달로 못 박아 두면 전단 이음 같은 정적 DOE 가 하중을 건너뛴 채 모달로 돈다."""
     suggested_element_size_mm: float | None = None
+    suggested_order: str | None = None
+    """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
     """CAD 가 「전체」 로 적은 요소 크기(mm). **CalculiX 는 이것이나 사람이 준 값이 있어야
     돈다** — 둘 다 없으면 설계점마다 메시 단계에서 멈춘다."""
+    conditions: ConditionsOut | None = None
+    """조건이 든 첫 점의 조건이 그 해석 종류에서 어떻게 다뤄지나(반영 · 넘김 · 막음). 조건 없는
+    폴더면 비운다."""
 
 
 class DoeEntryOut(BaseModel):

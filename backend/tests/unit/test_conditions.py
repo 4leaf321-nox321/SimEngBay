@@ -122,3 +122,179 @@ def test_조건_줄에_면_수가_붙는다() -> None:
     assert constraint.detail == "fixed_support · 바닥 · 면 1"
     load = next(one for one in out.lines if one.kind == "load" and one.status == "applied")
     assert load.detail.endswith("· 면 1")
+
+
+def _with_settings(settings: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = _point("조건_측면가진")
+    payload["conditions"]["body_settings"] = settings
+    return payload
+
+
+def test_파트별_설정을_읽는다() -> None:
+    """CompCore 제안(2026-10-04)의 예 그대로 — 강체 · 메시 · 해석 제외."""
+    found = conditions.read(
+        _with_settings(
+            [
+                {
+                    "name": "받침판",
+                    "behavior": "rigid",
+                    "representation": "solid",
+                    "suppressed": False,
+                    "mesh": {
+                        "element_size": 4,
+                        "method": "automatic",
+                        "order": "program_controlled",
+                    },
+                },
+                {"name": "기둥", "mesh": {"element_size": 1.5, "order": "quadratic"}},
+                {"name": "표시나사", "suppressed": True},
+            ]
+        )
+    )
+    assert found.refused == []
+    by_name = {one.name: one for one in found.body_settings}
+    assert by_name["받침판"].rigid and by_name["받침판"].element_size == 4
+    assert by_name["기둥"].order == "quadratic" and not by_name["기둥"].rigid
+    assert found.suppressed == {"표시나사"}
+    assert found.rigid == {"받침판"}
+    assert by_name["받침판"].describe() == "강체 · 요소 4"
+    assert by_name["표시나사"].describe() == "해석 제외"
+
+
+def test_중간면이_없는_쉘_파트는_막는다() -> None:
+    """**솔리드로 풀지 않는다** — 쉘로 둔 판을 솔리드로 풀면 강성이 다른 모델이 되고, 사람은
+    쉘로 풀었다고 읽는다. 점 파일에 그 파트의 중간면이 없거나 CompCore 가 못 만들었으면
+    (`midsurface.failed[]`) 그 까닭을 단다. 뺀 파트면 표현은 상관없다."""
+    payload = _with_settings(
+        [
+            {"name": "받침판", "representation": "shell"},
+            {"name": "기둥", "representation": "shell", "suppressed": True},
+        ]
+    )
+    found = conditions.read(payload)
+    assert [one.what for one in found.refused] == ["파트 「받침판」 쉘 표현"]
+    assert "중간면" in found.refused[0].why
+    assert [one.name for one in found.body_settings] == ["기둥"]
+
+    payload["midsurface"] = {"failed": [{"name": "받침판", "error": "판이 아닙니다."}]}
+    failed = conditions.read(payload)
+    assert "판이 아닙니다" in failed.refused[0].why
+
+
+SHELL_FOLDER = "조건_강체지그_쉘브래킷"
+
+
+def test_쉘_파트를_중간면과_두께로_읽는다() -> None:
+    """CompCore v0.8.1 — 중간면은 쉘 파트만, 두께는 `midsurface.bodies[]`, 쉘 파트의 영역은
+    지문의 `mid`(중간면의 면 · 모서리 · 점)."""
+    payload = _point(SHELL_FOLDER)
+    found = conditions.read(payload, recipe="static")
+    assert found.refused == []
+    assert found.shells == {"브래킷": 2.0}
+    assert found.rigid == {"지그블록"} and found.suppressed == {"명판"}
+    view = conditions.shell_view(payload, set(found.shells))
+    # 겉면은 중간면의 면 — 앞뒤가 없고(`two_sided`), 원래 바깥 법선이 남는다(미는 쪽).
+    (face,) = view["regions"]["하중면"]
+    assert face["two_sided"] and face["outer_normal"] == [1.0, 0.0, 0.0]
+    assert face["centroid"] == [49.0, 0.0, 48.0]  # x = 50 - t/2
+    # 쉘이 아닌 파트의 지문은 그대로다.
+    assert view["regions"]["블록 윗면"] == payload["regions"]["블록 윗면"]
+    # 두께 쪽 면은 중간면의 모서리다 — 거기 건 조건은 아직 못 건다(이 픽스처는 조건에 안 쓴다).
+    assert "midpoint" in view["regions"]["브래킷 앞끝"][0]
+
+    payload["conditions"]["constraints"].append(
+        {"name": "끝 고정", "type": "fixed_support", "on": "브래킷 앞끝"}
+    )
+    edged = conditions.read(payload, recipe="static")
+    assert any("모서리" in one.why for one in edged.refused)
+
+
+def test_뺀_파트에_걸린_조건은_가려_낸다() -> None:
+    """CompCore 는 저장할 때 막지만, 왔으면 **엉뚱한 면을 집기 전에** 까닭을 단다.
+
+    실측(2026-10-04): 기둥을 빼고 「접합 기둥쪽」 접촉을 두었더니 Ansys 가 받침판의 맞닿은
+    면을 집고 「법선이 180도 틀어져 있다」 로 멈췄다 — 고칠 곳을 가리키지 않는 말이다.
+    """
+    gone_column = conditions.read(_with_settings([{"name": "기둥", "suppressed": True}]))
+    # 접촉은 한쪽이 없으면 없다 — 넘긴다. 모달의 하중은 원래 답과 상관없다.
+    assert gone_column.contacts == [] and gone_column.refused == []
+    assert any("접촉" in one.what and "기둥" in one.why for one in gone_column.skipped)
+
+    static = conditions.read(
+        _with_settings([{"name": "기둥", "suppressed": True}]), recipe="harmonic"
+    )
+    assert any(one.what.startswith("하중") for one in static.refused)
+
+    gone_plate = conditions.read(_with_settings([{"name": "받침판", "suppressed": True}]))
+    assert gone_plate.constraints == []
+    assert any("뺀 파트(받침판)" in one.why for one in gone_plate.refused)
+
+
+def test_모르는_거동은_막고_모르는_메시_칸은_넘긴다() -> None:
+    """거동은 답을 바꾸므로 막고, 메시 칸은 바람이므로 적고 넘어간다."""
+    found = conditions.read(
+        _with_settings(
+            [
+                {"name": "받침판", "behavior": "elastic"},
+                {"name": "기둥", "mesh": {"method": "voxel", "element_size": "=t/2"}},
+                {"name": "기둥", "suppressed": True},
+            ]
+        )
+    )
+    refused = [one.what for one in found.refused]
+    assert refused == ["파트 「받침판」", "파트 「기둥」"]  # 모르는 거동 · 두 줄
+    assert {one.what for one in found.skipped} >= {
+        "파트 「기둥」 요소 형상",
+        "파트 「기둥」 요소 크기",
+    }
+    column = found.body_settings[0]
+    assert column.method == "automatic" and column.element_size is None
+
+
+def test_국부_메시_규칙을_따른다() -> None:
+    """CompCore 2026-10-04 — 메시 힌트는 「국부 메시」 다.
+
+    - 「전체」 는 크기 · 요소 형상 · 차수를 함께 싣는다.
+    - **바디 그룹에 건 옛 힌트는 그 파트의 파트 메시로** 읽는다(파트별 설정에 크기가 따로
+      있으면 그것이 이긴다).
+    - 엣지 그룹은 아직 못 건다 — 조용히 버리지 않고 적는다.
+    """
+    payload = _point("조건_측면가진")
+    block = payload["conditions"]
+    block["named_selections"] = [
+        {"name": "기둥 통째", "entity": "body"},
+        {"name": "판 통째", "entity": "body"},
+        {"name": "기둥 모서리", "entity": "edge"},
+    ]
+    payload["regions"]["기둥 통째"] = [{"centroid": [0, 0, 50], "body": "기둥"}]
+    payload["regions"]["판 통째"] = [{"centroid": [0, 0, 5], "body": "받침판"}]
+    payload["regions"]["기둥 모서리"] = [
+        {"midpoint": [5, 5, 50], "length": 80, "body": "기둥"}
+    ]
+    block["mesh_hints"] = [
+        {"on": "전체", "element_size": 2, "method": "hex_dominant", "order": "linear"},
+        {"on": "기둥 통째", "element_size": 1},
+        {"on": "판 통째", "element_size": 3},
+        {"on": "기둥 모서리", "element_size": 0.5},
+    ]
+    block["body_settings"] = [
+        {"name": "받침판", "behavior": "rigid", "mesh": {"element_size": 8}}
+    ]
+    found = conditions.read(payload)
+
+    whole = found.whole_mesh
+    assert whole is not None
+    assert (whole.element_size, whole.method, whole.order) == (2, "hex_dominant", "linear")
+    sizes = {one.name: one.element_size for one in found.body_settings}
+    # 기둥은 옛 힌트로 파트 메시가 생기고, 받침판은 파트별 설정의 8 이 이긴다.
+    assert sizes == {"받침판": 8, "기둥": 1}
+    assert next(one for one in found.body_settings if one.name == "받침판").rigid
+    whats = {one.what for one in found.skipped}
+    assert "국부 메시 「기둥 모서리」(엣지)" in whats
+    assert "국부 메시 「판 통째」" in whats
+    # 면 · 엣지로 옮겨 간 것은 국부 힌트로 남지 않는다.
+    assert [one.region for one in found.mesh_hints] == ["전체"]
+
+    note = conditions.whole_order_note(found, "quadratic")
+    assert note is not None and "1차" in note.why and "2차" in note.why
+    assert conditions.whole_order_note(found, "linear") is None

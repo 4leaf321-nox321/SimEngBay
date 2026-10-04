@@ -27,6 +27,9 @@ export type WorkersOverview = components['schemas']['WorkersOut']
 export type WorkerRow = components['schemas']['WorkerOut']
 export type SolverAvailability = components['schemas']['SolverAvailabilityOut']
 export type Convergence = components['schemas']['ConvergenceOut']
+export type ConditionsPreview = components['schemas']['ConditionsPreviewOut']
+export type CadBody = components['schemas']['CadBodyOut']
+export type CadMaterial = components['schemas']['CadMaterialOut']
 export type Measurement = components['schemas']['MeasurementOut']
 export type StudyMeasurement = components['schemas']['StudyMeasurementOut']
 export type Comparison = components['schemas']['ComparisonOut']
@@ -156,40 +159,11 @@ export interface NewSimulation {
   file: File
   /** CAD 가 보낸 영역 지문. **구속을 걸려면 있어야 한다** — 서버가 걸기 전에 막는다. */
   topology?: File | null
+  /** 쉘 파트의 중간면(CAD 의 `pNNNN_mid.step`) — 쉘 파트가 있으면 서버가 요구한다. */
+  midsurface?: File | null
   spec: Record<string, unknown>
   workspaceSlug: string | null
   name?: string
-}
-
-/** `topology.json` 에서 화면이 읽는 것 — 고를 수 있는 영역 이름과 CAD 가 못 푼 이름. */
-export interface TopologyPreview {
-  regions: { name: string; faces: number }[]
-  unresolved: string[]
-  bodies: number
-}
-
-/**
- * 올린 지문을 **브라우저에서 읽어** 고를 목록을 만든다. 서버에 먼저 보내고 물어보면, 영역을
- * 고르기도 전에 작업이 하나 생긴다.
- */
-export async function readTopology(file: File): Promise<TopologyPreview> {
-  const parsed: unknown = JSON.parse(await file.text())
-  const document = parsed as {
-    regions?: Record<string, unknown[]>
-    unresolved?: string[]
-    bodies?: unknown[]
-  }
-  if (!document.regions || typeof document.regions !== 'object') {
-    throw new Error('영역 지문이 아닙니다 — regions 가 없습니다.')
-  }
-  return {
-    regions: Object.entries(document.regions).map(([name, faces]) => ({
-      name,
-      faces: Array.isArray(faces) ? faces.length : 0,
-    })),
-    unresolved: document.unresolved ?? [],
-    bodies: document.bodies?.length ?? 0,
-  }
 }
 
 export const simulationApi = {
@@ -210,6 +184,7 @@ export const simulationApi = {
     const form = new FormData()
     form.append('file', input.file)
     if (input.topology) form.append('topology', input.topology)
+    if (input.midsurface) form.append('midsurface', input.midsurface)
     form.append('spec', JSON.stringify(input.spec))
     if (input.workspaceSlug) form.append('workspace_slug', input.workspaceSlug)
     if (input.name) form.append('name', input.name)
@@ -223,7 +198,7 @@ export const simulationApi = {
     api.post<{ bytes_freed: number; files: number }>(`/simulations/${id}/tidy`),
   tidyStudy: (studyId: string) =>
     api.post<{ bytes_freed: number; files: number; points: number }>(
-      `/simulations/studies/${studyId}/tidy`,
+      `/simulations/studies/${encodeURIComponent(studyId)}/tidy`,
     ),
   /**
    * DOE 폴더 훑어 보기 — **걸기 전에** 점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개인지.
@@ -243,8 +218,21 @@ export const simulationApi = {
     api.get<DoeListing>(
       `/simulations/doe/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`,
     ),
-  previewDoe: (path: string) =>
-    api.get<DoePreview>(`/simulations/doe/preview?path=${encodeURIComponent(path)}`),
+  /** `recipe` 를 주면 첫 점의 조건을 그 해석 종류로 편다(안 주면 CAD 가 적은 종류). */
+  previewDoe: (path: string, recipe?: string) =>
+    api.get<DoePreview>(
+      `/simulations/doe/preview?path=${encodeURIComponent(path)}${recipe ? `&recipe=${recipe}` : ''}`,
+    ),
+  /**
+   * CAD 점 파일 한 장을 **작업을 만들기 전에** 서버가 읽어 준다 — 영역 · 물성 · 해석 설정과, 그
+   * 해석 종류에서 조건이 어떻게 다뤄지나. 화면이 따로 해석하지 않는다(거는 길과 같은 코드).
+   */
+  previewConditions: (file: File, recipe?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (recipe) form.append('recipe', recipe)
+    return api.postForm<ConditionsPreview>('/simulations/conditions/preview', form)
+  },
   importDoe: (body: {
     path: string
     spec: Record<string, unknown>

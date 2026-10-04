@@ -12,6 +12,15 @@ Ansys 쪽은 Mechanical 이 형상을 들고 있어서 면을 물어보면 됐�
 따로 메시되어 **붙어 있지 않은 모델**이 되고, 강체 모드가 바디마다 6개씩 나온다 — 값은
 그럴듯한데 모델이 떨어져 있는 상태다.
 
+## 파트를 메시 전에 안다
+
+파트별 설정(해석 제외 · 파트 요소 크기)은 **메시를 만들기 전에** 걸려야 한다 — 빼려는
+파트가 메시가 안 나오는 부품(나사산 붙은 나사)일 때가 많고, 크기는 메시가 시작할 때
+정해진다. 그래서 gmsh 에게 형상만 읽혀(`-0`, 메시 없이) **부피마다 부피값 · 무게중심**을
+묻는다(`probe_volumes`). `.geo` 의 `Mass` · `CenterOfMass` 가 답한다 — 실측 0.06초
+(2026-10-04). 그 값으로 CAD 파트와 짝지은 뒤, 뺄 부피를 지우고(`Recursive Delete`) 파트
+크기를 그 부피의 점에 준다.
+
 ## 단위
 
 형상은 **늘 mm** 다(CompCore 계약). 그래서 메시도 mm 이고, 덱은 mm · tonne · N (MPa) 로 쓴다 —
@@ -23,7 +32,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.bodies import BodyRecord
@@ -63,10 +72,105 @@ class Mesh:
     #: 모서리에 0 을 준다). 실측 2026-10-03: 구멍면 절점 436 중 57 만 받았다.
     face_rings: dict[int, list[list[int]]]
     second_order: bool
+    #: 쉘 면(중간면의 기하 면 번호) → [(요소 번호, 절점들)]. 삼각형 — 2차면 6절점(`S6`).
+    shells: dict[int, list[tuple[int, list[int]]]] = field(default_factory=dict)
 
     @property
     def element_count(self) -> int:
-        return sum(len(rows) for rows in self.solids.values())
+        return sum(len(rows) for rows in self.solids.values()) + sum(
+            len(rows) for rows in self.shells.values()
+        )
+
+
+#: `probe_volumes` 가 gmsh 에게 찍게 하는 줄의 머리. 다른 출력과 섞여도 이것으로 고른다.
+PROBE_MARK = "SEB_VOLUME"
+#: 쉘(중간면)의 면 하나 — 넓이 · 무게중심.
+SURFACE_MARK = "SEB_SURFACE"
+
+
+@dataclass(frozen=True)
+class Probe:
+    """메시 없이 잰 형상 — 부피와 중간면의 면들(`volume` 칸이 넓이다)."""
+
+    volumes: list[BodyRecord]
+    surfaces: list[BodyRecord] = field(default_factory=list)
+
+
+def probe_volumes(
+    step: Path,
+    workdir: Path,
+    *,
+    fragment: bool = True,
+    timeout_seconds: int = 300,
+    shell_step: Path | None = None,
+) -> Probe:
+    """메시 없이 **gmsh 부피 번호마다 부피 · 무게중심**(mm)을 잰다 — 파트와 짝짓는 데 쓴다.
+    중간면이 있으면 **면 번호마다 넓이 · 무게중심**도 잰다(쉘 파트에 나눠 준다).
+
+    `build_mesh` 와 **같은 머리**(형상 읽기 · 쪼개기)를 지나야 번호가 같다.
+    """
+    geo = workdir / "probe.geo"
+    geo.write_text(
+        "\n".join(
+            [
+                # 쪼개기 없이 잰다 — 지우기는 쪼개기 전에 하므로 그때의 번호가 필요하다.
+                *_head_lines(step, False, shell_step),
+                "vols() = Volume{:};",
+                "For i In {0:#vols()-1}",
+                "  m = Mass Volume{vols(i)};",
+                "  c() = CenterOfMass Volume{vols(i)};",
+                f'  Printf("{PROBE_MARK} %g %.12g %.12g %.12g %.12g", vols(i), m, c(0), c(1), '
+                "c(2));",
+                "EndFor",
+                *(
+                    [
+                        "For i In {0:#sh()-1}",
+                        "  a = Mass Surface{sh(i)};",
+                        "  c() = CenterOfMass Surface{sh(i)};",
+                        f'  Printf("{SURFACE_MARK} %g %.12g %.12g %.12g %.12g", sh(i), a, '
+                        "c(0), c(1), c(2));",
+                        "EndFor",
+                    ]
+                    if shell_step is not None
+                    else []
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # `-v 3` 이어야 `Printf` 가 나온다(실측 — `-v 2` 면 아무것도 안 찍는다).
+    done = tools.run(
+        tools.gmsh_bin(),
+        [str(geo), "-0", "-o", str(workdir / "probe.geo_unrolled"), "-nopopup", "-v", "3"],
+        cwd=workdir,
+        timeout_seconds=timeout_seconds,
+        what="gmsh",
+    )
+    found = parse_probe(done.stdout or "")
+    if not found:
+        tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
+        raise StageFailure("mesh_failed", f"gmsh 가 형상의 부피를 읽지 못했습니다:\n{tail}")
+    return Probe(volumes=found, surfaces=parse_probe(done.stdout or "", mark=SURFACE_MARK))
+
+
+def parse_probe(text: str, *, mark: str = PROBE_MARK) -> list[BodyRecord]:
+    """`SEB_VOLUME 번호 부피 cx cy cz` 줄들 → 바디 기록(`SEB_SURFACE` 면 넓이)."""
+    found: list[BodyRecord] = []
+    for line in text.splitlines():
+        parts = line.split()
+        if mark not in parts:
+            continue
+        values = parts[parts.index(mark) + 1 :]
+        if len(values) < 5:
+            continue
+        try:
+            tag = int(float(values[0]))
+            volume, x, y, z = (float(one) for one in values[1:5])
+        except ValueError:
+            continue
+        found.append(BodyRecord(index=tag, volume=volume, centroid=(x, y, z)))
+    return found
 
 
 def build_mesh(
@@ -79,6 +183,10 @@ def build_mesh(
     local_sizes: dict[int, float] | None = None,
     surface_only: bool = False,
     fragment: bool = True,
+    removed: frozenset[int] = frozenset(),
+    volume_sizes: dict[int, float] | None = None,
+    shell_step: Path | None = None,
+    shell_sizes: dict[int, float] | None = None,
 ) -> Mesh:
     """gmsh 를 불러 메시를 만들고 읽는다. `.geo` 와 `.msh` 가 작업 폴더에 남는다.
 
@@ -86,11 +194,24 @@ def build_mesh(
     들어온다. `surface_only` 는 **면 번호를 먼저 알아내는 1차 통과**에 쓴다(2차원만 메시하므로
     빠르다): 힌트는 영역 **이름**으로 오고, 그 이름을 면 번호로 바꾸려면 면 지문이 필요한데
     그 지문이 메시에서 나온다(닭과 달걀). 그 순서는 `build.py` 가 쥔다.
+
+    `removed` 는 **해석에서 뺄 부피 번호**, `volume_sizes` 는 **부피 번호 → 파트 요소
+    크기(mm)** 다 — 둘 다 `probe_volumes` 로 파트와 짝지은 번호다.
     """
     geo = workdir / ("surface.geo" if surface_only else "model.geo")
     msh = workdir / ("surface.msh" if surface_only else "model.msh")
     geo.write_text(
-        _geo(step, element_size_mm, second_order, local_sizes or {}, fragment),
+        _geo(
+            step,
+            element_size_mm,
+            second_order,
+            local_sizes or {},
+            fragment,
+            removed=removed,
+            volume_sizes=volume_sizes or {},
+            shell_step=shell_step,
+            shell_sizes=shell_sizes or {},
+        ),
         encoding="utf-8",
     )
     done = tools.run(
@@ -104,7 +225,45 @@ def build_mesh(
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
         raise StageFailure("mesh_failed", f"gmsh 가 메시를 못 만들었습니다:\n{tail}")
     # 1차 통과는 **면만** 만든다 — 사면체가 없는 것이 정상이다.
-    return read_mesh(msh, require_solid=not surface_only)
+    return read_mesh(
+        msh,
+        require_solid=not surface_only,
+        shell_surfaces=frozenset(shell_sizes or {}) if shell_step is not None else frozenset(),
+    )
+
+
+def _head_lines(
+    step: Path,
+    fragment: bool,
+    shell_step: Path | None = None,
+    removed: frozenset[int] = frozenset(),
+) -> list[str]:
+    """형상 읽기 · 지우기 · 쪼개기 — **부피 · 면 번호가 여기서 정해진다**(모든 통과가 같이
+    지난다).
+
+    중간면(쉘)은 **먼저** 읽는다 — 그래야 그 면 번호가 형상 쪽 지우기 · 쪼개기에 흔들리지
+    않는다. 중간면은 솔리드와 쪼개지 않는다 — 두께의 절반만큼 떨어져 있어 닿지 않고, 잇는 것은
+    접촉(`*TIE`)이다.
+
+    **뺄 부피(해석 제외 · 쉘 파트의 솔리드)는 쪼개기 전에 지운다.** 쪼갠 뒤에 지우면 이웃 면에
+    맞닿았던 자국이 남아 면이 둘로 갈라지고, 그 면을 가리키는 조건이 「중심이 떨어져 있다」 로
+    멈춘다(실측 2026-10-04: 쉘 브래킷을 지운 강체 블록의 윗면). 쪼개기는 부피 번호를 바꾸지
+    않으므로(실측) 쪼개기 없이 잰 번호(`probe_volumes`)로 지우고 크기를 준다.
+    """
+    return [
+        'SetFactory("OpenCASCADE");',
+        *([f'sh() = ShapeFromFile("{shell_step.resolve()}");'] if shell_step else []),
+        # **절대경로로 적는다** — gmsh 는 `.geo` 가 있는 폴더를 기준으로 찾으므로
+        # 상대경로를 주면 「파일을 못 읽는다」 로 끝난다(실측 2026-10-03).
+        f'v() = ShapeFromFile("{step.resolve()}");',
+        *(f"Recursive Delete {{ Volume{{{tag}}}; }}" for tag in sorted(removed)),
+        # **맞닿은 면을 하나로 — 절점을 공유해야 붙은 모델이 된다.**
+        #
+        # 안 쪼개면(`fragment=False`) 두 솔리드가 따로 메시되어 접합면이 **두 장**으로
+        # 남는다. 그때는 접촉 쌍을 써야 하고, 안 쓰면 바디가 떨어져 있어 강체 모드가
+        # 바디마다 6개씩 나온다 — 값은 그럴듯한데 모델이 붙어 있지 않은 상태다.
+        *(["BooleanFragments{ Volume{:}; Delete; }{}"] if fragment else []),
+    ]
 
 
 def _geo(
@@ -113,27 +272,43 @@ def _geo(
     second_order: bool,
     local_sizes: dict[int, float],
     fragment: bool = True,
+    *,
+    removed: frozenset[int] = frozenset(),
+    volume_sizes: dict[int, float] | None = None,
+    shell_step: Path | None = None,
+    shell_sizes: dict[int, float] | None = None,
 ) -> str:
     """gmsh 에게 줄 쪽지. **`.geo` 파일이 경계다** — 파이썬 API 를 안 쓴다(`tools` 참고)."""
+    parts = dict(volume_sizes or {})
+    sheets = dict(shell_sizes or {})
+    # 파트 크기가 전역보다 크면 상한을, 작으면 하한을 그만큼 넓힌다 — 안 그러면 gmsh 가 그
+    # 파트를 전역 범위 안으로 되돌린다.
+    largest = max([size, *parts.values(), *sheets.values()])
+    smallest = min([size, *parts.values(), *sheets.values()])
     return (
         "\n".join(
             [
-                'SetFactory("OpenCASCADE");',
-                # **절대경로로 적는다** — gmsh 는 `.geo` 가 있는 폴더를 기준으로 찾으므로
-                # 상대경로를 주면 「파일을 못 읽는다」 로 끝난다(실측 2026-10-03).
-                f'v() = ShapeFromFile("{step.resolve()}");',
-                # **맞닿은 면을 하나로 — 절점을 공유해야 붙은 모델이 된다.**
-                #
-                # 안 쪼개면(`fragment=False`) 두 솔리드가 따로 메시되어 접합면이 **두 장**으로
-                # 남는다. 그때는 접촉 쌍을 써야 하고, 안 쓰면 바디가 떨어져 있어 강체 모드가
-                # 바디마다 6개씩 나온다 — 값은 그럴듯한데 모델이 붙어 있지 않은 상태다.
-                *(["BooleanFragments{ Volume{:}; Delete; }{}"] if fragment else []),
-                f"Mesh.MeshSizeMax = {size:g};",
-                f"Mesh.MeshSizeMin = {size / 4:g};",
+                *_head_lines(step, fragment, shell_step, removed),
+                f"Mesh.MeshSizeMax = {largest:g};",
+                f"Mesh.MeshSizeMin = {smallest / 4:g};",
                 f"Mesh.ElementOrder = {2 if second_order else 1};",
                 # 물리 그룹을 안 만들어도 전부 저장한다 — 우리는 기하 번호로 찾는다.
                 "Mesh.SaveAll = 1;",
                 "Mesh.MshFileVersion = 2.2;",
+                # **파트 크기는 그 부피의 점에 준다** — 먼저 모든 점에 전역 크기를 주고(상한을
+                # 넓혔으므로 안 주면 다른 파트가 성겨진다), 큰 것부터 적어 **맞닿은 점에서는
+                # 작은 쪽이 이긴다.** 면 힌트는 그 뒤에 와서 파트 크기를 이긴다(좁은 쪽이
+                # 이긴다 — CompCore 의 순서: 「전체」 < 파트 < 선택 그룹).
+                *([f"MeshSize{{ PointsOf{{ Volume{{:}}; }} }} = {size:g};"] if parts else []),
+                *(
+                    f"MeshSize{{ PointsOf{{ Volume{{{tag}}}; }} }} = {value:g};"
+                    for tag, value in sorted(parts.items(), key=lambda pair: -pair[1])
+                ),
+                # 쉘 면은 그 파트의 크기(없으면 전역) — 중간면 점에 준다.
+                *(
+                    f"MeshSize{{ PointsOf{{ Surface{{{tag}}}; }} }} = {value:g};"
+                    for tag, value in sorted(sheets.items(), key=lambda pair: -pair[1])
+                ),
                 # **영역별 힌트는 그 면의 점에 크기를 준다.** `MeshSize{ PointsOf{ … } }` 는
                 # gmsh 의 고전적인 방법이고, 필드를 세우는 것보다 읽기 쉽다. 전역 크기보다 큰
                 # 값을 줘도 gmsh 가 받아 준다 — 그것이 CAD 가 말한 것이면 그대로 쓴다.
@@ -147,7 +322,9 @@ def _geo(
     )
 
 
-def read_mesh(msh: Path, *, require_solid: bool = True) -> Mesh:
+def read_mesh(
+    msh: Path, *, require_solid: bool = True, shell_surfaces: frozenset[int] = frozenset()
+) -> Mesh:
     """`.msh`(2.2) 를 읽어 절점 · 요소 · 면 지문 · 바디 지문을 낸다.
 
     `require_solid` 를 끄면 **면만 있는 메시**도 받는다(면 번호를 알아내는 1차 통과). 켜 두면
@@ -166,6 +343,12 @@ def read_mesh(msh: Path, *, require_solid: bool = True) -> Mesh:
         number += 1
         second_order = second_order or kind == 11
         solids[entity].append((number, [ids[one] for one in order]))
+    # **쉘 요소** — 중간면의 삼각형. 번호는 사면체 다음부터(덱에서 한 줄 번호다).
+    shells: dict[int, list[tuple[int, list[int]]]] = defaultdict(list)
+    for kind, entity, ids in elements:
+        if kind in TRIANGLE_KINDS and entity in shell_surfaces:
+            number += 1
+            shells[entity].append((number, list(ids)))
     if not solids and require_solid:
         raise StageFailure(
             "mesh_failed", "메시에 사면체가 없습니다 — 형상이 솔리드인지 보세요."
@@ -183,6 +366,7 @@ def read_mesh(msh: Path, *, require_solid: bool = True) -> Mesh:
         face_triangles=by_face,
         face_rings=rings,
         second_order=second_order,
+        shells=dict(shells),
     )
 
 

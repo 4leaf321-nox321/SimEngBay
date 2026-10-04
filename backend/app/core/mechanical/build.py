@@ -21,13 +21,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
 from app.core import materials, units
-from app.core.bodies import BodyRecord, match_bodies
+from app.core.bodies import BodyRecord, match_bodies, place_settings, without
 from app.core.harmonic import HarmonicPlan, harmonic_plan
 from app.core.regions import FaceRecord, match_regions
 from app.core.spec import (
@@ -37,7 +37,13 @@ from app.core.spec import (
     ModalSpec,
     StaticSpec,
 )
-from app.core.stages import ArtifactSpec, FailureCode, StageFailure, StageResult
+from app.core.stages import (
+    MIDSURFACE_NAME,
+    ArtifactSpec,
+    FailureCode,
+    StageFailure,
+    StageResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +95,10 @@ def build(
     # **CAD 가 보낸 물성**. 읽을 수 없으면 여기서 멈춘다 — 빠진 물성은 Mechanical 이 기본값
     # (구조용 강)으로 풀고, 그 사실은 고유진동수가 틀린 뒤에야 드러난다.
     given = _declared_materials(spec, workdir, system)
+    if not given and spec.material is None:
+        raise StageFailure(
+            "internal", "물성이 없습니다 — CAD 가 물성을 보내지 않았고 스펙에도 없습니다."
+        )
     # **CAD 가 보낸 조건** — 못 거는 것이 하나라도 있으면 여기서 멈춘다(Mechanical 을 띄우기
     # 전에). 조용히 빼면 「조건을 넣었는데 왜 결과가 같지」 를 사람이 물을 자리가 없다.
     given_conditions = _declared_conditions(spec, topology)
@@ -102,15 +112,58 @@ def build(
         _use_unit_system(app, system)
         reused = _open_cached(app, cached)
         bodies = _bodies_of(app) if reused else _import_geometry(app, step)
+        shells = given_conditions.shells
+        if shells and not reused:
+            # **쉘 파트는 중간면으로 푼다** — 두 번째 형상으로 들여온다(면 바디).
+            bodies = _import_midsurface(app, workdir, shells)
+        sheets = [body for body in bodies if _is_sheet(body)]
+        bodies = [body for body in bodies if not _is_sheet(body)]
+        # **파트별 설정** — 형상을 읽은 직후에 건다(메시 · 물성 · 조건이 모두 그 뒤다). 캐시는
+        # 그 설정까지 담고(열쇠에 들어간다 — `_cache_path`), 다시 열면 이미 걸려 있다.
+        placed = _place_body_settings(given_conditions, bodies, topology or {}, system)
+        sheet_of = _place_sheets(sheets, topology or {}, shells) if shells else {}
+        if not reused:
+            _apply_body_settings(app, placed, bodies, system)
+            _apply_whole_method(app, given_conditions, placed, bodies)
+            _apply_sheet_settings(app, sheet_of, given_conditions, system)
+        order_note = condition_model.whole_order_note(given_conditions, spec.mesh.order)
+        if order_note is not None:
+            given_conditions.skipped.append(order_note)
+        # 뺀 파트 · 쉘 파트의 솔리드는 물성 · 조건 · 질량 · 메시 어디에도 안 나온다.
+        active = [
+            body
+            for index, body in enumerate(bodies)
+            if not (index in placed and (placed[index].suppressed or placed[index].shell))
+        ]
+        # 조건 · 메시는 면 바디(쉘)까지 본다.
+        modelled = active + list(sheet_of.values())
+        rigid_ids = {
+            int(bodies[index].GetGeoBody().Id)
+            for index, one in placed.items()
+            if one.rigid and not one.suppressed
+        }
+        kept = (
+            without(topology, given_conditions.suppressed | set(shells))
+            if topology
+            else topology
+        )
+        # **쉘 파트의 영역은 중간면에서 찾는다**(지문의 `mid`).
+        view = (
+            condition_model.shell_view(topology, set(shells))
+            if topology and shells
+            else topology
+        )
         if cached is not None and not reused:
             # **깨끗할 때 남긴다 — 해석 · 조건을 걸기 전에.** 접촉 · 이름 선택 · 하중은 모델
             # 수준 객체라서, 다 건 뒤에 남기면 **다음 점이 앞 점의 것을 물려받는다** — 접촉
             # 종류를 훑는 DOE 에서 마찰 점이 앞 점의 접착에 덮여 조용히 접착으로 풀렸다
             # (2026-10-03, CompCore 전단 이음으로 들켰다). 캐시는 영역별 메시 힌트가 없을 때만
             # 쓰므로(`_cache_path`) 여기서 전역 크기로 메시해도 나중 메시와 같다.
-            _mesh(app, spec, given_conditions, system, {}, topology or {}, bodies)
+            _mesh(app, spec, given_conditions, system, {}, view or {}, modelled)
             _save_cache(app, cached)
-        used = _apply_material(spec, bodies, system, given, topology)
+        used = _apply_material(spec, active, system, given, kept)
+        sheet_materials = _apply_sheet_materials(spec, sheet_of, given, system)
+        _rigid_mass(active, used, rigid_ids, system)
         constrained = bool(given_conditions.constraints or spec.constraints)
         plan: HarmonicPlan | None = None
         if isinstance(spec, HarmonicSpec):
@@ -136,7 +189,9 @@ def build(
             analysis = _add_modal(
                 app, spec, constrained=constrained, given=given_conditions, upstream=upstream
             )
-        _write_boundary(workdir, constrained=constrained, spec=spec, plan=plan)
+        _write_boundary(
+            workdir, constrained=constrained, spec=spec, plan=plan, material=used.names
+        )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
         # **구속은 앞선 해석에 건다** — 모드 중첩의 모드는 모달에서 나오고, 선응력의 응력은
@@ -145,20 +200,25 @@ def build(
         # CAD 조건이든 스펙 구속이든 같은 자리여야 한다.
         held = upstream if upstream is not None else analysis
         if given_conditions.constraints or given_conditions.contacts:
-            regions, places = _apply_given_conditions(
-                app, given_conditions, system, topology or {}, bodies, held
+            regions, places, flipped = _apply_given_conditions(
+                app, given_conditions, system, view or {}, modelled, held, rigid_ids
             )
         else:
-            regions = _apply_constraints(app, spec, workdir, bodies, held)
+            flipped = set()
+            regions = _apply_constraints(app, spec, workdir, active, held)
         if isinstance(spec, HarmonicSpec):
             # **조화 응답의 하중은 흔드는 힘이다** — 앞선 모달이 아니라 조화 쪽에 건다.
             # (모달에 걸면 덱에 `sfedele,all` 만 남아 응답이 전부 0 으로 나온다 — 실측.)
-            _apply_loads(app, given_conditions, system, places, analysis)
+            _apply_loads(app, given_conditions, system, places, analysis, flipped)
         elif upstream is not None:
-            _apply_loads(app, given_conditions, system, places, upstream)
-        mass = _mass_kg(used, bodies, system)
+            _apply_loads(app, given_conditions, system, places, upstream, flipped)
+        mass = _mass_kg(used, active, system)
+        if sheet_materials:
+            mass = round(
+                (mass or 0.0) + _sheet_mass(topology or {}, shells, sheet_materials), 4
+            )
         nodes, elements = _mesh(
-            app, spec, given_conditions, system, places, topology or {}, bodies
+            app, spec, given_conditions, system, places, view or {}, modelled
         )
         size_mm = _global_size_mm(spec, given_conditions, system)
 
@@ -202,7 +262,26 @@ def build(
         return StageResult(
             artifacts=artifacts,
             summary={
-                "bodies": len(bodies),
+                "bodies": len(active) + len(sheet_of),
+                **(
+                    {"suppressed_bodies": " · ".join(sorted(given_conditions.suppressed))}
+                    if len(active) < len(bodies)
+                    else {}
+                ),
+                **(
+                    {"rigid_bodies": " · ".join(sorted(given_conditions.rigid))}
+                    if rigid_ids
+                    else {}
+                ),
+                **(
+                    {
+                        "shell_bodies": " · ".join(
+                            f"{name} {shells[name]:g} mm" for name in sorted(sheet_of)
+                        )
+                    }
+                    if sheet_of
+                    else {}
+                ),
                 "nodes": nodes,
                 "elements": elements,
                 # **전역 요소 크기**(mm) — 메시 수렴 점검의 기준. 비면 Mechanical 기본값으로
@@ -319,6 +398,19 @@ def _cache_path(
     digest.update(spec.recipe.encode())
     digest.update(str(spec.mesh.element_size_mm).encode())
     digest.update(spec.mesh.order.encode())
+    whole = given.whole_mesh
+    if whole is not None and whole.method:
+        # 「전체」 요소 형상도 캐시에 담긴다(`_apply_whole_method`).
+        digest.update(f"method:{whole.method}".encode())
+    if given.shells:
+        # 쉘이면 중간면 형상도 모델이다.
+        mid = step.with_name(MIDSURFACE_NAME)
+        if mid.is_file():
+            digest.update(mid.read_bytes())
+    if given.body_settings:
+        # **파트별 설정도 모델이다** — 강체 · 제외 · 파트 메시가 캐시에 같이 담긴다. 다르면
+        # 다른 열쇠여야 다음 점이 앞 점의 설정을 물려받지 않는다.
+        digest.update(repr(sorted(given.body_settings, key=lambda one: one.name)).encode())
     return cache_dir / f"{digest.hexdigest()[:16]}.mechdb"
 
 
@@ -617,6 +709,8 @@ def _apply_material(
     STEP 이 한글 이름을 못 나르기 때문이다(실측: Mechanical 이 「챘째혴…|Solid」 로 읽는다).
     """
     if not given:
+        # 위(`build`)에서 이미 막았다 — 둘 다 없으면 Mechanical 을 띄우기 전에 멈춘다.
+        assert spec.material is not None
         return _uniform(bodies, spec.material, system, source="spec")
     if len(given) == 1 and (given[0].every_body or len(bodies) == 1):
         picked = given[0]
@@ -840,8 +934,12 @@ def _apply_loads(
     system: units.UnitSystem,
     places: dict[str, Any],
     static: Any,
+    flipped: set[str] | None = None,
 ) -> None:
     """하중을 **정적 해석에** 건다 — 그 응력을 모달이 안고 푼다.
+
+    `flipped` 는 **면 법선이 원래 겉면의 바깥 법선과 반대로 선** 쉘 면의 영역이다 — 거기
+    압력은 부호를 뒤집어야 같은 쪽(안쪽)으로 민다(`_flipped_pressures`).
 
     크기는 선언된 계의 값이라 단위를 붙여 준다. 방향은 성분 벡터이거나 면의 법선(압력)이다.
     """
@@ -861,6 +959,12 @@ def _apply_loads(
                     )
                 made.Location = place
             _load_magnitude(made, load, system, quantity)
+            if load.kind == "pressure" and load.region in (flipped or set()):
+                made.Magnitude.Output.DiscreteValues = [
+                    quantity(
+                        f"{-(load.magnitude or 0.0)} [{load.unit or system.length_label}]"
+                    )
+                ]
             made.Name = load.name
             logger.info("하중 %s(%s) ← %s", load.name, load.kind, load.region or "전체")
         except StageFailure:
@@ -903,12 +1007,18 @@ def _load_magnitude(
 
 
 def _write_boundary(
-    workdir: Path, *, constrained: bool, spec: AnySpec, plan: HarmonicPlan | None = None
+    workdir: Path,
+    *,
+    constrained: bool,
+    spec: AnySpec,
+    plan: HarmonicPlan | None = None,
+    material: list[str] | None = None,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
     조화면 **실제로 쓴 감쇠비**도 남긴다. CAD 가 적어 보낸 값이 스펙과 다를 수 있어서, 결과가
     스펙 값을 적으면 **화면이 거짓말을 한다**(봉우리 높이를 그 값으로 읽는 사람에게는 치명적).
+    **실제로 붙인 물성 이름**도 같은 까닭이다 — CAD 가 파트마다 보내면 스펙의 것은 안 쓰인다.
     """
     payload: dict[str, Any] = {
         "constrained": constrained,
@@ -919,6 +1029,8 @@ def _write_boundary(
         ),
         "recipe": spec.recipe,
     }
+    if material:
+        payload["material"] = " · ".join(material)
     if plan is not None:
         payload["damping_ratio"] = plan.damping_ratio
         payload["frequency_range_hz"] = [plan.low, plan.high]
@@ -1052,7 +1164,8 @@ def _apply_given_conditions(
     topology: dict[str, Any],
     bodies: list[Any],
     analysis: Any,
-) -> tuple[list[str], dict[str, Any]]:
+    rigid_ids: set[int] | None = None,
+) -> tuple[list[str], dict[str, Any], set[str]]:
     """**CAD 가 보낸 구속 · 접촉을 건다** — 종류마다 Mechanical 의 짝으로.
 
     매핑표는 우리 것이다(CompCore 는 솔버를 모른다). 칸 이름은 **실측으로 쟀다**
@@ -1068,9 +1181,10 @@ def _apply_given_conditions(
         | {one.region for one in given.loads if one.region}
     )
     if not wanted:
-        return [], {}
+        return [], {}, set()
 
-    matched = match_regions(topology, _face_records(bodies), wanted_regions=wanted)
+    records = _face_records(bodies)
+    matched = match_regions(topology, records, wanted_regions=wanted)
     if not matched.ok:
         raise StageFailure(
             "region_unresolved",
@@ -1084,7 +1198,20 @@ def _apply_given_conditions(
     places = {name: _named_selection(app, name, matched.faces[name]) for name in wanted}
     frames = _build_frames(app, given, system)
     applied: list[str] = []
+    rigid_of = _rigid_owner(bodies, matched.faces, rigid_ids or set())
+    on_sheet = _sheet_regions(bodies, matched.faces)
+    flipped = _flipped_pressures(given, topology, records, matched.faces, on_sheet)
+    for load in given.loads:
+        if load.region and load.region in rigid_of:
+            # 실측(2026-10-04): 강체 면의 힘 · 압력은 `UnderDefined` — 솔브에서 늦게 죽는다.
+            raise StageFailure(
+                "internal",
+                f"하중 「{load.name}」({load.kind}): 강체 파트의 면에 건 하중은 아직 못 "
+                "겁니다 — 그 파트를 변형체로 두세요.",
+            )
     for constraint in given.constraints:
+        if constraint.region in rigid_of:
+            constraint = _on_rigid(constraint)
         _one_constraint(analysis, constraint, places[constraint.region], system, frames)
         applied.append(f"{constraint.kind}:{constraint.region}")
         logger.info("구속 %s(%s) ← %s", constraint.name, constraint.kind, constraint.region)
@@ -1099,12 +1226,474 @@ def _apply_given_conditions(
             applied.append(f"auto_contacts_removed:{removed}")
             logger.info("자동 접촉 %s 개를 지웠습니다 — CAD 가 접촉을 선언했습니다", removed)
     for contact in given.contacts:
-        _one_contact(app, contact, places[contact.source], places[contact.target])
+        source, target = places[contact.source], places[contact.target]
+        if contact.source in rigid_of and contact.target in rigid_of:
+            raise StageFailure(
+                "internal",
+                f"접촉 「{contact.name}」: 강체 파트끼리의 접촉은 아직 못 겁니다 — 한쪽을 "
+                "변형체로 두세요.",
+            )
+        if contact.source in rigid_of:
+            # **강체는 대상면(target)이어야 한다** — 실측(2026-10-04): 강체가 접촉면(source)
+            # 이면 `UnderDefined`. 본딩 · 마찰은 두 면을 바꿔도 같은 접촉이다.
+            source, target = target, source
+            applied.append(f"contact_flipped:{contact.name}")
+        region = _one_contact(app, contact, source, target)
+        if contact.source in on_sheet or contact.target in on_sheet:
+            # **쉘의 두께를 접촉에 넣는다** — 중간면은 맞닿은 솔리드 면에서 두께의 절반만큼
+            # 떨어져 있다. 끄면 그 틈이 접촉 판정에 그대로 남는다.
+            try:
+                region.ShellThicknessEffect = True
+            except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+                logger.warning(
+                    "접촉 %s 에 쉘 두께를 못 넣었습니다", contact.name, exc_info=True
+                )
         applied.append(f"contact:{contact.kind}")
         logger.info(
             "접촉 %s(%s) %s ↔ %s", contact.name, contact.kind, contact.source, contact.target
         )
-    return applied, places
+    return applied, places, flipped
+
+
+def _rigid_owner(
+    bodies: list[Any], faces: dict[str, list[int]], rigid_ids: set[int]
+) -> set[str]:
+    """강체 파트 위에 있는 영역 이름들 — 면이 **모두** 강체의 것일 때."""
+    if not rigid_ids:
+        return set()
+    owner: dict[int, int] = {}
+    for body in bodies:
+        geo = body.GetGeoBody()
+        for face in geo.Faces:
+            owner[int(face.Id)] = int(geo.Id)
+    return {
+        name
+        for name, ids in faces.items()
+        if ids and all(owner.get(int(one)) in rigid_ids for one in ids)
+    }
+
+
+def _on_rigid(constraint: condition_model.Constraint) -> condition_model.Constraint:
+    """강체 면의 구속 — **고정 지지는 원격 변위(성분 전부 0)로** 건다.
+
+    실측(2026-10-04, 2025 R2): 강체 면의 고정 지지는 `UnderDefined` 고 원격 변위는 받는다.
+    강체에서 둘은 같은 구속이다(면이 변형하지 않으므로 「면 고정」 = 「강체 고정」).
+    """
+    if constraint.kind == "remote_displacement":
+        return constraint
+    if constraint.kind == "fixed_support":
+        return replace(
+            constraint,
+            kind="remote_displacement",
+            components=(0.0, 0.0, 0.0),
+            rotations=(0.0, 0.0, 0.0),
+        )
+    raise StageFailure(
+        "internal",
+        f"구속 「{constraint.name}」({constraint.kind}): 강체 파트의 면에는 고정 지지 · 원격 "
+        "변위만 걸 수 있습니다 — 그 파트를 변형체로 두세요.",
+    )
+
+
+#: 중립 이름 → Mechanical `MethodType`(실측 2026-10-04: `AllTriAllTet` 이 사면체다).
+_MESH_METHODS = {
+    "automatic": "Automatic",
+    "tetrahedrons": "AllTriAllTet",
+    "hex_dominant": "HexDominant",
+    "sweep": "Sweep",
+    "multizone": "MultiZone",
+}
+
+
+def _place_body_settings(
+    given: condition_model.Conditions,
+    bodies: list[Any],
+    topology: dict[str, Any],
+    system: units.UnitSystem,
+) -> dict[int, condition_model.BodySetting]:
+    """파트별 설정 → **바디 번호.** 못 짝지으면 멈춘다 — 설정이 엉뚱한 바디에 붙으면 강체 ·
+    제외가 뒤바뀐 모델이 오류 없이 풀린다."""
+    if not given.body_settings:
+        return {}
+    placed, failures = place_settings(
+        given.body_settings, topology, _body_records(bodies, system)
+    )
+    if failures:
+        raise StageFailure(
+            "internal",
+            "파트별 설정의 파트를 형상에서 찾지 못했습니다: " + " · ".join(failures),
+            details={"failures": failures},
+        )
+    return placed
+
+
+def _apply_body_settings(
+    app: Any,
+    placed: dict[int, condition_model.BodySetting],
+    bodies: list[Any],
+    system: units.UnitSystem,
+) -> None:
+    """파트마다 **제외 · 강체 · 파트 메시**(Body Sizing · Method)를 건다.
+
+    실측(2026-10-04, 2025 R2): `Suppressed` 를 켜면 그 바디에 걸린 자동 접촉도 Mechanical
+    이 스스로 끈다. 강체는 `StiffnessBehavior.Rigid` 이고 **메시 칸은 걸지 않는다** — 강체는
+    부피를 메시하지 않는다(질량 한 점 · `MASS21`). 메시 칸은 바람이라 못 걸면 경고만 남긴다.
+    """
+    if not placed:
+        return
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    quantity = _global("Quantity")
+    selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
+    rigid_ids: set[int] = set()
+    for index, one in sorted(placed.items()):
+        body = bodies[index]
+        try:
+            if one.suppressed or one.shell:
+                # 쉘 파트의 솔리드도 끈다 — 그 자리는 중간면의 면 바디가 맡는다.
+                body.Suppressed = True
+                logger.info(
+                    "파트 %s → %s", one.name, "쉘(솔리드 끔)" if one.shell else "해석 제외"
+                )
+                continue
+            if one.rigid:
+                body.StiffnessBehavior = enums.StiffnessBehavior.Rigid
+                rigid_ids.add(int(body.GetGeoBody().Id))
+                logger.info("파트 %s → 강체", one.name)
+                continue
+        except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+            raise _translated(
+                failure, "internal", f"파트 「{one.name}」 의 설정을 걸지 못했습니다"
+            ) from failure
+        if not one.meshed:
+            continue
+        info = app.ExtAPI.SelectionManager.CreateSelectionInfo(selection_type.GeometryEntities)
+        info.Ids = [body.GetGeoBody().Id]
+        try:
+            if one.element_size is not None:
+                sizing = app.Model.Mesh.AddSizing()
+                sizing.Location = info
+                sizing.ElementSize = quantity(f"{one.element_size} [{system.length_label}]")
+            if one.method != "automatic" or one.order != "program_controlled":
+                method = app.Model.Mesh.AddAutomaticMethod()
+                method.Location = info
+                method.Method = getattr(enums.MethodType, _MESH_METHODS[one.method])
+                if one.order != "program_controlled":
+                    method.ElementOrder = (
+                        enums.ElementOrder.Quadratic
+                        if one.order == "quadratic"
+                        else enums.ElementOrder.Linear
+                    )
+            logger.info("파트 %s → %s", one.name, one.describe())
+        except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+            logger.warning(
+                "파트 %s 의 메시 설정을 못 걸었습니다 — 넘어갑니다", one.name, exc_info=True
+            )
+    if rigid_ids:
+        _orient_contacts(app, bodies, rigid_ids)
+
+
+def _apply_whole_method(
+    app: Any,
+    given: condition_model.Conditions,
+    placed: dict[int, condition_model.BodySetting],
+    bodies: list[Any],
+) -> None:
+    """「전체」 요소 형상 — 제 형상을 따로 정한 파트 · 강체 · 뺀 파트를 뺀 바디 전부에.
+
+    좁은 쪽이 이긴다(CompCore 의 순서): 파트의 Method 가 따로 있으면 그것이다. 못 걸면 경고만
+    남긴다 — 메시는 바람이다.
+    """
+    whole = given.whole_mesh
+    if whole is None or not whole.method:
+        return
+    targets = [
+        body
+        for index, body in enumerate(bodies)
+        if not (
+            index in placed
+            and (
+                placed[index].suppressed
+                or placed[index].rigid
+                or placed[index].method != "automatic"
+            )
+        )
+    ]
+    if not targets:
+        return
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
+    try:
+        info = app.ExtAPI.SelectionManager.CreateSelectionInfo(selection_type.GeometryEntities)
+        info.Ids = [body.GetGeoBody().Id for body in targets]
+        method = app.Model.Mesh.AddAutomaticMethod()
+        method.Location = info
+        method.Method = getattr(enums.MethodType, _MESH_METHODS[whole.method])
+        logger.info("메시 전체 요소 형상 ← CAD %s (바디 %s)", whole.method, len(targets))
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        logger.warning("메시 전체 요소 형상을 못 걸었습니다 — 넘어갑니다", exc_info=True)
+
+
+def _is_sheet(body: Any) -> bool:
+    """면 바디(쉘)인가 — 중간면 형상의 바디다(실측: `GeoBodySheet`, 부피 0)."""
+    try:
+        return "Sheet" in str(body.GetGeoBody().BodyType)
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        return False
+
+
+def _import_midsurface(app: Any, workdir: Path, shells: dict[str, float]) -> list[Any]:
+    """중간면 형상(`input_mid.step`)을 **두 번째 형상**으로 들여온다 — 바디 전부를 돌려준다."""
+    mid = workdir / MIDSURFACE_NAME
+    if not mid.is_file():
+        raise StageFailure(
+            "geometry_import",
+            f"쉘 파트({' · '.join(sorted(shells))})가 있는데 중간면 형상({MIDSURFACE_NAME})이 "
+            "작업에 없습니다 — CAD 폴더의 pNNNN_mid.step 을 함께 올려야 합니다.",
+        )
+    return _import_geometry(app, mid)
+
+
+def _place_sheets(
+    sheets: list[Any], topology: dict[str, Any], shells: dict[str, float]
+) -> dict[str, Any]:
+    """면 바디 → 쉘 파트. 점 파일 `midsurface.bodies[]` 의 **무게중심 · 넓이**로 짝짓는다
+    (`_mid.step` 의 셸에는 이름이 없다 — CompCore v0.8.1 이 그 둘을 싣는다)."""
+    rows = [
+        one
+        for one in (topology.get("midsurface") or {}).get("bodies") or []
+        if isinstance(one, dict) and str(one.get("name") or "") in shells
+    ]
+    found: dict[str, Any] = {}
+    left = list(sheets)
+    for row in rows:
+        centre = [float(one) for one in (row.get("centroid") or [0.0, 0.0, 0.0])]
+
+        def gap(body: Any, centre: list[float] = centre) -> float:
+            here = (
+                float(body.CentroidX.Value),
+                float(body.CentroidY.Value),
+                float(body.CentroidZ.Value),
+            )
+            return sum((here[axis] - centre[axis]) ** 2 for axis in range(3))
+
+        if not left:
+            break
+        pick = min(left, key=gap)
+        area = float(pick.SurfaceArea.Value)
+        wanted = float(row.get("area") or 0.0)
+        if wanted and abs(area - wanted) / wanted > 0.02:
+            raise StageFailure(
+                "internal",
+                f"쉘 파트 「{row['name']}」 의 중간면 넓이가 맞지 않습니다(형상 {area:.1f} · "
+                f"점 파일 {wanted:.1f} mm²) — 다른 판을 집었을 수 있습니다.",
+            )
+        found[str(row["name"])] = pick
+        left.remove(pick)
+    missing = sorted(set(shells) - set(found))
+    if missing:
+        raise StageFailure(
+            "internal", f"중간면 형상에서 쉘 파트를 찾지 못했습니다: {' · '.join(missing)}"
+        )
+    return found
+
+
+def _apply_sheet_settings(
+    app: Any,
+    sheet_of: dict[str, Any],
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+) -> None:
+    """면 바디에 **두께**(mm)와 파트 요소 크기를 준다. 두께는 점 파일의 값이다."""
+    if not sheet_of:
+        return
+    quantity = _global("Quantity")
+    selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
+    sizes = {
+        one.name: one.element_size
+        for one in given.body_settings
+        if one.element_size is not None
+    }
+    for name, sheet in sheet_of.items():
+        try:
+            sheet.Thickness = quantity(f"{given.shells[name]} [mm]")
+            if name in sizes:
+                info = app.ExtAPI.SelectionManager.CreateSelectionInfo(
+                    selection_type.GeometryEntities
+                )
+                info.Ids = [sheet.GetGeoBody().Id]
+                sizing = app.Model.Mesh.AddSizing()
+                sizing.Location = info
+                sizing.ElementSize = quantity(f"{sizes[name]} [{system.length_label}]")
+            logger.info("쉘 %s → 두께 %s mm", name, given.shells[name])
+        except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+            raise _translated(
+                failure, "internal", f"쉘 파트 「{name}」 의 두께를 넣지 못했습니다"
+            ) from failure
+
+
+def _apply_sheet_materials(
+    spec: AnySpec,
+    sheet_of: dict[str, Any],
+    given: list[materials.Material],
+    system: units.UnitSystem,
+) -> dict[str, MaterialSpec]:
+    """면 바디의 물성 — 솔리드와 같은 규칙(CAD 가 먼저, 이름으로). 물성 조각으로 덮는다."""
+    if not sheet_of:
+        return {}
+    names = sorted(sheet_of)
+    on_part = materials.assigned(given, names) if given else {}
+    made: dict[str, MaterialSpec] = {}
+    for name in names:
+        chosen = on_part.get(name)
+        material = chosen.spec() if chosen is not None else spec.material
+        if material is None:
+            raise StageFailure("internal", f"쉘 파트 「{name}」 에 붙일 물성이 없습니다.")
+        snippet = sheet_of[name].AddCommandSnippet()
+        snippet.AppendText(material_commands(material, system))
+        made[name] = material
+        logger.info("물성 %s ← 쉘 %s", material.name, name)
+    return made
+
+
+def _sheet_mass(
+    topology: dict[str, Any], shells: dict[str, float], made: dict[str, MaterialSpec]
+) -> float:
+    """쉘의 질량(kg) — 점 파일의 중간면 넓이(mm²) x 두께(mm) x 밀도. 계를 타지 않는다."""
+    total = 0.0
+    for row in (topology.get("midsurface") or {}).get("bodies") or []:
+        name = str(row.get("name") or "") if isinstance(row, dict) else ""
+        if name in made and name in shells:
+            total += (
+                float(row.get("area") or 0.0) * shells[name] * 1e-9 * made[name].density_kg_m3
+            )
+    return total
+
+
+def _sheet_regions(bodies: list[Any], faces: dict[str, list[int]]) -> set[str]:
+    """면 바디(쉘) 위의 영역 이름 — 면이 **모두** 면 바디의 것일 때."""
+    sheet_faces: set[int] = set()
+    for body in bodies:
+        if _is_sheet(body):
+            sheet_faces |= {int(face.Id) for face in body.GetGeoBody().Faces}
+    return {
+        name
+        for name, ids in faces.items()
+        if ids and all(int(one) in sheet_faces for one in ids)
+    }
+
+
+def _flipped_pressures(
+    given: condition_model.Conditions,
+    topology: dict[str, Any],
+    records: list[FaceRecord],
+    faces: dict[str, list[int]],
+    on_sheet: set[str],
+) -> set[str]:
+    """쉘 면의 압력 중 **부호를 뒤집을 것** — 면 법선이 원래 겉면의 바깥 법선과 반대로 섰다.
+
+    Mechanical 의 양의 압력은 면 법선의 반대쪽(안쪽)으로 민다. CAD 가 「바깥 겉면을 누른다」 고
+    했으니, 쉘 면의 법선이 그 바깥 법선과 같으면 그대로, 반대면 뒤집는다. 한 영역의 면들이
+    서로 엇갈리면 한 부호로 못 건다 — 멈춘다.
+    """
+    by_id = {one.id: one for one in records}
+    flipped: set[str] = set()
+    for load in given.loads:
+        if load.kind != "pressure" or load.region not in on_sheet:
+            continue
+        rows = (topology.get("regions") or {}).get(load.region) or []
+        outer = next(
+            (
+                row["outer_normal"]
+                for row in rows
+                if isinstance(row, dict) and row.get("outer_normal")
+            ),
+            None,
+        )
+        if outer is None:
+            continue
+        signs = set()
+        for face in faces.get(load.region) or []:
+            normal = by_id[face].normal if face in by_id else None
+            if normal is not None:
+                signs.add(sum(a * float(b) for a, b in zip(normal, outer, strict=False)) >= 0)
+        if len(signs) > 1:
+            raise StageFailure(
+                "internal",
+                f"하중 「{load.name}」: 쉘 면의 법선이 면마다 엇갈려 압력을 한 쪽으로 걸 수 "
+                "없습니다.",
+            )
+        if signs == {False}:
+            flipped.add(load.region)
+    return flipped
+
+
+def _orient_contacts(app: Any, bodies: list[Any], rigid_ids: set[int]) -> None:
+    """형상을 읽을 때 생긴 자동 접촉을 **강체가 대상면(target)이 되게** 돌린다.
+
+    실측(2026-10-04): 강체가 접촉면(source)이면 `UnderDefined` 다. 강체끼리면 잇지 못한다 —
+    그 사실을 말하고 멈춘다(떨어진 강체가 강체 모드로 나오면 이유를 찾을 수 없다).
+    """
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    owner: dict[int, int] = {}
+    for body in bodies:
+        geo = body.GetGeoBody()
+        for face in geo.Faces:
+            owner[int(face.Id)] = int(geo.Id)
+
+    def rigid(location: Any) -> bool:
+        ids = [int(one) for one in getattr(location, "Ids", []) or []]
+        return bool(ids) and all(owner.get(one) in rigid_ids for one in ids)
+
+    for region in list(
+        _global("DataModel").GetObjectsByType(enums.DataModelObjectCategory.ContactRegion)
+    ):
+        if region.Suppressed:
+            continue
+        source, target = region.SourceLocation, region.TargetLocation
+        if rigid(source) and rigid(target):
+            raise StageFailure(
+                "internal",
+                "강체 파트끼리 맞닿아 있습니다 — 강체끼리는 아직 잇지 못합니다. 한쪽을 "
+                "변형체로 두세요.",
+            )
+        if rigid(source):
+            region.SourceLocation = target
+            region.TargetLocation = source
+            logger.info("자동 접촉 %s — 강체를 대상면으로 돌렸습니다", region.Name)
+
+
+def _rigid_mass(
+    bodies: list[Any], used: Applied, rigid_ids: set[int], system: units.UnitSystem
+) -> None:
+    """강체의 질량 · 관성을 **CAD 밀도로** 고친다.
+
+    Mechanical 은 강체를 `MASS21` 한 점으로 보내고 그 질량 · 관성을 **Engineering Data 의
+    물성**(기본 구조용 강)으로 계산한다 — 우리 물성 조각(`MP,DENS`)은 거기에 닿지 않는다(실측
+    2026-10-04: 알루미늄 판이 강의 질량 5.024e-4 t 로 나갔다). 그래서 조각에서 그 실상수를
+    **밀도 비만큼** 고친다 — 밀도가 한결같으면 질량 · 관성이 같은 비로 바뀐다. 실상수 번호는
+    그 바디의 요소형 번호(`typeids(1)`)와 같다(덱에서 `et,1,21` · `real,1`).
+    """
+    if not rigid_ids:
+        return
+    for index, name, material in used.per_body:
+        body = bodies[index]
+        if int(body.GetGeoBody().Id) not in rigid_ids:
+            continue
+        volume = float(body.Volume.Value)
+        mass = system.density(material.density_kg_m3) * volume
+        snippet = body.AddCommandSnippet()
+        snippet.AppendText(
+            "! SimEngBay rigid body mass from CAD density (MASS21 uses Engineering Data)\n"
+            "*get,sebm0,rcon,typeids(1),const,1\n"
+            "*if,sebm0,gt,0,then\n"
+            f"sebk={mass:.9g}/sebm0\n"
+            "*do,sebi,1,6\n"
+            "*get,sebv,rcon,typeids(1),const,sebi\n"
+            "rmodif,typeids(1),sebi,sebv*sebk\n"
+            "*enddo\n"
+            "*endif\n"
+        )
+        logger.info("강체 %s 질량 ← %s (CAD 밀도)", name or index + 1, mass)
 
 
 def _build_frames(
@@ -1278,7 +1867,7 @@ def _clear_automatic_contacts(app: Any) -> int:
     return len(found)
 
 
-def _one_contact(app: Any, contact: condition_model.Contact, source: Any, target: Any) -> None:
+def _one_contact(app: Any, contact: condition_model.Contact, source: Any, target: Any) -> Any:
     """접촉 한 쌍 — `ConnectionGroup` 아래 `ContactRegion`(실측한 자리)."""
     enums = _global("Ansys").Mechanical.DataModel.Enums
     try:
@@ -1294,6 +1883,7 @@ def _one_contact(app: Any, contact: condition_model.Contact, source: Any, target
         raise _translated(
             failure, "internal", f"접촉 「{contact.name}」({contact.kind})을 걸지 못했습니다"
         ) from failure
+    return region
 
 
 #: 중립 이름 → Mechanical 의 `ContactType` 멤버(실측 2026-10-02).

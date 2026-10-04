@@ -21,6 +21,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from app.core import boundary
 from app.core import probes as core_probes
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes
@@ -48,7 +49,7 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
 
     real: dict[float, frd_reader.Block] = {}
     imaginary: dict[float, frd_reader.Block] = {}
-    for block in frd_reader.read(result_file):
+    for block in frd_reader.read_folded(workdir, result_file):
         if block.kind == "DISP":
             real[block.value] = block
         elif block.kind == "DISPI":
@@ -89,7 +90,7 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
         "damping_ratio": damping,
         "points": points,
         "peak": worst,
-        "material": spec.material.name,
+        "material": boundary.used_material(workdir, spec),
         **({"mesh": _mesh(workdir)} if _mesh(workdir) else {}),
     }
     # **측정점마다 그 자리의 봉우리 한 줄** — 절점 거리와 「멀다」 경고가 여기 실린다.

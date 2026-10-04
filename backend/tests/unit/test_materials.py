@@ -349,3 +349,24 @@ def test_물성_배율이_점마다_반영된다() -> None:
     assert math.isclose(high.youngs_modulus_pa, 77.33e9, rel_tol=1e-9)
     # 밀도는 배율 대상이 아니다 — 질량이 같아야 두 점을 견줄 수 있다.
     assert math.isclose(low.density_kg_m3, high.density_kg_m3, rel_tol=1e-9)
+
+
+def test_파트마다_붙을_물성을_모델링과_같은_규칙으로_짝짓는다() -> None:
+    """작업을 만들기 전에 **어느 파트에 무엇이 붙나**를 보여 주고, 빠진 파트를 미리 말한다.
+    규칙은 모델링과 같다 — 한 벌이 「전체」 거나 파트가 하나면 모두에, 그 밖에는 이름으로."""
+    plate = materials.read(
+        _payload(_row(_converted("등록재료-mm_n_tonne.json"), apply_to=["지그판"])),
+        units.MM_N_TONNE,
+    )
+    whole = materials.read(
+        _payload(_row(_converted("문헌물성-mm_n_tonne.json"))), units.MM_N_TONNE
+    )
+
+    on_body = materials.assigned(plate, ["지그판", "부품"])
+    assert on_body["지그판"] is plate[0] and on_body["부품"] is None
+    assert materials.uncovered(plate, ["지그판", "부품"]) == ["부품"]
+    # 파트가 하나면 이름이 달라도 그 한 벌이 붙는다(Mechanical 경로가 그렇게 한다).
+    assert materials.uncovered(plate, ["부품"]) == []
+    assert materials.uncovered(whole, ["지그판", "부품"]) == []
+    assert materials.uncovered(plate + whole, ["지그판", "부품"]) == []
+    assert materials.body_names({"bodies": [{"name": " 판 "}, {"name": ""}, "x"]}) == ["판"]

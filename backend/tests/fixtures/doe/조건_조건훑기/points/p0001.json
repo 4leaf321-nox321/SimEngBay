@@ -134,7 +134,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "cc649ece-5ca5-4155-ab82-b44f6ebf23b5",
+      "id": "54819e2d-431e-4f02-ae10-476b289505ee",
       "name": "조건_조건훑기",
       "method": "factorial",
       "seed": 1
@@ -737,11 +737,13 @@
         "defeature_size": null
       }
     ],
+    "body_settings": [],
     "coordinate_systems": []
   },
   "length_units": {
     "geometry": "mm",
     "regions": "mm",
+    "midsurface": "mm",
     "coordinate_systems": "mm"
   }
 }

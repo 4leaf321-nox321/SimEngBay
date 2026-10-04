@@ -5,7 +5,7 @@
 #
 # **Ansys 워커 개수 = Mechanical 라이선스 수.** 그 수를 넘긴 워커는 라이선스 오류로 실패한다.
 # **CalculiX 는 라이선스가 없어 코어 수만큼** 띄울 수 있으므로, 솔버로 갈라 띄운다 — 아래
-# `worker-%i.env` 에 `SIMULATION_SOLVERS` 를 적는다(없으면 그 워커는 전부 집는다).
+# `worker-%i.env` 에 `SIMULATION_SOLVERS` 를 적는다(없으면 그 워커는 깔린 솔버 전부를 집는다).
 Description=@@APP_NAME@@ 해석 작업 워커 %i
 After=network-online.target @@APP_SLUG@@.service
 Wants=network-online.target

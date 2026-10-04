@@ -88,6 +88,8 @@ class DoePoint:
     step: Path | None = None
     point_file: Path | None = None
     """`pNNNN.json` — 영역 · 바디 · 설계점 메타 · 조건이 한 파일에 있다."""
+    mid_step: Path | None = None
+    """`pNNNN_mid.step` — 쉘 파트의 중간면(표의 `mid_file`). 쉘 파트가 있을 때만 있다."""
     status: str = "ok"
     unresolved: list[str] = field(default_factory=list)
     error: str = ""
@@ -231,6 +233,7 @@ def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
         params=params,
         step=step,
         point_file=point_file,
+        mid_step=_resolve(folder, row.get("mid_file")),
         status=status or "ok",
         unresolved=unresolved,
         error=error,

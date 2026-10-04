@@ -134,7 +134,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "673e7d88-952d-4a29-9937-e8eb31a926e1",
+      "id": "86f9d823-f68d-42a4-8201-1a5a90b43114",
       "name": "조건_재료훑기",
       "method": "factorial",
       "seed": 1
@@ -732,11 +732,13 @@
         "defeature_size": null
       }
     ],
+    "body_settings": [],
     "coordinate_systems": []
   },
   "length_units": {
     "geometry": "mm",
     "regions": "mm",
+    "midsurface": "mm",
     "coordinate_systems": "mm"
   }
 }

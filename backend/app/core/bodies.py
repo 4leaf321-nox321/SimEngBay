@@ -28,6 +28,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.conditions import ALL_BODIES, BodySetting
+
 #: 부피가 이 비율 안으로 같으면 「닮았다」 로 본다. STEP 을 다시 읽어 생기는 차이는 0.1% 도 안
 #: 되지만(실측 0.01%), 메시 · 곡면 재현이 걸리면 조금 더 벌어질 수 있다.
 VOLUME_TOLERANCE_RATIO = 0.02
@@ -142,3 +144,46 @@ def _triple(value: Any) -> tuple[float, float, float] | None:
 
 def _distance(one: tuple[float, float, float], other: tuple[float, float, float]) -> float:
     return math.dist(one, other)
+
+
+def place_settings(
+    settings: list[BodySetting], topology: dict[str, Any], records: list[BodyRecord]
+) -> tuple[dict[int, BodySetting], list[str]]:
+    """파트별 설정(`body_settings`)을 **해석 쪽 바디 번호에** 붙인다 — (번호 → 설정, 실패).
+
+    단품은 이름이 「전체」 다 — 그 한 줄은 바디 전부에 붙는다(짝지을 것이 없다). 나머지는
+    물성과 같은 규칙(부피 · 무게중심)으로 짝짓고, **설정이 적힌 파트만** 본다: 설정이 없는
+    파트를 못 짝지은 것은 여기서 실패가 아니다(물성 쪽이 따로 본다).
+    """
+    if not settings:
+        return {}, []
+    whole = next((one for one in settings if one.name == ALL_BODIES), None)
+    if whole is not None:
+        return {one.index: whole for one in records}, []
+    matched = match_bodies(topology, records)
+    placed: dict[int, BodySetting] = {}
+    failures: list[str] = []
+    for one in settings:
+        index = matched.bodies.get(one.name)
+        if index is None:
+            why = next(
+                (line for line in matched.failures if line.startswith(f"{one.name}:")),
+                f"{one.name}: 점 파일의 bodies[] 에 없습니다",
+            )
+            failures.append(why)
+            continue
+        placed[index] = one
+    return placed, failures
+
+
+def without(topology: dict[str, Any], names: set[str]) -> dict[str, Any]:
+    """해석에서 뺀 파트를 `bodies[]` 에서 지운 점 파일 — 남은 바디와 짝지을 때 쓴다(뺀 파트는
+    메시 · 물성 짝짓기에 나오지 않으므로 그대로 두면 「짝이 없다」 로 멈춘다)."""
+    if not names or not topology:
+        return topology
+    rows = [
+        one
+        for one in topology.get("bodies") or []
+        if not (isinstance(one, dict) and str(one.get("name") or "").strip() in names)
+    ]
+    return {**topology, "bodies": rows}

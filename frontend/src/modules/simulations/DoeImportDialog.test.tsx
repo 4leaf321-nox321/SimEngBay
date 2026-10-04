@@ -39,7 +39,7 @@ const PREVIEW = {
   seed: 1,
   usable: 3,
   skipped: 1,
-  materials: [],
+  materials: ['SS400'],
   suggested_modes: null,
   points: [
     { number: 1, params: { 두께: 6 }, usable: true, skip_reason: '' },
@@ -208,7 +208,7 @@ describe('DOE 가져오기', () => {
       unknown
     >
     expect(spec.solver).toBe('calculix')
-    expect(spec.mesh).toEqual({})
+    expect(spec.mesh).toEqual({ order: 'quadratic' })
   })
 
   it('요소 크기가 어디에도 없으면 CalculiX 로 실행하지 않는다', async () => {
@@ -241,30 +241,14 @@ describe('DOE 가져오기', () => {
     vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
     await waitFor(() => expect(screen.getByText(/SS400 · AL6061/)).toBeDefined())
+    // 물성 칸은 없다 — 물성은 CompCore 가 점마다 파트에 정해 보낸다.
+    expect(screen.queryByLabelText('재료 이름')).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: /3건 실행/ }))
     await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
     const sent = vi.mocked(simulationApi.importDoe).mock.calls[0][0]
-    expect((sent.spec as Record<string, unknown>).material_from).toBe('cad')
-  })
-
-  it('끄면 사람이 넣은 값으로 돌린다', async () => {
-    vi.mocked(simulationApi.previewDoe).mockResolvedValue(WITH_MATERIALS)
-    vi.mocked(simulationApi.importDoe).mockResolvedValue({
-      study_id: '3f9a21',
-      name: '브래킷_두께훑기',
-      created: ['a'],
-      skipped: [],
-    })
-    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
-    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
-    await waitFor(() => expect(screen.getByText(/SS400 · AL6061/)).toBeDefined())
-
-    await userEvent.click(screen.getByRole('checkbox'))
-    await userEvent.click(screen.getByRole('button', { name: /3건 실행/ }))
-    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
-    const sent = vi.mocked(simulationApi.importDoe).mock.calls[0][0]
-    expect((sent.spec as Record<string, unknown>).material_from).toBe('spec')
+    // 물성은 싣지 않는다 — 서버가 점마다 파트에 붙이고, 재료가 빠진 점은 까닭을 달아 건너뛴다.
+    expect('material' in sent.spec).toBe(false)
   })
 
   it('CAD 가 적은 모드 수를 미리 채운다', async () => {
@@ -280,12 +264,14 @@ describe('DOE 가져오기', () => {
     )
   })
 
-  it('물성을 안 보낸 폴더면 그 사실을 말한다', async () => {
-    // 아무 말도 없으면 사람은 「CAD 값으로 돌았겠지」 로 읽는다.
+  it('물성을 안 보낸 폴더는 실행하지 않는다', async () => {
+    // **물성은 CompCore 가 정한다** — 이 창에서 한 벌을 받아 모든 파트에 붙이는 길은 없다.
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue({ ...PREVIEW, materials: [] })
     vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
     render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
     await waitFor(() => expect(screen.getByText(/물성을 보내지 않았습니다/)).toBeDefined())
-    expect(screen.getByRole('checkbox')).toBeDisabled()
+    expect(screen.queryByLabelText('재료 이름')).toBeNull()
+    expect(screen.getByRole('button', { name: /3건 실행/ })).toBeDisabled()
   })
   it('집을 워커가 없는 솔버를 고르면 미리 말한다', async () => {
     // **영원히 대기하는 작업을 거는 자리에서 막는다** — 걸고 나면 아무도 그 사실을 말하지 않는다.
@@ -310,5 +296,59 @@ describe('DOE 가져오기', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
     await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
     expect(screen.queryByText(/이 솔버를 집는 워커가 없습니다/)).toBeNull()
+  })
+  it('고른 설계점만 보낸다', async () => {
+    // **다 걸 필요는 없다** — 몇 점만 먼저 돌려 보거나 하나만 작업으로 만든다(서버의 numbers).
+    vi.mocked(simulationApi.importDoe).mockResolvedValue({
+      study_id: '3f9a21',
+      name: '브래킷_두께훑기',
+      created: ['a'],
+      skipped: [],
+    })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
+    // 걸 수 없는 점은 고를 수 없다.
+    expect(screen.getByRole('checkbox', { name: 'p0004 선택' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: 'p0002 선택' }))
+    await userEvent.click(screen.getByRole('button', { name: /2건 실행/ }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    expect(vi.mocked(simulationApi.importDoe).mock.calls[0][0].numbers).toEqual([1, 3])
+  })
+
+  it('다 고르면 numbers 를 보내지 않는다', async () => {
+    vi.mocked(simulationApi.importDoe).mockResolvedValue({
+      study_id: '3f9a21',
+      name: '브래킷_두께훑기',
+      created: ['a'],
+      skipped: [],
+    })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /3건 실행/ })).toBeEnabled())
+    await userEvent.click(screen.getByRole('button', { name: /3건 실행/ }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    expect(vi.mocked(simulationApi.importDoe).mock.calls[0][0].numbers).toBeNull()
+  })
+
+  it('첫 점의 조건을 고른 해석 종류로 다시 편다', async () => {
+    vi.mocked(simulationApi.previewDoe).mockResolvedValue({
+      ...PREVIEW,
+      suggested_recipe: 'static',
+      conditions: {
+        lines: [{ kind: 'load', label: '클램프', detail: '', status: 'applied', why: '' }],
+        unit_system: 'mm_n_tonne',
+        prestressed: false,
+      },
+    })
+    vi.mocked(simulationApi.browseDoe).mockResolvedValueOnce(STUDY_LISTING)
+    render(<DoeImportDialog open onClose={() => {}} onImported={() => {}} />)
+    await waitFor(() => expect(screen.getByText('클램프')).toBeDefined())
+    await userEvent.selectOptions(screen.getByLabelText('해석 종류'), 'modal')
+    await waitFor(() =>
+      expect(vi.mocked(simulationApi.previewDoe).mock.calls.some((call) => call[1] === 'modal')).toBe(
+        true,
+      ),
+    )
   })
 })

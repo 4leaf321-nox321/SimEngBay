@@ -19,11 +19,22 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core import conditions
 from app.core.probes import FAR_MM, Spot, body_of, row, wanted
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FAR_MM", "Spot", "locate", "read", "rows", "scale_for", "topology_of", "wanted"]
+__all__ = [
+    "FAR_MM",
+    "Spot",
+    "locate",
+    "read",
+    "rows",
+    "scale_for",
+    "topology_of",
+    "total_reaction",
+    "wanted",
+]
 
 TOPOLOGY_NAME = "topology.json"
 
@@ -38,7 +49,9 @@ def topology_of(workdir: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         logger.warning("%s 를 읽지 못했습니다 — 측정점 없이 갑니다", TOPOLOGY_NAME)
         return {}
-    return loaded
+    # **쉘 파트의 측정점은 중간면 위의 점이다**(지문의 `mid`) — 모델에 있는 것이 중간면이다.
+    shells = conditions.read(loaded).shells
+    return conditions.shell_view(loaded, set(shells)) if shells else loaded
 
 
 def scale_for(unit: str) -> float:
@@ -248,3 +261,16 @@ def reaction(
         if node in on_plane:
             total += force
     return [round(float(one), 6) for one in total]
+
+
+def total_reaction(model: Any) -> list[float] | None:
+    """모델 전체의 **반력 합** `[Fx, Fy, Fz]` — 구속이 하나일 때 그 구속이 버틴 힘이다."""
+    try:
+        import numpy as np
+
+        field = model.results.reaction_force.eval()[0]
+        data = np.asarray(field.data, dtype=float).reshape(-1, 3)
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("반력을 못 읽었습니다", exc_info=True)
+        return None
+    return [round(float(one), 6) for one in data.sum(axis=0)]

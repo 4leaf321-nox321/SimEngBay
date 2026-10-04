@@ -26,7 +26,14 @@ from typing import Any
 from app.core import conditions as condition_model
 from app.core import probes as core_probes
 from app.core.harmonic import harmonic_plan
-from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec, parse_spec
+from app.core.spec import (
+    RIGID_BODY_MODES,
+    HarmonicSpec,
+    MaterialSpec,
+    ModalSpec,
+    StaticSpec,
+    parse_spec,
+)
 from app.core.stages import (
     ArtifactSpec,
     CancelCheck,
@@ -76,7 +83,7 @@ class FakeExecutor:
         kind = {"modal": "MODAL", "static": "STATIC", "harmonic": "HARMIC"}[spec.recipe]
         dat.write_text(
             "/PREP7\n! fake input — 진짜 실행기가 오면 WriteInputFile 의 것으로 바뀐다\n"
-            f"! material {spec.material.name}\n/SOLU\nANTYPE,{kind}\nSOLVE\nFINISH\n",
+            f"! material {_material(spec).name}\n/SOLU\nANTYPE,{kind}\nSOLVE\nFINISH\n",
             encoding="utf-8",
         )
         mechdb = ctx.workdir / "model.mechdb"
@@ -91,7 +98,7 @@ class FakeExecutor:
                 # **실제로 쓴 전역 요소 크기** — 메시 수렴 점검이 이것을 기준으로 줄인다.
                 "element_size_mm": _element_size(spec),
                 # 지어낸 부피 x 진짜 밀도 — 화면이 「질량 칸이 있다」 를 보고 만들어진다.
-                "mass_kg": round(1.2e-4 * spec.material.density_kg_m3, 4),
+                "mass_kg": round(1.2e-4 * _material(spec).density_kg_m3, 4),
             },
             detail=f"바디 1 · 절점 {nodes:,}",
         )
@@ -165,6 +172,16 @@ AnySpec = ModalSpec | StaticSpec | HarmonicSpec
 BASE_SIZE_MM = 5.0
 
 
+#: 스펙에 물성이 없을 때(CAD 가 보낸 것으로 풀 때) 숫자를 지어낼 값 — 자릿수만 정한다.
+CAD_STAND_IN = MaterialSpec(
+    name="CAD 물성", youngs_modulus_gpa=200, poisson_ratio=0.3, density_kg_m3=7850
+)
+
+
+def _material(spec: AnySpec) -> MaterialSpec:
+    return spec.material or CAD_STAND_IN
+
+
 def _element_size(spec: AnySpec) -> float:
     return float(spec.mesh.element_size_mm or BASE_SIZE_MM)
 
@@ -183,8 +200,9 @@ def _stiffening(spec: AnySpec) -> float:
 def _fake_frequencies(spec: ModalSpec | HarmonicSpec) -> list[float]:
     """지어낸 고유진동수. 강성/밀도 제곱근에 비례하게 만들어 물성을 바꾸면 값이 따라오게
     한다. 성긴 메시일수록 조금 높다."""
+    material = _material(spec)
     scale = (
-        math.sqrt(spec.material.youngs_modulus_gpa * 1e9 / spec.material.density_kg_m3) / 1000
+        math.sqrt(material.youngs_modulus_gpa * 1e9 / material.density_kg_m3) / 1000
     ) * math.sqrt(_stiffening(spec))
     values: list[float] = []
     if isinstance(spec, ModalSpec) and spec.is_free_free:
@@ -228,7 +246,7 @@ def _write(ctx: StageContext, result: dict[str, Any]) -> Path:
 def _static(ctx: StageContext, spec: StaticSpec) -> StageResult:
     """정적 — `dpf/static.py` 와 같은 열쇠. 변형은 강성에 반비례, 응력은 **정련할수록 큰다**
     (구속 모서리의 특이점처럼)."""
-    softness = 200.0 / spec.material.youngs_modulus_gpa
+    softness = 200.0 / _material(spec).youngs_modulus_gpa
     largest = round(0.04 * softness / _stiffening(spec), 8)
     stress = round(120.0 * (1 + 0.05 * BASE_SIZE_MM / _element_size(spec)), 6)
     topology = _topology(ctx)
@@ -267,7 +285,7 @@ def _static(ctx: StageContext, spec: StaticSpec) -> StageResult:
         **({"probes": probes} if probes else {}),
         **({"reactions": reactions} if reactions else {}),
         "max_von_mises": stress,
-        "material": spec.material.name,
+        "material": _material(spec).name,
         "fake": True,
     }
     path = _write(ctx, result)
@@ -310,7 +328,7 @@ def _harmonic(ctx: StageContext, spec: HarmonicSpec) -> StageResult:
         "damping_ratio": damping,
         "points": points,
         "peak": worst,
-        "material": spec.material.name,
+        "material": _material(spec).name,
         "fake": True,
     }
     tops = core_probes.peaks(spots, points, unit="mm")

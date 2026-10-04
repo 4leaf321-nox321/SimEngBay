@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { Download, Eraser, RotateCcw, Square } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
 import type { Artifact, Simulation, Stage } from '@/modules/simulations/api'
@@ -84,6 +84,10 @@ const SUMMARY_LABELS: Record<string, string> = {
   // 메시 수렴 점검이 줄일 기준 — 비면 Mechanical 기본 크기로 돌았다.
   element_size_mm: '전역 요소 크기',
   contact_pairs: '비선형 접촉',
+  // CompCore 의 파트별 설정 — 무엇을 빼고 무엇을 굳혀 풀었나. 안 보이면 「질량이 왜 줄었지」 ·
+  // 「주파수가 왜 올랐지」 를 설명할 길이 없다.
+  rigid_bodies: '강체 파트',
+  suppressed_bodies: '해석 제외 파트',
 }
 
 function shownSummary(key: string, value: unknown): string {
@@ -223,6 +227,8 @@ export default function SimulationDetailPage() {
             {shownDateTime(simulation.created_at)} · 소요{' '}
             {shownDuration(simulation.started_at, simulation.finished_at)}
             {simulation.attempts > 1 && ` · ${simulation.attempts}번째 시도`}
+            {/* **어느 워커가 집었나** — 서버 화면의 워커 표와 잇는 끈이다(같은 `호스트:pid`). */}
+            {simulation.worker_id && ` · 워커 ${simulation.worker_id}`}
           </>
         }
         back={{ to: '/simulations', label: '해석 작업' }}
@@ -238,7 +244,7 @@ export default function SimulationDetailPage() {
             {(simulation.status === 'failed' || simulation.status === 'canceled') && (
               <Button size="sm" onClick={retry} disabled={busy}>
                 <RotateCcw className="size-4" />
-                다시 걸기
+                다시 실행
               </Button>
             )}
             {finished && (
@@ -253,12 +259,14 @@ export default function SimulationDetailPage() {
 
       <ErrorNotice error={error} />
 
+      <SourceLine simulation={simulation} />
+
       {tidied && (
         <Alert>
           <AlertTitle>정리했습니다</AlertTitle>
           <AlertDescription>
-            {tidied} 결과(고유진동수 · 모드 형상)와 입력은 그대로 남습니다. 지운 것을 되살리려면
-            다시 걸어야 합니다.
+            {tidied} 결과(결과 요약 · 그림)와 입력은 그대로 남습니다. 정리한 파일이 다시 필요하면
+            작업을 다시 실행해야 합니다.
           </AlertDescription>
         </Alert>
       )}
@@ -374,4 +382,40 @@ export default function SimulationDetailPage() {
       </details>
     </div>
   )
+}
+
+/**
+ * **이 작업은 어디서 왔나** — DOE 설계점이면 그 스터디로, 메시 수렴 점검이면 원래 작업으로
+ * 가는 길. 없으면 설계점 하나를 보다가 같은 스터디의 다른 점과 견줄 길을 잃는다.
+ */
+function SourceLine({ simulation }: { simulation: Simulation }) {
+  const meta = (simulation.source_meta ?? {}) as Record<string, unknown>
+  if (simulation.source_kind === 'doe_point') {
+    const study = String(meta.study_id ?? meta.study_name ?? '')
+    const params = Object.entries((meta.params ?? {}) as Record<string, unknown>)
+      .map(([name, value]) => `${name} ${String(value)}`)
+      .join(' · ')
+    if (!study) return null
+    return (
+      <p className="text-muted-foreground text-sm">
+        DOE{' '}
+        <Link to={`/simulations/studies/${encodeURIComponent(study)}`} className="font-medium hover:underline">
+          {String(meta.study_name ?? study)}
+        </Link>{' '}
+        의 설계점 p{String(meta.point ?? 0).padStart(4, '0')}
+        {params && ` (${params})`}
+      </p>
+    )
+  }
+  if (simulation.source_kind === 'mesh_check' && typeof meta.convergence_of === 'string') {
+    return (
+      <p className="text-muted-foreground text-sm">
+        <Link to={`/simulations/${meta.convergence_of}`} className="font-medium hover:underline">
+          원래 작업
+        </Link>
+        의 메시 수렴 점검 — 요소 크기 {String(meta.element_size_mm ?? '—')} mm
+      </p>
+    )
+  }
+  return null
 }

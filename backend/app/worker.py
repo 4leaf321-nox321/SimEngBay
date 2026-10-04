@@ -42,12 +42,32 @@ POLL_SECONDS = 1.0
 STALE_CHECK_EVERY = 60.0
 
 
-def _solvers() -> tuple[str, ...] | None:
-    """이 워커가 집을 솔버. 비면 `None`(전부) — 설정을 안 건드린 설치가 그대로 돌아야 한다."""
-    raw = get_settings().simulation_solvers.strip()
-    if not raw:
+def solvers_for(
+    setting: str, *, executor: str, tools: dict[str, Any]
+) -> tuple[str, ...] | None:
+    """이 워커가 집을 솔버. `None` 이면 전부, 빈 것이면 **아무것도 안 집는다.**
+
+    설정(`SIMULATION_SOLVERS`)이 있으면 그것이다. 비면 **이 기계에서 돌릴 수 있는 것
+    전부**를 깔린 도구(`toolcheck.report`)로 고른다 — 전에는 비면 무조건 전부 집어서, gmsh 가
+    없는 개발 PC 의 워커가 CalculiX 작업을 집어 1초 만에 실패시켰다(2026-10-04). 못 돌리는
+    작업은 대기열에 남겨야 다른 워커가 집고, 작업을 거는 화면이 「집을 워커가 없다」 고 미리
+    말한다.
+
+    모의 실행기는 솔버를 부르지 않으므로 전부 집는다. Ansys 는 확인했는데 없을 때만 뺀다 —
+    `windows-bridge` 는 Windows 쪽이라 여기서 확인하지 못한다(모른다를 없다로 읽지 않는다).
+    """
+    raw = setting.strip()
+    if raw:
+        return tuple(one.strip() for one in raw.split(",") if one.strip())
+    if executor == "fake":
         return None
-    return tuple(one.strip() for one in raw.split(",") if one.strip())
+    able: list[str] = []
+    ansys = tools.get("ansys") or {}
+    if not (ansys.get("checked") and not ansys.get("path")):
+        able.append("ansys")
+    if tools.get("gmsh") and tools.get("ccx"):
+        able.append("calculix")
+    return tuple(able)
 
 
 class Worker:
@@ -90,16 +110,36 @@ class Worker:
 
     def run(self) -> None:
         executor = services.default_executor()
-        solvers = _solvers()
         settings = get_settings()
+        tools = toolcheck.report(
+            executor=executor.name,
+            ansys_root=settings.ansys_root,
+            ansys_version=settings.ansys_version,
+        )
+        solvers = solvers_for(settings.simulation_solvers, executor=executor.name, tools=tools)
+        if solvers == ():
+            # **아무것도 못 돌리는 워커는 띄우지 않는다** — 떠 있으면 서버 화면에 「살아
+            # 있음」 으로 보이는데 아무 작업도 안 집는다. 까닭을 적고 끝낸다.
+            raise SystemExit(
+                "이 기계에서 돌릴 수 있는 솔버가 없습니다 — gmsh · ccx(CalculiX) 나 Ansys 를 "
+                "깔고 다시 띄우세요."
+            )
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
         logger.info(
             "워커 시작 (%s, 실행기 %s, 솔버 %s)",
             self.worker_id,
             executor.name,
-            ",".join(solvers) if solvers else "전부",
+            "전부" if solvers is None else ",".join(solvers) or "없음",
         )
+        if not settings.simulation_solvers.strip() and solvers is not None:
+            missing = [name for name in services.SOLVERS if name not in solvers]
+            if missing:
+                logger.warning(
+                    "%s 은 이 기계에 도구가 없어 집지 않습니다 — gmsh · ccx 를 깔거나 "
+                    "GMSH_BIN · CCX_BIN 으로 자리를 알려 주세요(Ansys 는 ANSYS_ROOT).",
+                    ",".join(missing),
+                )
         # **무엇을 집고 무엇이 깔렸나는 워커가 적는다** — 워커마다 환경 파일 · 이미지가 다르다.
         self.identity = {
             "hostname": socket.gethostname(),
@@ -107,11 +147,7 @@ class Worker:
             "version": version.current(),
             "executor": executor.name,
             "solvers": list(solvers or []),
-            "tools": toolcheck.report(
-                executor=executor.name,
-                ansys_root=settings.ansys_root,
-                ansys_version=settings.ansys_version,
-            ),
+            "tools": tools,
         }
         beater = threading.Thread(target=self._beat, name="worker-beat", daemon=True)
         beater.start()

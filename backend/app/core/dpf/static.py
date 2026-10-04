@@ -28,6 +28,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core import boundary
 from app.core.dpf import probes, shapes
 from app.core.spec import StaticSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -96,7 +97,7 @@ def extract(
         **({"probes": spots} if spots else {}),
         **({"reactions": forces} if forces else {}),
         "max_von_mises": stress,
-        "material": spec.material.name,
+        "material": boundary.used_material(workdir, spec),
     }
     if max_displacement <= 0:
         # **0 인 결과는 「해석이 됐다」 처럼 보인다.** 그림도 표도 멀쩡하다.
@@ -168,6 +169,11 @@ def _reactions(model: Any, mesh: Any, topology: dict[str, Any]) -> dict[str, lis
         return {}
     regions = topology.get("regions") or {}
     found: dict[str, list[float]] = {}
+    held = _rigid_hold(given, regions)
+    if held is not None:
+        total = probes.total_reaction(model)
+        if total is not None:
+            found[held] = total
     for rule in given.constraints:
         if rule.kind != "displacement":
             continue
@@ -178,6 +184,23 @@ def _reactions(model: Any, mesh: Any, topology: dict[str, Any]) -> dict[str, lis
         if total is not None:
             found[rule.region] = total
     return found
+
+
+def _rigid_hold(given: Any, regions: dict[str, Any]) -> str | None:
+    """**강체 파트를 붙든 구속**의 영역 — 그것이 모델의 유일한 구속일 때만.
+
+    강체 면의 구속은 강체의 기준점(무게중심의 `MASS21`)에 걸려서, 그 면 위 절점에서 반력을 찾을
+    수 없다. 유일한 구속이면 모델 전체의 반력 합이 그 구속이 버틴 힘이다(CalculiX 쪽은 강체
+    절점 전부의 합 — 같은 뜻이다). 구속이 여럿이면 가를 수 없어 내지 않는다.
+    """
+    if len(given.constraints) != 1 or not given.rigid:
+        return None
+    rule = given.constraints[0]
+    if rule.kind not in ("fixed_support", "remote_displacement"):
+        return None
+    rows = regions.get(rule.region) or []
+    bodies = {str(one.get("body") or "") for one in rows if isinstance(one, dict)}
+    return str(rule.region) if bodies and bodies <= given.rigid else None
 
 
 def _von_mises(model: Any) -> tuple[float | None, str]:

@@ -663,3 +663,191 @@ def test_메시를_줄이면_1차_주파수가_수렴하고_GCI_가_그만큼을
     assert verdict.status == "converged", (levels, verdict)
     assert verdict.gci is not None and verdict.gci < 0.01
     assert verdict.extrapolated == pytest.approx(levels[-1][1], rel=0.01)
+
+
+# --- 파트별 설정(CompCore body_settings, 2026-10-04) -----------------------------
+
+
+def _side_shake_with(
+    work: Path,
+    settings: list[dict[str, Any]],
+    *,
+    free: bool = False,
+    aluminum_plate: bool = False,
+) -> None:
+    """`조건_측면가진`(강판 위 알루미늄 기둥, 바닥 고정)에 파트별 설정을 얹는다."""
+    work.mkdir(parents=True, exist_ok=True)
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    payload["conditions"]["body_settings"] = settings
+    if free:
+        payload["conditions"]["constraints"] = []
+    if aluminum_plate:
+        # 재료를 맞바꾼다 — 판이 알루미늄, 기둥이 강. **강체 질량이 CAD 밀도를 따르나**를 본다.
+        for row in payload["conditions"]["materials"]:
+            row["apply_to"] = ["기둥"] if row["apply_to"] == ["받침판"] else ["받침판"]
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _first(work: Path) -> float:
+    result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    return float(next(one["frequency_hz"] for one in result["modes"] if not one["rigid_body"]))
+
+
+def test_파트별_설정_강체_제외_파트_메시(ready: None, tmp_path: Path) -> None:
+    """**강체 · 해석 제외 · 파트 메시가 물리대로 움직이나.**
+
+    실측(2026-10-04, 요소 5 mm): 기본 1,263.5 Hz · 받침판 강체 1,289.0 Hz(받침이 굳어 오른다) ·
+    기둥 제외 76 kHz(바닥이 고정된 판만 남는다, 질량은 판 0.5024 kg) · 기둥 1.5 mm 1,257.3 Hz
+    (절점 6,401 → 28,217, 메시가 고와져 조금 내려간다).
+    """
+    base = tmp_path / "base"
+    _side_shake_with(base, [])
+    plain = _run(base, SPEC)
+    plain_hz = _first(base)
+
+    rigid = tmp_path / "rigid"
+    _side_shake_with(rigid, [{"name": "받침판", "behavior": "rigid"}])
+    stiff = _run(rigid, SPEC)
+    assert stiff["rigid_bodies"] == "받침판"
+    assert "rigid:받침판" in stiff["constrained_regions"]
+    # 강체도 질량은 그대로다 — 요소를 남겨 둔다.
+    assert stiff["mass_kg"] == pytest.approx(plain["mass_kg"], rel=1e-3)
+    assert 1.005 < _first(rigid) / plain_hz < 1.05
+
+    off = tmp_path / "off"
+    _side_shake_with(off, [{"name": "기둥", "suppressed": True}])
+    alone = _run(off, SPEC)
+    assert alone["bodies"] == 1 and alone["suppressed_bodies"] == "기둥"
+    assert alone["mass_kg"] == pytest.approx(0.5024, rel=0.01)
+    assert _first(off) > 10 * plain_hz
+
+    fine = tmp_path / "fine"
+    _side_shake_with(fine, [{"name": "기둥", "mesh": {"element_size": 1.5}}])
+    dense = _run(fine, SPEC)
+    assert int(dense["nodes"]) > 2 * int(plain["nodes"])
+    assert _first(fine) == pytest.approx(plain_hz, rel=0.02)
+
+
+def test_중간면이_없는_쉘_파트는_멈춘다(ready: None, tmp_path: Path) -> None:
+    """**솔리드로 풀지 않는다** — 점 파일에 그 파트의 중간면이 없으면 까닭을 달고 멈춘다."""
+    _side_shake_with(tmp_path, [{"name": "기둥", "representation": "shell"}])
+    with pytest.raises(StageFailure) as caught:
+        _run(tmp_path, SPEC)
+    assert "쉘" in str(caught.value) and "기둥" in str(caught.value)
+
+
+@pytest.mark.ansys
+def test_두_솔버가_강체를_같게_푼다(ready: None, tmp_path: Path) -> None:
+    """**교차 검증 — 강체.** 알루미늄 받침판을 강체로, 구속 없이(자유-자유) 푼다.
+
+    Ansys 는 강체를 `MASS21` 한 점으로 보내고 질량을 Engineering Data(강)로 계산한다 — 우리가
+    밀도 비만큼 고친다(`mechanical/build.py` 의 `_rigid_mass`). 그 보정이 빠지면 판이 강의
+    질량(약 3배)으로 풀려 1차가 크게 내려간다. CalculiX 는 요소를 남기므로 CAD 밀도 그대로다.
+    """
+    import os
+
+    from app.core import executors
+    from app.core.stages import StageContext
+
+    found: dict[str, float] = {}
+    for solver in ("calculix", "ansys"):
+        work = tmp_path / solver
+        _side_shake_with(
+            work, [{"name": "받침판", "behavior": "rigid"}], free=True, aluminum_plate=True
+        )
+        spec = {**SPEC, "solver": solver}
+        (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        if solver == "calculix":
+            _run(work, spec)
+        else:
+            runner = executors.resolve(
+                os.environ.get("ANSYS_TEST_EXECUTOR", "local"),
+                python=(
+                    Path(os.environ["ANSYS_TEST_PYTHON"])
+                    if os.environ.get("ANSYS_TEST_PYTHON")
+                    else None
+                ),
+            )
+            for stage in STAGES:
+                runner.run(StageContext(stage=stage, spec=spec, workdir=work))
+        found[solver] = _first(work)
+    assert found["calculix"] == pytest.approx(found["ansys"], rel=0.03), found
+
+
+# --- 쉘(CompCore v0.8.1 「조건_강체지그_쉘브래킷」) --------------------------------
+
+SHELL_BRACKET = FIXTURES / "doe" / "조건_강체지그_쉘브래킷"
+
+
+def _shell_point(work: Path, number: int, *, solid: bool = False) -> None:
+    """강체 지그블록 위 판금 브래킷(쉘) · 명판은 해석 제외. `solid` 면 브래킷을 솔리드로
+    (두께 방향 2겹 — 요소 t/2) 바꿔 견줄 기준을 만든다."""
+    work.mkdir(parents=True, exist_ok=True)
+    points = SHELL_BRACKET / "points"
+    shutil.copy(points / f"p{number:04d}.step", work / "input.step")
+    shutil.copy(points / f"p{number:04d}_mid.step", work / "input_mid.step")
+    payload = json.loads((points / f"p{number:04d}.json").read_text(encoding="utf-8"))
+    if solid:
+        for row in payload["conditions"]["body_settings"]:
+            if row["name"] == "브래킷":
+                row["representation"] = "solid"
+                row["mesh"]["element_size"] = (
+                    payload["midsurface"]["bodies"][0]["thickness"] / 2
+                )
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_쉘_브래킷이_손셈과_솔리드에_맞는다(ready: None, tmp_path: Path) -> None:
+    """**쉘이 제대로 들어갔나** — CompCore README 의 잣대 그대로.
+
+    실측(2026-10-04, 전역 5 mm · 브래킷 요소 t): 끝 처짐 t2 0.3223 · t3 0.0959 mm(비 3.36 —
+    손셈 3.4 ~ 3.7), 반력 66.0 · 64.5 N(= 0.05 MPa x 하중면 넓이), 솔리드(2겹) 0.3203 ·
+    0.0954 mm 와 0.6% 차이. 최대 상당응력 91.1 · 39.1 MPa(겉면 — 쉘을 펼쳐 읽는다, 비 2.33 ·
+    손셈 뿌리 응력 73 · 31 의 비 2.35).
+    """
+    spec = {"recipe": "static", "solver": "calculix", "mesh": {"element_size_mm": 5}}
+    found: dict[str, dict[str, Any]] = {}
+    for label, number, as_solid in (("t2", 1, False), ("t3", 2, False), ("t2_solid", 1, True)):
+        work = tmp_path / label
+        _shell_point(work, number, solid=as_solid)
+        summary = _run(work, spec)
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        found[label] = {**result, "summary": summary}
+
+    t2, t3, solid = found["t2"], found["t3"], found["t2_solid"]
+    assert t2["summary"]["shell_bodies"] == "브래킷 2 mm"
+    assert t2["summary"]["rigid_bodies"] == "지그블록"
+    assert t2["summary"]["suppressed_bodies"] == "명판"
+    # 반력은 하중면 넓이 그대로 — 1% 안.
+    assert t2["reactions"]["블록 바닥"][0] == pytest.approx(66.0, rel=0.01)
+    assert t3["reactions"]["블록 바닥"][0] == pytest.approx(64.5, rel=0.01)
+    # 질량은 쉘(넓이 x 두께)로 세도 솔리드와 같다.
+    assert t2["summary"]["mass_kg"] == pytest.approx(solid["summary"]["mass_kg"], rel=0.01)
+    # 처짐 — 솔리드와 2% 안, 두 두께의 비는 1/t³ 언저리.
+    assert t2["max_displacement"] == pytest.approx(solid["max_displacement"], rel=0.02)
+    assert 3.2 < t2["max_displacement"] / t3["max_displacement"] < 3.7
+    # 응력은 **겉면**이다 — 중간면에서 읽으면 굽힘이 빠져 30 MPa 언저리로 나온다.
+    assert t2["max_von_mises"] > 60
+    assert 2.1 < t2["max_von_mises"] / t3["max_von_mises"] < 2.6
+
+
+def test_쉘_브래킷의_고유진동수가_솔리드와_맞는다(ready: None, tmp_path: Path) -> None:
+    """질량 · 강성이 함께 맞아야 맞는다. 실측: 1차 쉘 620.4 · 솔리드 622.7 Hz(0.4%)."""
+    spec = {
+        "recipe": "modal",
+        "solver": "calculix",
+        "mesh": {"element_size_mm": 5},
+        "modes": 4,
+    }
+    first: dict[bool, float] = {}
+    for solid in (False, True):
+        work = tmp_path / ("solid" if solid else "shell")
+        _shell_point(work, 1, solid=solid)
+        _run(work, spec)
+        first[solid] = _first(work)
+    assert first[False] == pytest.approx(first[True], rel=0.02)

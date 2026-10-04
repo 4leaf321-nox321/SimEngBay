@@ -61,6 +61,139 @@ class Plan:
     local_frames: dict[int, tuple[list[float], list[float]]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RigidBody:
+    """강체로 푸는 파트 하나 — 그 절점이 **기준점 하나를 따라** 움직인다(`*RIGID BODY`).
+
+    요소는 남긴다 — 질량 · 관성이 거기서 나온다(Ansys 는 같은 몫을 `MASS21` 한 점에 싣는다).
+    기준점은 무게중심이고, 회전 절점은 같은 자리에 겹쳐 둔다(CalculiX 는 회전 절점의 이동
+    자유도로 회전을 나른다). 두 점은 `NALL` 밖에 두어 결과 파일에 안 나온다 — 회전 절점의
+    「변위」 는 각(라디안)이라, 섞이면 최대 변위가 그 값을 집는다.
+    """
+
+    part: str
+    """CAD 파트 이름(사람의 말)."""
+    name: str
+    """절점 집합 이름(덱의 말, ASCII)."""
+    nodes: frozenset[int]
+    ref: int
+    rot: int
+    point: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class ShellSection:
+    """쉘 파트 하나 — 중간면의 삼각형과 두께 · 물성(`*SHELL SECTION`)."""
+
+    part: str
+    name: str
+    """요소 집합 이름(덱의 말, ASCII)."""
+    elements: list[tuple[int, list[int]]]
+    thickness: float
+    """mm."""
+    material: Material
+
+
+@dataclass(frozen=True)
+class Tie:
+    """쉘을 솔리드에 붙인다(`*TIE`) — CAD 가 선언한 본딩 접촉 하나.
+
+    중간면은 맞닿은 솔리드 면에서 **두께의 절반만큼 떨어져** 있다. 그래서 절점을 나눠 쓸 수
+    없고, 쉘 쪽 절점(종)을 솔리드 쪽 요소면(주)에 거리 한도 안에서 묶는다.
+    """
+
+    contact: str
+    name: str
+    slave_nodes: frozenset[int]
+    master_faces: list[tuple[int, str]]
+    tolerance: float
+    """mm — 두께의 절반보다 넉넉해야 한다."""
+
+
+#: 쉘 요소에 거는 압력의 **부호를 뒤집는** 표시(`_load_rows`). ccx 의 쉘 압력은 양수면 요소
+#: 법선(모서리 1-2 x 1-3) **쪽으로** 민다 — 솔리드 면과 반대다(실측 2026-10-04: 바깥 법선과
+#: 같은 쪽 요소에 양수를 걸었더니 브래킷이 +X 로 휘었다). 그래서 법선이 바깥 법선과 같은 쪽인
+#: 요소에 부호를 뒤집어 건다.
+SHELL_PRESSURE = "P"
+SHELL_PRESSURE_FLIPPED = "P-"
+
+
+def rigid_bodies(
+    nodes: dict[int, tuple[float, float, float]],
+    solids: dict[int, list[tuple[int, list[int]]]],
+    picked: dict[str, int],
+    centroids: dict[int, tuple[float, float, float]],
+) -> list[RigidBody]:
+    """파트 이름 → 솔리드 번호 를 강체 묶음으로. 기준점 번호는 메시 절점 다음부터 쓴다."""
+    top = max(nodes) if nodes else 0
+    made: list[RigidBody] = []
+    for index, (part, entity) in enumerate(sorted(picked.items(), key=lambda pair: pair[1])):
+        members = frozenset(node for _, ids in solids.get(entity, []) for node in ids)
+        point = centroids.get(entity)
+        if point is None and members:
+            point = tuple(  # type: ignore[assignment]
+                sum(nodes[node][axis] for node in members) / len(members) for axis in range(3)
+            )
+        made.append(
+            RigidBody(
+                part=part,
+                name=f"RIGID{index + 1}",
+                nodes=members,
+                ref=top + 2 * index + 1,
+                rot=top + 2 * index + 2,
+                point=point or (0.0, 0.0, 0.0),
+            )
+        )
+    return made
+
+
+def _bound(rigid: tuple[RigidBody, ...] | list[RigidBody]) -> set[int]:
+    """강체가 쥔 절점 전부 — 거기에는 구속 · 하중을 따로 걸지 않는다."""
+    return {node for body in rigid for node in body.nodes}
+
+
+def _on_rigid(
+    load: condition_model.Load,
+    load_nodes: dict[str, set[int]],
+    rigid: tuple[RigidBody, ...] | list[RigidBody],
+) -> condition_model.Note | None:
+    """강체 파트의 면에 건 하중이면 거절한다 — Ansys 도 그 하중을 받지 않는다(실측
+    2026-10-04: 강체 면의 힘 · 압력이 `UnderDefined`)."""
+    members = load_nodes.get(load.region) or set()
+    owner = next((body for body in rigid if members and members <= body.nodes), None)
+    if owner is None:
+        return None
+    return condition_model.Note(
+        f"하중 「{load.name}」({load.kind})",
+        f"강체 파트 「{owner.part}」 의 면에 건 하중은 아직 못 겁니다 — 그 파트를 변형체로 "
+        "두세요.",
+    )
+
+
+def _finish(
+    lines: list[str],
+    rigid: tuple[RigidBody, ...] | list[RigidBody],
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+) -> str:
+    """덱 글을 맺는다. 강체가 있으면 결과를 **메시 절점(`NALL`)만** 내게 한다 — 기준점 ·
+    회전 절점이 결과에 섞이지 않게(`RigidBody` 참고). 쉘이 있으면 **펼친 채로**(`OUTPUT=3D`)
+    낸다 — `OUTPUT=2D` 는 응력을 중간면에서 내서 굽힘이 빠진다."""
+    if shells:
+        # 펼친 채로 낸다 — 겉면 응력이 거기 있다. 원래 쉘 절점으로 접는 일은 결과를 읽을 때
+        # 한다(`frd.fold_shells`). 그때 우리 메시 밖의 절점(펼친 것 · 강체 기준점)은 빠진다.
+        lines = [
+            "*NODE FILE, OUTPUT=3D"
+            if line == "*NODE FILE"
+            else "*EL FILE, OUTPUT=3D"
+            if line == "*EL FILE"
+            else line
+            for line in lines
+        ]
+    elif rigid:
+        lines = ["*NODE FILE, NSET=NALL" if line == "*NODE FILE" else line for line in lines]
+    return "\n".join(lines) + "\n"
+
+
 def write_modal(
     *,
     nodes: dict[int, tuple[float, float, float]],
@@ -75,6 +208,9 @@ def write_modal(
     element_size_mm: float = 1.0,
     modes: int,
     second_order: bool,
+    rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    ties: tuple[Tie, ...] | list[Tie] = (),
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
 
@@ -86,8 +222,8 @@ def write_modal(
     (그 매칭은 `app/core/regions` 가 하고, 솔버를 모른다).
     """
     plan = Plan()
-    lines = _head(nodes, solids, body_of, materials, plan, second_order)
-    lines += _holds(held_nodes, given, plan, shapes)
+    lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
+    lines += _holds(held_nodes, given, plan, shapes, rigid)
 
     if contact_faces is None:
         # 메시를 쪼개 붙였다(절점 공유) — 그 사실을 적어 둔다. 조용히 두면 사람은 마찰이
@@ -156,8 +292,21 @@ def write_modal(
         "U",
         "*END STEP",
     ]
-    plan.text = "\n".join(lines) + "\n"
+    plan.text = _finish(lines, rigid, shells)
     return plan
+
+
+def _material_lines(name: str, material: Material) -> list[str]:
+    """`*MATERIAL` 한 벌 — 단면(솔리드 · 쉘)은 부른 쪽이 붙인다."""
+    modulus_mpa = material.youngs_modulus_pa / units.STRESS_UNITS["mpa"]
+    density_tonne_mm3 = material.density_kg_m3 / units.DENSITY_UNITS["tonne/mm3"]
+    return [
+        f"*MATERIAL, NAME={name}",
+        "*ELASTIC",
+        f"{modulus_mpa:.8g}, {material.poisson_ratio:.6g}",
+        "*DENSITY",
+        f"{density_tonne_mm3:.8g}",
+    ]
 
 
 def _material_block(entity: int, material: Material) -> list[str]:
@@ -217,6 +366,9 @@ def write_static(
     contact_faces: dict[str, list[tuple[int, str]]] | None = None,
     element_size_mm: float = 1.0,
     second_order: bool,
+    rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    ties: tuple[Tie, ...] | list[Tie] = (),
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
     「해석이 됐다」 처럼 보인다. 그래서 하중이 없으면 거절한다.
@@ -225,8 +377,8 @@ def write_static(
     {절점: 분담 면적} 이고 힘을 나눌 때 쓴다 — 부른 쪽(`build.py`)이 메시에서 만들어 준다.
     """
     plan = Plan()
-    lines = _head(nodes, solids, body_of, materials, plan, second_order)
-    lines += _holds(held_nodes, given, plan, shapes)
+    lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
+    lines += _holds(held_nodes, given, plan, shapes, rigid)
     nonlinear = False
     if contact_faces is not None:
         nonlinear = any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
@@ -254,6 +406,10 @@ def write_static(
         lines.append("0.1, 1.0")
     applied_loads = 0
     for load in given.loads:
+        refused = _on_rigid(load, load_nodes, rigid)
+        if refused is not None:
+            plan.refused.append(refused)
+            continue
         rows, why = _load_rows(
             load, load_faces, load_areas, load_nodes, nodes, shapes, plan.local_frames
         )
@@ -298,7 +454,7 @@ def write_static(
         "S, E",
         "*END STEP",
     ]
-    plan.text = "\n".join(lines) + "\n"
+    plan.text = _finish(lines, rigid, shells)
     return plan
 
 
@@ -361,6 +517,9 @@ def _head(
     materials: list[Material],
     plan: Plan,
     second_order: bool,
+    rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    ties: tuple[Tie, ...] | list[Tie] = (),
 ) -> list[str]:
     """절점 · 요소 · 물성 — 레시피가 달라도 같은 부분이다."""
     lines: list[str] = [
@@ -382,6 +541,46 @@ def _head(
                 continue
             lines += _material_block(found, one)
             plan.applied.append(f"material:{body}")
+    for held in rigid:
+        x, y, z = held.point
+        # 기준점 · 회전 절점은 **`NALL` 밖**에 둔다(`RigidBody` 참고).
+        lines += [
+            "*NODE",
+            f"{held.ref}, {x:.6f}, {y:.6f}, {z:.6f}",
+            f"{held.rot}, {x:.6f}, {y:.6f}, {z:.6f}",
+        ]
+        lines += _nset(held.name, set(held.nodes))
+        lines.append(
+            f"*RIGID BODY, NSET={held.name}, REF NODE={held.ref}, ROT NODE={held.rot}"
+        )
+        plan.applied.append(f"rigid:{held.part}")
+        logger.info("강체 %s → 절점 %s · 기준점 %s", held.part, len(held.nodes), held.ref)
+    for index, sheet in enumerate(shells, start=1):
+        kind = "S6" if second_order else "S3"
+        lines.append(f"*ELEMENT, TYPE={kind}, ELSET={sheet.name}")
+        for number, ids in sheet.elements:
+            lines.append(f"{number}, " + ", ".join(str(one) for one in ids))
+        material = f"MS{index}"
+        lines += _material_lines(material, sheet.material)
+        lines += [
+            f"*SHELL SECTION, ELSET={sheet.name}, MATERIAL={material}",
+            f"{sheet.thickness:.8g}",
+        ]
+        plan.applied.append(f"shell:{sheet.part}")
+        logger.info(
+            "쉘 %s → 요소 %s · 두께 %s mm", sheet.part, len(sheet.elements), sheet.thickness
+        )
+    for tie in ties:
+        lines += _nset(f"{tie.name}S", set(tie.slave_nodes))
+        lines += [f"*SURFACE, NAME={tie.name}S, TYPE=NODE", f"{tie.name}S"]
+        # 면 정의는 `S1` 표기다(압력의 `P1` 과 같은 자리) — 섞으면 ccx 가 못 읽는다.
+        lines.append(f"*SURFACE, NAME={tie.name}M, TYPE=ELEMENT")
+        lines += [f"{element}, {face.replace('P', 'S')}" for element, face in tie.master_faces]
+        lines += [
+            f"*TIE, NAME={tie.name}, POSITION TOLERANCE={tie.tolerance:.6g}, ADJUST=NO",
+            f"{tie.name}S, {tie.name}M",
+        ]
+        plan.applied.append(f"tie:{tie.contact}")
     return lines
 
 
@@ -390,14 +589,36 @@ def _holds(
     given: condition_model.Conditions,
     plan: Plan,
     shapes: dict[str, dict[str, Any]] | None = None,
+    rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
 ) -> list[str]:
     """구속 — 레시피가 달라도 같은 부분이다.
 
     `shapes` 는 영역 이름 → **CAD 가 보낸 지문**이다(원통이면 `axis` · `centroid`). 축은
     메시에서 되맞출 수도 있지만 **선언이 정본이다** — 그쪽이 사람이 의도한 축이다.
+
+    **강체 파트의 면**이면 그 기준점을 묶는다 — 강체가 쥔 절점에 따로 `*BOUNDARY` 를 걸면
+    두 번 묶여 ccx 가 거절한다. 그래서 고정 지지만 받는다(Ansys 와 같다 — 그쪽은 원격
+    변위로 건다). 변형체 면이 강체와 맞닿은 절점도 강체가 쥐므로 빼고 건다.
     """
     lines: list[str] = []
+    bound = _bound(rigid)
     for index, rule in enumerate(given.constraints):
+        on_rigid = next(
+            (body for body in rigid if (held_nodes.get(rule.region) or set()) <= body.nodes),
+            None,
+        )
+        if on_rigid is not None and held_nodes.get(rule.region):
+            rows, why = _rigid_hold(index, rule, on_rigid)
+            if why is not None:
+                plan.refused.append(why)
+                continue
+            lines += rows
+            # **반력은 강체 절점 전부의 합으로 읽는다.** 기준점에만 모이지 않는다 — 쉘이 강체에
+            # 붙으면 ccx 가 그 몫을 강체 절점에 둔다(실측 2026-10-04: 기준점 0 · 강체 절점 합
+            # 66.0 N). 솔리드만 있을 때는 두 합이 같다(66.0 · 66.0).
+            plan.reaction_sets[rule.region] = on_rigid.name
+            plan.applied.append(f"{rule.kind}:{rule.region}")
+            continue
         if rule.kind not in SUPPORTED_CONSTRAINTS:
             plan.refused.append(
                 condition_model.Note(
@@ -414,6 +635,7 @@ def _holds(
                 )
             )
             continue
+        members = members - bound
         name = f"HOLD{index}"
         if rule.kind == "cylindrical":
             rows, why, frame = _cylindrical(
@@ -450,6 +672,50 @@ def _holds(
         lines += ["*BOUNDARY", f"{name}, 1, 3, 0.0"]
         plan.applied.append(f"{rule.kind}:{rule.region}")
     return lines
+
+
+def _rigid_hold(
+    index: int, rule: condition_model.Constraint, owner: RigidBody
+) -> tuple[list[str], condition_model.Note | None]:
+    """강체 파트 면의 구속 — **기준점 · 회전 절점**에 건다.
+
+    고정 지지는 여섯 자유도를 다 막는다. 원격 변위는 성분마다(`None` 자유 · 0 고정 · 그 밖은
+    그만큼) — 이동은 기준점, 회전은 회전 절점의 이동 자유도(라디안)다. 그 밖의 구속은 강체 면에
+    뜻이 없어 막는다(Ansys 도 같다).
+    """
+    what = f"구속 「{rule.name}」({rule.kind})"
+    if rule.kind == "fixed_support":
+        moves: tuple[float | None, ...] = (0.0, 0.0, 0.0)
+        turns: tuple[float | None, ...] = (0.0, 0.0, 0.0)
+    elif rule.kind == "remote_displacement":
+        if rule.cs not in condition_model.GLOBAL_FRAMES:
+            return [], condition_model.Note(
+                what,
+                f"좌표계 「{rule.cs}」 의 원격 변위는 아직 못 겁니다 — 솔버를 ansys 로 "
+                "바꾸세요.",
+            )
+        moves, turns = rule.components[:3], rule.rotations[:3]
+    else:
+        return [], condition_model.Note(
+            what,
+            f"강체 파트 「{owner.part}」 의 면에는 고정 지지 · 원격 변위만 걸 수 있습니다 — "
+            "그 파트를 변형체로 두세요.",
+        )
+    held = [
+        (owner.ref, dof, value)
+        for dof, value in enumerate(moves, start=1)
+        if value is not None
+    ] + [
+        (owner.rot, dof, math.radians(value))
+        for dof, value in enumerate(turns, start=1)
+        if value is not None
+    ]
+    if not held:
+        return [], condition_model.Note(what, "여섯 성분이 모두 자유라 구속이 아닙니다.")
+    name = f"HOLD{index}"
+    lines = ["*NSET, NSET=" + name, str(owner.ref), "*BOUNDARY"]
+    lines += [f"{node}, {dof}, {dof}, {value:.8g}" for node, dof, value in held]
+    return lines, None
 
 
 def _displacement(
@@ -579,6 +845,9 @@ def write_harmonic(
     plan_of: HarmonicPlan,
     modes: int,
     second_order: bool,
+    rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    ties: tuple[Tie, ...] | list[Tie] = (),
 ) -> Plan:
     """조화 응답 덱 — **한 파일에 두 단계다.**
 
@@ -591,8 +860,8 @@ def write_harmonic(
     응답이 끝없이 커지고, 그 큰 수는 그럴듯해 보인다.
     """
     plan = Plan()
-    lines = _head(nodes, solids, body_of, materials, plan, second_order)
-    lines += _holds(held_nodes, given, plan, shapes)
+    lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
+    lines += _holds(held_nodes, given, plan, shapes, rigid)
 
     # ① 모드를 푸고 남긴다.
     lines += [
@@ -618,6 +887,10 @@ def write_harmonic(
     ]
     applied_loads = 0
     for load in given.loads:
+        refused = _on_rigid(load, load_nodes, rigid)
+        if refused is not None:
+            plan.refused.append(refused)
+            continue
         rows, why = _load_rows(
             load, load_faces, load_areas, load_nodes, nodes, shapes, plan.local_frames
         )
@@ -646,7 +919,7 @@ def write_harmonic(
             condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
         )
     lines += ["*NODE FILE", "U", "*END STEP"]
-    plan.text = "\n".join(lines) + "\n"
+    plan.text = _finish(lines, rigid, shells)
     return plan
 
 
@@ -678,7 +951,13 @@ def _load_rows(
         )
         return [
             "*DLOAD",
-            *(f"{element}, {face}, {value:.8g}" for element, face in faces),
+            *(
+                # 쉘 요소는 면 하나다(`P`). 법선이 바깥 법선과 반대로 섰으면 부호를 뒤집는다.
+                f"{element}, {SHELL_PRESSURE}, {-value:.8g}"
+                if face == SHELL_PRESSURE_FLIPPED
+                else f"{element}, {face}, {value:.8g}"
+                for element, face in faces
+            ),
         ], None
 
     areas = load_areas.get(load.region) or {}

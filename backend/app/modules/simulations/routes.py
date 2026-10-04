@@ -23,6 +23,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.simulations import services
 from app.modules.simulations.schemas import (
+    ConditionsPreviewOut,
     ConvergenceOut,
     ConvergenceRequest,
     DoeImportOut,
@@ -59,10 +60,12 @@ def create(
     name: str | None = Form(default=None, max_length=120),
     upload_file: UploadFile = File(alias="file"),
     topology_file: UploadFile | None = File(default=None, alias="topology"),
+    midsurface_file: UploadFile | None = File(default=None, alias="midsurface"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SimulationOut:
-    """형상(STEP)과, 구속을 걸 거라면 CAD 가 보낸 `topology.json` 을 함께 받는다."""
+    """형상(STEP)과, 구속을 걸 거라면 CAD 가 보낸 `topology.json` 을 함께 받는다. 쉘 파트가
+    있으면 중간면 형상(`pNNNN_mid.step`)도 받는다."""
     try:
         spec_raw: Any = json.loads(spec)
     except json.JSONDecodeError as failure:
@@ -80,6 +83,7 @@ def create(
         filename=upload_file.filename or "input.step",
         stream=upload_file.file,
         topology=topology_file.file.read() if topology_file is not None else None,
+        midsurface=midsurface_file.file.read() if midsurface_file is not None else None,
     )
     return services.to_out(db, simulation)
 
@@ -212,9 +216,23 @@ def browse_doe(
     return services.browse_doe(path)
 
 
+@router.post("/conditions/preview", response_model=ConditionsPreviewOut)
+def preview_conditions(
+    recipe: str | None = Form(default=None),
+    topology_file: UploadFile = File(alias="file"),
+    user: User = Depends(current_user),
+) -> ConditionsPreviewOut:
+    """CAD 점 파일 한 장을 **작업을 만들기 전에** 읽어 준다 — 영역 · 물성 · 해석 설정과, 그
+    해석 종류에서 조건이 어떻게 다뤄지나. 저장하지 않는다."""
+    return services.preview_conditions(
+        topology_file.file.read(services.MAX_TOPOLOGY_BYTES + 1), recipe=recipe
+    )
+
+
 @router.get("/doe/preview", response_model=DoePreviewOut)
 def preview_doe(
     path: str,
+    recipe: str | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DoePreviewOut:
@@ -223,7 +241,7 @@ def preview_doe(
     폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 파일을 올리는 것이 아니다 —
     설계점 200개면 STEP 만 수십 MB 다.
     """
-    return services.preview_doe(path)
+    return services.preview_doe(path, recipe=recipe)
 
 
 @router.post("/doe/import", response_model=DoeImportOut, status_code=201)

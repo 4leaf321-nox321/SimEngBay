@@ -14,19 +14,20 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
 from app.core import materials as material_model
 from app.core import units
-from app.core.bodies import match_bodies
+from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import deck as deck_writer
-from app.core.calculix.mesh import build_mesh, element_faces, tributary_areas
+from app.core.calculix.mesh import build_mesh, element_faces, probe_volumes, tributary_areas
 from app.core.harmonic import harmonic_plan
 from app.core.regions import match_regions
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
-from app.core.stages import ArtifactSpec, StageFailure, StageResult
+from app.core.stages import MIDSURFACE_NAME, ArtifactSpec, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,18 @@ def build(
     )
     # 1차 통과도 **같은 쪼개기 규칙**을 따른다 — 안 그러면 접합면 두 장이 하나로 합쳐져서 한쪽
     # 면에 걸린 메시 힌트가 「법선이 180도 틀어져 있다」 로 빠진다(실측 2026-10-03).
+    # **파트별 설정** — 뺄 파트 · 파트 크기는 메시 전에 정한다(`mesh.py` 머리말).
+    layout = _layout(
+        step,
+        workdir,
+        topology,
+        given,
+        system,
+        second_order,
+        timeout_seconds,
+        fragment=not use_contact,
+        size=size,
+    )
     local = _local_sizes(
         step,
         workdir,
@@ -99,6 +112,7 @@ def build(
         second_order,
         timeout_seconds,
         fragment=not use_contact,
+        layout=layout,
     )
     mesh = build_mesh(
         step,
@@ -108,6 +122,10 @@ def build(
         timeout_seconds=timeout_seconds,
         local_sizes=local,
         fragment=not use_contact,
+        removed=layout.removed,
+        volume_sizes=layout.sizes,
+        shell_step=layout.shell_step,
+        shell_sizes=layout.shell_sizes,
     )
     logger.info(
         "메시: 절점 %s · 요소 %s · 면 %s · 솔리드 %s",
@@ -117,7 +135,23 @@ def build(
         len(mesh.solids),
     )
 
-    body_of, materials, material_from = _materials(spec, topology, system, mesh)
+    # 뺀 파트는 메시에 없다 — 짝짓기 · 물성은 **남은 파트로만** 본다.
+    kept = without(topology, given.suppressed | set(given.shells))
+    body_of, materials, material_from = _materials(spec, kept, system, mesh)
+    rigid = _rigid(kept, given, mesh)
+    if rigid and use_contact:
+        _no_contact_on_rigid(topology, given, mesh, rigid)
+    # **쉘 파트의 영역은 중간면에서 찾는다**(지문의 `mid`) — 뒤의 짝짓기가 모두 이 판을 본다.
+    topology = (
+        condition_model.shell_view(topology, set(given.shells)) if topology else topology
+    )
+    shells = _shell_sections(spec, kept, system, given, layout, mesh)
+    ties, rigid, tied = _ties(topology, given, mesh, shells, rigid)
+    if tied:
+        # 쉘을 잇는 접촉은 따로 건다(`*TIE` · 강체) — 덱의 「절점 공유로 붙였다」 줄에서 뺀다.
+        given = replace(
+            given, contacts=[one for one in given.contacts if one.name not in tied]
+        )
     held = _held_nodes(topology, given, mesh)
     constrained = plan_constrained(given, spec)
     shapes = _region_shapes(topology)
@@ -138,6 +172,9 @@ def build(
             plan_of=shake,
             modes=spec.modes,
             second_order=mesh.second_order,
+            rigid=rigid,
+            shells=shells,
+            ties=ties,
         )
     elif isinstance(spec, StaticSpec):
         places, areas, faces = _load_places(topology, given, mesh)
@@ -155,6 +192,9 @@ def build(
             contact_faces=_contact_faces(topology, given, mesh) if use_contact else None,
             element_size_mm=size,
             second_order=mesh.second_order,
+            rigid=rigid,
+            shells=shells,
+            ties=ties,
         )
     else:
         preload: list[str] | None = None
@@ -178,6 +218,9 @@ def build(
                 contact_faces=contact_faces,
                 element_size_mm=size,
                 second_order=mesh.second_order,
+                rigid=rigid,
+                shells=shells,
+                ties=ties,
             )
             preload = ahead.load_rows or None
         plan = deck_writer.write_modal(
@@ -195,7 +238,11 @@ def build(
             # 수가 모자라게 나온다(Ansys 쪽과 같은 규칙).
             modes=spec.modes + (0 if constrained else RIGID_BODY_MODES),
             second_order=mesh.second_order,
+            rigid=rigid,
+            shells=shells,
+            ties=ties,
         )
+    plan.skipped += layout.skipped
     if plan.refused:
         # **못 거는 조건은 조용히 빼지 않는다.** 그대로 풀면 구속 없는 해석이 끝까지 돌고,
         # 그 결과는 0 Hz 여섯 개를 달고 나온다.
@@ -220,6 +267,14 @@ def build(
     # **측정점이 어느 바디의 것인가** — 같은 자리에 두 바디의 꼭짓점이 겹치면(이음 입구) 바디로
     # 갈라야 미끄럼을 잴 수 있다. 추출이 그 바디의 절점 안에서만 가장 가까운 것을 찾는다.
     boundary["bodies"] = {name: entity for name, entity in body_of.items()}
+    if shells:
+        # **결과를 읽을 때 쉘을 접는다**(`frd.read_folded`) — 펼친 절점은 두께의 절반 안이다.
+        boundary["shells"] = {
+            "surfaces": sorted(layout.shell_parts),
+            "reach": round(0.55 * max(one.thickness for one in shells), 6),
+        }
+    # **실제로 붙인 물성 이름** — 결과에 스펙 이름을 적으면 CAD 물성으로 푼 것을 숨긴다.
+    boundary["material"] = " · ".join(dict.fromkeys(one.name for one in materials))
     if isinstance(spec, HarmonicSpec):
         # **실제로 쓴 감쇠비 · 범위 · 점 수.** 결과가 스펙 값을 적으면 화면이 거짓말을 한다 —
         # 봉우리 높이는 1/2ζ 로 읽히기 때문이다(Ansys 쪽과 같은 규칙).
@@ -232,11 +287,28 @@ def build(
         json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
     mass = _mass_kg(materials, body_of, mesh)
+    if shells:
+        mass = round((mass or 0.0) + _shell_mass(shells, mesh.nodes), 4)
     return StageResult(
         artifacts=[ArtifactSpec("dat", path)],
         summary={
             "solver": "calculix",
             "bodies": len(mesh.solids),
+            **(
+                {"suppressed_bodies": " · ".join(sorted(given.suppressed))}
+                if layout.removed
+                else {}
+            ),
+            **({"rigid_bodies": " · ".join(one.part for one in rigid)} if rigid else {}),
+            **(
+                {
+                    "shell_bodies": " · ".join(
+                        f"{one.part} {one.thickness:g} mm" for one in shells
+                    )
+                }
+                if shells
+                else {}
+            ),
             "nodes": len(mesh.nodes),
             "elements": mesh.element_count,
             **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
@@ -301,9 +373,19 @@ def _declared_conditions(
     if not topology or spec.conditions_from != "cad":
         return condition_model.Conditions()
     try:
-        return condition_model.read(topology, recipe=spec.recipe)
+        found = condition_model.read(topology, recipe=spec.recipe)
     except ValueError as failure:
         raise StageFailure("internal", f"조건을 읽지 못했습니다: {failure}") from failure
+    if found.refused:
+        # **못 거는 조건이 있으면 멈춘다** — Ansys 경로와 같다. 전에는 여기서 안 봐서 모르는
+        # 구속 · 점 파일에 없는 영역이 **조용히 빠진 채** 풀렸다(2026-10-04 에 들켰다).
+        raise StageFailure(
+            "region_unresolved",
+            "CAD 가 보낸 조건 중 아직 걸 수 없는 것이 있습니다: "
+            + " · ".join(f"{one.what} — {one.why}" for one in found.refused),
+            details={"refused": [{"what": one.what, "why": one.why} for one in found.refused]},
+        )
+    return found
 
 
 def _materials(
@@ -312,33 +394,76 @@ def _materials(
     system: units.UnitSystem,
     mesh: Any,
 ) -> tuple[dict[str, int], list[material_model.Material], str]:
-    """바디마다 물성 — **CAD 가 보낸 것이 먼저**고, 없으면 스펙의 한 벌을 전체에 건다."""
+    """바디마다 물성 — **CAD 가 보낸 것이 먼저**고, 없으면 스펙의 한 벌을 전체에 건다.
+
+    규칙은 Ansys 경로(`mechanical/build.py` 의 `_apply_material`)와 같다 — 같은 폴더를 두
+    솔버로 풀면 같은 바디에 같은 물성이 붙어야 한다. **솔리드마다 물성이 꼭 하나 붙는다**:
+    못 붙이면 멈춘다. 덱에서 빠진 솔리드는 오류 없이 사라지고, 그 결과는 그럴듯하게 틀린다.
+    """
+    found: list[material_model.Material] = []
     if topology and spec.material_from == "cad":
         try:
             found = material_model.read(topology, system)
         except material_model.MaterialProblem as failure:
             raise StageFailure("internal", str(failure)) from failure
-        if found:
-            matched = match_bodies(topology, mesh.bodies)
-            if matched.failures:
-                raise StageFailure(
-                    "internal",
-                    "메시의 솔리드와 CAD 바디를 짝짓지 못했습니다: "
-                    + " · ".join(matched.failures),
-                )
-            return matched.bodies, found, "cad"
+    solids = sorted(mesh.solids)
+    matched = match_bodies(topology, mesh.bodies) if topology else None
+    # **짝지은 이름을 쓴다** — 측정점이 그 이름으로 바디를 가른다(`probes.locate`). 못 짝지은
+    # 솔리드는 번호로 부른다.
+    name_of = {entity: name for name, entity in (matched.bodies if matched else {}).items()}
 
-    # 스펙 물성 — 솔리드 전부에 같은 것을 건다. 이름은 짝짓지 않아도 된다.
-    one = material_model.Material(
-        name=spec.material.name,
-        youngs_modulus_pa=spec.material.youngs_modulus_gpa * 1e9,
-        poisson_ratio=spec.material.poisson_ratio,
-        density_kg_m3=spec.material.density_kg_m3,
-        bodies=tuple(f"solid{entity}" for entity in sorted(mesh.solids)),
-        source="spec",
-    )
-    body_of = {f"solid{entity}": entity for entity in sorted(mesh.solids)}
-    return body_of, [one], "spec"
+    def key(entity: int) -> str:
+        return name_of.get(entity) or f"solid{entity}"
+
+    body_of = {key(entity): entity for entity in solids}
+    if not found:
+        if spec.material is None:
+            raise StageFailure(
+                "internal",
+                "물성이 없습니다 — CAD 가 물성을 보내지 않았고 스펙에도 없습니다.",
+            )
+        # 스펙 물성 — 솔리드 전부에 같은 것을 건다.
+        one = material_model.Material(
+            name=spec.material.name,
+            youngs_modulus_pa=spec.material.youngs_modulus_gpa * 1e9,
+            poisson_ratio=spec.material.poisson_ratio,
+            density_kg_m3=spec.material.density_kg_m3,
+            bodies=tuple(body_of),
+            source="spec",
+        )
+        return body_of, [one], "spec"
+
+    if len(found) == 1 and (found[0].every_body or len(solids) == 1):
+        # 한 벌이면 짝짓지 않아도 모두에 붙는다(Ansys 경로와 같다).
+        return body_of, [replace(found[0], bodies=tuple(body_of))], "cad"
+
+    # **파트마다 다른 물성** — 부피 · 무게중심으로 짝지은 이름으로 찾는다.
+    if matched is None or matched.failures:
+        raise StageFailure(
+            "internal",
+            "메시의 솔리드와 CAD 바디를 짝짓지 못했습니다: "
+            + " · ".join(matched.failures if matched else ["점 파일이 없습니다"]),
+        )
+    members: dict[int, list[str]] = {}
+    for entity in solids:
+        name = name_of.get(entity, "")
+        chosen = material_model.for_body(found, name) if name else None
+        if chosen is None:
+            raise StageFailure(
+                "internal",
+                f"솔리드 {entity}"
+                + (f"({name})" if name else "")
+                + " 에 붙일 물성이 없습니다 — CAD 가 이 파트에 재료를 지정하지 않았습니다.",
+                details={
+                    "bodies": list(matched.bodies),
+                    "materials": [one.name for one in found],
+                },
+            )
+        members.setdefault(found.index(chosen), []).append(key(entity))
+    made = [
+        replace(found[index], bodies=tuple(names)) for index, names in sorted(members.items())
+    ]
+    return body_of, made, "cad"
 
 
 def _held_nodes(
@@ -401,6 +526,387 @@ def _global_size(
     )
 
 
+@dataclass
+class _Layout:
+    """파트별 설정을 메시에 옮긴 것 — gmsh 부피 번호로."""
+
+    removed: frozenset[int] = frozenset()
+    """해석에서 뺄 부피."""
+    sizes: dict[int, float] = field(default_factory=dict)
+    """부피 → 파트 요소 크기(mm)."""
+    shell_step: Path | None = None
+    """중간면 형상 — 쉘 파트가 있을 때만."""
+    shell_sizes: dict[int, float] = field(default_factory=dict)
+    """중간면의 면 번호 → 요소 크기(mm)."""
+    shell_parts: dict[int, str] = field(default_factory=dict)
+    """중간면의 면 번호 → 쉘 파트 이름."""
+    skipped: list[condition_model.Note] = field(default_factory=list)
+    """CalculiX 가 못 따르는 파트 메시 칸 — 바람이므로 멈추지 않고 적는다."""
+
+
+def _layout(
+    step: Path,
+    workdir: Path,
+    topology: dict[str, Any],
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    second_order: bool,
+    timeout_seconds: int,
+    *,
+    fragment: bool = True,
+    size: float = 5.0,
+) -> _Layout:
+    """파트별 설정 → **뺄 부피 · 부피별 크기**. 메시 전에 gmsh 로 부피를 재서 짝짓는다
+    (`probe_volumes`). 뺄 것도 크기도 없으면 그 통과를 건너뛴다."""
+    made = _Layout()
+    global_order = "quadratic" if second_order else "linear"
+    whole = given.whole_mesh
+    if whole is not None and whole.method not in ("", "automatic", "tetrahedrons"):
+        made.skipped.append(
+            condition_model.Note(
+                f"메시 「전체」 요소 형상({whole.method})",
+                "CalculiX 경로(gmsh)는 사면체만 만듭니다 — 사면체로 풀었습니다.",
+            )
+        )
+    order_note = condition_model.whole_order_note(given, global_order)
+    if order_note is not None:
+        made.skipped.append(order_note)
+    for one in given.body_settings:
+        if one.suppressed or one.rigid:
+            continue
+        if one.method not in ("automatic", "tetrahedrons"):
+            made.skipped.append(
+                condition_model.Note(
+                    f"파트 「{one.name}」 요소 형상({one.method})",
+                    "CalculiX 경로(gmsh)는 사면체만 만듭니다 — 사면체로 풀었습니다.",
+                )
+            )
+        if one.order not in ("program_controlled", global_order):
+            made.skipped.append(
+                condition_model.Note(
+                    f"파트 「{one.name}」 요소 차수({one.order})",
+                    "CalculiX 경로는 파트마다 차수를 달리하지 못합니다 — 전체 차수"
+                    f"({'2차' if second_order else '1차'})로 풀었습니다.",
+                )
+            )
+    wanted = [
+        one
+        for one in given.body_settings
+        if one.suppressed or one.shell or one.element_size is not None
+    ]
+    if not wanted:
+        return made
+    shells = given.shells
+    if shells:
+        made.shell_step = workdir / MIDSURFACE_NAME
+        if not made.shell_step.is_file():
+            raise StageFailure(
+                "internal",
+                f"쉘 파트({' · '.join(sorted(shells))})가 있는데 중간면 형상"
+                f"({MIDSURFACE_NAME})이 작업에 없습니다 — CAD 폴더의 pNNNN_mid.step 을 함께 "
+                "올려야 합니다.",
+            )
+    probe = probe_volumes(
+        step,
+        workdir,
+        fragment=fragment,
+        timeout_seconds=min(timeout_seconds, 300),
+        shell_step=made.shell_step,
+    )
+    records = probe.volumes
+    placed, failures = place_settings(wanted, topology, records)
+    if failures:
+        raise StageFailure(
+            "internal",
+            "파트별 설정의 파트를 형상에서 찾지 못했습니다: " + " · ".join(failures),
+            details={"failures": failures},
+        )
+    # 쉘 파트의 솔리드도 지운다 — 그 자리는 중간면의 쉘이 맡는다.
+    made.removed = frozenset(tag for tag, one in placed.items() if one.suppressed or one.shell)
+    if made.removed and len(made.removed) == len(records) and not shells:
+        raise StageFailure(
+            "internal", "모든 파트가 해석에서 제외되었습니다 — 풀 것이 없습니다."
+        )
+    made.sizes = {
+        tag: one.element_size * system.length_mm
+        for tag, one in placed.items()
+        if not (one.suppressed or one.shell) and one.element_size is not None
+    }
+    if shells:
+        made.shell_parts = _shell_parts(probe.surfaces, topology, set(shells))
+        wished = {
+            one.name: one.element_size * system.length_mm
+            for one in given.body_settings
+            if one.element_size is not None
+        }
+        made.shell_sizes = {
+            tag: wished.get(name, size) for tag, name in made.shell_parts.items()
+        }
+    for tag, one in sorted(placed.items()):
+        logger.info("파트 %s → 부피 %s · %s", one.name, tag, one.describe())
+    return made
+
+
+def _shell_parts(
+    surfaces: list[Any], topology: dict[str, Any], names: set[str]
+) -> dict[int, str]:
+    """중간면의 면 → 쉘 파트. **점 파일 `midsurface.bodies[]` 의 경계상자 · 무게중심으로**
+    가른다(CompCore v0.8.1 — `_mid.step` 의 셸에는 이름이 없다). 파트마다 넓이를 맞춰 본다 —
+    어긋나면 다른 판을 집은 것이다."""
+    rows = [
+        one
+        for one in (topology.get("midsurface") or {}).get("bodies") or []
+        if isinstance(one, dict) and str(one.get("name") or "") in names
+    ]
+    if not rows:
+        raise StageFailure("internal", "점 파일에 중간면(midsurface.bodies)이 없습니다.")
+
+    def inside(point: tuple[float, float, float], box: Any) -> bool:
+        try:
+            low, high = box
+            return all(low[axis] - 0.5 <= point[axis] <= high[axis] + 0.5 for axis in range(3))
+        except (TypeError, ValueError, IndexError):
+            return False
+
+    def gap(point: tuple[float, float, float], row: dict[str, Any]) -> float:
+        centre = row.get("centroid") or [0.0, 0.0, 0.0]
+        return sum((point[axis] - float(centre[axis])) ** 2 for axis in range(3))
+
+    found: dict[int, str] = {}
+    for surface in surfaces:
+        holders = [one for one in rows if inside(surface.centroid, one.get("bbox"))]
+        pick = min(holders or rows, key=lambda one: gap(surface.centroid, one))
+        found[surface.index] = str(pick["name"])
+    for row in rows:
+        area = sum(one.volume for one in surfaces if found.get(one.index) == row["name"])
+        wanted = float(row.get("area") or 0.0)
+        if wanted and abs(area - wanted) / wanted > 0.02:
+            raise StageFailure(
+                "internal",
+                f"쉘 파트 「{row['name']}」 의 중간면 넓이가 맞지 않습니다(형상 {area:.1f} · "
+                f"점 파일 {wanted:.1f} mm²) — 다른 판을 집었을 수 있습니다.",
+            )
+        logger.info(
+            "쉘 %s → 면 %s · 넓이 %.1f mm²",
+            row["name"],
+            sorted(tag for tag, name in found.items() if name == row["name"]),
+            area,
+        )
+    return found
+
+
+def _shell_sections(
+    spec: AnySpec,
+    topology: dict[str, Any],
+    system: units.UnitSystem,
+    given: condition_model.Conditions,
+    layout: _Layout,
+    mesh: Any,
+) -> list[deck_writer.ShellSection]:
+    """쉘 파트마다 요소 · 두께 · 물성. 물성은 솔리드와 같은 규칙(CAD 가 먼저)이다."""
+    if not layout.shell_parts:
+        return []
+    found: list[material_model.Material] = []
+    if topology and spec.material_from == "cad":
+        try:
+            found = material_model.read(topology, system)
+        except material_model.MaterialProblem as failure:
+            raise StageFailure("internal", str(failure)) from failure
+    names = sorted(set(layout.shell_parts.values()))
+    on_part = material_model.assigned(found, names) if found else {}
+    made: list[deck_writer.ShellSection] = []
+    for index, name in enumerate(names, start=1):
+        material = on_part.get(name)
+        if material is None and not found and spec.material is not None:
+            material = material_model.Material(
+                name=spec.material.name,
+                youngs_modulus_pa=spec.material.youngs_modulus_gpa * 1e9,
+                poisson_ratio=spec.material.poisson_ratio,
+                density_kg_m3=spec.material.density_kg_m3,
+                bodies=(name,),
+                source="spec",
+            )
+        if material is None:
+            raise StageFailure("internal", f"쉘 파트 「{name}」 에 붙일 물성이 없습니다.")
+        elements = [
+            row
+            for tag, part in sorted(layout.shell_parts.items())
+            if part == name
+            for row in mesh.shells.get(tag, [])
+        ]
+        if not elements:
+            raise StageFailure(
+                "mesh_failed", f"쉘 파트 「{name}」 의 중간면에 요소가 없습니다."
+            )
+        made.append(
+            deck_writer.ShellSection(
+                part=name,
+                name=f"SHELL{index}",
+                elements=elements,
+                thickness=given.shells[name],
+                material=material,
+            )
+        )
+    return made
+
+
+def _ties(
+    topology: dict[str, Any],
+    given: condition_model.Conditions,
+    mesh: Any,
+    shells: list[deck_writer.ShellSection],
+    rigid: list[deck_writer.RigidBody],
+) -> tuple[list[deck_writer.Tie], list[deck_writer.RigidBody], set[str]]:
+    """쉘이 낀 접촉 → `*TIE`. 쉘 쪽이 종(절점), 솔리드 쪽이 주(요소면)다. 쉘끼리 · 비선형
+    접촉은 아직 못 건다(멈춘다). 돌려주는 것: 묶음 · 고친 강체 · 처리한 접촉 이름.
+
+    **상대가 강체면 `*TIE` 를 쓰지 않고 쉘 절점을 그 강체에 넣는다** — 강체에 붙은 것은
+    강체와 함께 움직이므로 같은 뜻이다. `*TIE` 로 강체 표면에 묶으면 구속이 사슬(쉘 → 강체
+    표면 절점 → 기준점)이 되어, ccx 가 기준점 반력에 그 몫을 넣지 않았다(실측 2026-10-04:
+    처짐은 맞는데 반력 0).
+    """
+    if not shells or not given.contacts:
+        return [], rigid, set()
+    shell_faces = set(mesh.shells)
+    wanted = sorted(
+        {one.source for one in given.contacts} | {one.target for one in given.contacts}
+    )
+    found = match_regions(topology, mesh.faces, wanted_regions=wanted)
+    lookup = element_faces(mesh)
+    thickest = max(one.thickness for one in shells)
+    made: list[deck_writer.Tie] = []
+    held = list(rigid)
+    handled: set[str] = set()
+    for index, pair in enumerate(given.contacts, start=1):
+        ends = (found.faces.get(pair.source) or [], found.faces.get(pair.target) or [])
+        on_shell = [bool(ids) and all(one in shell_faces for one in ids) for ids in ends]
+        if not any(on_shell):
+            continue
+        if all(on_shell):
+            raise StageFailure(
+                "internal", f"접촉 「{pair.name}」: 쉘끼리의 접촉은 아직 못 겁니다."
+            )
+        if pair.kind != "bonded":
+            raise StageFailure(
+                "internal",
+                f"접촉 「{pair.name}」({pair.kind}): 쉘이 낀 접촉은 본딩만 겁니다 — 솔버를 "
+                "ansys 로 바꾸세요.",
+            )
+        sheet, solid = (ends[0], ends[1]) if on_shell[0] else (ends[1], ends[0])
+        slaves: set[int] = set()
+        for face in sheet:
+            slaves |= mesh.face_nodes.get(face, set())
+        masters: list[tuple[int, str]] = []
+        for face in solid:
+            for triangle in mesh.face_triangles.get(face, []):
+                hit = lookup.get(frozenset(triangle))
+                if hit is not None:
+                    masters.append(hit)
+        if not slaves or not masters:
+            raise StageFailure(
+                "internal", f"접촉 「{pair.name}」: 쉘과 솔리드의 맞닿은 면을 못 찾았습니다."
+            )
+        handled.add(pair.name)
+        corners = {node for element, _ in masters for node in _corner_nodes(mesh, element)}
+        owner = next(
+            (index for index, one in enumerate(held) if corners and corners <= one.nodes), None
+        )
+        if owner is not None:
+            held[owner] = replace(held[owner], nodes=held[owner].nodes | frozenset(slaves))
+            logger.info(
+                "접촉 %s → 쉘 절점 %s 를 강체 %s 에 넣었습니다",
+                pair.name,
+                len(slaves),
+                held[owner].part,
+            )
+            continue
+        made.append(
+            deck_writer.Tie(
+                contact=pair.name,
+                name=f"TIE{index}",
+                slave_nodes=frozenset(slaves),
+                master_faces=masters,
+                # 중간면은 두께의 절반만큼 떨어져 있다 — 넉넉히 두께만큼 본다.
+                tolerance=thickest,
+            )
+        )
+        logger.info(
+            "접촉 %s → TIE 쉘 절점 %s · 솔리드 요소면 %s", pair.name, len(slaves), len(masters)
+        )
+    return made, held, handled
+
+
+def _corner_nodes(mesh: Any, element: int) -> list[int]:
+    """사면체 요소의 절점(그 번호의 요소를 솔리드에서 찾는다)."""
+    for rows in mesh.solids.values():
+        for number, ids in rows:
+            if number == element:
+                return list(ids)
+    return []
+
+
+def _rigid(
+    topology: dict[str, Any], given: condition_model.Conditions, mesh: Any
+) -> list[deck_writer.RigidBody]:
+    """강체 파트 → 덱의 강체 묶음. **강체끼리 맞닿으면 멈춘다** — 한 절점이 두 강체에 묶이면
+    ccx 가 거절하고, Ansys 도 강체끼리의 접촉을 받지 않는다."""
+    wanted = [one for one in given.body_settings if one.rigid and not one.suppressed]
+    if not wanted:
+        return []
+    placed, failures = place_settings(wanted, topology, mesh.bodies)
+    if failures:
+        raise StageFailure(
+            "internal",
+            "강체 파트를 메시에서 찾지 못했습니다: " + " · ".join(failures),
+            details={"failures": failures},
+        )
+    # 단품(「전체」)이 솔리드 여럿에 붙으면 이름이 겹친다 — 번호를 덧붙인다.
+    picked = {
+        (one.name if len(placed) == 1 else f"{one.name}#{tag}")
+        if one.name == condition_model.ALL_BODIES
+        else one.name: tag
+        for tag, one in placed.items()
+    }
+    centroids = {one.index: one.centroid for one in mesh.bodies}
+    made = deck_writer.rigid_bodies(mesh.nodes, mesh.solids, picked, centroids)
+    for index, first in enumerate(made):
+        for second in made[index + 1 :]:
+            if first.nodes & second.nodes:
+                raise StageFailure(
+                    "internal",
+                    f"강체 파트 「{first.part}」 · 「{second.part}」 가 맞닿아 있습니다 — "
+                    "강체끼리는 아직 잇지 못합니다. 한쪽을 변형체로 두세요.",
+                )
+    return made
+
+
+def _no_contact_on_rigid(
+    topology: dict[str, Any],
+    given: condition_model.Conditions,
+    mesh: Any,
+    rigid: list[deck_writer.RigidBody],
+) -> None:
+    """비선형 접촉(정적)이 강체 면에 걸리면 멈춘다 — 그 길은 아직 다지지 않았다."""
+    regions = sorted(
+        {one.source for one in given.contacts} | {one.target for one in given.contacts}
+    )
+    if not regions:
+        return
+    found = match_regions(topology, mesh.faces, wanted_regions=regions)
+    for name, ids in found.faces.items():
+        members: set[int] = set()
+        for face in ids:
+            members |= mesh.face_nodes.get(face, set())
+        owner = next((one for one in rigid if members and members <= one.nodes), None)
+        if owner is not None:
+            raise StageFailure(
+                "internal",
+                f"접촉면 「{name}」 이 강체 파트 「{owner.part}」 에 있습니다 — CalculiX "
+                "경로는 강체의 비선형 접촉을 아직 못 겁니다. 솔버를 ansys 로 바꾸거나 그 "
+                "파트를 변형체로 두세요.",
+            )
+
+
 def _local_sizes(
     step: Path,
     workdir: Path,
@@ -412,6 +918,7 @@ def _local_sizes(
     timeout_seconds: int,
     *,
     fragment: bool = True,
+    layout: _Layout | None = None,
 ) -> dict[int, float]:
     """영역별 메시 힌트 → **면 번호 → 크기(mm)**.
 
@@ -435,6 +942,8 @@ def _local_sizes(
             timeout_seconds=timeout_seconds,
             surface_only=True,
             fragment=fragment,
+            # 뺀 파트를 같이 지워야 면 번호가 본 통과와 같다.
+            removed=layout.removed if layout else frozenset(),
         )
         found = match_regions(topology, rough.faces, wanted_regions=list(wanted))
     except StageFailure:
@@ -530,7 +1039,23 @@ def _load_places(
         places[name] = members
         areas[name] = tributary_areas(mesh, ids)
         rows: list[tuple[int, str]] = []
+        outer = _outer_normal(topology, name)
         for face in ids:
+            if face in mesh.shells:
+                # **쉘 요소는 면 하나다** — 압력은 요소 전체에 건다. 미는 쪽은 원래 겉면의 바깥
+                # 법선의 반대(안쪽)다 — 요소 법선이 바깥 법선과 같은 쪽이면 부호를 뒤집는다
+                # (ccx 의 쉘 압력은 법선 쪽으로 민다 — 덱의 `SHELL_PRESSURE_FLIPPED`).
+                for number, ids_ in mesh.shells[face]:
+                    along = _dot(_element_normal(mesh.nodes, ids_), outer) >= 0
+                    rows.append(
+                        (
+                            number,
+                            deck_writer.SHELL_PRESSURE_FLIPPED
+                            if along
+                            else deck_writer.SHELL_PRESSURE,
+                        )
+                    )
+                continue
             for triangle in mesh.face_triangles.get(face, []):
                 hit = lookup.get(frozenset(triangle))
                 if hit is not None:
@@ -540,6 +1065,44 @@ def _load_places(
             "하중 영역 %s → 면 %s · 절점 %s · 요소면 %s", name, ids, len(members), len(rows)
         )
     return places, areas, faces
+
+
+def _outer_normal(topology: dict[str, Any], region: str) -> tuple[float, float, float]:
+    """쉘 영역의 **원래 겉면 바깥 법선**(`shell_view` 가 남긴 `outer_normal`). 없으면 +Z."""
+    for row in (topology.get("regions") or {}).get(region) or []:
+        if isinstance(row, dict) and isinstance(row.get("outer_normal"), list):
+            x, y, z = (float(one) for one in row["outer_normal"][:3])
+            return (x, y, z)
+    return (0.0, 0.0, 1.0)
+
+
+def _element_normal(
+    nodes: dict[int, tuple[float, float, float]], ids: list[int]
+) -> tuple[float, float, float]:
+    """삼각형 요소의 법선(모서리 셋 — 절점 순서가 정한다)."""
+    a, b, c = (nodes[one] for one in ids[:3])
+    u = [b[axis] - a[axis] for axis in range(3)]
+    v = [c[axis] - a[axis] for axis in range(3)]
+    return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+
+
+def _dot(first: tuple[float, float, float], second: tuple[float, float, float]) -> float:
+    return sum(one * two for one, two in zip(first, second, strict=True))
+
+
+def _shell_mass(
+    shells: list[deck_writer.ShellSection], nodes: dict[int, tuple[float, float, float]]
+) -> float:
+    """쉘의 질량(kg) — 요소 넓이 x 두께 x 밀도. 넓이는 모서리 셋으로 잰다(평면 요소)."""
+    total = 0.0
+    for sheet in shells:
+        area = 0.0
+        for _, ids in sheet.elements:
+            x, y, z = _element_normal(nodes, ids)
+            area += 0.5 * (x * x + y * y + z * z) ** 0.5
+        # mm² x mm = mm³ → m³ 는 1e-9.
+        total += area * sheet.thickness * 1e-9 * sheet.material.density_kg_m3
+    return total
 
 
 def _mass_kg(

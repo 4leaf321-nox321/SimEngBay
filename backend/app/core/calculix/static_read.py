@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.core import boundary
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, vtp
 from app.core.calculix.mesh import read_mesh
@@ -33,7 +34,7 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     if not result_file.is_file():
         raise StageFailure("solver_failed", f"결과 파일이 없습니다: {FRD_NAME}")
 
-    blocks = frd_reader.read(result_file)
+    blocks = frd_reader.read_folded(workdir, result_file)
     # **마지막 증분을 읽는다.** 비선형 정적은 하중을 나눠 걸므로 `.frd` 에 증분마다 블록이
     # 쌓인다 — 첫 블록을 읽으면 **하중의 일부만** 걸린 상태가 나온다(실측 2026-10-03: 접착
     # 1.93e-4 대 마찰 3.35e-5, 비가 0.17 로 첫 증분이었다). 선형 정적은 블록이 하나라 같다.
@@ -65,7 +66,7 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
         },
         "max_displacement": max_displacement,
         "max_von_mises": max_von_mises,
-        "material": spec.material.name,
+        "material": boundary.used_material(workdir, spec),
     }
     mesh_counts = _draw(workdir, moved, magnitude, result)
     # **측정점의 변위** — 전체 최대는 구속 모서리의 수치적 첨두일 수 있고, 센서는 그 자리에

@@ -15,9 +15,9 @@ Mechanical 은 단위계를 여러 개 받지만 **이 스펙은 하나로 못 �
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: 강체 모드 수 — 구속이 없는 3차원 물체는 자유도 6개(이동 3 · 회전 3)가 0 Hz 로 나온다.
 RIGID_BODY_MODES = 6
@@ -32,6 +32,20 @@ class MaterialSpec(BaseModel):
     youngs_modulus_gpa: float = Field(gt=0, le=2000)
     poisson_ratio: float = Field(ge=0, lt=0.5)
     density_kg_m3: float = Field(gt=0, le=30000)
+
+
+class _HasMaterial(Protocol):
+    material: MaterialSpec | None
+    material_from: Literal["cad", "spec"]
+
+
+def _needs_material[S: _HasMaterial](spec: S) -> S:
+    """「내 값으로」(`material_from="spec"`)를 골랐으면 그 값이 있어야 한다 — 없으면 무엇으로
+    풀지 모른다. CAD 쪽으로 가는 경우는 여기서 못 본다(점 파일은 스펙 밖에 있다) — 작업을 만들
+    때 본다."""
+    if spec.material_from == "spec" and spec.material is None:
+        raise ValueError("물성 출처가 「스펙」 이면 물성(material)이 있어야 합니다.")
+    return spec
 
 
 class MeshSpec(BaseModel):
@@ -65,19 +79,28 @@ class ModalSpec(BaseModel):
     노드락이 없다). 대신 걸 수 있는 조건이 적다 — 못 거는 것은 모델링이 **까닭을 달아 거절**
     한다(`app/core/calculix/deck.py` 의 능력표). 두 솔버의 수는 몇 % 갈리므로 결과에 **어느
     쪽으로 풀었는지 도장**을 찍는다."""
-    material: MaterialSpec
+    material: MaterialSpec | None = None
+    """물성 한 벌 — **모든 바디에 같은 것이 붙는다.** 화면은 이 칸을 보내지 않는다: 물성은
+    CompCore 가 점 파일에 파트마다 정해 보내고, 한 벌을 조립품 전체에 붙이는 것은 뜻이 없다.
+    점 파일 없이 부르는 시험 · 스크립트를 위해 남겨 둔 칸이다. CAD 물성도 이것도 없으면
+    작업을 만들 때 거절한다."""
     material_from: Literal["cad", "spec"] = "cad"
+    """물성을 어디서 가져오나. `cad` 면 **CAD 가 보낸 것이 먼저**고 없으면 `material` 을 쓴다.
+
+    `spec` 은 「내가 지정한 값으로 풀어라」 다 — CAD 가 보낸 것을 일부러 무시한다(그때는
+    `material` 이 있어야 한다). 어느 쪽으로 풀었는지는 모델링 단계 요약에 적힌다(안 적으면
+    나중에 결과를 믿을 수 없다)."""
     conditions_from: Literal["cad", "spec"] = "cad"
     """구속 · 접촉을 어디서 가져오나. `cad` 면 **CAD 가 보낸 조건이 먼저**고, 없으면 아래
     `constraints` 를 쓴다. `spec` 은 「내가 고른 영역만 완전 고정으로」 다."""
-    """물성을 어디서 가져오나. `cad` 면 **CAD 가 보낸 것이 먼저**고 없으면 `material` 을 쓴다.
-
-    `spec` 은 「내가 넣은 값으로 돌려라」 다 — CAD 가 보낸 것을 일부러 무시한다. 어느 쪽으로
-    돌았는지는 모델링 단계 요약에 적힌다(안 적으면 나중에 결과를 믿을 수 없다)."""
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     modes: int = Field(default=10, ge=1, le=100)
     """찾을 **탄성** 모드 수. 강체 모드는 여기 세지 않는다 — 실행기가 6개를 더해 찾는다."""
     constraints: list[Constraint] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _own_material(self) -> Self:
+        return _needs_material(self)
 
     @property
     def is_free_free(self) -> bool:
@@ -101,7 +124,8 @@ class StaticSpec(BaseModel):
     recipe: Literal["static"] = "static"
     solver: Literal["ansys", "calculix"] = "ansys"
     """무엇으로 풀까 — `ModalSpec.solver` 참고."""
-    material: MaterialSpec
+    material: MaterialSpec | None = None
+    """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"
     mesh: MeshSpec = Field(default_factory=MeshSpec)
@@ -109,6 +133,10 @@ class StaticSpec(BaseModel):
     """사람이 고른 구속. **CAD 조건이 있으면 그것이 먼저다**(`conditions_from`)."""
     large_deflection: bool = False
     """변형이 커서 모양이 바뀌면 켠다 — 비선형이라 느리다."""
+
+    @model_validator(mode="after")
+    def _own_material(self) -> Self:
+        return _needs_material(self)
 
 
 class HarmonicSpec(BaseModel):
@@ -124,7 +152,8 @@ class HarmonicSpec(BaseModel):
     recipe: Literal["harmonic"] = "harmonic"
     solver: Literal["ansys", "calculix"] = "ansys"
     """무엇으로 풀까 — `ModalSpec.solver` 참고."""
-    material: MaterialSpec
+    material: MaterialSpec | None = None
+    """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
     conditions_from: Literal["cad", "spec"] = "cad"
     mesh: MeshSpec = Field(default_factory=MeshSpec)
@@ -137,6 +166,10 @@ class HarmonicSpec(BaseModel):
     """모드 중첩에 쓸 모드 수."""
     damping_ratio: float = Field(default=0.02, gt=0, lt=1)
     """임계 감쇠에 대한 비. 강 구조는 0.01 ~ 0.03."""
+
+    @model_validator(mode="after")
+    def _own_material(self) -> Self:
+        return _needs_material(self)
 
 
 JobSpec = Annotated[ModalSpec | StaticSpec | HarmonicSpec, Field(discriminator="recipe")]

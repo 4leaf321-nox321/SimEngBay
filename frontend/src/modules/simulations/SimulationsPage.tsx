@@ -5,6 +5,9 @@
  * 쓰기는 그것과 무관하게 소유 부서의 일이다 — 서버가 판정한다.
  *
  * 목록은 폴링하지 않는다. 걸면 상세로 가고, 상세가 상태를 폴링한다(그 경로만 접근 로그를 비껴간다).
+ *
+ * **결과 칸은 해석 종류마다 다르다** — 모달은 1차 고유진동수, 정적은 최대 변형, 조화는 봉우리.
+ * 모달 값만 보이면 정적 · 조화 작업은 끝나도 빈칸으로 보였다.
  */
 
 import { useState } from 'react'
@@ -14,7 +17,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { simulationApi } from '@/modules/simulations/api'
 import type { DoeImport } from '@/modules/simulations/api'
 import { DoeImportDialog } from '@/modules/simulations/DoeImportDialog'
-import { RECIPE_LABELS, shownDuration } from '@/modules/simulations/labels'
+import { shownOutcome } from '@/modules/simulations/format'
+import { RECIPE_LABELS, SOLVER_LABELS, shownDuration } from '@/modules/simulations/labels'
+import { workspaceApi } from '@/modules/workspaces/api'
 import { NewSimulationDialog } from '@/modules/simulations/NewSimulationDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -53,26 +58,46 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'extracting', label: '추출' },
   { value: 'done', label: '완료' },
   { value: 'failed', label: '실패' },
+  { value: 'canceled', label: '취소됨' },
 ]
+
+/** 출처 — 어디서 만든 작업인가. 업로드는 따로 표시하지 않는다(가장 흔하다). */
+const SOURCE_LABELS: Record<string, string> = {
+  doe_point: 'DOE 설계점',
+  mesh_check: '메시 수렴 점검',
+}
+
 
 export default function SimulationsPage() {
   const navigate = useNavigate()
   // 홈의 「남은 일」 이 `?status=failed` 로 보낸다 — 주소가 필터의 정본이다.
   const [params, setParams] = useSearchParams()
   const status = params.get('status') ?? ''
+  const workspace = params.get('workspace') ?? ''
   const [offset, setOffset] = useState(0)
+  const workspaces = useResource(() => workspaceApi.options(), [])
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState<DoeImport | null>(null)
 
   const page = useResource(
-    () => simulationApi.list({ status: status || undefined, limit: PER_PAGE, offset }),
-    [status, offset],
+    () =>
+      simulationApi.list({
+        status: status || undefined,
+        workspaceSlug: workspace || undefined,
+        limit: PER_PAGE,
+        offset,
+      }),
+    [status, workspace, offset],
   )
 
-  function changeStatus(value: string) {
+  /** 주소가 필터의 정본이다 — 한 칸을 바꿔도 다른 칸은 남긴다. */
+  function changeFilter(key: 'status' | 'workspace', value: string) {
     setOffset(0)
-    setParams(value === ALL ? {} : { status: value })
+    const next = new URLSearchParams(params)
+    if (value === ALL) next.delete(key)
+    else next.set(key, value)
+    setParams(next)
   }
 
   return (
@@ -98,7 +123,7 @@ export default function SimulationsPage() {
       />
 
       <div className="flex items-center gap-3">
-        <Select value={status || ALL} onValueChange={changeStatus}>
+        <Select value={status || ALL} onValueChange={(value) => changeFilter('status', value)}>
           <SelectTrigger className="h-8 w-36">
             <SelectValue />
           </SelectTrigger>
@@ -110,19 +135,33 @@ export default function SimulationsPage() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={workspace || ALL} onValueChange={(value) => changeFilter('workspace', value)}>
+          <SelectTrigger className="h-8 w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>전체 부서</SelectItem>
+            {(workspaces.data ?? []).map((one) => (
+              <SelectItem key={one.slug} value={one.slug}>
+                {'\u00a0'.repeat(one.depth * 2)}
+                {one.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {imported && (
         <Alert>
           <AlertTitle>
-            {imported.name} — {imported.created.length}건을 걸었습니다
+            {imported.name} — {imported.created.length}건을 생성했습니다
           </AlertTitle>
           <AlertDescription>
             {imported.skipped.length === 0 ? (
-              <p>설계점 전부를 걸었습니다. 차례로 돌며 목록의 상태가 바뀝니다.</p>
+              <p>고른 설계점을 모두 생성했습니다. 차례로 실행되며 목록의 상태가 바뀝니다.</p>
             ) : (
               <>
-                <p>{imported.skipped.length}건은 걸지 않았습니다:</p>
+                <p>{imported.skipped.length}건은 생성하지 않았습니다:</p>
                 <ul className="mt-1 space-y-0.5 text-xs">
                   {imported.skipped.map((one) => (
                     <li key={one.number}>
@@ -149,14 +188,14 @@ export default function SimulationsPage() {
 
       {page.data && page.data.items.length === 0 ? (
         <EmptyState
-          title={status ? '해당 상태의 작업이 없습니다' : '해석 작업이 없습니다'}
+          title={status || workspace ? '조건에 맞는 작업이 없습니다' : '해석 작업이 없습니다'}
           hint={
-            status
-              ? '상태 필터를 「전체 상태」 로 바꾸면 다른 작업이 표시됩니다.'
-              : 'STEP 형상 하나로 첫 모달 해석을 실행할 수 있습니다.'
+            status || workspace
+              ? '필터를 「전체」 로 바꾸면 다른 작업이 표시됩니다.'
+              : 'STEP 형상(과 CAD 점 파일)으로 첫 해석을 실행하거나, DOE 폴더를 가져옵니다.'
           }
           action={
-            status ? undefined : (
+            status || workspace ? undefined : (
               <Button size="sm" onClick={() => setCreating(true)}>
                 <Plus className="size-4" />새 해석 작업
               </Button>
@@ -168,7 +207,7 @@ export default function SimulationsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>이름</TableHead>
-              <TableHead>레시피</TableHead>
+              <TableHead>해석 종류</TableHead>
               <TableHead>상태</TableHead>
               <TableHead>결과</TableHead>
               <TableHead>부서</TableHead>
@@ -184,19 +223,27 @@ export default function SimulationsPage() {
                   <Link to={`/simulations/${one.id}`} className="font-medium hover:underline">
                     {one.name}
                   </Link>
-                  <p className="text-muted-foreground text-xs">{one.source_ref}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {SOURCE_LABELS[one.source_kind] && (
+                      <span className="bg-muted mr-1 rounded px-1">{SOURCE_LABELS[one.source_kind]}</span>
+                    )}
+                    {one.source_ref}
+                  </p>
                 </TableCell>
-                <TableCell>{RECIPE_LABELS[one.recipe] ?? one.recipe}</TableCell>
+                <TableCell>
+                  {RECIPE_LABELS[one.recipe] ?? one.recipe}
+                  <span className="text-muted-foreground block text-xs">
+                    {SOLVER_LABELS[one.solver ?? 'ansys'] ?? one.solver}
+                  </span>
+                </TableCell>
                 <TableCell>
                   <StatusBadge kind="simulation" value={one.status} />
                 </TableCell>
                 <TableCell className="text-sm">
                   {one.status === 'failed' ? (
                     <span className="text-destructive font-mono text-xs">{one.error_code}</span>
-                  ) : one.summary?.first_elastic_hz != null ? (
-                    <>1차 {Number(one.summary.first_elastic_hz).toFixed(1)} Hz</>
                   ) : (
-                    '—'
+                    (shownOutcome(one) ?? '—')
                   )}
                 </TableCell>
                 <TableCell>{one.owner_workspace_name ?? '전역'}</TableCell>
@@ -225,7 +272,7 @@ export default function SimulationsPage() {
         onClose={() => setImporting(false)}
         onImported={(result) => {
           setImporting(false)
-          // 걸린 것을 바로 보여 준다 — N 개가 큐에 들어가 차례로 돈다.
+          // 만든 것을 바로 보여 준다 — N 개가 큐에 들어가 차례로 돈다.
           setOffset(0)
           page.reload()
           // **건너뛴 점은 목록에 안 생긴다** — 여기서 말하지 않으면 사라진다.

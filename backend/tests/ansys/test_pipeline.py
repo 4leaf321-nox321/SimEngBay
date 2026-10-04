@@ -918,3 +918,104 @@ def test_마찰_접촉은_모달에서_접착보다_낮다(workdir: Path) -> Non
     assert seen[3] < seen[1] * 0.99, f"마찰이 접착처럼 굴었다: {seen}"
     assert seen[1] == pytest.approx(27940.6, rel=0.02)
     assert seen[3] == pytest.approx(26472.8, rel=0.02)
+
+
+def _side_shake_body_settings(work: Path, settings: list[dict[str, Any]]) -> None:
+    """`조건_측면가진`(강판 위 알루미늄 기둥, 바닥 고정)에 파트별 설정을 얹는다."""
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    payload["conditions"]["body_settings"] = settings
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _modal(work: Path) -> tuple[dict[str, Any], float]:
+    spec = {"recipe": "modal", "mesh": {"element_size_mm": 5}, "modes": 4}
+    (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+    runner = _executor()
+    summary: dict[str, Any] = {}
+    for stage in STAGES:
+        summary.update(runner.run(StageContext(stage=stage, spec=spec, workdir=work)).summary)
+    result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    first = next(one["frequency_hz"] for one in result["modes"] if not one["rigid_body"])
+    return summary, float(first)
+
+
+def test_파트별_설정을_Mechanical_에_건다(workdir: Path) -> None:
+    """CompCore `body_settings`(2026-10-04) — **강체 · 해석 제외 · 파트 메시.**
+
+    실측(2026-10-04, 2025 R2, 요소 5 mm): 기본 1,266.4 Hz · 받침판 강체 1,289.3 Hz(CalculiX
+    1,289.0) · 기둥 제외 76,472.9 Hz, 판만 0.5024 kg(CalculiX 76,126.1) · 기둥 1.5 mm 면 절점
+    2,278 → 14,913.
+
+    **강체 면의 고정 지지는 원격 변위로 건다** — Mechanical 은 강체 면의 고정 지지를
+    `UnderDefined` 로 둔다(같은 날 실측). 강체는 접촉의 대상면이어야 해서 CAD 접촉(기둥 →
+    판)은 그대로 맞는다.
+    """
+    rigid = workdir / "rigid"
+    rigid.mkdir()
+    _side_shake_body_settings(rigid, [{"name": "받침판", "behavior": "rigid"}])
+    summary, first = _modal(rigid)
+    assert summary["rigid_bodies"] == "받침판"
+    assert "remote_displacement:바닥" in summary["constrained_regions"]
+    assert first == pytest.approx(1289.3, rel=0.01)
+
+    off = workdir / "off"
+    off.mkdir()
+    # 기둥을 빼면 「접합 기둥쪽」 접촉도 없다 — 넘기고 판만 푼다(엉뚱한 면을 집지 않는다).
+    _side_shake_body_settings(off, [{"name": "기둥", "suppressed": True}])
+    summary, first = _modal(off)
+    assert summary["bodies"] == 1 and summary["suppressed_bodies"] == "기둥"
+    assert summary["mass_kg"] == pytest.approx(0.5024, rel=0.01)
+    assert first > 20_000
+
+    fine = workdir / "fine"
+    fine.mkdir()
+    _side_shake_body_settings(fine, [{"name": "기둥", "mesh": {"element_size": 1.5}}])
+    summary, first = _modal(fine)
+    assert int(summary["nodes"]) > 5_000
+    assert first == pytest.approx(1266.4, rel=0.02)
+
+
+#: 강체 지그블록 위 판금 브래킷(쉘) · 명판은 해석 제외(CompCore v0.8.1).
+SHELL_BRACKET = FIXTURES / "doe" / "조건_강체지그_쉘브래킷"
+
+
+def test_쉘_브래킷을_중간면과_두께로_푼다(workdir: Path) -> None:
+    """**쉘** — 중간면 형상을 두 번째 형상으로 들여와 면 바디에 두께를 주고, 브래킷 솔리드는
+    끈다. 쉘 바닥과 강체 블록 윗면의 본딩은 쉘 두께를 접촉에 넣는다(`ShellThicknessEffect`).
+
+    실측(2026-10-04, 2025 R2): 끝 처짐 t2 0.3236 · t3 0.0962 mm(CalculiX 0.3223 · 0.0959),
+    반력 66.0 · 64.5 N(= 0.05 MPa x 하중면 넓이), 최대 상당응력 90.3 · 40.5 MPa(CalculiX
+    91.1 · 39.1). 강체 블록 면의 원격 변위가 유일한 구속이라 반력은 모델 전체의 합이다.
+    """
+    found: dict[int, dict[str, Any]] = {}
+    for number in (1, 2):
+        work = workdir / f"p{number}"
+        work.mkdir()
+        points = SHELL_BRACKET / "points"
+        shutil.copy(points / f"p{number:04d}.step", work / "input.step")
+        shutil.copy(points / f"p{number:04d}_mid.step", work / "input_mid.step")
+        shutil.copy(points / f"p{number:04d}.json", work / "topology.json")
+        spec = {"recipe": "static"}
+        (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+        runner = _executor()
+        summary: dict[str, Any] = {}
+        for stage in STAGES:
+            summary.update(
+                runner.run(StageContext(stage=stage, spec=spec, workdir=work)).summary
+            )
+        found[number] = {
+            **json.loads((work / "result.json").read_text(encoding="utf-8")),
+            "summary": summary,
+        }
+
+    t2, t3 = found[1], found[2]
+    assert t2["summary"]["shell_bodies"] == "브래킷 2 mm"
+    assert t2["summary"]["mass_kg"] == pytest.approx(0.5428, rel=0.01)
+    assert t2["reactions"]["블록 바닥"][0] == pytest.approx(66.0, rel=0.01)
+    assert t3["reactions"]["블록 바닥"][0] == pytest.approx(64.5, rel=0.01)
+    assert t2["max_displacement"] == pytest.approx(0.3236, rel=0.03)
+    assert 3.2 < t2["max_displacement"] / t3["max_displacement"] < 3.7
+    assert t2["max_von_mises"] > 60

@@ -24,6 +24,10 @@ CancelCheck = Callable[[], bool]
 #: 지나는 순서. 워커는 이 순서대로 돌리고, 하나가 실패하면 뒤는 안 돈다.
 STAGES: tuple[Stage, ...] = ("fetching", "modeling", "solving", "extracting")
 
+#: 쉘 파트의 **중간면 형상** — 작업 폴더에서의 이름. CAD 폴더의 `pNNNN_mid.step` 이 이 이름으로
+#: 들어온다(쉘 파트가 있을 때만). 두 솔버의 모델링이 같은 이름을 본다.
+MIDSURFACE_NAME = "input_mid.step"
+
 #: 실패 원인 — 사람이 목록에서 읽고 무엇을 고칠지 아는 단위. **메시지가 아니라 코드다.**
 #: 같은 원인이 워커마다 다른 문장으로 적히면 「라이선스 때문에 몇 건 실패했나」 를 셀 수 없다.
 FailureCode = Literal[
@@ -40,6 +44,8 @@ FailureCode = Literal[
 #: 산출물 종류. 화면이 이것으로 아이콘 · 이름 · 「뷰어로 열기」 를 가른다.
 ArtifactKind = Literal[
     "input_step",
+    # 쉘 파트의 중간면(CAD 의 `pNNNN_mid.step`).
+    "input_mid_step",
     "spec",
     "topology",
     "mechdb",
@@ -56,6 +62,7 @@ ArtifactKind = Literal[
 
 CONTENT_TYPES: dict[str, str] = {
     "input_step": "model/step",
+    "input_mid_step": "model/step",
     "spec": "application/json",
     "topology": "application/json",
     "mechdb": "application/octet-stream",

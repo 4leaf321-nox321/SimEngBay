@@ -1,0 +1,3 @@
+﻿point,status,두께,step_file,mid_file,point_file,unresolved,interference,warnings,error
+1,ok,2.0,points/p0001.step,points/p0001_mid.step,points/p0001.json,,ok,,
+2,ok,3.0,points/p0002.step,points/p0002_mid.step,points/p0002.json,,ok,,

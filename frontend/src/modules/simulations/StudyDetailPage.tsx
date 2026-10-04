@@ -12,7 +12,7 @@
  */
 
 import { useState } from 'react'
-import { Download } from 'lucide-react'
+import { Download, Eraser, RotateCcw } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
@@ -21,6 +21,7 @@ import { StudyMeasurements } from '@/modules/simulations/StudyMeasurements'
 import { StudyOverview } from '@/modules/simulations/StudyOverview'
 import { StudyValues } from '@/modules/simulations/StudyValues'
 import { ApiError } from '@/shared/api/client'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -31,6 +32,38 @@ export default function StudyDetailPage() {
   const { id = '' } = useParams()
   const study = useResource(() => simulationApi.study(id), [id])
   const [failed, setFailed] = useState<ApiError | Error | null>(null)
+  const [tidying, setTidying] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
+
+  /**
+   * **실패한 설계점만 다시 실행한다** — 점마다 재시도를 누르게 하면 200점짜리 DOE 에서는 아무도
+   * 안 한다. 서버의 재시도를 점마다 부르고, 못 한 점은 그 까닭을 모아 보여 준다.
+   */
+  async function retryFailed() {
+    if (!study.data) return
+    setRetrying(true)
+    setFailed(null)
+    const targets = study.data.points.filter(
+      (one) => one.status === 'failed' || one.status === 'canceled',
+    )
+    let done = 0
+    const problems: string[] = []
+    for (const one of targets) {
+      try {
+        await simulationApi.retry(one.simulation_id)
+        done += 1
+      } catch (caught) {
+        problems.push(`p${String(one.number).padStart(4, '0')}: ${caught instanceof Error ? caught.message : '실패'}`)
+      }
+    }
+    setNotice(
+      `실패 · 취소된 설계점 ${done}개를 다시 실행했습니다.` +
+        (problems.length ? ` 다시 실행하지 못한 점: ${problems.join(' · ')}` : ''),
+    )
+    setRetrying(false)
+    study.reload()
+  }
 
   async function exportCsv() {
     if (!study.data) return
@@ -55,6 +88,7 @@ export default function StudyDetailPage() {
   const points = study.data.points
   const tracked = study.data.tracks ?? []
   const modal = study.data.recipe === 'modal'
+  const retryable = points.filter((one) => one.status === 'failed' || one.status === 'canceled').length
   const solvers = study.data.solvers ?? []
 
   return (
@@ -81,14 +115,54 @@ export default function StudyDetailPage() {
         }
         back={{ to: '/simulations/studies', label: 'DOE 비교' }}
         actions={
-          <Button variant="outline" size="sm" onClick={exportCsv}>
-            <Download className="size-4" />
-            CSV 내보내기
-          </Button>
+          <>
+            {retryable > 0 && (
+              <Button variant="outline" size="sm" onClick={retryFailed} disabled={retrying}>
+                <RotateCcw className="size-4" />
+                {retrying ? '다시 실행 중…' : `실패한 점 다시 실행 (${retryable})`}
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => setTidying(true)}>
+              <Eraser className="size-4" />
+              중간 파일 정리
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportCsv}>
+              <Download className="size-4" />
+              CSV 내보내기
+            </Button>
+          </>
         }
       />
 
       <ErrorNotice error={failed} />
+      {notice && (
+        <p className="rounded-md border px-4 py-2 text-sm">
+          {notice}{' '}
+          <button type="button" className="text-muted-foreground underline" onClick={() => setNotice(null)}>
+            닫기
+          </button>
+        </p>
+      )}
+
+      <ConfirmDialog
+        open={tidying}
+        title="중간 파일 정리"
+        description={
+          <>
+            끝난 설계점 전부의 중간 파일(.mechdb · .rst · 솔버 scratch)을 삭제합니다. 결과 요약 · 그림 ·
+            입력은 남습니다. 삭제한 중간 파일이 다시 필요하면 그 점을 다시 실행해야 합니다.
+          </>
+        }
+        confirmLabel="정리"
+        destructive
+        onConfirm={async () => {
+          const done = await simulationApi.tidyStudy(id)
+          setNotice(
+            `설계점 ${done.points}개에서 중간 파일 ${done.files}개 · ${(done.bytes_freed / 1024 / 1024).toFixed(1)}MB 를 정리했습니다.`,
+          )
+        }}
+        onClose={() => setTidying(false)}
+      />
 
       {solvers.length > 1 && (
         // **솔버가 섞이면 그 차이(몇 %)가 변수의 효과로 읽힌다** — 견주기 전에 말해 둔다.

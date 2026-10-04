@@ -79,7 +79,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "5762541c-aafd-4551-a07d-ee9c5fd5a8a1",
+      "id": "1ba1a157-4959-47b3-8670-25fc02be217d",
       "name": "조건_원통_SI",
       "method": "factorial",
       "seed": 1
@@ -469,11 +469,13 @@
         "defeature_size": null
       }
     ],
+    "body_settings": [],
     "coordinate_systems": []
   },
   "length_units": {
     "geometry": "mm",
     "regions": "mm",
+    "midsurface": "mm",
     "coordinate_systems": "m"
   }
 }

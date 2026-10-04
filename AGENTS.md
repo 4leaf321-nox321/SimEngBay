@@ -190,6 +190,8 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
 - **본문은 오류 경계 안에 있다**(`ErrorBoundary`, AppShell 이 두른다). 사이드바까지 감싸지
   않는 이유는 나갈 길은 살아 있어야 해서다.
 - 내려받기는 `downloadFile` 로 — access 토큰이 메모리에만 있어서 `<a href>` 에는 안 실린다.
+- **공통 틀의 타입(`shared/api/types.ts`)도 생성 타입의 별칭이다.** 이름만 화면이 쓰던 그대로
+  두었다 — 새 타입을 거기 손으로 적지 않는다.
 
 ## 스크립트와 배포
 
@@ -261,6 +263,34 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
 - **`result.json` 이 결과의 정본이다.** 모드 목록 · 단위계 · 참여계수를 표로 옮겨 담지 않는다 —
   두 벌이 되면 언젠가 갈리고, **갈린 쪽을 화면이 그린다.** DB 에는 요약 몇 칸만 둔다(목록에서
   거르고 정렬하는 데 필요한 것). 화면은 `GET /simulations/{id}/result` 로 파일을 읽는다.
+- **화면은 CAD 점 파일을 따로 해석하지 않는다** — 올리는 즉시 서버가 읽는다
+  (`POST /simulations/conditions/preview` · DOE 는 `doe/preview?recipe=`). 작업을 거는 길과 같은
+  코드라, 화면에 보인 조건 줄(반영 · 넘김 · 막음)이 실제로 걸리는 것이다. 브라우저가 따로 읽던
+  때에는 물성 칸이 늘 쓰이는 것처럼 보였다(실제로는 CAD 물성이 이겼다).
+- **물성은 CompCore 가 파트마다 정한다** — 화면에는 물성 칸이 없다(새 작업 · DOE 둘 다). 한 벌을
+  STEP 의 모든 파트에 붙이는 것은 조립품에서 뜻이 없고 결과가 CompCore 의 정의로 거슬러 올라가지
+  않아서 없앴다. 그래서 **점 파일이 있어야 실행한다** — 화면은 「파트 → 재료」 표를 보이고, 스펙에
+  `material` 을 싣지 않는다(서버 스펙에는 시험 · 스크립트용 선택 칸으로 남아 있다). 파트에 붙는 규칙은
+  `app/core/materials.py` 의 `assigned` 하나다 — Ansys · CalculiX 모델링과 미리보기 · 작업
+  만들기가 같은 것을 부른다. **재료가 빠진 파트**는 사람이 준 한 벌로 메우지 않고 작업을 만들 때
+  거절한다(DOE 는 그 점만 까닭을 달아 건너뛴다). 결과의 `material` 은 스펙이 아니라 모델링이
+  `boundary.json` 에 남긴 **실제로 붙인 이름**이다(`app/core/boundary.py`).
+- **파트별 설정(`body_settings`)은 파트를 메시 전에 안다** — 강체 · 해석 제외 · 파트 메시는 바디 짝짓기
+  (`bodies.place_settings`, 부피 · 무게중심)로 해석 쪽 바디에 붙는다. Ansys 는 형상을 읽은 직후에 걸고(캐시
+  열쇠에 설정이 들어간다), CalculiX 는 gmsh 에게 형상만 읽혀(`-0`) 부피를 재고(`mesh.probe_volumes`) 짝지은
+  뒤 메시한다 — **뺄 파트가 메시가 안 나오는 부품일 때가 많기 때문이다.** Mechanical 은 강체 질량을
+  Engineering Data 로 계산하므로 물성 조각에서 `MASS21` 실상수를 밀도 비만큼 고친다(`_rigid_mass`). 강체
+  면의 고정 지지는 Ansys 에서 원격 변위로 건다(고정 지지는 `UnderDefined`), 강체는 접촉의 대상면이어야 한다.
+  **쉘**은 중간면(`input_mid.step`, CAD 의 `pNNNN_mid.step`)과 `midsurface.bodies[]` 의 두께로 푼다 — 쉘
+  파트의 영역은 지문의 `mid` 로 짝짓고(`conditions.shell_view`, 앞뒤가 없어 법선은 양쪽을 받는다), 압력은
+  원래 겉면의 바깥 법선(`outer_normal`)으로 미는 쪽을 정한다. CalculiX 는 쉘을 두께 방향으로 펼쳐 풀므로
+  `OUTPUT=3D` 로 내고 읽을 때 원래 쉘 절점으로 접는다(`frd.fold_shells` — `2D` 는 응력이 중간면 값이라
+  굽힘이 빠진다). 중간면이 없거나 CompCore 가 못 만들었으면 `refused` 다 — 솔리드로 풀지 않는다.
+  메시 힌트는 「국부 메시」(「전체」 · 면 · 엣지)이고
+  바디 그룹에 건 옛 힌트는 파트 메시로 옮겨 읽는다(`conditions._legacy_body_hint`).
+- **작업 창의 칸과 스펙은 한 곳에서** — `SpecFields.tsx`(해석 종류 · 물성 · 메시 · 조화)와
+  `spec.ts`(`buildSpec`)를 새 작업 창 · DOE 창이 함께 쓴다. 두 벌일 때 DOE 창은 재료 이름만 받고
+  영률 · 밀도를 강으로 못 박아 보냈다.
 - **결과에서 견줄 값은 `app/core/values.py` 가 꺼낸다** — 스터디 비교 · CSV · 메시 수렴 · 실측
   맞추기가 같은 값을 **mm · MPa · N · Hz 로 맞춰** 본다. Ansys 는 DPF 가 읽은 계 그대로(SI 면 m ·
   Pa), CalculiX 는 늘 mm · MPa 다 — 견주는 자리마다 단위를 맞추면 언젠가 하나가 안 맞고, 그때

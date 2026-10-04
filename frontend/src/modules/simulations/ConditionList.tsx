@@ -16,6 +16,7 @@ const KIND_LABELS: Record<string, string> = {
   contact: '접촉',
   load: '하중',
   mesh: '메시',
+  body: '파트',
   frame: '좌표계',
   analysis: '해석 설정',
 }

@@ -190,7 +190,7 @@
   "point": {
     "number": 3,
     "study": {
-      "id": "119dbba5-7ca0-4d47-8e64-dcd4684354a1",
+      "id": "787171c5-ead4-46be-87cd-eb513782f087",
       "name": "조건_전단이음",
       "method": "table",
       "seed": 1
@@ -888,11 +888,13 @@
         "defeature_size": null
       }
     ],
+    "body_settings": [],
     "coordinate_systems": []
   },
   "length_units": {
     "geometry": "mm",
     "regions": "mm",
+    "midsurface": "mm",
     "coordinate_systems": "mm"
   }
 }

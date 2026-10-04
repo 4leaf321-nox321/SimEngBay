@@ -132,6 +132,31 @@ def for_body(materials: list[Material], body: str) -> Material | None:
     return next((one for one in materials if one.every_body), None)
 
 
+def body_names(payload: Any) -> list[str]:
+    """점 파일의 `bodies[].name` — CAD 가 이름 붙인 파트들. 없으면 빈 목록."""
+    rows = payload.get("bodies") if isinstance(payload, dict) else None
+    names = [str(one.get("name") or "").strip() for one in rows or [] if isinstance(one, dict)]
+    return [one for one in names if one]
+
+
+def assigned(materials: list[Material], bodies: list[str]) -> dict[str, Material | None]:
+    """파트마다 붙을 물성 — **모델링과 같은 규칙**(`mechanical/build.py` 의 `_apply_material`
+    · `calculix/build.py` 의 `_materials`): 한 벌이면 「전체」 거나 파트가 하나일 때 모두에
+    붙고, 그 밖에는 파트마다 `for_body` 로 찾는다. 못 찾으면 `None`."""
+    if len(materials) == 1 and (materials[0].every_body or len(bodies) <= 1):
+        return dict.fromkeys(bodies, materials[0])
+    return {one: for_body(materials, one) for one in bodies}
+
+
+def uncovered(materials: list[Material], bodies: list[str]) -> list[str]:
+    """물성이 안 붙는 파트의 이름.
+
+    모델링은 이런 파트를 만나면 멈춘다 — 그대로 풀면 솔버의 기본값(구조용 강)이 붙고, 그
+    결과는 그럴듯하게 틀린다. 작업을 만들 때 미리 말해 주려고 여기 둔다.
+    """
+    return [name for name, one in assigned(materials, bodies).items() if one is None]
+
+
 # --- 읽기 ---------------------------------------------------------------------
 
 

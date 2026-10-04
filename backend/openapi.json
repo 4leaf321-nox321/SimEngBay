@@ -2281,7 +2281,7 @@
           "simulations"
         ],
         "summary": "Create",
-        "description": "형상(STEP)과, 구속을 걸 거라면 CAD 가 보낸 `topology.json` 을 함께 받는다.",
+        "description": "형상(STEP)과, 구속을 걸 거라면 CAD 가 보낸 `topology.json` 을 함께 받는다. 쉘 파트가\n있으면 중간면 형상(`pNNNN_mid.step`)도 받는다.",
         "operationId": "create_api_simulations_post",
         "requestBody": {
           "required": true,
@@ -2708,6 +2708,48 @@
         }
       }
     },
+    "/api/simulations/conditions/preview": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Preview Conditions",
+        "description": "CAD 점 파일 한 장을 **작업을 만들기 전에** 읽어 준다 — 영역 · 물성 · 해석 설정과, 그\n해석 종류에서 조건이 어떻게 다뤄지나. 저장하지 않는다.",
+        "operationId": "preview_conditions_api_simulations_conditions_preview_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_preview_conditions_api_simulations_conditions_preview_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConditionsPreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/doe/preview": {
       "get": {
         "tags": [
@@ -2724,6 +2766,22 @@
             "schema": {
               "type": "string",
               "title": "Path"
+            }
+          },
+          {
+            "name": "recipe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Recipe"
             }
           }
         ],
@@ -3903,6 +3961,18 @@
               }
             ],
             "title": "Topology"
+          },
+          "midsurface": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midsurface"
           }
         },
         "type": "object",
@@ -3911,6 +3981,31 @@
           "file"
         ],
         "title": "Body_create_api_simulations_post"
+      },
+      "Body_preview_conditions_api_simulations_conditions_preview_post": {
+        "properties": {
+          "recipe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_preview_conditions_api_simulations_conditions_preview_post"
       },
       "Body_upload_api_attachments_post": {
         "properties": {
@@ -3960,6 +4055,94 @@
           "file"
         ],
         "title": "Body_upload_api_attachments_post"
+      },
+      "CadBodyOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "volume_mm3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume Mm3"
+          },
+          "material": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material"
+          },
+          "suppressed": {
+            "type": "boolean",
+            "title": "Suppressed",
+            "default": false
+          },
+          "shell": {
+            "type": "boolean",
+            "title": "Shell",
+            "default": false
+          },
+          "setting": {
+            "type": "string",
+            "title": "Setting",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CadBodyOut",
+        "description": "CAD 가 이름 붙인 파트 하나와 거기 붙을 물성."
+      },
+      "CadMaterialOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "bodies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Bodies"
+          },
+          "youngs_modulus_gpa": {
+            "type": "number",
+            "title": "Youngs Modulus Gpa"
+          },
+          "poisson_ratio": {
+            "type": "number",
+            "title": "Poisson Ratio"
+          },
+          "density_kg_m3": {
+            "type": "number",
+            "title": "Density Kg M3"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "bodies",
+          "youngs_modulus_gpa",
+          "poisson_ratio",
+          "density_kg_m3"
+        ],
+        "title": "CadMaterialOut",
+        "description": "CAD 가 보낸 물성 한 벌 — 사람이 읽는 단위로."
       },
       "ChangePasswordRequest": {
         "properties": {
@@ -4105,6 +4288,102 @@
         "type": "object",
         "title": "ConditionsOut",
         "description": "작업 하나에 딸린 조건 전부.\n\n**없으면 `lines` 가 비어 있다** — 사람이 준 스펙으로 돈 것이다."
+      },
+      "ConditionsPreviewOut": {
+        "properties": {
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/RegionOut"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unresolved"
+          },
+          "bodies": {
+            "items": {
+              "$ref": "#/components/schemas/CadBodyOut"
+            },
+            "type": "array",
+            "title": "Bodies"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/CadMaterialOut"
+            },
+            "type": "array",
+            "title": "Materials"
+          },
+          "material_error": {
+            "type": "string",
+            "title": "Material Error",
+            "default": ""
+          },
+          "suggested_recipe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Recipe"
+          },
+          "suggested_modes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Modes"
+          },
+          "suggested_element_size_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Element Size Mm"
+          },
+          "suggested_order": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Order"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/ConditionsOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe",
+          "regions",
+          "conditions"
+        ],
+        "title": "ConditionsPreviewOut",
+        "description": "CAD 점 파일 한 장을 **작업을 만들기 전에** 읽은 것 — 무엇이 들었고 어떻게 다뤄지나."
       },
       "ConvergenceLevelOut": {
         "properties": {
@@ -4714,6 +4993,27 @@
               }
             ],
             "title": "Suggested Element Size Mm"
+          },
+          "suggested_order": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Order"
+          },
+          "conditions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConditionsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -5733,6 +6033,35 @@
         "title": "RecipeOut",
         "description": "화면이 새 작업 폼을 그리는 데 쓰는 레시피 목록과 JSON 스키마."
       },
+      "RegionOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "face",
+              "point",
+              "other"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "count",
+          "kind"
+        ],
+        "title": "RegionOut",
+        "description": "점 파일의 선택 그룹 하나."
+      },
       "RejectRequest": {
         "properties": {
           "note": {
@@ -6000,6 +6329,11 @@
             "type": "object",
             "title": "Source Meta"
           },
+          "solver": {
+            "type": "string",
+            "title": "Solver",
+            "default": "ansys"
+          },
           "owner_workspace_id": {
             "anyOf": [
               {
@@ -6210,6 +6544,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Source Meta"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver",
+            "default": "ansys"
           },
           "owner_workspace_id": {
             "anyOf": [

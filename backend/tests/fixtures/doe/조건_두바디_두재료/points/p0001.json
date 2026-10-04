@@ -134,7 +134,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "b439357c-9f07-4943-806f-6c586c8ed847",
+      "id": "ce8f5ba4-f238-4a0b-8e29-581be8192700",
       "name": "조건_두바디_두재료",
       "method": "factorial",
       "seed": 1
@@ -733,11 +733,13 @@
         "defeature_size": null
       }
     ],
+    "body_settings": [],
     "coordinate_systems": []
   },
   "length_units": {
     "geometry": "mm",
     "regions": "mm",
+    "midsurface": "mm",
     "coordinate_systems": "mm"
   }
 }

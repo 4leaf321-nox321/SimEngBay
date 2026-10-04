@@ -117,7 +117,9 @@ class Settings(BaseSettings):
     """단계를 어디서 돌리나 — fake · local · windows-bridge (app/core/executors). 개발 PC 는
     Ansys 가 Windows 에만 있어 `windows-bridge`, 운영 워커는 `local`, 시험은 `fake`."""
     simulation_solvers: str = ""
-    """이 워커가 **집을 솔버**(쉼표로 여럿). 비우면 전부 집는다.
+    """이 워커가 **집을 솔버**(쉼표로 여럿). 비우면 **이 기계에 깔린 것 전부**를 집는다 —
+    gmsh · ccx 가 없으면 CalculiX 를 빼고, 확인한 Ansys 가 없으면 Ansys 를 뺀다
+    (`app/worker.py` 의 `solvers_for`).
 
     쓰는 곳은 하나다: **Ansys 는 노드락 라이선스가 하나라 워커도 하나여야 하고, CalculiX 는
     라이선스가 없어 코어 수만큼 띄울 수 있다.** 그래서 운영은 이렇게 나눈다 —

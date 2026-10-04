@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core import boundary
 from app.core import probes as core_probes
 from app.core.dpf import probes
 from app.core.spec import HarmonicSpec
@@ -113,7 +114,7 @@ def extract(
         "damping_ratio": damping,
         "points": points,
         "peak": worst,
-        "material": spec.material.name,
+        "material": boundary.used_material(workdir, spec),
     }
     # **측정점마다 그 자리의 봉우리 한 줄** — 절점 거리와 「멀다」 경고가 여기 실린다.
     tops = core_probes.peaks(spots, points, unit=displacement_unit)

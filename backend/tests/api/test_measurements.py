@@ -149,6 +149,41 @@ def test_틀린_표는_줄_번호와_함께_전부_돌려준다(client: TestClie
     assert any(one.startswith("3줄") for one in errors)
 
 
+def test_화면의_표는_JSON_으로_오고_가운데_빈_줄도_줄_번호를_지킨다(
+    client: TestClient, member: Signed
+) -> None:
+    """화면의 실측 표(`MeasurementEntry`)는 로컬 파일 없이 **표 그대로 JSON** 으로 보낸다
+    (회사 PC 의 DRM). 칸마다 열 이름이 붙고 빈 칸은 빈 글이다. 가운데 빈 줄도 보내야 서버의 줄
+    번호가 화면의 줄 번호(+1, 머리줄)와 맞는다."""
+    job = _create(client, member, {"recipe": "modal", "material": MATERIAL})
+    blank = {"측정점": "", "종류": "", "주파수": "", "값": "", "단위": "", "성분": ""}
+    rows = [
+        {**blank, "종류": "공진", "주파수": "1250"},
+        blank,
+        {**blank, "측정점": "A", "종류": "가속", "주파수": "100", "값": "1"},
+    ]
+    body = json.dumps({"rows": rows}, ensure_ascii=False).encode("utf-8")
+    bad = client.post(
+        f"/api/simulations/{job['id']}/measurements",
+        data={"label": "화면"},
+        files={"file": ("화면 입력.json", io.BytesIO(body), "application/json")},
+        headers=member.headers,
+    )
+    assert bad.status_code == 400
+    # 화면의 3번 줄 = 서버의 4줄.
+    assert [one[:2] for one in bad.json()["error"]["details"]["errors"]] == ["4줄"]
+
+    good = json.dumps({"rows": rows[:2]}, ensure_ascii=False).encode("utf-8")
+    made = client.post(
+        f"/api/simulations/{job['id']}/measurements",
+        data={"label": "화면"},
+        files={"file": ("화면 입력.json", io.BytesIO(good), "application/json")},
+        headers=member.headers,
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["kinds"] == ["frequency"]
+
+
 def test_스터디에_붙이면_설계점마다_견주고_가장_가까운_점을_고른다(
     client: TestClient, member: Signed
 ) -> None:

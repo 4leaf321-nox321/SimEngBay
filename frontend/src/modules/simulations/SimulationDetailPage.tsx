@@ -1,20 +1,28 @@
 /**
- * 해석 작업 상세 — 단계 타임라인 · 요약 · 산출물.
+ * 해석 작업 상세 — **한눈에 보기 줄 + 탭 넷**(결과 · 진행 · 모델 · 검증 · 파일).
+ *
+ * 전에는 단계 · 요약 · 조건 · 결과 · 실측 · 수렴 · 산출물이 아래로만 쌓여, 사람이 먼저 보려는 결과가
+ * 화면 중간 아래에 있었다(2026-10-05). 이제 대표 숫자와 「믿어도 되나」 배지를 위에 두고, 나머지는
+ * 탭으로 가른다. **어느 탭을 여나는 상태가 정한다** — 끝났으면 결과, 아니면 진행 · 모델(실패도 그렇다
+ * — 어디서 왜 멈췄나가 거기 있다). 사람이 고른 탭은 주소(`?tab=`)에 남아, 스터디 · 수렴 표에서 오는
+ * 링크가 그 탭을 바로 연다.
  *
  * 끝나지 않은 작업은 2초마다 `/status` 를 폴링한다. 그 경로만 접근 로그를 비껴간다
  * (`shared/access_log.py`) — 상세 경로를 그대로 폴링하면 로그가 그 한 줄로 찬다.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Download, Eraser, RotateCcw, Square } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
-import type { Artifact, Simulation, Stage } from '@/modules/simulations/api'
+import type { Artifact, Convergence, Measurement, Simulation, Stage } from '@/modules/simulations/api'
 import { ConditionList } from '@/modules/simulations/ConditionList'
 import { ConvergencePanel } from '@/modules/simulations/ConvergencePanel'
 import { MeasurementsPanel } from '@/modules/simulations/MeasurementsPanel'
-import { ResultPanel } from '@/modules/simulations/ResultPanel'
+import { ResultGlance } from '@/modules/simulations/ResultGlance'
+import type { DetailTab } from '@/modules/simulations/ResultGlance'
+import { ResultPanel, useSimulationResult } from '@/modules/simulations/ResultPanel'
 import {
   ARTIFACT_LABELS,
   FAILURE_LABELS,
@@ -40,6 +48,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
@@ -88,11 +97,75 @@ const SUMMARY_LABELS: Record<string, string> = {
   // 「주파수가 왜 올랐지」 를 설명할 길이 없다.
   rigid_bodies: '강체 파트',
   suppressed_bodies: '해석 제외 파트',
+  shell_bodies: '쉘 파트',
+  mass_kg: '질량',
+  constrained_regions: '구속 영역',
+  shape_reused: '형상 캐시',
+  recipe: '해석 종류',
+  mode_shapes: '모드 그림',
+  tidied_bytes: '정리한 중간 파일',
 }
+
+/** 요약 묶음 — 메시 · 모델 · 해석 · 실행. 모르는 열쇠는 「기타」 로. */
+const SUMMARY_GROUPS: [string, string[]][] = [
+  ['메시', ['nodes', 'elements', 'element_size_mm', 'mesh_order', 'contact_pairs']],
+  [
+    '모델',
+    [
+      'bodies',
+      'mass_kg',
+      'material',
+      'material_from',
+      'youngs_modulus_gpa',
+      'density_kg_m3',
+      'rigid_bodies',
+      'suppressed_bodies',
+      'shell_bodies',
+      'constrained_regions',
+      'unit_system',
+      'input_bytes',
+    ],
+  ],
+  [
+    '해석',
+    [
+      'recipe',
+      'settings_from',
+      'modes',
+      'modes_requested',
+      'rigid_body_modes',
+      'first_elastic_hz',
+      'damping_ratio',
+      'frequency_points',
+      'max_displacement',
+      'max_von_mises',
+      'peak_hz',
+      'peak_displacement',
+      'mode_shapes',
+    ],
+  ],
+  [
+    '실행',
+    ['solver', 'ansys_version', 'solver_unit_system', 'solver_seconds', 'shape_reused', 'tidied_bytes'],
+  ],
+]
+
+function groupedSummary(rows: [string, unknown][]): [string, [string, unknown][]][] {
+  const known = new Set(SUMMARY_GROUPS.flatMap(([, keys]) => keys))
+  const byKey = new Map(rows)
+  const out: [string, [string, unknown][]][] = SUMMARY_GROUPS.map(([group, keys]) => [
+    group,
+    keys.filter((key) => byKey.has(key)).map((key) => [key, byKey.get(key)] as [string, unknown]),
+  ])
+  out.push(['기타', rows.filter(([key]) => !known.has(key))])
+  return out.filter(([, items]) => items.length > 0)
+}
+
+const TABS: DetailTab[] = ['result', 'progress', 'checks', 'files']
 
 function shownSummary(key: string, value: unknown): string {
   if (value == null) return '—'
-  if (key === 'input_bytes' && typeof value === 'number') return shownSize(value)
+  if ((key === 'input_bytes' || key === 'tidied_bytes') && typeof value === 'number') return shownSize(value)
   if (key === 'first_elastic_hz' && typeof value === 'number') return `${value.toFixed(2)} Hz`
   if (key === 'peak_hz' && typeof value === 'number') return `${value.toFixed(1)} Hz`
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
@@ -103,6 +176,9 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
   if (key === 'element_size_mm' && typeof value === 'number') return `${value} mm`
   if (key === 'contact_pairs') return value ? '있음' : '없음'
+  if (key === 'shape_reused') return value ? '다시 씀' : '새로 만듦'
+  if (key === 'mass_kg' && typeof value === 'number') return `${Number(value.toPrecision(4))} kg`
+  if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(' · ')
   if (key === 'density_kg_m3' && typeof value === 'number')
     return `${value.toLocaleString()} kg/m³`
   // 버전 번호는 자릿수를 구분하지 않는다 — 252 가 「252」 여야지 「252」 에 쉼표가 붙으면 안 된다.
@@ -111,8 +187,24 @@ function shownSummary(key: string, value: unknown): string {
   return String(value)
 }
 
+/** 검증 탭이 읽은 것. */
+interface Checked {
+  convergence?: Convergence
+  measurements?: Measurement[]
+}
+
+/**
+ * **작업마다 새로 띄운다.** 같은 주소 꼴(`/simulations/:id`)에서 「앞선 시도」 · 「원래 작업」 으로
+ * 넘어가면 React 는 화면을 그대로 두고 id 만 바꾼다 — 그러면 앞 작업의 정리 알림 · 오류 · 늦게 온
+ * 응답이 새 작업 위에 남고, 새 작업을 못 받으면 앞 작업이 오류 없이 그대로 보였다(그 위의
+ * 취소 · 정리 단추는 새 id 에 건다). 열쇠로 묶어 상태 전부를 작업과 함께 버린다(2026-10-05 리뷰).
+ */
 export default function SimulationDetailPage() {
   const { id = '' } = useParams()
+  return <SimulationDetail key={id} id={id} />
+}
+
+function SimulationDetail({ id }: { id: string }) {
   const initial = useResource(() => simulationApi.get(id), [id])
   // 폴링이 갱신하는 사본. 첫 응답은 `initial` 에서, 그 뒤는 `/status` 에서.
   const [live, setLive] = useState<Simulation | null>(null)
@@ -121,10 +213,34 @@ export default function SimulationDetailPage() {
 
   const simulation = live ?? initial.data
   const finished = simulation ? FINAL_STATUSES.has(simulation.status) : true
+  const done = simulation?.status === 'done'
+  // 결과는 한 번 받아 한눈에 보기 줄과 결과 탭이 함께 쓴다.
+  const loaded = useSimulationResult(id, simulation?.status ?? '')
 
-  useEffect(() => {
-    setLive(null)
-  }, [id])
+  // **어느 탭을 여나** — 주소에 고른 것이 있으면 그것(못 여는 탭이면 무시), 없으면 상태가 정한다:
+  // 끝났으면 결과, 아니면 진행 · 모델. 그래서 도는 동안 보던 화면이 끝나는 순간 결과로 넘어간다.
+  const [params, setParams] = useSearchParams()
+  const asked = params.get('tab') as DetailTab | null
+  const usable = (one: DetailTab) => done || (one !== 'result' && one !== 'checks')
+  const tab: DetailTab =
+    asked && TABS.includes(asked) && usable(asked) ? asked : done ? 'result' : 'progress'
+  function setTab(next: DetailTab) {
+    const after = new URLSearchParams(params)
+    after.set('tab', next)
+    setParams(after, { replace: true })
+  }
+
+  // **검증 탭이 새로 읽은 값** — 한눈에 보기의 배지가 그것을 따른다. 배지는 처음 한 번만 읽어서,
+  // 점검을 걸거나 실측을 올리고 돌아와도 옛 판정이 남아 있었다(2026-10-05 리뷰).
+  const [latest, setLatest] = useState<Checked>({})
+  const reportConvergence = useCallback(
+    (next: Convergence) => setLatest((was) => ({ ...was, convergence: next })),
+    [],
+  )
+  const reportMeasurements = useCallback(
+    (next: Measurement[]) => setLatest((was) => ({ ...was, measurements: next })),
+    [],
+  )
 
   useEffect(() => {
     if (finished || !id) return
@@ -241,7 +357,8 @@ export default function SimulationDetailPage() {
                 취소
               </Button>
             )}
-            {(simulation.status === 'failed' || simulation.status === 'canceled') && (
+            {/* 다시 가져와 대신한 작업이 있으면 그쪽에서 다시 건다 — 서버도 막는다(SIMULATIONS-0031). */}
+            {(simulation.status === 'failed' || simulation.status === 'canceled') && !replacedBy(simulation) && (
               <Button size="sm" onClick={retry} disabled={busy}>
                 <RotateCcw className="size-4" />
                 다시 실행
@@ -283,103 +400,147 @@ export default function SimulationDetailPage() {
         </Alert>
       )}
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium">단계</h2>
-        <ol className="divide-y rounded-md border">
-          {simulation.stages.map((stage: Stage) => (
-            <li key={stage.name} className="flex items-start gap-3 px-4 py-3">
-              <StatusBadge kind="stage" value={stage.status} className="mt-0.5 w-16 justify-center" />
-              <div className="min-w-0 flex-1">
-                <p className="font-medium">{STAGE_LABELS[stage.name] ?? stage.name}</p>
-                {stage.detail && <p className="text-muted-foreground text-sm">{stage.detail}</p>}
-                {stage.error_message && (
-                  <p className="text-destructive text-sm">{stage.error_message}</p>
-                )}
-              </div>
-              <div className="text-muted-foreground shrink-0 text-right text-xs">
-                {stage.started_at && <p>{shownDateTime(stage.started_at)}</p>}
-                {stage.started_at && <p>{shownDuration(stage.started_at, stage.finished_at)}</p>}
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      {summary.length > 0 && (
-        <section className="space-y-2">
-          <h2 className="text-sm font-medium">요약</h2>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-md border p-4 text-sm sm:grid-cols-3">
-            {summary.map(([key, value]) => (
-              <div key={key}>
-                <dt className="text-muted-foreground text-xs">{SUMMARY_LABELS[key] ?? key}</dt>
-                <dd className="font-medium">{shownSummary(key, value)}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      )}
-
-      {/* **조건을 조용히 무시하지 않는다** — 무엇을 반영하고 무엇을 넘겼는지 그대로 보인다. */}
-      <ConditionList conditions={simulation.conditions} />
-
-      {/* 결과 요약은 **끝난 뒤에 한 번만** 받는다. 폴링에 실으면 같은 파일을 2초마다 읽는다. */}
-      <ResultPanel
-        simulationId={id}
-        status={simulation.status}
-        artifacts={simulation.artifacts}
+      {/* **한눈에 보기** — 대표 숫자와 「이 숫자를 믿어도 되나」. 누르면 그 탭으로. */}
+      <ResultGlance
+        simulation={simulation}
+        result={loaded.result}
+        onJump={setTab}
+        convergence={latest.convergence}
+        measurements={latest.measurements}
       />
 
-      {/* **센서 자리의 실측과 같은 자리에서 견준다** — 차이를 변수(영률 · 감쇠)로 설명한다. */}
-      <MeasurementsPanel simulationId={id} status={simulation.status} />
+      <Tabs value={tab} onValueChange={(next) => setTab(next as DetailTab)}>
+        <TabsList variant="line">
+          <TabsTrigger value="result" disabled={!done} title={done ? undefined : '끝나면 나옵니다'}>
+            결과
+          </TabsTrigger>
+          <TabsTrigger value="progress">진행 · 모델</TabsTrigger>
+          <TabsTrigger value="checks" disabled={!done} title={done ? undefined : '끝나면 나옵니다'}>
+            검증
+          </TabsTrigger>
+          <TabsTrigger value="files">파일</TabsTrigger>
+        </TabsList>
 
-      {/* **이 값이 메시에 얼마나 기대나** — 요소 크기만 바꿔 다시 풀어 본다. */}
-      <ConvergencePanel
-        simulationId={id}
-        status={simulation.status}
-        solver={solverOf(simulation.spec)}
-      />
+        <TabsContent value="result" className="space-y-6 pt-4">
+          {/* 결과 요약은 **끝난 뒤에 한 번만** 받는다 — 한눈에 보기 줄과 같은 것을 쓴다. */}
+          <ResultPanel
+            simulationId={id}
+            status={simulation.status}
+            artifacts={simulation.artifacts}
+            loaded={loaded}
+          />
+        </TabsContent>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium">산출물</h2>
-        {simulation.artifacts.length === 0 ? (
-          <EmptyState title="산출물이 없습니다" hint="단계가 진행되면 여기에 표시됩니다." />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>종류</TableHead>
-                <TableHead>파일</TableHead>
-                <TableHead>단계</TableHead>
-                <TableHead>크기</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {simulation.artifacts.map((artifact: Artifact) => (
-                <TableRow key={artifact.id}>
-                  <TableCell>{ARTIFACT_LABELS[artifact.kind] ?? artifact.kind}</TableCell>
-                  <TableCell className="font-mono text-xs">{artifact.filename}</TableCell>
-                  <TableCell>{STAGE_LABELS[artifact.stage] ?? artifact.stage}</TableCell>
-                  <TableCell>{shownSize(artifact.size_bytes)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => download(artifact)}>
-                      <Download className="size-4" />
-                      다운로드
-                    </Button>
-                  </TableCell>
-                </TableRow>
+        <TabsContent value="progress" className="space-y-6 pt-4">
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium">단계</h2>
+            {/* **가로 진행 막대** — 어디까지 왔고 어디서 멈췄나를 한 줄에. */}
+            <ol className="grid gap-2 md:grid-cols-4">
+              {simulation.stages.map((stage: Stage, index) => (
+                <li
+                  key={stage.name}
+                  className={`space-y-1 rounded-md border p-3 ${stage.status === 'failed' ? 'border-destructive' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground text-xs">{index + 1}</span>
+                    <StatusBadge kind="stage" value={stage.status} />
+                  </div>
+                  <p className="font-medium">{STAGE_LABELS[stage.name] ?? stage.name}</p>
+                  {stage.started_at && (
+                    <p className="text-muted-foreground text-xs">
+                      {shownDateTime(stage.started_at)} · {shownDuration(stage.started_at, stage.finished_at)}
+                    </p>
+                  )}
+                  {stage.detail && <p className="text-muted-foreground text-sm">{stage.detail}</p>}
+                  {stage.error_message && <p className="text-destructive text-sm">{stage.error_message}</p>}
+                </li>
               ))}
-            </TableBody>
-          </Table>
-        )}
-      </section>
+            </ol>
+          </section>
 
-      <details className="rounded-md border">
-        <summary className="cursor-pointer px-4 py-2 text-sm font-medium">스펙</summary>
-        <pre className="text-muted-foreground overflow-x-auto px-4 pb-3 text-xs">
-          {JSON.stringify(simulation.spec, null, 2)}
-        </pre>
-      </details>
+          {summary.length > 0 && (
+            <section className="space-y-2">
+              <h2 className="text-sm font-medium">요약</h2>
+              {/* **묶어서 보인다** — 키 스무 개를 한 판에 늘어놓으면 「절점이 몇이었지」 를 찾기 어렵다. */}
+              <div className="grid gap-3 md:grid-cols-2">
+                {groupedSummary(summary).map(([group, rows]) => (
+                  <div key={group} className="rounded-md border p-3">
+                    <h3 className="text-muted-foreground mb-2 text-xs font-medium">{group}</h3>
+                    <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                      {rows.map(([key, value]) => (
+                        <div key={key} className="min-w-0">
+                          <dt className="text-muted-foreground text-xs">{SUMMARY_LABELS[key] ?? key}</dt>
+                          <dd className="truncate font-medium" title={shownSummary(key, value)}>
+                            {shownSummary(key, value)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* **조건을 조용히 무시하지 않는다** — 무엇을 반영하고 무엇을 넘겼는지 그대로 보인다. */}
+          <ConditionList conditions={simulation.conditions} />
+        </TabsContent>
+
+        <TabsContent value="checks" className="space-y-8 pt-4">
+          {/* **이 숫자를 믿어도 되나** — 실측과 견주고, 메시에 얼마나 기대는지 본다. */}
+          <MeasurementsPanel simulationId={id} status={simulation.status} onData={reportMeasurements} />
+          <ConvergencePanel
+            simulationId={id}
+            status={simulation.status}
+            solver={solverOf(simulation.spec)}
+            onData={reportConvergence}
+          />
+        </TabsContent>
+
+        <TabsContent value="files" className="space-y-6 pt-4">
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium">산출물</h2>
+            {simulation.artifacts.length === 0 ? (
+              <EmptyState title="산출물이 없습니다" hint="단계가 진행되면 여기에 표시됩니다." />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>종류</TableHead>
+                    <TableHead>파일</TableHead>
+                    <TableHead>단계</TableHead>
+                    <TableHead>크기</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {simulation.artifacts.map((artifact: Artifact) => (
+                    <TableRow key={artifact.id}>
+                      <TableCell>{ARTIFACT_LABELS[artifact.kind] ?? artifact.kind}</TableCell>
+                      <TableCell className="font-mono text-xs">{artifact.filename}</TableCell>
+                      <TableCell>{STAGE_LABELS[artifact.stage] ?? artifact.stage}</TableCell>
+                      <TableCell>{shownSize(artifact.size_bytes)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="sm" onClick={() => download(artifact)}>
+                          <Download className="size-4" />
+                          다운로드
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </section>
+
+          <details className="rounded-md border">
+            <summary className="cursor-pointer px-4 py-2 text-sm font-medium">스펙</summary>
+            <pre className="text-muted-foreground overflow-x-auto px-4 pb-3 text-xs">
+              {JSON.stringify(simulation.spec, null, 2)}
+            </pre>
+          </details>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -388,6 +549,49 @@ export default function SimulationDetailPage() {
  * **이 작업은 어디서 왔나** — DOE 설계점이면 그 스터디로, 메시 수렴 점검이면 원래 작업으로
  * 가는 길. 없으면 설계점 하나를 보다가 같은 스터디의 다른 점과 견줄 길을 잃는다.
  */
+/**
+ * **앞선 시도** — 실패 · 취소한 점을 CompCore 가 고쳐 다시 내보낸 폴더에서 다시 가져오면, 새 작업이
+ * 옛 작업을 가리킨다(`source_meta.previous`). 옛 작업은 지우지 않는다 — 왜 실패했는지 거기서 읽는다.
+ */
+/** 이 시도를 대신해 다시 가져온 작업의 id — 없으면 null. */
+function replacedBy(simulation: Simulation): string | null {
+  const value = (simulation.source_meta ?? {})['superseded_by']
+  return typeof value === 'string' && value ? value : null
+}
+
+function PreviousAttempts({ meta }: { meta: Record<string, unknown> }) {
+  const previous = Array.isArray(meta.previous) ? meta.previous.map(String) : []
+  // **옛 시도에서는 새 작업으로 간다** — 실패 목록에서 옛 시도를 열면 이미 다시 가져왔다는 것을
+  // 알 길이 없었다.
+  const replaced = typeof meta.superseded_by === 'string' && meta.superseded_by ? meta.superseded_by : null
+  if (replaced) {
+    return (
+      <>
+        {' '}
+        · 다시 가져옴 —{' '}
+        <Link to={`/simulations/${replaced}`} className="font-medium hover:underline">
+          새 작업 보기
+        </Link>
+      </>
+    )
+  }
+  if (previous.length === 0) return null
+  return (
+    <>
+      {' '}
+      · 다시 가져옴 — 앞선 시도{' '}
+      {previous.map((id, index) => (
+        <span key={id}>
+          {index > 0 && ', '}
+          <Link to={`/simulations/${id}`} className="font-medium hover:underline">
+            {previous.length > 1 ? `${index + 1}` : '보기'}
+          </Link>
+        </span>
+      ))}
+    </>
+  )
+}
+
 function SourceLine({ simulation }: { simulation: Simulation }) {
   const meta = (simulation.source_meta ?? {}) as Record<string, unknown>
   if (simulation.source_kind === 'doe_point') {
@@ -404,6 +608,7 @@ function SourceLine({ simulation }: { simulation: Simulation }) {
         </Link>{' '}
         의 설계점 p{String(meta.point ?? 0).padStart(4, '0')}
         {params && ` (${params})`}
+        <PreviousAttempts meta={meta} />
       </p>
     )
   }
@@ -412,6 +617,7 @@ function SourceLine({ simulation }: { simulation: Simulation }) {
     return (
       <p className="text-muted-foreground text-sm">
         CAD 설계 <span className="font-medium">{String(meta.study_name ?? '—')}</span>
+        <PreviousAttempts meta={meta} />
       </p>
     )
   }

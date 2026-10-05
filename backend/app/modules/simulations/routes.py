@@ -385,9 +385,14 @@ def request_convergence(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ConvergenceOut:
-    """끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 크기마다 작업 하나."""
+    """끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 원래 대비 비율(기본) 또는 크기(mm)."""
     return services.request_convergence(
-        db, user=user, simulation_id=simulation_id, sizes_mm=body.sizes_mm, solver=body.solver
+        db,
+        user=user,
+        simulation_id=simulation_id,
+        ratios=body.ratios,
+        sizes_mm=body.sizes_mm,
+        solver=body.solver,
     )
 
 

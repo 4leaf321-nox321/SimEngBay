@@ -33,9 +33,9 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { Convergence } from '@/modules/simulations/api'
-import { ConvergencePanel, suggestedSizes } from '@/modules/simulations/ConvergencePanel'
+import { ConvergencePanel, SUGGESTED_RATIOS } from '@/modules/simulations/ConvergencePanel'
 
-const LEVEL = { status: 'done', solver: 'calculix' }
+const LEVEL = { status: 'done', solver: 'calculix', local_scale: 1, ratio: null }
 
 const CHECKED: Convergence = {
   original_id: 'a',
@@ -116,18 +116,65 @@ describe('메시 수렴', () => {
     expect(simulationApi.convergence).not.toHaveBeenCalled()
   })
 
-  it('기준 크기에서 고르게 줄인 두 크기를 제안하고 그대로 보낸다', async () => {
-    expect(suggestedSizes(5)).toEqual(['3.5', '2.5'])
-    expect(suggestedSizes(null)).toEqual(['', ''])
+  it('원래 대비 비율(×0.7 · ×0.5)을 제안하고 비율로 보낸다', async () => {
+    // **mm 를 맞춰 치게 하지 않는다** — 전체와 파트 · 면이 모두 원래 대비 같은 비율로 줄어든다.
+    expect(SUGGESTED_RATIOS).toEqual(['0.7', '0.5'])
     show()
     await waitFor(() => expect(screen.getByText('수렴')).toBeDefined())
     await userEvent.click(screen.getByRole('button', { name: /메시 수렴 점검/ }))
-    expect((screen.getByLabelText('요소 크기 1 (mm)') as HTMLInputElement).value).toBe('3.5')
+    expect((screen.getByLabelText('정련 비율 1 (원래 대비)') as HTMLInputElement).value).toBe('0.7')
+    // 원래 5 mm → ×0.7 · ×0.5 = 3.5 · 2.5 mm.
+    const whole = screen.getByRole('row', { name: /^전체/ })
+    expect(whole.textContent).toContain('3.5')
+    expect(whole.textContent).toContain('2.5')
     await userEvent.click(screen.getByRole('button', { name: /2건 실행/ }))
     await waitFor(() => expect(simulationApi.requestConvergence).toHaveBeenCalled())
     expect(vi.mocked(simulationApi.requestConvergence).mock.calls[0][1]).toEqual({
-      sizes_mm: [3.5, 2.5],
+      ratios: [0.7, 0.5],
       solver: 'calculix',
     })
+  })
+
+  it('전체와 파트 · 면별 요소 크기를 창과 결과 표에 보인다', async () => {
+    vi.mocked(simulationApi.convergence).mockResolvedValue({
+      ...CHECKED,
+      base_size_mm: 4,
+      levels: [
+        { ...LEVEL, simulation_id: 'a', element_size_mm: 4, nodes: 9000, is_original: true, ratio: 1 },
+        { ...LEVEL, simulation_id: 'b', element_size_mm: 2, nodes: 60000, is_original: false, ratio: 0.5, local_scale: 0.5 },
+      ],
+      local_sizes: [
+        { name: '기둥', kind: 'part', size_mm: 1.5 },
+        { name: '기둥 끝', kind: 'face', size_mm: 0.8 },
+      ],
+    })
+    show()
+    // 결과 표 — 비율 · 전체 · 파트 · 면 열.
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: /기둥 파트/ })).toBeDefined())
+    expect(screen.getByRole('columnheader', { name: /기둥 끝 면/ })).toBeDefined()
+    const level = screen.getByRole('row', { name: /^×0\.5/ })
+    expect(level.textContent).toContain('0.75')
+    expect(level.textContent).toContain('0.4')
+
+    await userEvent.click(screen.getByRole('button', { name: /메시 수렴 점검/ }))
+    const row = (name: string) => screen.getByRole('row', { name: new RegExp(`^${name}`) })
+    // ×0.7 · ×0.5 → 전체 2.8 · 2, 기둥 1.05 · 0.75, 기둥 끝 0.56 · 0.4.
+    expect(row('전체').textContent).toContain('2.8')
+    expect(row('기둥 파트').textContent).toContain('1.05')
+    expect(row('기둥 끝 면').textContent).toContain('0.56')
+    // 비율을 고치면 따라 바뀐다.
+    await userEvent.clear(screen.getByLabelText('정련 비율 2 (원래 대비)'))
+    await userEvent.type(screen.getByLabelText('정련 비율 2 (원래 대비)'), '0.25')
+    expect(row('기둥 파트').textContent).toContain('0.375')
+    expect(row('전체').textContent).toContain('1')
+  })
+
+  it('원래 전체 크기를 모르면 비율을 곱할 기준이 없다고 말하고 실행하지 않는다', async () => {
+    vi.mocked(simulationApi.convergence).mockResolvedValue({ ...CHECKED, base_size_mm: null })
+    show()
+    await waitFor(() => expect(screen.getByText('수렴')).toBeDefined())
+    await userEvent.click(screen.getByRole('button', { name: /메시 수렴 점검/ }))
+    expect(screen.getByText(/비율을 곱할 기준이 없습니다/)).toBeDefined()
+    expect(screen.getByRole('button', { name: /건 실행/ })).toBeDisabled()
   })
 })

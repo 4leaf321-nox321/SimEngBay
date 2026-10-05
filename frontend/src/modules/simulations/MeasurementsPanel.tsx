@@ -17,9 +17,10 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Download, Trash2, Upload } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 
 import { simulationApi } from '@/modules/simulations/api'
+import { MeasurementEntry } from '@/modules/simulations/MeasurementEntry'
 import type { Comparison, FrfComparison, Measurement } from '@/modules/simulations/api'
 import { shownValue } from '@/modules/simulations/format'
 import { ApiError } from '@/shared/api/client'
@@ -27,8 +28,6 @@ import { Spectrum, colorAt } from '@/shared/charts'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
-import { Input } from '@/shared/components/ui/input'
-import { Label } from '@/shared/components/ui/label'
 import {
   Table,
   TableBody,
@@ -59,86 +58,6 @@ function shownPct(value: number | null | undefined): string {
 
 function percent(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : `${(value * 100).toFixed(2)}%`
-}
-
-/** 실측 표를 올리는 칸 — 작업과 스터디가 함께 쓴다. */
-export function MeasurementUpload({
-  onUpload,
-}: {
-  onUpload: (file: File, label: string) => Promise<void>
-}) {
-  const [file, setFile] = useState<File | null>(null)
-  const [label, setLabel] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<ApiError | Error | null>(null)
-  const [round, setRound] = useState(0)
-
-  async function upload() {
-    if (!file) return
-    setBusy(true)
-    setError(null)
-    try {
-      await onUpload(file, label)
-      setFile(null)
-      setLabel('')
-      setRound((value) => value + 1)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught : new Error('실측을 업로드하지 못했습니다.'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const details =
-    error instanceof ApiError && Array.isArray((error.details as { errors?: unknown })?.errors)
-      ? ((error.details as { errors: string[] }).errors ?? [])
-      : []
-
-  return (
-    <div className="space-y-2 rounded-md border p-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="measurement-file">실측 표 (CSV · 탭 · JSON)</Label>
-          <Input
-            key={round}
-            id="measurement-file"
-            type="file"
-            accept=".csv,.tsv,.txt,.json,text/csv"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="measurement-label">이름</Label>
-          <Input
-            id="measurement-label"
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            placeholder={file?.name ?? '예: 시편 1 · 10월 1일'}
-          />
-        </div>
-        <Button size="sm" onClick={upload} disabled={!file || busy}>
-          <Upload className="size-4" />
-          {busy ? '업로드 중…' : '업로드'}
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => void simulationApi.measurementTemplate()}>
-          <Download className="size-4" />
-          양식 다운로드
-        </Button>
-      </div>
-      <p className="text-muted-foreground text-xs">
-        한 표에 측정점 · 종류(공진 · FRF · 변위 · 변형률) · 주파수 · 값 · 단위 · 성분을 담습니다. 측정점
-        이름은 CAD 점 그룹 이름과 같아야 합니다.
-      </p>
-      <ErrorNotice error={error} />
-      {details.length > 1 && (
-        <ul className="text-destructive space-y-0.5 text-xs">
-          {details.map((one) => (
-            <li key={one}>{one}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
 }
 
 function FrequencyView({ comparison }: { comparison: NonNullable<Comparison['frequency']> }) {
@@ -315,7 +234,16 @@ export function ComparisonView({ comparison }: { comparison: Comparison }) {
   )
 }
 
-export function MeasurementsPanel({ simulationId, status }: { simulationId: string; status: string }) {
+export function MeasurementsPanel({
+  simulationId,
+  status,
+  onData,
+}: {
+  simulationId: string
+  status: string
+  /** 새로 읽었다(올리거나 지운 뒤 포함) — 한눈에 보기 줄이 따라 바꾼다. 같은 함수를 줘야 한다. */
+  onData?: (rows: Measurement[]) => void
+}) {
   const [rows, setRows] = useState<Measurement[] | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [removing, setRemoving] = useState<Measurement | null>(null)
@@ -328,7 +256,10 @@ export function MeasurementsPanel({ simulationId, status }: { simulationId: stri
     simulationApi
       .measurements(simulationId)
       .then((found) => {
-        if (!disposed) setRows(found)
+        if (disposed) return
+        setRows(found)
+        // 한 번 못 받은 것(5초 폴링 중 한 번 등)이 다음에 받은 표 위에 남지 않게.
+        setError(null)
       })
       .catch((caught: unknown) => {
         if (!disposed) setError(caught instanceof Error ? caught : new Error('실측을 읽지 못했습니다.'))
@@ -338,13 +269,17 @@ export function MeasurementsPanel({ simulationId, status }: { simulationId: stri
     }
   }, [simulationId, done, tick])
 
+  useEffect(() => {
+    if (rows) onData?.(rows)
+  }, [rows, onData])
+
   if (!done) return null
 
   return (
     <section className="space-y-3">
       <h2 className="text-sm font-medium">실측과 맞추기</h2>
-      <MeasurementUpload
-        onUpload={async (file, label) => {
+      <MeasurementEntry
+        onSubmit={async (file, label) => {
           await simulationApi.addMeasurement(simulationId, file, label)
           setTick((value) => value + 1)
         }}
@@ -352,7 +287,7 @@ export function MeasurementsPanel({ simulationId, status }: { simulationId: stri
       <ErrorNotice error={error} />
       {rows && rows.length === 0 && (
         <p className="text-muted-foreground text-sm">
-          아직 붙인 실측이 없습니다 — 센서 자리의 공진 · FRF · 변위 · 변형률을 올리면 이 결과와 같은 자리에서
+          아직 붙인 실측이 없습니다 — 센서 자리의 공진 · FRF · 변위 · 변형률을 위 표에 넣고 검토하면 이 결과와 같은 자리에서
           견줍니다.
         </p>
       )}

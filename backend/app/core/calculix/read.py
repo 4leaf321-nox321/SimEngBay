@@ -80,7 +80,9 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
             one["dominant_direction"] = direction
             one["effective_mass_ratio"] = round(ratios[direction][int(one["number"])], 4)
 
-    shapes = _draw_modes(workdir, [one["number"] for one in elastic[:VISUAL_MODES]], modes)
+    shapes, parts = _draw_modes(
+        workdir, [one["number"] for one in elastic[:VISUAL_MODES]], modes
+    )
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
     # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
@@ -100,6 +102,8 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         **({"participation": ratios} if ratios else {}),
         **({"probes": spots} if spots else {}),
+        # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
+        **({"parts": parts} if parts else {}),
     }
     loose = [
         one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
@@ -182,22 +186,31 @@ def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, 
     return made
 
 
-def _draw_modes(workdir: Path, wanted: list[int], modes: list[dict[str, Any]]) -> list[str]:
-    """고른 모드의 형상을 `.vtp` 로 쓴다. **못 만들면 그림만 없다** — 해석은 끝난 것이다.
+def _draw_modes(
+    workdir: Path, wanted: list[int], modes: list[dict[str, Any]]
+) -> tuple[list[str], list[str]]:
+    """고른 모드의 형상을 `.vtp` 로 쓴다 — (파일 이름들, 파트 이름들). **못 만들면 그림만
+    없다** — 해석은 끝난 것이다.
 
     `.frd` 의 블록 순서가 모드 순서다. 표면 삼각형은 `.msh` 에서 다시 읽는다 — 모델링이 남긴
-    파일이 정본이고, 그래야 이 단계를 따로 다시 돌릴 수 있다.
+    파일이 정본이고, 그래야 이 단계를 따로 다시 돌릴 수 있다. 파트는 모드마다 같다
+    (`vtp.parted`).
     """
     result = workdir / "model.frd"
     msh = workdir / "model.msh"
     if not wanted or not result.is_file() or not msh.is_file():
-        return []
+        return [], []
     try:
         mesh = read_mesh(msh)
         blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("모드 형상을 못 읽었습니다 — 그림 없이 갑니다", exc_info=True)
-        return []
+        return [], []
+    try:
+        triangles, parts, names = vtp.parted(mesh, workdir)
+    except Exception:  # pragma: no cover - 나누기만 못 한다
+        logger.warning("그림을 파트로 못 나눴습니다 — 나누지 않고 그립니다", exc_info=True)
+        triangles, parts, names = list(mesh.triangles), None, []
 
     by_mode = {index: block for index, block in enumerate(blocks, start=1)}
     made: list[str] = []
@@ -210,9 +223,10 @@ def _draw_modes(workdir: Path, wanted: list[int], modes: list[dict[str, Any]]) -
         counts = vtp.write(
             workdir / name,
             nodes=mesh.nodes,
-            triangles=mesh.triangles,
+            triangles=triangles,
             displacement=block.values,
             magnitude=magnitude,
+            parts=parts,
         )
         made.append(name)
         for one in modes:
@@ -220,7 +234,7 @@ def _draw_modes(workdir: Path, wanted: list[int], modes: list[dict[str, Any]]) -
                 one["vtp"] = name
                 one["max_displacement"] = round(max(magnitude.values(), default=0.0), 8)
                 one["points"] = counts["points"]
-    return made
+    return made, (names if made else [])
 
 
 def _declared(workdir: Path) -> tuple[bool, dict[str, int]]:

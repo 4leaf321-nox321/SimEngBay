@@ -116,6 +116,13 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert {one["mode"] for one in result["probes"]} == elastic
     assert all(len(one["vector"]) == 3 for one in result["probes"])
 
+    # **그림은 파트마다 나뉜다** — 화면이 파트를 보이고 숨긴다. 이름은 모델링이 짝지은 것이고,
+    # 그림의 셀 배열 `part` 가 그 순서의 번호다(두 바디가 맞닿은 면은 둘 다에 한 번씩).
+    assert sorted(result["parts"]) == ["기둥", "받침판"]
+    drawn = (tmp_path / "mode_01.vtp").read_text(encoding="utf-8")
+    numbers = drawn.split('Name="part" format="ascii">')[1].split("</DataArray>")[0].split()
+    assert set(numbers) == {"0", "1"}
+
     first = result["modes"][0]["frequency_hz"]
     # **Ansys 1,266.4 Hz 와 맞는가.** 메시가 같지 않으므로(gmsh 가 더 촘촘하다) 2% 로 본다.
     assert first == pytest.approx(1266.4, rel=0.02), f"1차 굽힘이 {first} Hz 로 나왔다"
@@ -851,3 +858,7 @@ def test_쉘_브래킷의_고유진동수가_솔리드와_맞는다(ready: None,
         _run(work, spec)
         first[solid] = _first(work)
     assert first[False] == pytest.approx(first[True], rel=0.02)
+    # 그림의 파트 — 쉘 파트는 꺾인 중간면 여럿이어도 **한 파트**다(이름 하나로 숨긴다).
+    for kind in ("shell", "solid"):
+        result = json.loads((tmp_path / kind / "result.json").read_text(encoding="utf-8"))
+        assert result["parts"] == ["지그블록", "브래킷"], kind

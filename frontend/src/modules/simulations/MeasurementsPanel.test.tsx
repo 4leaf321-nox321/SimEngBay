@@ -138,15 +138,19 @@ describe('실측과 맞추기', () => {
     await waitFor(() => expect(screen.getByText(/이 작업은 정적이 아닙니다/)).toBeDefined())
   })
 
-  it('표를 업로드하면 다시 읽는다', async () => {
+  it('화면의 표에 넣고 검토하면 그 표를 보내고 다시 읽는다 — 로컬 파일을 거치지 않는다', async () => {
     render(<MeasurementsPanel simulationId="sim" status="done" />)
     await waitFor(() => expect(screen.getByText('시편 1')).toBeDefined())
-    const file = new File(['종류,주파수\n공진,1250\n'], '실측.csv', { type: 'text/csv' })
-    await userEvent.upload(screen.getByLabelText('실측 표 (CSV · 탭 · JSON)'), file)
+    await userEvent.type(screen.getByLabelText('1번 줄 종류'), '공진')
+    await userEvent.type(screen.getByLabelText('1번 줄 주파수 (Hz)'), '1250')
     await userEvent.type(screen.getByLabelText('이름'), '시편 2')
-    await userEvent.click(screen.getByRole('button', { name: /업로드/ }))
+    await userEvent.click(screen.getByRole('button', { name: '검토' }))
     await waitFor(() => expect(simulationApi.addMeasurement).toHaveBeenCalled())
-    expect(vi.mocked(simulationApi.addMeasurement).mock.calls[0][2]).toBe('시편 2')
+    const [, sent, label] = vi.mocked(simulationApi.addMeasurement).mock.calls[0]
+    expect(label).toBe('시편 2')
+    expect(JSON.parse(await sent.text())).toEqual({
+      rows: [{ 측정점: '', 종류: '공진', 주파수: '1250', 값: '', 단위: '', 성분: '' }],
+    })
     await waitFor(() => expect(simulationApi.measurements).toHaveBeenCalledTimes(2))
   })
 
@@ -163,12 +167,13 @@ describe('실측과 맞추기', () => {
     )
     render(<MeasurementsPanel simulationId="sim" status="done" />)
     await waitFor(() => expect(screen.getByText('시편 1')).toBeDefined())
-    await userEvent.upload(
-      screen.getByLabelText('실측 표 (CSV · 탭 · JSON)'),
-      new File(['x'], 'bad.csv', { type: 'text/csv' }),
-    )
-    await userEvent.click(screen.getByRole('button', { name: /업로드/ }))
-    await waitFor(() => expect(screen.getByText(/3줄: 변위에는/)).toBeDefined())
+    await userEvent.type(screen.getByLabelText('1번 줄 종류'), '가속')
+    await userEvent.type(screen.getByLabelText('2번 줄 종류'), '변위')
+    await userEvent.click(screen.getByRole('button', { name: '검토' }))
+    // 서버의 줄 번호(머리가 1 줄)를 **표의 줄 번호로** — 그 줄도 붉게 칠한다.
+    await waitFor(() => expect(screen.getByText(/2번 줄: 변위에는/)).toBeDefined())
+    expect(screen.getByText(/1번 줄: 모르는 종류/)).toBeDefined()
+    expect(screen.getByLabelText('2번 줄 종류').closest('tr')?.className).toContain('bg-destructive')
   })
 
   it('끝나지 않은 작업에는 나타나지 않는다', () => {

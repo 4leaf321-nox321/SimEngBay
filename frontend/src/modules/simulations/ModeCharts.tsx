@@ -173,7 +173,7 @@ export function ModeCharts({ result, onPick, selected }: Props) {
 
       {selected != null && view === 'spectrum' && (
         <p className="text-muted-foreground text-xs">
-          줄기를 누르면 아래 3D 뷰어가 그 모드로 바뀝니다.
+          줄기를 누르면 위 3D 뷰어에서 그 모드를 크게 엽니다.
         </p>
       )}
     </div>

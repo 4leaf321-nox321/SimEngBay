@@ -55,6 +55,13 @@ class MeshSpec(BaseModel):
     """비우면 Mechanical 의 기본 크기. Student 판은 절점 상한이 있어 개발 PC 에서는 크게
     준다."""
     order: Literal["quadratic", "linear"] = "quadratic"
+    local_scale: float = Field(default=1.0, gt=0, le=10)
+    """CAD 가 적은 **파트 요소 크기 · 면 국부 크기**에 곱하는 배율. 1 이면 CAD 값 그대로다.
+
+    메시 수렴 점검이 쓴다(비례 정련) — 전체 크기만 줄이면 CAD 가 크기를 적은 파트 · 면은
+    그대로라 정련이 고르지 않았다. 점검은 수준마다 「새 크기 / 원래 크기」 를 여기 적고,
+    모델링이 조건을 읽은 직후 곱한다(`conditions.scaled`). 점 파일은 CAD 가 보낸 그대로 둔다 —
+    출처를 따라가야 한다."""
 
 
 class Constraint(BaseModel):

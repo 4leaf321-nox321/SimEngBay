@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StageOut(BaseModel):
@@ -425,14 +425,31 @@ class SolverAvailabilityOut(BaseModel):
 
 
 class ConvergenceRequest(BaseModel):
-    """같은 설계점을 **요소 크기만 바꿔** 다시 푼다 — 크기마다 작업 하나."""
+    """같은 설계점을 **요소 크기만 바꿔** 다시 푼다 — 수준마다 작업 하나.
 
-    sizes_mm: list[float] = Field(min_length=1, max_length=4)
-    """새로 풀 전역 요소 크기들(mm). 원래 작업의 크기는 넣지 않아도 한 수준으로 들어간다."""
+    `ratios` 가 기본이다 — **원래 대비 비율**(예: 0.7 · 0.5)로 전체 크기와 CAD 가 크기를 적은
+    파트 · 면을 모두 같은 비율로 줄인다. 원래 작업의 크기를 몰라도 사람이 mm 를 맞춰 칠 일이
+    없다. `sizes_mm` 는 옛 방식이다(전체 크기를 mm 로 — 파트 · 면은 그 비율로 따라간다).
+    """
+
+    ratios: list[float] | None = Field(default=None, min_length=1, max_length=4)
+    """원래 대비 정련 비율. 1 보다 작으면 촘촘하게, 크면 성기게."""
+    sizes_mm: list[float] | None = Field(default=None, min_length=1, max_length=4)
+    """(옛 방식) 새로 풀 전체 요소 크기들(mm)."""
     solver: Literal["ansys", "calculix"] | None = None
     """비우면 원래 작업의 솔버. **솔버를 바꾸면 그 차이(몇 %)가 메시 차이로 읽힌다** — 그래서
     판정은 한 솔버의 수준끼리만 하고, 원래 크기도 그 솔버로 다시 푼다(CalculiX 로 점검하면
     Ansys 라이선스를 쓰지 않는다)."""
+
+    @model_validator(mode="after")
+    def _one_way(self) -> ConvergenceRequest:
+        if (self.ratios is None) == (self.sizes_mm is None):
+            raise ValueError("ratios 와 sizes_mm 중 하나만 줍니다")
+        # services.MIN_RATIO · MAX_RATIO 와 같다 — 열 배 촘촘하게(요소 수 천 배)부터 두 배
+        # 성기게까지.
+        if self.ratios is not None and any(not 0.1 <= one <= 2 for one in self.ratios):
+            raise ValueError("비율은 0.1 이상 2 이하여야 합니다")
+        return self
 
 
 class ConvergenceLevelOut(BaseModel):
@@ -444,6 +461,20 @@ class ConvergenceLevelOut(BaseModel):
     status: str
     solver: str
     is_original: bool = False
+    local_scale: float = 1.0
+    """CAD 가 적은 파트 · 면 요소 크기에 곱한 배율(비례 정련). 원래 작업은 1 이다."""
+    ratio: float | None = None
+    """원래 대비 전체 크기 비율. 원래 작업은 1, 원래 크기를 모르면 없다."""
+
+
+class ConvergenceLocalSizeOut(BaseModel):
+    """CAD 가 요소 크기를 적은 자리 하나 — 점검 수준마다 같은 비율로 줄어든다."""
+
+    name: str
+    kind: Literal["part", "face"]
+    """파트(파트별 설정) · 면(국부 메시)."""
+    size_mm: float
+    """원래 작업이 쓴 크기(mm). CAD 가 선언한 계의 값을 mm 로 바꿨다."""
 
 
 ConvergenceStatus = Literal[
@@ -481,6 +512,8 @@ class ConvergenceOut(BaseModel):
     metrics: list[ConvergenceMetricOut]
     notes: list[str] = Field(default_factory=list)
     """판정을 읽을 때 알아야 할 것 — 솔버가 섞였다 · 접촉 강성이 크기를 따라간다 등."""
+    local_sizes: list[ConvergenceLocalSizeOut] = Field(default_factory=list)
+    """CAD 가 요소 크기를 적은 파트 · 면 — 점검 창이 수준마다 몇 mm 가 되는지 미리 보인다."""
 
 
 # --- 실측 ---------------------------------------------------------------------------

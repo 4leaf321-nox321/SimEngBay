@@ -75,6 +75,7 @@ from app.modules.simulations.schemas import (
     ConditionsOut,
     ConditionsPreviewOut,
     ConvergenceLevelOut,
+    ConvergenceLocalSizeOut,
     ConvergenceMetricOut,
     ConvergenceOut,
     DoeEntryOut,
@@ -606,15 +607,13 @@ def create(
     gap = material_gap(spec, payload)
     if gap:
         raise AppError(code("SIMULATIONS", 28), gap, status=400)
-    shells = condition_model.read(payload).shells if payload else {}
-    if shells and not midsurface:
-        # **쉘 파트는 중간면으로 푼다** — 없으면 모델링이 멈춘다. 만들 때 말한다.
-        raise AppError(
-            code("SIMULATIONS", 29),
-            f"쉘 파트({' · '.join(sorted(shells))})가 있습니다 — CAD 가 낸 중간면 형상"
-            "(pNNNN_mid.step)을 함께 올려야 합니다.",
-            status=400,
-        )
+    blocked = conditions_gap(spec, payload)
+    if blocked:
+        raise AppError(code("SIMULATIONS", 30), blocked, status=400)
+    missing_mid = midsurface_gap(payload, has_midsurface=bool(midsurface))
+    if missing_mid:
+        # 만들 때 말한다 — 걸어 두면 모델링에서 멈춘다.
+        raise AppError(code("SIMULATIONS", 29), missing_mid, status=400)
     if workspace_slug is None:
         if not user.is_system_admin:
             raise Forbidden(
@@ -631,7 +630,7 @@ def create(
         name=clean(name or filename)[:120] or "이름없음",
         recipe=spec.recipe,
         status="queued",
-        spec=spec.model_dump(),
+        spec=_stored_spec(spec),
         source_kind=source_kind,
         source_ref=clean(source_ref or filename)[:300],
         source_meta=source_meta or {},
@@ -659,7 +658,9 @@ def create(
             status=413,
         )
     spec_path = workdir / "spec.json"
-    spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    spec_path.write_text(
+        json.dumps(_stored_spec(spec), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     topology_path = workdir / TOPOLOGY_NAME
     if topology is not None:
         topology_path.write_bytes(topology)
@@ -702,7 +703,10 @@ def _preview_point(point: DoePoint) -> DoePointPreview:
 
 
 def doe_roots() -> list[Path]:
-    return list(get_settings().doe_root_paths)
+    """공용 폴더 뿌리 — **푼 경로로** 준다. 탐색은 고른 경로를 늘 풀어(`resolve`) 돌려주는데
+    뿌리만 적힌 그대로(심볼릭 링크 · 상대 경로)면 화면이 경로를 뿌리로 못 알아봐 경로 마디가
+    통째로 한 덩어리가 됐다(2026-10-05 리뷰)."""
+    return [one.resolve() for one in get_settings().doe_root_paths]
 
 
 def _inside_roots(path_text: str | None) -> Path:
@@ -940,6 +944,29 @@ def _volume_of(payload: dict[str, Any], name: str) -> float | None:
     return None
 
 
+def _stored_spec(spec: ModalSpec | StaticSpec | HarmonicSpec) -> dict[str, Any]:
+    """저장할 스펙 — **새 칸이 기본값이면 적지 않는다.** 스펙은 모르는 칸을 거절하므로
+    (`extra="forbid"`), 무중단 갱신(B 먼저 그다음 A — README_OPERATOR) 중 새 서버가 만든 작업을
+    옛 워커가 집으면 칸 하나 때문에 실패한다. 기본값이면 칸이 없어도 뜻이 같다."""
+    stored: dict[str, Any] = spec.model_dump()
+    mesh = stored.get("mesh")
+    if isinstance(mesh, dict) and mesh.get("local_scale") == 1.0:
+        del mesh["local_scale"]
+    return stored
+
+
+def midsurface_gap(payload: dict[str, Any] | None, *, has_midsurface: bool) -> str:
+    """쉘 파트가 있는데 중간면 형상이 없으면 그 까닭 한 줄. **쉘 파트는 중간면으로 푼다** —
+    없으면 모델링이 멈춘다."""
+    shells = condition_model.read(payload).shells if payload else {}
+    if not shells or has_midsurface:
+        return ""
+    return (
+        f"쉘 파트({' · '.join(sorted(shells))})가 있습니다 — CAD 가 낸 중간면 형상"
+        "(pNNNN_mid.step)을 함께 올려야 합니다."
+    )
+
+
 def material_gap(
     spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
 ) -> str | None:
@@ -975,6 +1002,29 @@ def material_gap(
             "CompCore 에서 재료를 지정하세요."
         )
     return None
+
+
+def conditions_gap(
+    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
+) -> str | None:
+    """CAD 가 보낸 조건 중 못 거는 것이 있나 — 있으면 까닭, 없으면 `None`.
+
+    **작업을 만들 때 막는다.** 모델링은 「막음」 이 하나라도 있으면 멈춘다
+    (`_declared_conditions`) — 구속이 빠지면 모드가 통째로 달라지는데 그 사실은 고유진동수를
+    보고도 모른다. 그대로 두면 워커가 집어 들고 모델링에서야 같은 말을 한다(DOE 200점이면
+    200번). 규칙은 모델링과 같다: 사람이 「내 스펙으로」 를 골랐으면(`conditions_from="spec"`)
+    CAD 조건을 안 읽는다.
+    """
+    if spec.conditions_from == "spec" or not payload:
+        return None
+    refused = condition_model.read(payload, recipe=spec.recipe).refused
+    if not refused:
+        return None
+    return (
+        "CAD 가 보낸 조건 중 걸 수 없는 것이 있습니다: "
+        + " · ".join(f"{one.what} — {one.why}" for one in refused)
+        + " (CAD 조건 없이 돌리려면 「CAD 가 보낸 조건 사용」 을 끄고 고정할 면을 고릅니다)"
+    )
 
 
 def _doe_materials(doe: DoeFolder) -> list[str]:
@@ -1027,16 +1077,28 @@ def import_doe(
     # **이미 가져온 점은 다시 걸지 않는다.** 폴더를 두 번 가리키는 일은 흔하고(경로를 다시
     # 붙여넣기), 그때 조용히 두 벌이 돌면 Mechanical 라이선스를 두 번 태운다. 다시 돌리려면
     # 그 작업에서 재시도한다.
-    already = {
-        int(one.source_meta.get("point") or 0)
-        for one in db.scalars(
-            select(Simulation).where(
-                Simulation.deleted_at.is_(None),
-                Simulation.source_kind.in_(("doe_point", "design")),
-                Simulation.source_meta["study_id"].astext == doe.study_id,
-            )
+    #
+    # **단, 앞선 작업이 실패 · 취소면 다시 가져온다.** 재시도는 가져올 때 복사한 옛 점 파일을
+    # 그대로 쓰므로, CompCore 가 고쳐 다시 내보낸 폴더(2026-10-05 「솔버 덱 함께」 — 엣지
+    # 지문을 면으로)를 쓸 길이 이것뿐이다. 옛 작업은 지우지 않고 기록으로 남기고, 새 작업이
+    # 그것을 가리킨다(`source_meta.previous`). 스터디는 점마다 마지막 작업으로 견준다
+    # (`_latest_per_point`).
+    already: set[int] = set()
+    earlier: dict[int, list[Simulation]] = {}
+    for one in db.scalars(
+        select(Simulation)
+        .where(
+            Simulation.deleted_at.is_(None),
+            Simulation.source_kind.in_(("doe_point", "design")),
+            Simulation.source_meta["study_id"].astext == doe.study_id,
         )
-    }
+        .order_by(Simulation.created_at)
+    ):
+        number = int(one.source_meta.get("point") or 0)
+        if one.status in RETRYABLE_BY_IMPORT:
+            earlier.setdefault(number, []).append(one)
+        else:
+            already.add(number)
 
     created: list[uuid.UUID] = []
     skipped: list[DoePointPreview] = []
@@ -1058,8 +1120,17 @@ def import_doe(
             continue
         assert point.step is not None  # usable 이 보장한다
         topology = point.point_file.read_bytes() if point.point_file else None
-        # **물성이 빠지는 점은 걸지 않는다** — 재료를 훑는 DOE 는 점마다 붙는 재료가 다르다.
-        gap = material_gap(spec, parse_topology(topology) if topology is not None else None)
+        # **물성이 빠지거나 못 거는 조건이 있는 점은 걸지 않는다** — 재료를 훑는 DOE 는 점마다
+        # 붙는 재료가 다르고, 걸어 봐야 모델링에서 멈춘다.
+        payload = parse_topology(topology) if topology is not None else None
+        # **중간면도 여기서 본다** — `create` 가 점마다 커밋하므로, 여기서 안 거르면 앞 점들은
+        # 만들어지고 이 점에서 400 이 나 요약도 못 받는다(다시 가져오면 「이미 가져온 점」
+        # 이다).
+        gap = (
+            material_gap(spec, payload)
+            or conditions_gap(spec, payload)
+            or midsurface_gap(payload, has_midsurface=point.mid_step is not None)
+        )
         if gap:
             skipped.append(
                 DoePointPreview(
@@ -1082,6 +1153,9 @@ def import_doe(
             "unit_system": point.unit_system,
             "folder": str(doe.path),
         }
+        if point.number in earlier:
+            # 앞선 시도(실패 · 취소) — 왜 다시 가져왔는지 그 작업에서 읽는다.
+            meta["previous"] = [str(one.id) for one in earlier[point.number]]
         label = " · ".join(
             f"{name} {value:g}" if isinstance(value, float) else f"{name} {value}"
             for name, value in point.params.items()
@@ -1111,6 +1185,15 @@ def import_doe(
                 source_meta=meta,
             )
         created.append(simulation.id)
+        if point.number in earlier:
+            # **옛 시도에는 대신한 작업을 적는다** — 안 적으면 홈의 「실패한 해석 작업」 에
+            # 영영 남고, 누가 옛 시도를 재시도하면 옛 점 파일로 다시 돌아 새 작업을 가린다.
+            for old in earlier[point.number]:
+                old.source_meta = {
+                    **(old.source_meta or {}),
+                    "superseded_by": str(simulation.id),
+                }
+            db.commit()
     return DoeImportOut(study_id=doe.study_id, name=doe.name, created=created, skipped=skipped)
 
 
@@ -1120,11 +1203,32 @@ def import_doe(
 COMPARE_MODES = 10
 
 
-def _study_points(db: Session, user: User, study_id: str) -> list[Simulation]:
+#: 이 상태의 작업이 있는 점은 다시 가져올 수 있다 — 재시도는 옛 점 파일을 그대로 쓴다.
+RETRYABLE_BY_IMPORT = ("failed", "canceled")
+
+
+def _latest_per_point(rows: list[Simulation]) -> list[Simulation]:
+    """점마다 **마지막 작업** — 실패 · 취소한 점을 다시 가져오면 한 점에 작업이 둘이 된다.
+
+    둘을 다 세면 표에 같은 점이 두 줄 나오고, 결과를 점 번호로 모으는 자리에서는 옛 실패 줄에
+    새 결과가 붙는다. `rows` 는 만든 순서여야 한다 — 점의 자리는 처음 나온 순서 그대로 둔다.
+    """
+    latest: dict[int, Simulation] = {}
+    for one in rows:
+        latest[int(one.source_meta.get("point") or 0)] = one
+    return list(latest.values())
+
+
+def _study_points(
+    db: Session, user: User, study_id: str, *, every: bool = False
+) -> list[Simulation]:
     """그 스터디의 점들. **목록과 같은 열쇠로 모은다** — `study_id` 가 없는 옛 가져오기는
     목록이 `study_name` 으로 묶으므로 여기서도 그렇게 찾는다. 안 그러면 목록에는 있는데 상세는
-    404 다."""
-    return list(
+    404 다.
+
+    점마다 마지막 작업만 준다(`_latest_per_point`). `every` 면 다시 가져오기 전의 시도까지 —
+    정리(중간 파일 지우기)는 그것들도 대상이다."""
+    rows = list(
         db.scalars(
             _visible(user)
             .where(
@@ -1140,6 +1244,7 @@ def _study_points(db: Session, user: User, study_id: str) -> list[Simulation]:
             .order_by(Simulation.created_at)
         )
     )
+    return rows if every else _latest_per_point(rows)
 
 
 def solver_of(simulation: Simulation) -> str:
@@ -1170,7 +1275,8 @@ def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
             grouped.setdefault(key, []).append(one)
 
     out: list[StudySummaryOut] = []
-    for study_id, points in grouped.items():
+    for study_id, every in grouped.items():
+        points = _latest_per_point(every)
         first = points[0]
         factors: list[str] = []
         for point in points:
@@ -1464,6 +1570,16 @@ def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
             status=409,
             details={"status": simulation.status},
         )
+    replaced = (simulation.source_meta or {}).get("superseded_by")
+    if replaced:
+        # **다시 가져온 점의 옛 시도는 다시 걸지 않는다** — 옛 점 파일로 돌아 새 작업을 가린다
+        # (스터디는 점마다 마지막 작업을 본다).
+        raise AppError(
+            code("SIMULATIONS", 31),
+            "이 점은 다시 가져왔습니다 — 새로 만든 작업에서 다시 실행하세요.",
+            status=409,
+            details={"superseded_by": replaced},
+        )
     simulation.status = "queued"
     simulation.stages = _initial_stages()
     simulation.summary = None
@@ -1650,6 +1766,11 @@ def requeue_stale(db: Session) -> int:
 
 #: 수준(작업) 수 상한 — 원래 작업 + 새 크기 넷. 그 너머는 정련보다 다른 원인을 볼 때다.
 MAX_LEVELS = 5
+#: 원래 대비 크기 비율의 범위 — `ConvergenceRequest` 의 비율 검사와 같다. 아래 한도는 열 배
+#: 촘촘하게(요소 수로 천 배)다 — 그 너머는 정련이 아니라 다른 해석이고, 배율이 반올림에서
+#: 0 이 된다.
+MIN_RATIO = 0.1
+MAX_RATIO = 2.0
 #: 판정 문턱(상대). 주파수는 좁게, 크기는 조금 넓게 — 실측과 견주는 자릿수에 맞춘다.
 FREQUENCY_TOLERANCE = 0.01
 SIZE_TOLERANCE = 0.02
@@ -1689,10 +1810,16 @@ def request_convergence(
     *,
     user: User,
     simulation_id: uuid.UUID,
-    sizes_mm: list[float],
     solver: str | None,
+    ratios: list[float] | None = None,
+    sizes_mm: list[float] | None = None,
 ) -> ConvergenceOut:
-    """끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 크기마다 작업 하나.
+    """끝난 작업을 **요소 크기만 바꿔** 다시 건다 — 수준마다 작업 하나.
+
+    **비율이 기본이다**(`ratios` — 원래 대비 0.7 · 0.5). 전체 크기와 CAD 가 크기를 적은 파트
+    · 면이 모두 그 비율로 줄어든다. 원래 작업의 전체 크기를 모르면(Ansys 를 크기 없이 —
+    Mechanical 기본값으로 — 풀었다) 곱할 기준이 없어 거절한다: 짐작한 크기로 풀면 원래보다
+    성기게 풀릴 수도 있다(박스는 육면체로 메시돼 사면체 기준 짐작이 두 배 어긋난다).
 
     작업 셋으로 두는 까닭: 상태 기계 · 단계 파일 · 재시도 · 취소 · 정리가 작업 단위로 이미
     되고, CalculiX 워커 여럿이 크기들을 **동시에** 푼다. 한 작업 안에서 크기를 돌리면 그 전부를
@@ -1707,18 +1834,53 @@ def request_convergence(
             details={"status": original.status},
         )
     existing = _levels_of(db, user, original)
-    asked = {round(float(one), 6) for one in sizes_mm if one > 0}
+    base = _size_of(original)
+    if ratios is not None:
+        if base is None:
+            raise AppError(
+                code("SIMULATIONS", 23),
+                "원래 작업의 전체 요소 크기를 모릅니다 — Ansys 기본 크기로 풀린 작업이라 "
+                "비율을 곱할 기준이 없습니다. 전체 요소 크기를 정해 다시 실행한 뒤 "
+                "점검하세요.",
+                status=400,
+            )
+        sizes_mm = [base * one for one in ratios]
+    asked = {round(float(one), 6) for one in sizes_mm or [] if one > 0}
     if not asked:
         raise AppError(code("SIMULATIONS", 23), "요소 크기는 0 보다 커야 합니다.", status=400)
-    base = _size_of(original)
+    # 크기는 6자리로 반올림했다 — 원래 크기가 더 긴 소수면 비율 2 가 2.0000001 로 읽힌다.
+    if base and any(one / base > MAX_RATIO + 1e-6 for one in asked):
+        # **옛 방식(`sizes_mm`)도 비율과 같은 한도다** — 크기에서 나온 배율이 스펙 칸의 한도를
+        # 넘으면 만들 때 속 칸(`mesh.local_scale`) 이름으로 거절돼 사람이 까닭을 못 읽었다
+        # (2026-10-05 리뷰). 원래보다 두 배 넘게 성긴 수준은 수렴 판정에 보탬이 안 된다.
+        raise AppError(
+            code("SIMULATIONS", 23),
+            f"원래 크기({base:g} mm)의 {MAX_RATIO:g}배보다 큰 크기는 점검하지 않습니다 — "
+            "수렴은 촘촘하게 줄여 가며 봅니다.",
+            status=400,
+            details={"base_size_mm": base, "max_ratio": MAX_RATIO},
+        )
+    if base and any(one / base < MIN_RATIO - 1e-6 for one in asked):
+        raise AppError(
+            code("SIMULATIONS", 23),
+            f"원래 크기({base:g} mm)의 {MIN_RATIO:g}배보다 작은 크기는 점검하지 않습니다 — "
+            "요소 수가 천 배를 넘습니다.",
+            status=400,
+            details={"base_size_mm": base, "min_ratio": MIN_RATIO},
+        )
     if solver and solver != solver_of(original) and base is not None:
         # **솔버를 바꾸면 원래 크기도 그 솔버로 다시 푼다** — 원래 작업은 다른 솔버라 판정에서
         # 빠지므로, 안 그러면 그 솔버의 수준이 하나 모자라 차수를 못 잰다.
         asked.add(round(base, 6))
+    # **비례 정련 전에 만든 수준은 「푼 크기」 로 치지 않는다** — CAD 파트 · 면 크기를 그대로
+    # 둔 수준이라, 같은 크기를 비례로 다시 풀 수 있어야 판정이 고르게 된다(새 수준이 옛 것을
+    # 대신한다 — `convergence`). 줄일 CAD 크기가 없으면 둘은 같은 수준이다.
+    uneven_matters = base is not None and bool(_cad_local_sizes(original))
     taken = {
         (round(size, 6), solver_of(one))
         for one in existing
         if (size := _size_of(one)) is not None
+        and (not uneven_matters or _proportional(one, base))
     }
     wanted = sorted(
         (size for size in asked if (size, solver or solver_of(original)) not in taken),
@@ -1751,12 +1913,21 @@ def request_convergence(
         if topology_path is not None and topology_path.is_file()
         else None
     )
+    # **쉘 파트가 있으면 중간면도 함께 옮긴다** — 빠뜨리면 만들 때 SIMULATIONS-0029 로 막힌다
+    # (2026-10-05, 조건_강체지그_쉘브래킷: 형상 · 점 파일만 옮겨서 점검 자체가 안 걸렸다).
+    mid_path = resolve_work_path(f"{original.work_dir}/{MIDSURFACE_NAME}")
+    midsurface = mid_path.read_bytes() if mid_path is not None and mid_path.is_file() else None
     workspace = (
         db.get(Workspace, original.owner_workspace_id) if original.owner_workspace_id else None
     )
     for size in wanted:
         spec = dict(original.spec or {})
         spec["mesh"] = {**(spec.get("mesh") or {}), "element_size_mm": size}
+        if base:
+            # **비례 정련** — CAD 가 크기를 적은 파트 · 면도 전체 크기와 같은 비율로 줄인다.
+            # 안 그러면 그 자리는 그대로라 정련이 고르지 않다. 원래 크기를 모르면(옛 방식
+            # `sizes_mm` 에서만 온다) 비율을 못 정하므로 CAD 값 그대로 둔다.
+            spec["mesh"]["local_scale"] = round(size / base, 6)
         if solver:
             spec["solver"] = solver
         with source.open("rb") as stream:
@@ -1769,6 +1940,7 @@ def request_convergence(
                 filename=INPUT_NAME,
                 stream=stream,
                 topology=topology,
+                midsurface=midsurface,
                 source_kind="mesh_check",
                 source_ref=f"{original.id}",
                 source_meta={
@@ -1909,6 +2081,28 @@ def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> Converg
             "(두 솔버의 값은 몇 % 갈립니다)."
         )
     rows = [one for one in rows if solver_of(one) == solver]
+    base_size = _size_of(original)
+    local = _cad_local_sizes(original)
+    if local and base_size is not None:
+        # 같은 크기를 비례로 다시 풀었으면 그 크기의 옛 수준(CAD 크기를 그대로 둔)은
+        # 판정에서 뺀다.
+        redone = {
+            round(size, 6)
+            for one in rows
+            if one.source_kind == "mesh_check"
+            and _proportional(one, base_size)
+            and (size := _size_of(one)) is not None
+        }
+        rows = [
+            one
+            for one in rows
+            if not (
+                one.source_kind == "mesh_check"
+                and not _proportional(one, base_size)
+                and (size := _size_of(one)) is not None
+                and round(size, 6) in redone
+            )
+        ]
 
     loaded = [result_of(one) for one in rows]
     found = [core_values.read(one) if one else None for one in loaded]
@@ -1921,6 +2115,14 @@ def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> Converg
             status=one.status,
             solver=solver_of(one),
             is_original=one is original,
+            local_scale=float(((one.spec or {}).get("mesh") or {}).get("local_scale") or 1.0),
+            ratio=(
+                1.0
+                if one is original
+                else round(size / base_size, 6)
+                if (size := _size_of(one)) is not None and base_size
+                else None
+            ),
         )
         for one, values in zip(rows, found, strict=True)
     ]
@@ -1966,22 +2168,23 @@ def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> Converg
             "CalculiX 의 비선형 접촉은 접촉 강성이 요소 크기를 따라갑니다 — 크기를 바꾸면 "
             "메시와 접촉 모델이 함께 바뀐 결과입니다."
         )
-    declared = condition_model.read(_topology_payload(original))
-    if any(hint.region not in ("전체", "all") for hint in declared.mesh_hints):
-        notes.append(
-            "CAD 가 영역별 요소 크기를 적었습니다 — 그 자리는 전역 크기를 바꿔도 그대로라 "
-            "정련이 고르지 않습니다."
-        )
-    sized = sorted(
-        one.name
-        for one in declared.body_settings
-        if one.element_size is not None and not one.suppressed
-    )
-    if sized:
-        notes.append(
-            f"CAD 가 파트 요소 크기를 적었습니다({' · '.join(sized)}) — 그 파트는 전역 크기를 "
-            "바꿔도 그대로라 정련이 고르지 않습니다."
-        )
+    checks = [one for one in rows if one.source_kind == "mesh_check"]
+    if local and checks:
+        even = all(_proportional(one, base_size) for one in checks)
+        if even:
+            notes.append(
+                f"CAD 가 요소 크기를 적은 자리({' · '.join(one.name for one in local)})도 "
+                "전체 크기와 같은 비율로 "
+                "줄였습니다(비례 정련)."
+            )
+        else:
+            # 비례 정련 전에 만든 수준이 섞였다 — 그 수준은 CAD 크기를 그대로 두었다.
+            notes.append(
+                f"CAD 가 요소 크기를 적은 자리({' · '.join(one.name for one in local)})를 "
+                "그대로 둔 수준이 "
+                "있습니다(비례 정련 전에 만든 수준) — 정련이 고르지 않습니다. 새로 점검하는 "
+                "크기부터는 같은 비율로 줄입니다."
+            )
     return ConvergenceOut(
         original_id=original.id,
         recipe=original.recipe,
@@ -1989,7 +2192,57 @@ def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> Converg
         levels=levels,
         metrics=metrics,
         notes=notes,
+        local_sizes=local,
     )
+
+
+def _proportional(simulation: Simulation, base: float | None) -> bool:
+    """그 수준의 CAD 파트 · 면 배율이 정말 「이 수준의 크기 / 원래 크기」 인가 — 비례 정련으로
+    푼 수준인가. 칸이 없으면 1 이다(기본값은 저장하지 않는다 — `_stored_spec`). 비례 정련 전에
+    만든 수준은 칸이 없어 원래 크기가 아니면 어긋난다."""
+    scale = ((simulation.spec or {}).get("mesh") or {}).get("local_scale", 1.0)
+    size = _size_of(simulation)
+    return (
+        base is not None
+        and size is not None
+        and isinstance(scale, int | float)
+        and abs(float(scale) - size / base) < 1e-5
+    )
+
+
+def _cad_local_sizes(original: Simulation) -> list[ConvergenceLocalSizeOut]:
+    """원래 작업에서 CAD 가 크기를 적은 파트 · 면. **CAD 조건을 끄고 푼 작업에는 없다** —
+    빌더가 점 파일을 아예 안 읽는다(`conditions_from="spec"`). 보이면 쓰지도 않은 크기를
+    줄였다고 읽힌다."""
+    if (original.spec or {}).get("conditions_from", "cad") != "cad":
+        return []
+    return _local_sizes(_topology_payload(original))
+
+
+def _local_sizes(payload: dict[str, Any]) -> list[ConvergenceLocalSizeOut]:
+    """CAD 가 요소 크기를 적은 자리 — 파트(파트별 설정)와 면(국부 메시). 「전체」 는 아니다.
+
+    크기는 mm 로 바꿔 준다 — CAD 는 선언한 계의 길이로 적는다(SI 폴더면 m).
+    """
+    if not payload:
+        return []
+    declared = condition_model.read(payload)
+    try:
+        mm = units.declared_in(payload).length_mm
+    except ValueError:
+        mm = 1.0
+    found: dict[str, ConvergenceLocalSizeOut] = {}
+    for one in declared.body_settings:
+        if one.element_size is not None and not one.suppressed:
+            found[one.name] = ConvergenceLocalSizeOut(
+                name=one.name, kind="part", size_mm=round(one.element_size * mm, 6)
+            )
+    for hint in declared.mesh_hints:
+        if hint.element_size is not None and not hint.whole and hint.region not in found:
+            found[hint.region] = ConvergenceLocalSizeOut(
+                name=hint.region, kind="face", size_mm=round(hint.element_size * mm, 6)
+            )
+    return sorted(found.values(), key=lambda one: (one.kind != "part", one.name))
 
 
 def _topology_payload(simulation: Simulation) -> dict[str, Any]:
@@ -2670,7 +2923,7 @@ def tidy(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, Any]
 
 def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
     """스터디 하나를 통째로 정리한다. **설계점 200개면 이것이 유일하게 할 만한 길이다.**"""
-    points = _study_points(db, user, study_id)
+    points = _study_points(db, user, study_id, every=True)
     freed = 0
     files = 0
     for point in points:
@@ -2679,7 +2932,9 @@ def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
         done = tidy(db, user=user, simulation_id=point.id)
         freed += int(done["bytes_freed"])
         files += int(done["files"])
-    return {"bytes_freed": freed, "files": files, "points": len(points)}
+    # 정리는 다시 가져오기 전의 시도까지 하지만, 세는 것은 설계점이다 — 한 점의 두 시도를
+    # 두 점으로 말하면 화면의 「설계점 N개」 가 스터디 표와 어긋난다.
+    return {"bytes_freed": freed, "files": files, "points": len(_latest_per_point(points))}
 
 
 # --- 공통 화면에 등록하는 것 ----------------------------------------------------
@@ -2707,6 +2962,8 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
         .where(
             Simulation.deleted_at.is_(None),
             Simulation.status == "failed",
+            # 다시 가져와 대신한 작업이 있는 옛 시도는 「남은 일」 이 아니다.
+            Simulation.source_meta["superseded_by"].astext.is_(None),
             open_owner_clause(viewer, Simulation.owner_workspace_id),
         )
     )

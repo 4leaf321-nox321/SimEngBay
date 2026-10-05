@@ -112,7 +112,7 @@ def extract(
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
     # 안 보인다」 가 첫 거름망이다.
     spots = _probe_modes(rst, workdir, elastic)
-    artifacts = _draw_modes(
+    artifacts, parts = _draw_modes(
         rst, workdir, [one["number"] for one in elastic[:visual_modes]], modes
     )
     result: dict[str, Any] = {
@@ -128,6 +128,8 @@ def extract(
         # 화면이 「방향별로 얼마나 흔들리나」 를 그릴 수 있게 원본 표도 함께 싣는다.
         "participation": {name: value for name, value in ratios.items()},
         **({"probes": spots} if spots else {}),
+        # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
+        **({"parts": parts} if parts else {}),
     }
     loose = [
         one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
@@ -234,12 +236,13 @@ def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:
 
 def _draw_modes(
     rst: Path, workdir: Path, numbers: list[Any], modes: list[dict[str, Any]]
-) -> list[ArtifactSpec]:
-    """모드 형상 파일들. **여기서 실패해도 해석은 끝난 것이다** — 고유진동수는 이미 나왔고,
-    그림이 없다고 그 숫자를 버릴 이유가 없다. 대신 무엇이 없는지 로그에 남는다."""
+) -> tuple[list[ArtifactSpec], list[str]]:
+    """모드 형상 파일들과 파트 이름들. **여기서 실패해도 해석은 끝난 것이다** — 고유진동수는
+    이미 나왔고, 그림이 없다고 그 숫자를 버릴 이유가 없다. 대신 무엇이 없는지 로그에 남는다."""
     if not numbers:
-        return []
+        return [], []
     made: list[ArtifactSpec] = []
+    parts: list[str] = []
     try:
         from ansys.dpf import core as dpf
 
@@ -248,6 +251,8 @@ def _draw_modes(
         by_number = {int(one["number"]): one for one in modes}
         for number in numbers:
             drawn = shapes.export_mode(model, skin, int(number), workdir)
+            # 파트는 모드마다 같다(같은 겉면) — 처음 것을 쓴다.
+            parts = parts or list(drawn.get("parts") or [])
             by_number[int(number)].update(
                 {key: value for key, value in drawn.items() if key in ("vtp", "png")}
             )
@@ -257,7 +262,7 @@ def _draw_modes(
                 made.append(ArtifactSpec("mode_png", workdir / drawn["png"]))
     except Exception:
         logger.warning("모드 형상 생성 실패 — 고유진동수만 남깁니다", exc_info=True)
-    return made
+    return made, parts
 
 
 def _read(rst: Path) -> tuple[list[float], dict[str, str], int, int]:

@@ -5,7 +5,7 @@
  *     cd frontend ; npm run api:types
  */
 
-import { api, downloadFile, fetchBlob, fetchBytes } from '@/shared/api/client'
+import { api, downloadFile, fetchBytes } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
 import type { components } from '@/shared/api/schema'
 
@@ -27,6 +27,7 @@ export type WorkersOverview = components['schemas']['WorkersOut']
 export type WorkerRow = components['schemas']['WorkerOut']
 export type SolverAvailability = components['schemas']['SolverAvailabilityOut']
 export type Convergence = components['schemas']['ConvergenceOut']
+export type ConvergenceLocalSize = components['schemas']['ConvergenceLocalSizeOut']
 export type ConditionsPreview = components['schemas']['ConditionsPreviewOut']
 export type CadBody = components['schemas']['CadBodyOut']
 export type CadMaterial = components['schemas']['CadMaterialOut']
@@ -122,6 +123,8 @@ export interface StaticResult {
   max_von_mises: number | null
   material?: string
   shape?: { vtp: string; png?: string; points?: number }
+  /** 그림의 셀 배열 `part` 번호의 이름 — 뷰어가 파트마다 보이고 숨긴다. 옛 결과에는 없다. */
+  parts?: string[]
   /** 측정점의 변위 — 크기(`value`)와 성분(`vector`). */
   probes?: ProbeRow[]
   /** 변위로 당긴 영역 → 그 자리가 버틴 **반력 합** `[Fx, Fy, Fz]`(단위는 `units.force`). */
@@ -140,6 +143,8 @@ export interface SimulationResult {
   mesh?: { nodes: number; elements: number }
   modes: ModeResult[]
   participation?: Record<string, Record<string, number>>
+  /** 그림의 셀 배열 `part` 번호의 이름 — 뷰어가 파트마다 보이고 숨긴다. 옛 결과에는 없다. */
+  parts?: string[]
   /**
    * 측정점마다 · **탄성 모드마다** 한 줄(`mode` 로 가른다). 질량 정규화된 값이라 절대 크기가
    * 아니다 — 같은 측정점 안에서 모드끼리 견준다. 옛 결과는 1차 탄성 모드 한 줄뿐이다.
@@ -249,9 +254,6 @@ export const simulationApi = {
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
   result: (id: string) =>
     api.get<SimulationResult | StaticResult | HarmonicResult>(`/simulations/${id}/result`),
-  /** 썸네일 — `<img src>` 로는 안 된다(토큰이 메모리에만 있다). blob 으로 받아 그린다. */
-  image: (simulationId: string, artifactId: string) =>
-    fetchBlob(`/simulations/${simulationId}/artifacts/${artifactId}/content`),
   /** 모드 형상(VTP). vtk.js 가 ArrayBuffer 를 그대로 읽는다. */
   mesh: (simulationId: string, artifactId: string) =>
     fetchBytes(`/simulations/${simulationId}/artifacts/${artifactId}/content`),
@@ -276,12 +278,13 @@ export const simulationApi = {
   },
   removeMeasurement: (measurementId: string) =>
     api.delete<void>(`/simulations/measurements/${measurementId}`),
-  /** 실측 양식 — 종류 넷(공진 · FRF · 변위 · 변형률)을 한 표에. */
-  measurementTemplate: () => downloadFile('/simulations/measurements/template.csv', '실측양식.csv'),
   /** 메시 수렴 묶음 — 원래 작업이나 수준 작업 어느 쪽으로 물어도 같다. */
   convergence: (id: string) => api.get<Convergence>(`/simulations/${id}/convergence`),
   /** 끝난 작업을 요소 크기만 바꿔 다시 건다 — 크기마다 작업 하나. */
-  requestConvergence: (id: string, body: { sizes_mm: number[]; solver?: string | null }) =>
+  requestConvergence: (
+    id: string,
+    body: { ratios?: number[]; sizes_mm?: number[]; solver?: string | null },
+  ) =>
     api.post<Convergence>(`/simulations/${id}/convergence`, body),
   /** 워커 · 솔버별 줄 · 라이선스를 쥔 작업(시스템 관리자). 서버 화면이 10초마다 묻는다. */
   workers: () => api.get<WorkersOverview>('/simulations/workers'),

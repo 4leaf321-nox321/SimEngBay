@@ -10,10 +10,13 @@
 
 | 남긴다 | 왜 |
 | --- | --- |
-| `input.step` · `topology.json` · `spec.json` | **무엇으로 돌렸나** — 없으면 못 되짚는다 |
+| `input.step` · `input_mid.step` · `topology.json` · `spec.json` | **무엇으로 돌렸나** |
 | `result.json` · `mode_*.png` · `mode_*.vtp` | 사람이 보는 것 |
 | `model.dat` | 솔버 입력. 작고, 이것만 있으면 다시 풀 수 있다 |
 | `solve.out` | 왜 그렇게 풀렸나(라이선스 · 경고 · 시간) |
+
+입력이 없으면 못 되짚는다 — 중간면(`input_mid.step`)이 없으면 쉘 작업은 다시 풀 수도, 메시
+수렴을 점검할 수도 없다.
 
 ## 무엇을 지우나
 
@@ -52,7 +55,15 @@ SCRATCH_PATTERNS = (
 
 #: 이 이름은 무슨 일이 있어도 남긴다 — 위 꼴에 걸리더라도.
 KEEP_NAMES = frozenset(
-    {"input.step", "topology.json", "spec.json", "result.json", "model.dat", "solve.out"}
+    {
+        "input.step",
+        "input_mid.step",
+        "topology.json",
+        "spec.json",
+        "result.json",
+        "model.dat",
+        "solve.out",
+    }
 )
 
 

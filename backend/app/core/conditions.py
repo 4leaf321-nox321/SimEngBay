@@ -44,6 +44,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from app.core.regions.match import not_a_face
+
 #: 우리가 Mechanical 에 걸 수 있는 구속 — CompCore 의 7종 그대로.
 CONSTRAINT_KINDS = (
     "fixed_support",
@@ -342,6 +344,11 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         _body_setting(row, made, middle)
     gone = _on_suppressed(payload, made.suppressed)
     flat = _off_midsurface(payload, set(made.shells))
+    entities = {
+        str(one.get("name") or ""): str(one.get("entity") or "face")
+        for one in _rows(block, "named_selections")
+    }
+    odd = _not_faces(payload, entities)
     known = {one.name for one in made.frames}
     for row in _rows(block, "constraints"):
         _needs_frame(row, known, made)
@@ -361,6 +368,11 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
                 Note(f"구속 「{row.get('name') or '이름 없는 구속'}」", flat[place])
             )
             continue
+        if place in odd:
+            made.refused.append(
+                Note(f"구속 「{row.get('name') or '이름 없는 구속'}」", odd[place])
+            )
+            continue
         _constraint(row, regions, made)
     for row in _rows(block, "contacts"):
         ends = [str(row.get(key) or "") for key in ("source", "target")]
@@ -375,14 +387,12 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
             )
             continue
         stuck = next((flat[one] for one in ends if one in flat), None)
+        if stuck is None:
+            stuck = next((odd[one] for one in ends if one in odd), None)
         if stuck is not None:
             made.refused.append(Note(f"접촉 「{row.get('name') or '이름 없는 접촉'}」", stuck))
             continue
         _contact(row, regions, made)
-    entities = {
-        str(one.get("name") or ""): str(one.get("entity") or "face")
-        for one in _rows(block, "named_selections")
-    }
     for row in _rows(block, "mesh_hints"):
         _mesh_hint(row, made, _dict(_dict(payload).get("regions")), entities)
     for row in _rows(block, "loads"):
@@ -395,9 +405,15 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
             else:
                 made.refused.append(Note(what, why + " — 거기에는 형상이 없습니다"))
             continue
-        if place in flat and not (recipe == "modal" and not made.analysis.prestressed):
+        live = not (recipe == "modal" and not made.analysis.prestressed)
+        if place in flat and live:
             made.refused.append(
                 Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", flat[place])
+            )
+            continue
+        if place in odd and live:
+            made.refused.append(
+                Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", odd[place])
             )
             continue
         _load(row, recipe, made)
@@ -640,6 +656,55 @@ class _Middle:
 
     thickness: dict[str, float] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
+
+
+def scaled(given: Conditions, factor: float) -> Conditions:
+    """파트 요소 크기 · 면 국부 크기에 `factor` 를 곱한 사본 — **비례 정련**(메시 수렴 점검).
+
+    「전체」 힌트는 건드리지 않는다 — 점검 수준은 스펙의 전체 크기를 직접 적고, 그것이 「전체」
+    힌트보다 먼저다. 1 이면 그대로 돌려준다.
+    """
+    if factor == 1:
+        return given
+
+    def times(size: float | None) -> float | None:
+        return None if size is None else round(size * factor, 9)
+
+    return replace(
+        given,
+        mesh_hints=[
+            hint if hint.whole else replace(hint, element_size=times(hint.element_size))
+            for hint in given.mesh_hints
+        ],
+        body_settings=[
+            replace(one, element_size=times(one.element_size)) for one in given.body_settings
+        ],
+    )
+
+
+def _not_faces(payload: Any, entities: dict[str, str]) -> dict[str, str]:
+    """면이 아닌 지문으로 온 영역 → 막는 까닭.
+
+    **매처는 면만 짝짓는다**(`regions.match`). 여기서 막지 않으면 미리보기는 「반영」 이라 하고
+    모델링에서야 「바닥[0] 엣지 그룹입니다」 로 멈췄다(2026-10-05 — CompCore 가 09-24 에 내보낸
+    「솔버 덱 함께」). 그 폴더는 「바닥」 을 **면으로 선언하고 엣지 지문 15개를** 실었다 — 그때
+    CompCore 는 규칙에 `what` 이 없으면 엣지로 골랐다. 선언과 지문이 어긋나면 그렇다고 말한다:
+    고칠 자리가 우리 창이 아니라 CompCore 의 내보내기다.
+    """
+    found: dict[str, str] = {}
+    for name, rows in _dict(_dict(payload).get("regions")).items():
+        listed = list(rows) if isinstance(rows, list) else []
+        kind = not_a_face(listed)
+        if not kind:
+            continue
+        if entities.get(name) == "face":
+            found[name] = (
+                f"「{name}」 을 CAD 는 면으로 선언했는데 지문은 {kind} {len(listed)}개로 "
+                "왔습니다 — CompCore 에서 다시 내보내야 합니다(면 그룹만 걸 수 있습니다)"
+            )
+        else:
+            found[name] = f"「{name}」 은 {kind} 그룹입니다 — 지금은 면 그룹만 걸 수 있습니다"
+    return found
 
 
 def _midsurface(payload: Any) -> _Middle:

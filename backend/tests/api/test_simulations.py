@@ -603,6 +603,72 @@ def test_물성이_아무_데도_없으면_만들_때_거절한다(client: TestC
     assert mine.status_code == 400
 
 
+def test_못_거는_CAD_조건이_있으면_만들_때_막는다(client: TestClient, member: Signed) -> None:
+    """**모델링은 「막음」 이 하나라도 있으면 멈춘다** — 그 말을 워커가 1분 뒤에 하게 두지
+    않는다. CompCore 가 「바닥」 을 면으로 선언하고 엣지 지문을 실은 폴더(09-24 「솔버 덱
+    함께」)가 그랬다. 미리보기도 같은 말을 하고, 「내 스펙으로」 를 고르면 CAD 조건을 안
+    읽으므로 만들어진다."""
+    payload = json.loads((TWO_BODY_FOLDER / "points" / "p0001.json").read_text("utf-8"))
+    payload["regions"]["바닥"] = [
+        {"midpoint": [float(index), 0.0, 4.0], "length": 8.0} for index in range(15)
+    ]
+    point = json.dumps(payload, ensure_ascii=False).encode()
+
+    preview = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("p0001.json", io.BytesIO(point), "application/json")},
+        headers=member.headers,
+    )
+    assert preview.status_code == 200, preview.text
+    lines = preview.json()["conditions"]["lines"]
+    assert any(one["status"] == "refused" and "엣지(edge) 15개" in one["why"] for one in lines)
+
+    blocked = _create_with_point(client, member, {"recipe": "modal"}, point)
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["code"].endswith("SIMULATIONS-0030")
+    assert "면으로 선언했는데" in blocked.json()["error"]["message"]
+
+    mine = _create_with_point(
+        client,
+        member,
+        {"recipe": "modal", "conditions_from": "spec", "constraints": []},
+        point,
+    )
+    assert mine.status_code == 201, mine.text
+
+
+def test_DOE_는_못_거는_조건이_있는_점을_걸지_않고_까닭을_단다(
+    client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """점 하나만 지문이 어긋나도 그 점만 빠진다 — 나머지는 걸린다."""
+    folder = tmp_path / "두바디_엣지섞임"
+    shutil.copytree(TWO_BODY_FOLDER, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["id"] = "e" * 32
+    (folder / "study.json").write_text(json.dumps(study), encoding="utf-8")
+    first = folder / "points" / "p0001.json"
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    payload["regions"]["바닥"] = [
+        {"midpoint": [float(index), 0.0, 4.0], "length": 8.0} for index in range(15)
+    ]
+    first.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
+    imported = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "modal"},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert imported.status_code == 201, imported.text
+    body = imported.json()
+    assert len(body["created"]) == 1
+    assert [one["number"] for one in body["skipped"]] == [1]
+    assert "엣지(edge) 15개" in body["skipped"][0]["skip_reason"]
+
+
 def test_파트별_설정을_미리보기에_싣고_뺀_파트는_물성을_안_묻는다(
     client: TestClient, member: Signed
 ) -> None:
@@ -726,6 +792,29 @@ def test_뿌리_위로는_못_올라간다(client: TestClient, member: Signed) -
     # 한 칸 위(뿌리)로는 올라갈 수 있다.
     assert inside.json()["parent"] == str(DOE_FOLDER.parent)
     assert inside.json()["is_study"] is True
+
+
+def test_뿌리가_심볼릭_링크여도_경로는_뿌리_아래로_읽힌다(
+    client: TestClient,
+    member: Signed,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """탐색은 고른 경로를 풀어 돌려준다 — 뿌리만 링크 그대로면 화면이 경로를 뿌리 아래로 못
+    알아봐 경로 마디가 한 덩어리가 됐다. 뿌리도 푼 경로로 준다."""
+    real = tmp_path / "실제"
+    (real / "하위").mkdir(parents=True)
+    link = tmp_path / "링크"
+    link.symlink_to(real)
+    monkeypatch.setattr(get_settings(), "doe_roots", str(link))
+    root = client.get("/api/simulations/doe/browse", headers=member.headers).json()
+    inside = client.get(
+        f"/api/simulations/doe/browse?path={link / '하위'}", headers=member.headers
+    ).json()
+    assert root["roots"] == [str(real)]
+    assert root["path"] == str(real)
+    assert inside["path"].startswith(root["roots"][0] + "/")
+    assert inside["parent"] == str(real)
 
 
 def test_점_찍고_올라가는_길도_막는다(client: TestClient, member: Signed) -> None:
@@ -973,6 +1062,110 @@ def test_같은_DOE_를_두_번_가져와도_두_벌이_안_생긴다(
     body = again.json()
     assert body["created"] == []
     assert any("이미 가져온 점" in one["skip_reason"] for one in body["skipped"])
+
+
+def test_중간면이_빠진_쉘_점은_건너뛰고_나머지는_만든다(
+    client: TestClient,
+    member: Signed,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`create` 는 점마다 커밋한다 — 중간면이 빠진 쉘 점을 거기서야 막으면 앞 점들은 만들어지고
+    요청은 400 이라 요약도 못 받고, 다시 가져오면 앞 점들이 「이미 가져온 점」 이다. 물성 ·
+    조건처럼 미리 걸러 까닭을 단다."""
+    folder = tmp_path / "쉘_중간면빠짐"
+    shutil.copytree(SHELL_FOLDER, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["id"] = uuid.uuid4().hex
+    (folder / "study.json").write_text(json.dumps(study), encoding="utf-8")
+    manifest = folder / "manifest.csv"
+    text = manifest.read_text(encoding="utf-8-sig")
+    manifest.write_text(text.replace(",points/p0002_mid.step,", ",,"), encoding="utf-8-sig")
+    monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
+
+    made = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "static", "solver": "calculix"},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert len(body["created"]) == 1
+    assert [one["number"] for one in body["skipped"]] == [2]
+    assert "중간면" in body["skipped"][0]["skip_reason"]
+
+
+def test_실패한_점은_다시_가져오고_스터디는_마지막_작업으로_본다(
+    client: TestClient,
+    member: Signed,
+    db: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**재시도는 가져올 때 복사한 옛 점 파일을 그대로 쓴다** — CompCore 가 고쳐 다시 내보낸
+    폴더(2026-10-05 「솔버 덱 함께」)를 쓰려면 다시 가져와야 한다. 실패 · 취소한 점만 그렇다:
+    끝났거나 도는 점을 다시 가져오면 라이선스를 두 번 태운다. 옛 작업은 지우지 않고 새 작업이
+    가리키며, 스터디 표는 점마다 마지막 작업 하나다(전에는 같은 점이 두 줄 나올 자리였다)."""
+    folder = tmp_path / "두바디_다시"
+    shutil.copytree(TWO_BODY_FOLDER, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["id"] = "f" * 32
+    (folder / "study.json").write_text(json.dumps(study), encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
+    body = {
+        "path": str(folder),
+        "spec": {"recipe": "modal"},
+        "workspace_slug": member.workspace,
+    }
+
+    first = client.post("/api/simulations/doe/import", json=body, headers=member.headers)
+    assert first.status_code == 201, first.text
+    made = first.json()["created"]
+    assert len(made) == 2
+    failed = db.get(Simulation, uuid.UUID(made[0]))
+    assert failed is not None
+    failed.status = "failed"
+    db.commit()
+    before = maintenance_counts(client, member).get("simulations_failed", 0)
+
+    again = client.post("/api/simulations/doe/import", json=body, headers=member.headers)
+    assert again.status_code == 201, again.text
+    redo = again.json()
+    assert len(redo["created"]) == 1
+    # 끝난(또는 도는) 점은 여전히 막는다.
+    assert [one["number"] for one in redo["skipped"]] == [
+        int(failed.source_meta["point"]) % 2 + 1
+    ]
+    fresh = db.get(Simulation, uuid.UUID(redo["created"][0]))
+    assert fresh is not None
+    assert fresh.source_meta["point"] == failed.source_meta["point"]
+    assert fresh.source_meta["previous"] == [str(failed.id)]
+    # 옛 시도에는 대신한 작업을 적는다 — 「남은 일」 에서 빠지고, 옛 점 파일로 다시 걸 수 없다.
+    db.refresh(failed)
+    assert failed.source_meta["superseded_by"] == str(fresh.id)
+    after = maintenance_counts(client, member).get("simulations_failed", 0)
+    assert after == before - 1
+    revived = client.post(f"/api/simulations/{failed.id}/retry", headers=member.headers)
+    assert revived.status_code == 409, revived.text
+    assert revived.json()["error"]["code"].endswith("SIMULATIONS-0031")
+
+    shown = client.get(f"/api/simulations/studies/{'f' * 32}", headers=member.headers)
+    assert shown.status_code == 200, shown.text
+    rows = shown.json()["points"]
+    assert len(rows) == 2
+    assert str(fresh.id) in {one["simulation_id"] for one in rows}
+    assert str(failed.id) not in {one["simulation_id"] for one in rows}
+    listed = client.get("/api/simulations/studies", headers=member.headers)
+    mine = next(one for one in listed.json() if one["study_id"] == "f" * 32)
+    assert mine["points"] == 2 and mine["failed"] == 0
+    # 정리는 옛 시도까지 하지만 「설계점 N개」 는 점의 수다 — 표와 같은 2.
+    tidied = client.post(f"/api/simulations/studies/{'f' * 32}/tidy", headers=member.headers)
+    assert tidied.status_code == 200, tidied.text
+    assert tidied.json()["points"] == 2
 
 
 def test_정적_DOE_비교에_반력과_측정점이_실린다(client: TestClient, member: Signed) -> None:

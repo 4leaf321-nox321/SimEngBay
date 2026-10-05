@@ -85,7 +85,7 @@ sudo ./deploy.sh update
 | --- | --- |
 | **`root` 로 바로 ssh 했다면** | 운영 계정을 알 수 없어 멈춘다(`sudo` 를 거치지 않아 `SUDO_USER` 가 없다). `OPERATOR=<계정> ./deploy.sh install` 로 준다 |
 | **임시 비밀번호는 한 번만 찍힌다** | 세션이 끊기면 잃는다. `sudo ./deploy.sh install 2>&1 \| tee ~/install-<태그>.log` 로 받아 둔다 |
-| **`setup` 은 묻는다 — TTY 가 없으면 멈춘다** | 원격 자동 설치는 값을 env 로 주고 `--yes`: `sudo SETUP_ROLE=1 APP_SLUG=simengbay DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore ./deploy.sh setup --yes`. 묻는 대신 env(없으면 기본값)를 쓰고 무엇을 썼는지 찍는다. **역할(`SETUP_ROLE=A\|B\|1`)은 꼭 준다** — 기본값이 없다. 먼저 `setup --yes --plan` 으로 계획만 본다. 대기(B)가 A 에서 파일을 받는 단계는 ssh 키로만 된다(비밀번호를 칠 사람이 없다) |
+| **`setup` 은 묻는다 — TTY 가 없으면 멈춘다** | 원격 자동 설치는 값을 env 로 주고 `--yes`: `sudo SETUP_ROLE=1 APP_SLUG=simengbay DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore ./deploy.sh setup --yes`. 묻는 대신 env(없으면 기본값)를 쓰고 무엇을 썼는지 찍는다. **역할(`SETUP_ROLE=A\|B\|1`)은 꼭 준다** — 기본값이 없다. 먼저 `setup --yes --plan` 으로 계획만 본다. 대기(B)가 A 에서 파일을 받는 단계는 ssh 키로만 된다(비밀번호를 칠 사람이 없다) — A 의 계정 이름이 이 서버와 다르면 `PEER_ACCOUNT=` 로 준다 |
 | **`reset` 은 되묻는다** | `ssh <서버> 'sudo ./deploy.sh reset'` 은 TTY 가 없어 그 물음에서 실패한다. `ssh -t` 로 붙는다 |
 | **`prepare` 는 apt 를 쓴다** | 서버가 우분투 저장소(또는 사내 미러)에 닿아야 한다. apptainer 는 번들에 동봉한 `.deb` 로 깔리므로 PPA 에 닿을 필요는 없다. 그래도 못 깔면 `prepare` 가 DB·폴더까지 만든 뒤 **무엇을 먼저 깔지 말하고 멈춘다** — 해결 뒤 `prepare` 를 다시 돌린다(앞 단계는 멱등하다) |
 
@@ -205,7 +205,7 @@ apptainer exec ~/apps/<slug>/app.sif gmsh -info | head -3
 ### DOE 공용 폴더 — CAD 가 내보낸 것을 읽으려면
 
 CAD 플랫폼(CompCore)이 설계점 묶음(DOE) · 설계 하나를 폴더로 내보내고, 이 서버가 **그 폴더를
-읽어** 해석을 건다 — 「새 해석 작업」 의 「CAD 폴더에서 선택」 과 「DOE 가져오기」 가 여기를 본다.
+읽어** 해석을 건다 — 「새 해석 작업」 의 「CAD 폴더에서 선택」(설계 하나든 DOE 든)이 여기를 본다.
 컨테이너는 걸어 준 폴더만 보므로 **한 번** 알려 준다(그 뒤로는 기억한다 — 위 표):
 
 ```bash
@@ -230,7 +230,7 @@ sudo mount -a && mount | grep exchange
 | --- | --- |
 | 무엇을 거나 | 호스트의 그 폴더 → 컨테이너의 `/data/doe`, **읽기 전용** |
 | `.env` | `DOE_ROOTS=/data/doe` 를 자동으로 채운다(컨테이너 안에서 보는 경로) |
-| 안 주면 | 「CAD 폴더에서 선택」 · DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」 라고 말한다. 「파일 직접 업로드」 는 그대로 된다 |
+| 안 주면 | 「새 해석 작업」 의 「CAD 폴더에서 선택」 이 「공용 폴더가 설정돼 있지 않습니다」 라고 말한다. 「파일 직접 업로드」 는 그대로 된다 |
 | 권한 | **읽기만 하면 된다.** 가져올 때 STEP 을 작업 폴더로 복사하므로 원본은 손대지 않는다 |
 | CAD 쪽과의 관계 | CompCore 의 `DOE_EXPORT_ROOT` 와 **같은 실제 폴더**여야 한다. 두 서버가 다른 기계면 공유 스토리지(NFS · SMB)를 양쪽에 마운트한다 — 경로 이름은 서로 달라도 된다 |
 
@@ -350,7 +350,7 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | **해석 작업이 「대기」 에서 안 움직인다** | 먼저 서버 화면의 「워커 · 솔버」 카드 — **그 솔버를 집는 워커가 있나**(CalculiX 작업인데 워커가 전부 `SIMULATION_SOLVERS=ansys` 면 영원히 대기한다). 워커가 아예 없으면 `systemctl status '<slug>-worker@1'` · `journalctl -u '<slug>-worker@1' -n 50`. 번들에 `worker.service.template` 이 없으면 설치가 건너뛴다(설치 로그에 「워커 유닛 건너뜀」) |
 | **워커가 10초마다 다시 뜬다**(`journalctl` 에 `No module named app`) | v0.5.0 이하의 워커 유닛이 `/opt/app/backend` 로 옮기지 않고 띄웠다. v0.5.1 이상 번들로 `sudo ./deploy.sh update` — 유닛을 다시 그린다. 손으로 고친 유닛(`--pwd`)도 그때 덮이는데, 새 템플릿이 같은 일을 하므로 괜찮다. 지금은 install · update 끝에 「워커 N 이 떠 있지 않습니다」 와 마지막 기록이 찍힌다 |
 | 해석 작업이 `license` 로 실패한다 | **Ansys** 워커 수가 Mechanical 라이선스 수보다 많다. 줄이려면 `sudo WORKER_COUNT=1 ./deploy.sh update` 로 낮추거나, 아래 「솔버를 갈라 띄우기」 로 Ansys 워커만 하나로 둔다 |
-| **「CAD 폴더에서 선택」 · DOE 가져오기가 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 를 한 번도 안 줬다. `sudo DOE_ROOT_HOST_DIR=… ./deploy.sh update` — 그 뒤로는 기억한다 |
+| **「새 해석 작업」 의 「CAD 폴더에서 선택」 이 「공용 폴더가 설정돼 있지 않습니다」** | `DOE_ROOT_HOST_DIR` 를 한 번도 안 줬다. `sudo DOE_ROOT_HOST_DIR=… ./deploy.sh update` — 그 뒤로는 기억한다 |
 | **어제까지 되던 「CAD 폴더에서 선택」 이 폴더를 못 읽는다** | 대개 NAS 가 빠졌다(재부팅 뒤 등). `mount \| grep exchange` — 비었으면 `/etc/fstab` 에 `_netdev` 로 넣고 `sudo mount -a`. `sudo ./deploy.sh status` 의 「CAD 공용 폴더」 칸도 같은 것을 본다. v0.4.0 이하에서 `update` 를 했다면 연결 자체가 빠졌을 수 있다 — 값을 다시 주고 `update` |
 | DOE 화면에 「폴더가 없습니다」 | `.env` 의 `DOE_ROOTS` 가 **호스트 경로**를 가리킨다. 컨테이너 안에서 보이는 이름(`/data/doe`)이어야 한다 |
 | 폴더는 보이는데 DOE 표시가 안 붙는다 | 그 폴더에 `manifest.csv` 가 없다 — CAD 가 내보내기를 끝내지 않았거나 상위 폴더를 보고 있다 |
@@ -441,7 +441,7 @@ sudo ./deploy.sh status            # 앱 · 상대 앱 · 메인 서버 경유 h
 
 **메인 서버 쪽에 부탁할 것** — 조각에 그대로 있다: `X-Forwarded-Proto $scheme` (앱이 https 인 줄 알아야 쿠키가 산다). 접두어 `/<slug>/` 는 벗겨 넘기든 그대로 넘기든 앱이 둘 다 받는다.
 
-**메인 서버가 아직 없어도** A · B 설치와 8.3 · 8.4 의 리허설은 전부 된다 — 화면은 `http://<A의 IP>:8040/<slug>/` 로 직접 본다(접두어를 붙여서). http 로 직접 보는 동안은 쿠키에 Secure 가 안 붙을 뿐 로그인 유지는 된다.
+**메인 서버가 아직 없어도** A · B 설치와 8.3 · 8.4 의 리허설은 전부 된다 — 화면은 `http://<A의 IP>:8070/<slug>/` 로 직접 본다(접두어를 붙여서). http 로 직접 보는 동안은 쿠키에 Secure 가 안 붙을 뿐 로그인 유지는 된다.
 
 DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다. **없으면** 앱은 A 의 IP 로 DB 에 붙고 자동 승격은 꺼진다 — 받은 뒤 「8.5」.
 
@@ -474,7 +474,7 @@ sudo ./deploy.sh update
 | **서버 A(주) 통째** | **DB VIP 가 있으면** 약 15초 뒤 B 가 승격되고 DB VIP → B. 마지막 몇 초의 쓰기는 유실될 수 있다. 앱은 B 만 남는다 | A 가 살아나도 **주로 못 뜬다**(guard). 「8.4」 대로 A 를 대기로 |
 | **주 DB 만**(A 의 postgres) | 위와 같다(`pg-ha check` 가 3번 실패 → VIP 이동 → 승격) | 같다 |
 | **DB VIP 없이 A 통째** | 앱은 B 만 남지만 **DB 를 잃는다** | B 에서 `sudo ./deploy.sh db-promote` → `/data/…/.env` 의 `DATABASE_URL` 호스트를 B 로 → `sudo systemctl restart <slug>` |
-| **메인 서버** | 아무도 못 들어온다 — 메인 서버 쪽 일 | A · B 는 그대로 돈다. 급하면 `http://<A>:8040/<slug>/` 로 직접(접두어를 붙여서. http 라 리프레시 쿠키는 안 산다 — 확인용으로만) |
+| **메인 서버** | 아무도 못 들어온다 — 메인 서버 쪽 일 | A · B 는 그대로 돈다. 급하면 `http://<A>:8070/<slug>/` 로 직접(접두어를 붙여서. http 라 리프레시 쿠키는 안 산다 — 확인용으로만) |
 | **/data 가 안 보인다** | 첨부 · 백업이 멈춘다. 앱 재시작은 `.env` 를 못 읽어 실패한다(떠 있는 앱은 계속 돈다) | 마운트를 살린다. 그동안은 앱을 재시작하지 않는다 |
 
 ### 8.4 승격 뒤 원복 — 옛 주를 대기로, 그리고 (원하면) 다시 주로

@@ -77,7 +77,7 @@ export function StaticResult({ simulationId, result, artifacts }: Props) {
         <Suspense
           fallback={<p className="text-muted-foreground py-8 text-center text-sm">변형 그림을 불러오는 중…</p>}
         >
-          <MeshViewer data={mesh} warpRatio={0.05} periodMs={0} heightClass="h-[28rem]" />
+          <MeshViewer data={mesh} warpRatio={0.05} periodMs={0} heightClass="h-[28rem]" partNames={result.parts} />
         </Suspense>
       )}
       <p className="text-muted-foreground text-xs">

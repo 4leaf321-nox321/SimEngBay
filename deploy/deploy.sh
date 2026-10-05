@@ -165,7 +165,7 @@ ANSYS_HOST_DIR="${ANSYS_HOST_DIR:-$(instance_conf_get "$APP_SLUG" ANSYS_HOST_DIR
 ANSYS_VERSION="${ANSYS_VERSION:-$(instance_conf_get "$APP_SLUG" ANSYS_VERSION)}"
 ANSYS_VERSION="${ANSYS_VERSION:-252}"
 #: CAD(CompCore)가 DOE 를 내보내는 공용 폴더. 주면 컨테이너의 /data/doe 에 **읽기 전용**으로
-#: 걸고 .env 의 DOE_ROOTS 를 그 경로로 채운다. 안 주면 「CAD 폴더에서 선택」 · DOE 가져오기가
+#: 걸고 .env 의 DOE_ROOTS 를 그 경로로 채운다. 안 주면 「새 해석 작업」 의 「CAD 폴더에서 선택」 이
 #: 막힌다(그것이 기본값 — 아무 경로나 읽게 두면 그 화면이 서버의 모든 폴더를 여는 문이 된다).
 DOE_ROOT_HOST_DIR="${DOE_ROOT_HOST_DIR:-$(instance_conf_get "$APP_SLUG" DOE_ROOT_HOST_DIR)}"
 #: 컨테이너 안에서 그 폴더가 보이는 이름. 앱의 DOE_ROOTS 가 이 값이다.
@@ -362,7 +362,7 @@ sync_env_paths() {
 # 누군가 「CAD 폴더에서 선택」 을 연 날에야 드러난다. ──
 check_doe_dir() {
     [[ -n "$DOE_ROOT_HOST_DIR" ]] || {
-        warn "CAD 공용 폴더를 안 정했습니다 — 「CAD 폴더에서 선택」 · DOE 가져오기가 막힙니다(파일 직접 업로드는 됩니다).
+        warn "CAD 공용 폴더를 안 정했습니다 — 「새 해석 작업」 의 「CAD 폴더에서 선택」 이 막힙니다(파일 직접 업로드는 됩니다).
       정하려면 한 번: sudo DOE_ROOT_HOST_DIR=/mnt/exchange/CompCore ./deploy.sh update (그 뒤로는 기억합니다)"
         return 0
     }
@@ -866,7 +866,7 @@ ask() {  # $1=변수 $2=질문 $3=기본값
     local answer
     if [[ $SETUP_YES -eq 1 ]]; then
         answer="${!1:-}"; printf -v "$1" '%s' "${answer:-$3}"
-        echo "$2: ${!1}"   # 무엇으로 깔았는지 setup.log 에 남는다
+        echo "$2: ${!1}"   # 무엇으로 깔았는지 찍는다(화면 — setup.log 는 계획을 확정한 뒤부터 쓴다)
         return 0
     fi
     if [[ -n "$3" ]]; then read -r -p "$2 [$3]: " answer; else read -r -p "$2: " answer; fi
@@ -906,7 +906,8 @@ cmd_setup() {
     ask DOE_ROOT_HOST_DIR "CAD(CompCore) 공용 폴더 — 「CAD 폴더에서 선택」 이 읽는 곳 (예: /mnt/exchange/CompCore, 없으면 Enter)" "${remembered:-$DOE_ROOT_HOST_DIR}"
     remembered="$(instance_conf_get "$APP_SLUG" ANSYS_HOST_DIR)"
     ask ANSYS_HOST_DIR "리눅스 Ansys 설치 폴더 (예: /opt/ansys_inc, 안 쓰면 Enter)" "${remembered:-$ANSYS_HOST_DIR}"
-    local peer_account=""
+    # `--yes` 면 env 로 준다(PEER_ACCOUNT) — 안 주면 이 서버의 운영 계정과 같은 이름으로 본다.
+    local peer_account="${PEER_ACCOUNT:-}"
     if [[ -n "$HA_ROLE" ]]; then
         ask PEER_IP "상대 서버의 IP ($( [[ "$HA_ROLE" == master ]] && echo 'B' || echo 'A' ))" "$PEER_IP"
         [[ -n "$PEER_IP" ]] || err "상대 서버 IP 가 필요합니다."

@@ -96,6 +96,44 @@ def test_없는_자리를_가리키면_막는다() -> None:
     assert any("없는면" in one.why for one in found.refused)
 
 
+def _edges(count: int) -> list[dict[str, Any]]:
+    """엣지 지문 — `midpoint` · `length`(CompCore 의 모양 그대로)."""
+    return [{"midpoint": [float(index), 0.0, 4.0], "length": 8.0} for index in range(count)]
+
+
+def test_면으로_선언하고_엣지_지문이_오면_막고_그렇다고_말한다() -> None:
+    """CompCore 가 09-24 에 내보낸 「솔버 덱 함께」 — 「바닥」 을 **면으로 선언하고 엣지 지문
+    15개를** 실었다(그때는 규칙에 `what` 이 없으면 엣지를 골랐다). 전에는 이 자리가 「반영」
+    으로 지나가고 모델링에서야 「바닥[0] 엣지 그룹입니다」 로 멈췄다(2026-10-05). 고칠 자리가
+    우리 창이 아니라 CompCore 의 내보내기라는 것까지 말한다."""
+    payload = _point("조건_두바디_두재료")
+    payload["regions"]["바닥"] = _edges(15)
+    found = conditions.read(payload)
+    assert found.constraints == []
+    assert any(
+        "면으로 선언했는데 지문은 엣지(edge) 15개" in one.why and "다시 내보내" in one.why
+        for one in found.refused
+    ), found.refused
+
+
+def test_엣지_그룹에_걸린_접촉과_하중을_막는다() -> None:
+    """매처는 면만 짝짓는다 — 접촉 · 하중도 같다. **모달의 하중은 답을 안 바꾸므로 넘긴다**
+    (막으면 모달로 돌려 보는 것까지 막힌다). 정적이면 막는다."""
+    payload = _point("조건_두바디_두재료")
+    payload["regions"]["블록 아랫면"] = _edges(4)
+    payload["regions"]["블록 윗면"] = _edges(4)
+    for one in payload["conditions"]["named_selections"]:
+        if one["name"] in ("블록 아랫면", "블록 윗면"):
+            one["entity"] = "edge"
+    modal = conditions.read(payload)
+    assert modal.contacts == []
+    assert any("「블록 아랫면」 은 엣지(edge) 그룹" in one.why for one in modal.refused)
+    assert not any("누름" in one.what for one in modal.refused)
+    static = conditions.read(payload, recipe="static")
+    assert static.loads == []
+    assert any("누름" in one.what and "엣지(edge)" in one.why for one in static.refused)
+
+
 def test_모르는_구속은_막는다() -> None:
     """종류가 늘어도 **모르면 걸지 않는다**.
 
@@ -298,3 +336,18 @@ def test_국부_메시_규칙을_따른다() -> None:
     note = conditions.whole_order_note(found, "quadratic")
     assert note is not None and "1차" in note.why and "2차" in note.why
     assert conditions.whole_order_note(found, "linear") is None
+
+
+def test_비례_정련은_파트와_면_크기를_같은_비율로_줄이고_전체는_두다() -> None:
+    """메시 수렴 점검 — 전체 크기만 줄이면 CAD 가 크기를 적은 파트 · 면은 그대로라 정련이
+    고르지 않았다. 「전체」 는 점검 수준이 스펙에 직접 적으므로 건드리지 않는다."""
+    payload = _with_settings([{"name": "기둥", "mesh": {"element_size": 1.5}}])
+    payload["conditions"]["mesh_hints"].append({"on": "기둥 끝", "element_size": 0.8})
+    found = conditions.read(payload)
+    half = conditions.scaled(found, 0.5)
+    assert {one.name: one.element_size for one in half.body_settings} == {"기둥": 0.75}
+    sizes = {one.region: one.element_size for one in half.mesh_hints}
+    assert sizes == {"전체": 2.0, "기둥 끝": 0.4}
+    # 원본은 그대로, 1 이면 같은 것.
+    assert {one.name: one.element_size for one in found.body_settings} == {"기둥": 1.5}
+    assert conditions.scaled(found, 1) is found

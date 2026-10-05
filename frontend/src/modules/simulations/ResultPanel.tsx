@@ -27,21 +27,39 @@ interface Props {
   /** 작업 상태. **끝난 작업에만 결과가 있다** — 도는 동안에는 받지 않는다. */
   status: string
   artifacts: Artifact[]
+  /**
+   * 화면이 이미 받은 결과. 주면 여기서 다시 받지 않는다 — 상세 화면은 한눈에 보기 줄과 결과 탭이
+   * 같은 결과를 쓴다(같은 파일을 두 번 읽지 않는다).
+   */
+  loaded?: LoadedResult
+}
+
+export interface LoadedResult {
+  result: AnyResult | null
+  error: ApiError | Error | null
 }
 
 /** 화면이 받을 수 있는 결과 — **레시피마다 모양이 다르다.** */
-type AnyResult = SimulationResult | StaticResultData | HarmonicResultData
+export type AnyResult = SimulationResult | StaticResultData | HarmonicResultData
 
 /** **레시피로 가른다** — `SimulationResult.recipe` 가 넓은 글자형이라 좁혀 준다. */
-function isStatic(result: AnyResult): result is StaticResultData {
+export function isStatic(result: AnyResult): result is StaticResultData {
   return result.recipe === 'static'
 }
 
-function isHarmonic(result: AnyResult): result is HarmonicResultData {
+export function isHarmonic(result: AnyResult): result is HarmonicResultData {
   return result.recipe === 'harmonic'
 }
 
-export function ResultPanel({ simulationId, status, artifacts }: Props) {
+/**
+ * 끝난 작업의 결과 요약을 **한 번** 받는다. 폴링에 실으면 같은 파일을 2초마다 읽는다.
+ * `enabled` 가 거짓이면 받지 않는다(화면이 이미 받아 넘겨준 경우).
+ */
+export function useSimulationResult(
+  simulationId: string,
+  status: string,
+  enabled = true,
+): LoadedResult {
   const [result, setResult] = useState<AnyResult | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
@@ -51,7 +69,7 @@ export function ResultPanel({ simulationId, status, artifacts }: Props) {
   }, [simulationId])
 
   useEffect(() => {
-    if (status !== 'done') return
+    if (status !== 'done' || !enabled) return
     let disposed = false
     simulationApi
       .result(simulationId)
@@ -69,7 +87,14 @@ export function ResultPanel({ simulationId, status, artifacts }: Props) {
     return () => {
       disposed = true
     }
-  }, [simulationId, status])
+  }, [simulationId, status, enabled])
+
+  return { result, error }
+}
+
+export function ResultPanel({ simulationId, status, artifacts, loaded }: Props) {
+  const own = useSimulationResult(simulationId, status, loaded === undefined)
+  const { result, error } = loaded ?? own
 
   if (status !== 'done') return null
   if (result) {

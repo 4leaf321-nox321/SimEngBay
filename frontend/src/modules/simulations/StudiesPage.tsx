@@ -38,7 +38,7 @@ export default function StudiesPage() {
       {studies.data && studies.data.length === 0 ? (
         <EmptyState
           title="가져온 DOE 가 없습니다"
-          hint="해석 작업 화면의 「DOE 가져오기」 로 CAD 가 내보낸 폴더를 읽어 옵니다."
+          hint="해석 작업 화면의 「새 해석 작업」 에서 CAD 가 내보낸 DOE 폴더를 선택해 가져옵니다."
         />
       ) : (
         <Table>

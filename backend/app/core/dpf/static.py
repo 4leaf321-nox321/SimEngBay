@@ -250,6 +250,9 @@ def _draw(model: Any, mesh: Any, workdir: Path, result: dict[str, Any]) -> list[
         vtp = workdir / str(drawn["vtp"])
         made.append(ArtifactSpec("mode_vtp", vtp))
         result["shape"] = {"vtp": drawn["vtp"], "points": drawn.get("points")}
+        if drawn.get("parts"):
+            # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
+            result["parts"] = drawn["parts"]
         if "png" in drawn:
             made.append(ArtifactSpec("mode_png", workdir / str(drawn["png"])))
             result["shape"]["png"] = drawn["png"]

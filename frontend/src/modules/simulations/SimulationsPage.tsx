@@ -11,12 +11,11 @@
  */
 
 import { useState } from 'react'
-import { FolderInput, Plus, RefreshCw } from 'lucide-react'
+import { Plus, RefreshCw } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { DoeImport } from '@/modules/simulations/api'
-import { DoeImportDialog } from '@/modules/simulations/DoeImportDialog'
 import { shownOutcome } from '@/modules/simulations/format'
 import { RECIPE_LABELS, SOLVER_LABELS, shownDuration } from '@/modules/simulations/labels'
 import { workspaceApi } from '@/modules/workspaces/api'
@@ -78,7 +77,6 @@ export default function SimulationsPage() {
   const [offset, setOffset] = useState(0)
   const workspaces = useResource(() => workspaceApi.options(), [])
   const [creating, setCreating] = useState(false)
-  const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState<DoeImport | null>(null)
 
   const page = useResource(
@@ -111,10 +109,6 @@ export default function SimulationsPage() {
             <Button variant="outline" size="sm" onClick={page.reload}>
               <RefreshCw className="size-4" />
               새로 고침
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
-              <FolderInput className="size-4" />
-              DOE 가져오기
             </Button>
             <Button size="sm" onClick={() => setCreating(true)}>
               <Plus className="size-4" />새 해석 작업
@@ -268,11 +262,19 @@ export default function SimulationsPage() {
         />
       )}
 
-      <DoeImportDialog
-        open={importing}
-        onClose={() => setImporting(false)}
+      {/* 설계 하나든 DOE 든 이 창 하나다 — 1건이면 그 상세로, 여러 건이면 여기서 결과를 말한다.
+          **열 때마다 새로 띄운다** — 띄워 둔 채 다시 열면 앞에서 고른 파일 · 폴더 · 체크가 남아
+          방금 만든 점을 또 걸거나(0건) 칸에는 안 보이는 파일을 올렸다(2026-10-05 리뷰). */}
+      {creating && (
+      <NewSimulationDialog
+        open
+        onClose={() => setCreating(false)}
+        onCreated={(created) => {
+          setCreating(false)
+          navigate(`/simulations/${created.id}`)
+        }}
         onImported={(result) => {
-          setImporting(false)
+          setCreating(false)
           // 만든 것을 바로 보여 준다 — N 개가 큐에 들어가 차례로 돈다.
           setOffset(0)
           page.reload()
@@ -280,15 +282,7 @@ export default function SimulationsPage() {
           setImported(result)
         }}
       />
-
-      <NewSimulationDialog
-        open={creating}
-        onClose={() => setCreating(false)}
-        onCreated={(created) => {
-          setCreating(false)
-          navigate(`/simulations/${created.id}`)
-        }}
-      />
+      )}
     </div>
   )
 }

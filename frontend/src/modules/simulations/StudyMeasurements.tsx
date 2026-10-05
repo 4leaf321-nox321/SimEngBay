@@ -12,7 +12,8 @@ import { Link } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { StudyMeasurement } from '@/modules/simulations/api'
-import { KIND_LABELS, MeasurementUpload } from '@/modules/simulations/MeasurementsPanel'
+import { MeasurementEntry } from '@/modules/simulations/MeasurementEntry'
+import { KIND_LABELS } from '@/modules/simulations/MeasurementsPanel'
 import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -52,8 +53,8 @@ export function StudyMeasurements({ studyId, factors }: { studyId: string; facto
   return (
     <section className="space-y-3">
       <h2 className="text-sm font-medium">실측과 맞추기</h2>
-      <MeasurementUpload
-        onUpload={async (file, label) => {
+      <MeasurementEntry
+        onSubmit={async (file, label) => {
           await simulationApi.addStudyMeasurement(studyId, file, label)
           setTick((value) => value + 1)
         }}

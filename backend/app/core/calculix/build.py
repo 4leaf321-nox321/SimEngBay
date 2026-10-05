@@ -271,6 +271,8 @@ def build(
         # **결과를 읽을 때 쉘을 접는다**(`frd.read_folded`) — 펼친 절점은 두께의 절반 안이다.
         boundary["shells"] = {
             "surfaces": sorted(layout.shell_parts),
+            # 그림의 파트 이름 — 화면이 쉘 파트를 이름으로 보이고 숨긴다(`vtp.parted`).
+            "parts": {str(surface): name for surface, name in layout.shell_parts.items()},
             "reach": round(0.55 * max(one.thickness for one in shells), 6),
         }
     # **실제로 붙인 물성 이름** — 결과에 스펙 이름을 적으면 CAD 물성으로 푼 것을 숨긴다.
@@ -385,7 +387,8 @@ def _declared_conditions(
             + " · ".join(f"{one.what} — {one.why}" for one in found.refused),
             details={"refused": [{"what": one.what, "why": one.why} for one in found.refused]},
         )
-    return found
+    # **비례 정련** — 메시 수렴 점검이 전체 크기와 같은 비율로 CAD 의 파트 · 면 크기를 줄인다.
+    return condition_model.scaled(found, spec.mesh.local_scale)
 
 
 def _materials(

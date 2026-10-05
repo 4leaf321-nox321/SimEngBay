@@ -198,15 +198,24 @@ def _draw(
         return {}
     try:
         mesh = read_mesh(msh)
+        try:
+            triangles, parts, names = vtp.parted(mesh, workdir)
+        except Exception:  # pragma: no cover - 나누기만 못 한다
+            logger.warning("그림을 파트로 못 나눴습니다 — 나누지 않고 그립니다", exc_info=True)
+            triangles, parts, names = list(mesh.triangles), None, []
         counts = vtp.write(
             workdir / "mode_01.vtp",
             nodes=mesh.nodes,
-            triangles=mesh.triangles,
+            triangles=triangles,
             displacement=block.values,
             magnitude=magnitude,
+            parts=parts,
         )
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("변형 그림을 못 만들었습니다 — 그림 없이 갑니다", exc_info=True)
         return {}
     result["shape"] = {"vtp": "mode_01.vtp", "points": counts["points"]}
+    if names:
+        # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
+        result["parts"] = names
     return {"nodes": len(mesh.nodes), "elements": mesh.element_count}

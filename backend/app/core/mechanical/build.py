@@ -559,6 +559,11 @@ def _declared_conditions(
         )
     for note in found.skipped:
         logger.info("조건 건너뜀 %s — %s", note.what, note.why)
+    if spec.mesh.local_scale != 1:
+        # **비례 정련** — 메시 수렴 점검이 전체 크기와 같은 비율로 CAD 의 파트 · 면 크기를
+        # 줄인다.
+        logger.info("CAD 파트 · 면 요소 크기 배율 %g (비례 정련)", spec.mesh.local_scale)
+        found = condition_model.scaled(found, spec.mesh.local_scale)
     return found
 
 

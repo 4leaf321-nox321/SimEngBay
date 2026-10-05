@@ -22,10 +22,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
+from app.core import surface_parts
 from app.core.dpf import fields
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,12 @@ THUMBNAIL_SIZE = (480, 360)
 #: 썸네일에서 변위를 모델 크기의 몇 배로 과장하나.
 WARP_RATIO = 0.15
 
+#: 결과 파일의 길이 단위 → mm. CAD 바디 지문(mm)과 견주려면 맞춰야 한다.
+LENGTH_TO_MM = {"m": 1000.0, "cm": 10.0, "mm": 1.0, "um": 1e-3, "in": 25.4, "ft": 304.8}
+
+#: 모델링이 작업 폴더에 둔 CAD 점 파일 — 파트 이름을 바디 지문으로 짝짓는다.
+TOPOLOGY_NAME = "topology.json"
+
 
 def export_mode(
     model: Any,
@@ -55,6 +63,7 @@ def export_mode(
     import numpy as np
 
     surface = _surface_with_displacement(model, skin_mesh, mode)
+    parts = _mark_parts(surface, skin_mesh, workdir)
     magnitude = surface.point_data["magnitude"]
     max_displacement = float(np.max(magnitude)) if len(magnitude) else 0.0
 
@@ -69,6 +78,8 @@ def export_mode(
         "points": int(surface.n_points),
         "faces": int(surface.n_cells),
     }
+    if parts:
+        made["parts"] = parts
     if thumbnail:
         png = _thumbnail(surface, workdir / f"mode_{mode:02d}.png", max_displacement)
         if png is not None:
@@ -98,16 +109,64 @@ def _surface_with_displacement(model: Any, skin_mesh: Any, mode: int) -> Any:
     grid.point_data["displacement"] = vectors
     grid.point_data["magnitude"] = np.linalg.norm(vectors, axis=1)
 
-    # 중간 절점을 버리고(브라우저가 못 그린다) 삼각형으로.
+    # 중간 절점을 버린다(브라우저가 못 그린다). **요소면은 그대로 둔다** — 사각형을 삼각형으로
+    # 쪼개면 화면의 「요소」 선에 없는 대각선이 그려진다(2026-10-05). 솎기만 삼각형을 받으므로
+    # 그때만 쪼갠다 — 솎은 그림의 선은 요소 경계가 아니다.
     linear = grid.linear_copy() if hasattr(grid, "linear_copy") else grid
-    surface = linear.extract_surface(algorithm="dataset_surface").triangulate()
+    surface = linear.extract_surface(algorithm="dataset_surface")
     if surface.n_cells > DECIMATE_ABOVE_CELLS:
+        surface = surface.triangulate()
         reduction = 1.0 - TARGET_CELLS / surface.n_cells
         surface = surface.decimate_pro(reduction)
     # 솎기가 남기는 보조 배열은 화면에 쓸모가 없다 — 파일만 키운다.
     surface.point_data.pop("vtkOriginalPointIds", None)
     surface.cell_data.pop("vtkOriginalCellIds", None)
     return surface
+
+
+def _mark_parts(surface: Any, skin_mesh: Any, workdir: Path) -> list[str]:
+    """면마다 파트 번호(셀 배열 `part`)를 적고 이름들을 돌려준다(`surface_parts`).
+
+    **못 나눠도 그림은 그대로다** — 빈 목록을 돌려주고 배열을 안 적는다(화면이 스스로 나눈다).
+    """
+    import numpy as np
+
+    try:
+        flat = [int(one) for one in np.asarray(surface.faces)]
+        cells: list[list[int]] = []
+        at = 0
+        while at < len(flat):
+            size = flat[at]
+            cells.append(flat[at + 1 : at + 1 + size])
+            at += size + 1
+        # 선 · 점 셀이 섞이면 셀 배열의 순서가 면과 어긋난다 — 그때는 나누지 않는다.
+        if len(cells) != int(surface.n_cells):
+            return []
+        labels = surface_parts.components(cells, int(surface.n_points))
+        count = max(labels, default=-1) + 1
+        if count < 2:
+            return []
+        unit = str(getattr(skin_mesh, "unit", "") or "").strip().lower()
+        records = surface_parts.body_records(
+            np.asarray(surface.points).tolist(),
+            cells,
+            labels,
+            to_mm=LENGTH_TO_MM.get(unit, 1000.0),
+        )
+        topology_path = workdir / TOPOLOGY_NAME
+        topology = (
+            json.loads(topology_path.read_text(encoding="utf-8"))
+            if topology_path.is_file()
+            else None
+        )
+        names = surface_parts.names_for(
+            count, records, topology if isinstance(topology, dict) else None
+        )
+        surface.cell_data["part"] = np.asarray(labels, dtype=np.int32)
+        return names
+    except Exception:
+        logger.warning("그림을 파트로 못 나눴습니다 — 나누지 않고 그립니다", exc_info=True)
+        return []
 
 
 def _thumbnail(surface: Any, path: Path, max_displacement: float) -> Path | None:

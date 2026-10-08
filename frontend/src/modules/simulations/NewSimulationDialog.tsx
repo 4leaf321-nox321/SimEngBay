@@ -125,7 +125,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     user?.home_workspace_slug ?? memberships[0]?.slug ?? GLOBAL,
   )
   const [recipe, setRecipe] = useState<RecipeName>('modal')
-  const [solver, setSolver] = useState<Solver>('ansys')
+  // **CalculiX 가 기본이다**(2026-10-08) — 라이선스 없이 서버에서 바로, 여러 점을 함께 푼다.
+  const [solver, setSolver] = useState<Solver>('calculix')
   const [modes, setModes] = useState('10')
   const [largeDeflection, setLargeDeflection] = useState(false)
   const [harmonic, setHarmonic] = useState<HarmonicInput>(HARMONIC_DEFAULTS)
@@ -174,8 +175,12 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
       null)
     : null
   const suggested = preview ? (isRecipe(preview.suggested_recipe) ? preview.suggested_recipe : null) : undefined
-  // **정적 · 조화는 하중이 CAD 조건에서 온다** — 스펙에는 하중 칸이 없다.
-  const hasLoads = useCadConditions && lines.some((one) => one.kind === 'load' && one.status === 'applied')
+  // **정적 · 조화는 하중이 CAD 조건에서 온다** — 스펙에는 하중 칸이 없다. 정적은 강제 변위로
+  // 당겨도 답이 있다(시편 시험 — `drives`).
+  const hasLoads =
+    useCadConditions &&
+    (lines.some((one) => one.kind === 'load' && one.status === 'applied') ||
+      (recipe === 'static' && preview?.conditions.drives === true))
   // **CalculiX 는 요소 크기 없이 돌지 않는다** — 설계점 수만큼 메시 실패가 쌓이기 전에 막는다.
   const needsSize = solver === 'calculix' && !elementSize.trim() && cadSize === null
 

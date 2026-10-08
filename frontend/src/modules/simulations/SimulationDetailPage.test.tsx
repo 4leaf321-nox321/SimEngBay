@@ -47,6 +47,7 @@ function job(status: string): Simulation {
       lines: [{ kind: 'constraint', label: '바닥 고정', detail: '', status: 'applied', why: '' }],
       unit_system: 'mm_n_tonne',
       prestressed: false,
+      drives: false,
     },
     stages: STAGES.map((name, index) => ({
       name,

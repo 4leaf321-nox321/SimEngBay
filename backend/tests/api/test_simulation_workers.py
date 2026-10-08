@@ -190,7 +190,9 @@ def test_돌고_있는_Ansys_작업이_라이선스를_쥔_것으로_보인다(
 ) -> None:
     """**모델링(Mechanical) · 솔버 단계가 라이선스를 쥔다** — 추론이지만 지금 누가 쥐었나를
     아는 유일한 자리다(사람이 따로 연 Mechanical 은 못 본다)."""
-    job_id = _queue(client, member, {"recipe": "modal", "material": MATERIAL})
+    job_id = _queue(
+        client, member, {"recipe": "modal", "solver": "ansys", "material": MATERIAL}
+    )
     job = db.get(Simulation, uuid.UUID(job_id))
     assert job is not None
     job.status = "solving"
@@ -283,3 +285,22 @@ def test_다른_워커가_집어_간_작업에는_결과를_덮어쓰지_않는�
     assert after is not None
     assert after.worker_id == "thief:1"
     assert after.status == "fetching", "집어 간 워커의 상태를 덮었다"
+
+
+def test_일주일_넘게_소식이_없는_워커_줄은_새_워커가_뜰_때_지운다(db: Session) -> None:
+    """워커 id 는 호스트:PID 라 뜰 때마다 줄이 생긴다 — 지우지 않으면 쌓이기만 한다."""
+    old = f"old-{uuid.uuid4().hex[:8]}:1"
+    recent = f"recent-{uuid.uuid4().hex[:8]}:1"
+    services.beat(db, old, state="idle")
+    services.beat(db, recent, state="idle")
+    gone = db.get(SimulationWorker, old)
+    kept = db.get(SimulationWorker, recent)
+    assert gone is not None and kept is not None
+    gone.last_seen_at = gone.last_seen_at - timedelta(days=8)
+    kept.last_seen_at = kept.last_seen_at - timedelta(days=6)
+    db.commit()
+
+    services.beat(db, f"new-{uuid.uuid4().hex[:8]}:1", state="idle")
+    db.expire_all()
+    assert db.get(SimulationWorker, old) is None
+    assert db.get(SimulationWorker, recent) is not None

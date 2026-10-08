@@ -32,7 +32,7 @@ from app.core.spec import (
     MaterialSpec,
     ModalSpec,
     StaticSpec,
-    parse_spec,
+    parse_stored_spec,
 )
 from app.core.stages import (
     ArtifactSpec,
@@ -60,7 +60,7 @@ class FakeExecutor:
             waited += 0.2
         if should_cancel is not None and should_cancel():
             raise StageCanceled(f"{ctx.stage} 단계에서 취소했습니다.")
-        spec = parse_spec(ctx.spec)
+        spec = parse_stored_spec(ctx.spec)
         handler = getattr(self, f"_{ctx.stage}")
         result: StageResult = handler(ctx, spec)
         return result

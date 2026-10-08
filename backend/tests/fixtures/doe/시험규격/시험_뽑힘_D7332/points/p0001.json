@@ -1,0 +1,569 @@
+{
+  "units": "mm",
+  "bodies": [
+    {
+      "name": "시편",
+      "step_product": "body_1",
+      "volume": 39873.323,
+      "centroid": [
+        0.0,
+        -0.0,
+        2.0
+      ],
+      "bbox": [
+        [
+          -50.0,
+          -50.0,
+          0.0
+        ],
+        [
+          50.0,
+          50.0,
+          4.0
+        ]
+      ]
+    },
+    {
+      "name": "체결구",
+      "step_product": "body_2",
+      "volume": 823.4,
+      "centroid": [
+        -0.0,
+        -0.0,
+        0.923
+      ],
+      "bbox": [
+        [
+          -6.35,
+          -6.35,
+          -10.0
+        ],
+        [
+          6.35,
+          6.35,
+          7.0
+        ]
+      ]
+    }
+  ],
+  "regions": {
+    "받침 고리": [
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          0.0
+        ],
+        "area": 5579.47,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ],
+        "body": "시편"
+      }
+    ],
+    "누름 고리": [
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          4.0
+        ],
+        "area": 5579.47,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": "시편"
+      }
+    ],
+    "머리 아랫면": [
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          4.0
+        ],
+        "area": 95.01,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ],
+        "body": "체결구"
+      }
+    ],
+    "판 윗면": [
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          4.0
+        ],
+        "area": 2457.04,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": "시편"
+      },
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          4.0
+        ],
+        "area": 5579.47,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": "시편"
+      },
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          4.0
+        ],
+        "area": 1931.83,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": "시편"
+      }
+    ],
+    "체결구 끝면": [
+      {
+        "centroid": [
+          0.0,
+          -0.0,
+          -10.0
+        ],
+        "area": 31.67,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ],
+        "body": "체결구"
+      }
+    ]
+  },
+  "unresolved": [],
+  "quality": {
+    "valid": true,
+    "solids": 2,
+    "faces": 16,
+    "edges": 25,
+    "min_wall": 3.0,
+    "min_wall_at": [
+      -4.233,
+      -4.233,
+      7.0
+    ],
+    "shortest_edge": 3.0,
+    "short_edges": 0,
+    "narrowest_face": 2.8913,
+    "narrow_faces": 0,
+    "warnings": [],
+    "notes": []
+  },
+  "point": {
+    "number": 1,
+    "study": {
+      "id": "4f70a58e-3f0f-4c05-bc90-a73bcbeeeae0",
+      "name": "시험_뽑힘_D7332",
+      "method": "factorial",
+      "seed": 1
+    },
+    "params": {},
+    "step_file": "points/p0001.step"
+  },
+  "conditions": {
+    "schema_version": 1,
+    "units": {
+      "system": "mm_n_tonne",
+      "label": "mm · N · tonne (MPa)",
+      "length": "mm",
+      "mass": "tonne",
+      "time": "s",
+      "force": "N",
+      "stress": "MPa",
+      "temperature": "C",
+      "density": "tonne/mm3",
+      "conductivity": "mW/(mm.K)",
+      "specific_heat": "mJ/(tonne.K)",
+      "per_temperature": "1/K",
+      "temperature_abs": "K",
+      "duration": "s",
+      "frequency": "1/s",
+      "viscosity": "N.s/mm2",
+      "force_per_length": "N/mm",
+      "diffusivity": "mm^2/s",
+      "energy": "mJ",
+      "moment": "N*mm",
+      "acceleration": "mm/s^2",
+      "angular_velocity": "rad/s"
+    },
+    "named_selections": [
+      {
+        "name": "받침 고리",
+        "entity": "face",
+        "select": {
+          "tag": "받침",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "누름 고리",
+        "entity": "face",
+        "select": {
+          "tag": "누름판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "머리 아랫면",
+        "entity": "face",
+        "select": {
+          "body": "체결구",
+          "near": [
+            0,
+            0,
+            4.0
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
+        }
+      },
+      {
+        "name": "판 윗면",
+        "entity": "face",
+        "select": {
+          "body": "시편",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      {
+        "name": "체결구 끝면",
+        "entity": "face",
+        "select": {
+          "body": "체결구",
+          "near": [
+            0,
+            0,
+            -10.0
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
+        }
+      }
+    ],
+    "materials": [
+      {
+        "apply_to": [
+          "전체"
+        ],
+        "ref": {
+          "source": "matnexus",
+          "code": "M-000138",
+          "material_id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "name": "SECC-EXAD87-DP_선언물성_0.8",
+          "fetched_at": "2026-09-28T00:00:00Z"
+        },
+        "payload": {
+          "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "code": "M-000138",
+          "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+          "alias": null,
+          "grade": "SECC-EXAD87-DP",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 7850.0,
+          "details": "선언물성",
+          "category": "Steel",
+          "legacy_id": null,
+          "created_at": "2026-09-05T15:59:15.786123+09:00",
+          "updated_at": "2026-09-05T15:59:15.809514+09:00",
+          "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [
+            "브라켓"
+          ],
+          "poisson_ratio": 0.29,
+          "spec_thickness": 0.0008,
+          "applied_products": [
+            "예시 제품"
+          ],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 470.0,
+                  "value_si": 470.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "열전도율",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 50.0,
+                  "value_si": 50.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 1.2e-05,
+                  "value_si": 1.2e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "탄소강 20~100 °C",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "전단탄성계수",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 80.0,
+                  "value_si": 80000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "E/(2(1+ν)), ν=0.29",
+              "input_unit": "GPa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "예시",
+              "scale": null,
+              "points": [
+                {
+                  "value": 205.0,
+                  "value_si": 205000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "KS D 3506 · 일반 강판 대표값",
+              "input_unit": "GPa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "deck_formats": [],
+        "converted": {
+          "system": "mm_n_tonne",
+          "density": 7.85e-09,
+          "density_unit": "tonne/mm3",
+          "density_key": "physical.density",
+          "poisson_ratio": 0.29,
+          "poisson_key": "mechanical.poisson_ratio",
+          "properties": [
+            {
+              "item": "비열",
+              "key": "thermal.specific_heat",
+              "unit": "mJ/(tonne.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 470000000.0
+                }
+              ]
+            },
+            {
+              "item": "열전도율",
+              "key": "thermal.conductivity",
+              "unit": "mW/(mm.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 50.0
+                }
+              ]
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "key": "thermal.expansion_linear",
+              "unit": "1/K",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 1.2e-05
+                }
+              ]
+            },
+            {
+              "item": "전단탄성계수",
+              "key": "mechanical.shear_modulus",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 80000.0
+                }
+              ]
+            },
+            {
+              "item": "탄성계수",
+              "key": "mechanical.youngs_modulus",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 205000.0
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "constraints": [
+      {
+        "name": "받침 고정",
+        "type": "fixed_support",
+        "on": "받침 고리",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": null,
+        "y": null,
+        "z": null,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      },
+      {
+        "name": "누름판 고정",
+        "type": "fixed_support",
+        "on": "누름 고리",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": null,
+        "y": null,
+        "z": null,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      },
+      {
+        "name": "체결구 끝면 이동",
+        "type": "remote_displacement",
+        "on": "체결구 끝면",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "rigid",
+        "x": 0.0,
+        "y": 0.0,
+        "z": -0.2,
+        "rx": 0,
+        "ry": 0,
+        "rz": 0,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      }
+    ],
+    "loads": [],
+    "contacts": [
+      {
+        "name": "머리-판",
+        "type": "frictional",
+        "source": "머리 아랫면",
+        "target": "판 윗면",
+        "friction": 0.1,
+        "formulation": "program_controlled",
+        "behavior": "asymmetric",
+        "pinball": null,
+        "interface_treatment": "adjust_to_touch"
+      }
+    ],
+    "initial": [],
+    "analysis": {
+      "type": "static",
+      "large_deflection": true,
+      "steps": 1,
+      "substeps": null,
+      "solver": "program_controlled"
+    },
+    "mesh_hints": [],
+    "body_settings": [],
+    "coordinate_systems": []
+  },
+  "length_units": {
+    "geometry": "mm",
+    "regions": "mm",
+    "midsurface": "mm",
+    "coordinate_systems": "mm"
+  }
+}

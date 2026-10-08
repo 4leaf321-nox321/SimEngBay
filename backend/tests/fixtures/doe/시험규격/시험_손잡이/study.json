@@ -1,0 +1,282 @@
+{
+  "id": "f95d2ab8-b7ce-472a-95f0-c5a0b0d50d8d",
+  "name": "시험_손잡이",
+  "description": "",
+  "method": "factorial",
+  "samples": 1,
+  "seed": 1,
+  "factors": [],
+  "constraints": [],
+  "measures": [],
+  "batches": [],
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.5,
+    "short_edge": 0.1,
+    "narrow_face": 0.1
+  },
+  "recipe": {
+    "nodes": [
+      {
+        "id": "base",
+        "op": "sketch",
+        "label": "판 윤곽",
+        "shapes": [
+          {
+            "type": "rect",
+            "width": 100,
+            "height": 60
+          }
+        ]
+      },
+      {
+        "id": "plate",
+        "op": "extrude",
+        "label": "판",
+        "sketch": "base",
+        "distance": 12
+      },
+      {
+        "at": [
+          [
+            -40.0,
+            -20.0
+          ],
+          [
+            40.0,
+            -20.0
+          ],
+          [
+            40.0,
+            20.0
+          ],
+          [
+            -40.0,
+            20.0
+          ]
+        ],
+        "id": "holes",
+        "op": "hole",
+        "label": "모서리 구멍 4",
+        "target": "plate",
+        "diameter": 8
+      }
+    ],
+    "params": {
+      "시험_배수": 4.0
+    },
+    "version": 1
+  },
+  "conditions": {
+    "loads": [
+      {
+        "name": "무게 4배",
+        "type": "acceleration",
+        "direction": [
+          0,
+          0,
+          1
+        ],
+        "magnitude": "=시험_배수 * 9806.65"
+      }
+    ],
+    "analysis": {
+      "type": "static",
+      "large_deflection": false
+    },
+    "materials": [
+      {
+        "ref": {
+          "code": "M-000158",
+          "name": "AL5052H32DEMO_-_-",
+          "source": "matnexus",
+          "fetched_at": "2026-09-28T00:00:00Z",
+          "material_id": "334ec690-e61e-4ff2-a326-a8f81becf7b5"
+        },
+        "payload": {
+          "id": "334ec690-e61e-4ff2-a326-a8f81becf7b5",
+          "code": "M-000158",
+          "note": null,
+          "alias": "Al5052-H32 Bilinear",
+          "grade": "AL5052H32DEMO",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 2680.0,
+          "details": null,
+          "category": "Aluminum",
+          "legacy_id": null,
+          "created_at": "2026-09-06T15:01:22.619540+09:00",
+          "updated_at": "2026-09-06T15:01:22.670989+09:00",
+          "record_name": "AL5052H32DEMO_-_-",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [],
+          "poisson_ratio": 0.33,
+          "spec_thickness": null,
+          "applied_products": [],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 880.0,
+                  "value_si": 880.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 비열 0.880 J/g-°C [tier 2]",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 2.38e-05,
+                  "value_si": 2.38e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "MatWeb: Aluminum 5052-H32 · CTE 23.8 μm/m-°C [tier 2]",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "연신율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 0.12,
+                  "value_si": 0.12,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 연신율 ~12% [tier 2]",
+              "input_unit": "1"
+            },
+            {
+              "item": "열전도율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 138.0,
+                  "value_si": 138.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 열전도 138 W/m-K [tier 2]",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "인장강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 228000000.0,
+                  "value_si": 228000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, UTS ~228-230 MPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 70300000000.0,
+                  "value_si": 70300000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MatWeb: Aluminum 5052-H32 · 탄성계수 70.3 GPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "항복강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 193000000.0,
+                  "value_si": 193000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 0.2% proof ~180-193 MPa [tier 2]",
+              "input_unit": "Pa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "apply_to": [
+          "전체"
+        ]
+      }
+    ],
+    "constraints": [
+      {
+        "on": "시험 고정 자리",
+        "name": "고정 자리",
+        "type": "fixed_support"
+      }
+    ],
+    "schema_version": 1,
+    "named_selections": [
+      {
+        "name": "시험 고정 자리",
+        "entity": "face",
+        "select": {
+          "near": [
+            0.0,
+            0.0,
+            12.0
+          ],
+          "what": "faces",
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      }
+    ]
+  },
+  "owner": {
+    "name": "member",
+    "email": "member-f4805eaa@example.local"
+  },
+  "requested_by": null,
+  "cloned_from": null
+}

@@ -33,6 +33,30 @@ logger = logging.getLogger(__name__)
 #: 반경 · 접선 · 축이다. 그래서 「핀에 끼운 채 돈다」(접선만 자유)가 그대로 표현된다. 전역
 #: 좌표로 억지로 옮기면 그 모델은 돌지 못하고, 주파수가 올라간 채 그럴듯하게 나온다.
 SUPPORTED_CONSTRAINTS = ("fixed_support", "cylindrical", "displacement", "frictionless")
+#: 원격 변위는 따로 건다 — 강체 파트 면이면 그 기준점, 변형체 면이면 원격점에 묶는다(`_holds`).
+REMOTE_CONSTRAINTS = ("remote_displacement",)
+
+
+def unsupported(given: condition_model.Conditions) -> list[str]:
+    """CalculiX 경로가 **종류부터** 못 거는 조건 — 작업을 만들 때 미리 말한다
+    (`services.conditions_gap`). 자리 · 좌표계처럼 메시를 봐야 아는 것은 모델링이 말한다.
+
+    기본 솔버가 CalculiX 가 된 뒤(2026-10-08)로는 만들 때 막지 않으면 DOE 200점이 모델링에서
+    하나씩 같은 말을 한다.
+    """
+    out = [
+        f"구속 「{one.name}」({one.kind})"
+        for one in given.constraints
+        if one.kind not in SUPPORTED_CONSTRAINTS and one.kind not in REMOTE_CONSTRAINTS
+    ]
+    out += [
+        f"하중 「{one.name}」({one.kind})"
+        for one in given.loads
+        if one.kind not in SUPPORTED_LOADS
+    ]
+    return out
+
+
 #: 걸 수 있는 접촉 — **본딩은 절점 공유로 이미 걸려 있다**(`mesh.py` 의 `BooleanFragments`).
 #: 마찰 · 무마찰도 모달에서는 처음 붙어 있으면 같은 답이라, 「붙은 것으로 풀었다」 고 적는다.
 LINEARIZED_CONTACTS = ("bonded", "no_separation", "frictional", "frictionless", "rough")
@@ -52,6 +76,12 @@ class Plan:
     load_rows: list[str] = field(default_factory=list)
     #: 반력을 읽을 영역 → 절점 집합 이름. 변위로 당긴 자리다 — 거기서 버틴 힘이 답이다.
     reaction_sets: dict[str, str] = field(default_factory=dict)
+    #: 그 집합의 절점 — 관성 하중의 몫을 되돌려 줄 때 쓴다(`reaction_offsets`).
+    reaction_nodes: dict[str, frozenset[int]] = field(default_factory=dict)
+    #: 영역 → `.dat` 의 반력 합에 **더할** 벡터(N). ccx 의 RF 는 그 절점에 직접 걸린 외력을
+    #: 빼고 낸다 — 가속도 · 중력이 반력 절점에 얹은 몫(강체 파트면 그 파트의 무게 전부)이
+    #: 빠진다(`_inertia_offsets`).
+    reaction_offsets: dict[str, list[float]] = field(default_factory=dict)
     #: 국부 좌표계가 걸린 절점 → (축 위의 점, 축 방향).
     #:
     #: **그 절점에서는 `*CLOAD` 의 자유도 번호도 국부로 읽힌다**(1 반경 · 2 접선 · 3 축) —
@@ -59,6 +89,8 @@ class Plan:
     #: 힘이 엉뚱한 방향으로 들어가고, 그 결과는 오류 없이 그럴듯하게 나온다(실측 2026-10-03:
     #: 베어링 하중이 구멍면에 걸릴 때 그 자리였다).
     local_frames: dict[int, tuple[list[float], list[float]]] = field(default_factory=dict)
+    #: 원격 변위로 면을 묶은 원격점들(기준점 · 회전 절점) — 결과에서 빼야 한다(`_finish`).
+    remote_points: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -174,6 +206,8 @@ def _finish(
     lines: list[str],
     rigid: tuple[RigidBody, ...] | list[RigidBody],
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    *,
+    points: bool = False,
 ) -> str:
     """덱 글을 맺는다. 강체가 있으면 결과를 **메시 절점(`NALL`)만** 내게 한다 — 기준점 ·
     회전 절점이 결과에 섞이지 않게(`RigidBody` 참고). 쉘이 있으면 **펼친 채로**(`OUTPUT=3D`)
@@ -189,7 +223,8 @@ def _finish(
             else line
             for line in lines
         ]
-    elif rigid:
+    elif rigid or points:
+        # 원격 변위의 원격점도 같다 — 회전 절점의 「변위」 가 각(라디안)이다.
         lines = ["*NODE FILE, NSET=NALL" if line == "*NODE FILE" else line for line in lines]
     return "\n".join(lines) + "\n"
 
@@ -211,6 +246,8 @@ def write_modal(
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
     ties: tuple[Tie, ...] | list[Tie] = (),
+    centers: dict[str, tuple[float, float, float]] | None = None,
+    length_mm: float = 1.0,
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
 
@@ -219,11 +256,13 @@ def write_modal(
     조여 놓은 상태의 공진을 보는 길이고, 접촉이 열리고 닫히는 것이 거기서 결정된다.
 
     `held_nodes` 는 **영역 이름 → 절점**이다 — 면 지문을 푼 결과를 부른 쪽에서 넣어 준다
-    (그 매칭은 `app/core/regions` 가 하고, 솔버를 모른다).
+    (그 매칭은 `app/core/regions` 가 하고, 솔버를 모른다). `centers` 는 영역 → **CAD 가 잰
+    면적 중심**(mm, 원격점 자리)이고, `length_mm` 은 선언된 단위계의 길이 1 이 몇 mm 인가다 —
+    강제 변위의 크기가 그 단위로 온다(덱은 mm 다).
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
-    lines += _holds(held_nodes, given, plan, shapes, rigid)
+    lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
 
     if contact_faces is None:
         # 메시를 쪼개 붙였다(절점 공유) — 그 사실을 적어 둔다. 조용히 두면 사람은 마찰이
@@ -262,8 +301,9 @@ def write_modal(
             stiffness=contact_stiffness(materials, element_size_mm),
         )
 
-    for load in given.loads:
-        # 모달은 하중으로 답이 바뀌지 않는다 — Ansys 쪽과 같은 말을 적는다.
+    for load in [] if preload else given.loads:
+        # 모달은 하중으로 답이 바뀌지 않는다 — Ansys 쪽과 같은 말을 적는다. **선응력 모달은
+        # 다르다** — 그 하중이 앞 정적 단계에서 구조를 조여 답을 바꾼다.
         plan.skipped.append(
             condition_model.Note(
                 f"하중 「{load.name}」({load.kind})", "모달에서는 하중이 답을 바꾸지 않습니다."
@@ -292,7 +332,7 @@ def write_modal(
         "U",
         "*END STEP",
     ]
-    plan.text = _finish(lines, rigid, shells)
+    plan.text = _finish(lines, rigid, shells, points=bool(plan.remote_points))
     return plan
 
 
@@ -338,8 +378,41 @@ def _nset(name: str, members: set[int]) -> list[str]:
     return lines
 
 
-#: 걸 수 있는 하중 — 압력(면 법선) · 힘(면 절점에 분배) · 베어링(원통면의 반쪽).
-SUPPORTED_LOADS = ("pressure", "force", "bearing")
+#: 걸 수 있는 하중 — 압력(면 법선) · 힘(면 절점에 분배) · 베어링(원통면의 반쪽) · 모멘트(면
+#: 절점에 회전 분포) · 가속도 · 중력(몸 전체의 관성력).
+SUPPORTED_LOADS = (
+    "pressure",
+    "force",
+    "bearing",
+    "moment",
+    "acceleration",
+    "standard_earth_gravity",
+)
+#: 모멘트 단위 → N·mm(덱의 계). CAD 는 선언한 계로 적는다(mm 계 N*mm · SI N*m).
+MOMENT_UNITS = {
+    "n*mm": 1.0,
+    "n·mm": 1.0,
+    "n.mm": 1.0,
+    "nmm": 1.0,
+    "n*m": 1000.0,
+    "n·m": 1000.0,
+    "n.m": 1000.0,
+    "nm": 1000.0,
+}
+#: 가속도 단위 → mm/s²(덱의 계).
+ACCELERATION_UNITS = {
+    "mm/s^2": 1.0,
+    "mm/s2": 1.0,
+    "mm/s²": 1.0,
+    "m/s^2": 1000.0,
+    "m/s2": 1000.0,
+    "m/s²": 1000.0,
+    "g": 9806.65,
+}
+#: 표준 중력(mm/s²).
+STANDARD_GRAVITY = 9806.65
+#: 몸 전체에 거는 하중 — 반력 절점에 얹힌 몫을 되돌려야 한다(`_inertia_offsets`).
+INERTIAL_LOADS = ("acceleration", "standard_earth_gravity")
 
 #: C3D10 · C3D4 의 면 번호 → 모서리 절점 자리(1부터). CalculiX 가 쓰는 순서다 —
 #: 틀리면 압력이 **엉뚱한 면에** 걸리고, 그 결과는 오류 없이 그럴듯하게 나온다.
@@ -369,19 +442,26 @@ def write_static(
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
     ties: tuple[Tie, ...] | list[Tie] = (),
+    centers: dict[str, tuple[float, float, float]] | None = None,
+    length_mm: float = 1.0,
+    large_deflection: bool = False,
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
     「해석이 됐다」 처럼 보인다. 그래서 하중이 없으면 거절한다.
 
     `load_faces` 는 영역 → [(요소 번호, 면 이름)] 이고 압력에 쓴다. `load_areas` 는 영역 →
     {절점: 분담 면적} 이고 힘을 나눌 때 쓴다 — 부른 쪽(`build.py`)이 메시에서 만들어 준다.
+
+    `large_deflection`(화면의 「큰 변형」)이면 기하 비선형(`NLGEOM`)으로 증분을 밟는다 —
+    Ansys 의 `LargeDeflection` 과 같은 자리다. 기본 솔버가 CalculiX 가 된 뒤(2026-10-08)로는
+    이것을 안 받으면 그 체크가 조용히 무시된다.
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
-    lines += _holds(held_nodes, given, plan, shapes, rigid)
-    nonlinear = False
+    lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
+    nonlinear = large_deflection
     if contact_faces is not None:
-        nonlinear = any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
+        nonlinear = nonlinear or any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
         lines += contact_block(
             given.contacts,
             contact_faces,
@@ -390,6 +470,8 @@ def write_static(
             stiffness=contact_stiffness(materials, element_size_mm),
         )
     else:
+        # 접촉 쌍을 안 쓰면 절점 공유로 붙였다. 접촉 쌍을 쓰면(위) 마찰은 마찰대로 걸렸으니
+        # 「붙은 것으로」 라고 적으면 거짓말이다 — 그 말은 이 갈래에서만 한다.
         for pair in given.contacts:
             if pair.kind in LINEARIZED_CONTACTS:
                 plan.skipped.append(
@@ -398,20 +480,35 @@ def write_static(
                         "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다.",
                     )
                 )
+                continue
+            plan.refused.append(
+                condition_model.Note(
+                    f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다."
+                )
+            )
 
-    # **비선형 접촉은 증분으로 푼다** — 한 번에 걸면 접촉이 열린 채 수렴하지 못한다.
+    # **비선형(접촉 · 큰 변형)은 증분으로 푼다** — 한 번에 걸면 접촉이 열린 채 수렴하지
+    # 못한다.
     lines.append("*STEP, NLGEOM" if nonlinear else "*STEP")
     lines.append("*STATIC")
     if nonlinear:
         lines.append("0.1, 1.0")
     applied_loads = 0
+    pull = [0.0, 0.0, 0.0]
     for load in given.loads:
         refused = _on_rigid(load, load_nodes, rigid)
         if refused is not None:
             plan.refused.append(refused)
             continue
         rows, why = _load_rows(
-            load, load_faces, load_areas, load_nodes, nodes, shapes, plan.local_frames
+            load,
+            load_faces,
+            load_areas,
+            load_nodes,
+            nodes,
+            shapes,
+            plan.local_frames,
+            _elsets(body_of, shells),
         )
         if why is not None:
             plan.refused.append(why)
@@ -420,24 +517,22 @@ def write_static(
         plan.load_rows += rows
         plan.applied.append(f"{load.kind}:{load.region}")
         applied_loads += 1
+        if load.kind in INERTIAL_LOADS:
+            pull = [
+                mine + theirs for mine, theirs in zip(pull, _gravity_of(rows), strict=True)
+            ]
+    if any(pull) and plan.reaction_nodes:
+        plan.reaction_offsets = _inertia_offsets(
+            plan.reaction_nodes, pull, nodes, solids, body_of, materials, shells
+        )
 
-    if not applied_loads:
+    # **변위로 당기는 시험은 하중이 없어도 답이 있다**(`Conditions.drives`) — 그립 고정 ·
+    # 그립 강제 변위. 둘 다 없을 때만 막는다.
+    if not applied_loads and not given.drives:
         plan.refused.append(
             condition_model.Note(
-                "정적 해석", "걸린 하중이 하나도 없습니다 — 전부 0 이 나옵니다."
+                "정적 해석", "하중도 강제 변위도 없습니다 — 전부 0 이 나옵니다."
             )
-        )
-    for pair in given.contacts:
-        if pair.kind in LINEARIZED_CONTACTS:
-            plan.skipped.append(
-                condition_model.Note(
-                    f"접촉 「{pair.name}」({pair.kind})",
-                    "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다.",
-                )
-            )
-            continue
-        plan.refused.append(
-            condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
         )
 
     for region, nset in plan.reaction_sets.items():
@@ -454,7 +549,7 @@ def write_static(
         "S, E",
         "*END STEP",
     ]
-    plan.text = _finish(lines, rigid, shells)
+    plan.text = _finish(lines, rigid, shells, points=bool(plan.remote_points))
     return plan
 
 
@@ -590,6 +685,9 @@ def _holds(
     plan: Plan,
     shapes: dict[str, dict[str, Any]] | None = None,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
+    nodes: dict[int, tuple[float, float, float]] | None = None,
+    centers: dict[str, tuple[float, float, float]] | None = None,
+    length_mm: float = 1.0,
 ) -> list[str]:
     """구속 — 레시피가 달라도 같은 부분이다.
 
@@ -599,24 +697,110 @@ def _holds(
     **강체 파트의 면**이면 그 기준점을 묶는다 — 강체가 쥔 절점에 따로 `*BOUNDARY` 를 걸면
     두 번 묶여 ccx 가 거절한다. 그래서 고정 지지만 받는다(Ansys 와 같다 — 그쪽은 원격
     변위로 건다). 변형체 면이 강체와 맞닿은 절점도 강체가 쥐므로 빼고 건다.
+
+    **강제 변위는 선언된 단위계의 길이로 온다**(`length_mm`) — SI 폴더의 0.001 은 1 mm 다.
+    덱은 mm 라 옮겨 적는다. 회전(도)은 단위계와 상관없다.
     """
     lines: list[str] = []
-    bound = _bound(rigid)
+    remote = _remote_points(held_nodes, given, rigid, nodes or {}, centers or {})
+    # 원격점에 묶인 면의 절점도 그 묶음이 쥔다 — 다른 구속을 따로 걸면 두 번 묶인다.
+    bound = _bound(rigid) | _bound(list(remote.values()))
     for index, rule in enumerate(given.constraints):
         on_rigid = next(
             (body for body in rigid if (held_nodes.get(rule.region) or set()) <= body.nodes),
             None,
         )
-        if on_rigid is not None and held_nodes.get(rule.region):
-            rows, why = _rigid_hold(index, rule, on_rigid)
+        if index in remote:
+            face = remote[index]
+            if rule.location not in ("", "centroid"):
+                plan.refused.append(
+                    condition_model.Note(
+                        f"구속 「{rule.name}」({rule.kind})",
+                        f"원격점 자리 「{rule.location}」 는 아직 못 겁니다 — 그룹 중심만 "
+                        "받습니다.",
+                    )
+                )
+                continue
+            rows, why = _rigid_hold(index, rule, face, length_mm)
             if why is not None:
                 plan.refused.append(why)
                 continue
+            x, y, z = face.point
+            lines += [
+                "*NODE",
+                f"{face.ref}, {x:.6f}, {y:.6f}, {z:.6f}",
+                f"{face.rot}, {x:.6f}, {y:.6f}, {z:.6f}",
+            ]
+            lines += _nset(face.name, set(face.nodes))
+            lines.append(
+                f"*RIGID BODY, NSET={face.name}, REF NODE={face.ref}, ROT NODE={face.rot}"
+            )
             lines += rows
+            plan.remote_points += [face.ref, face.rot]
+            # 반력은 묶인 면 절점의 합으로 읽는다(강체 파트와 같다).
+            plan.reaction_sets[rule.region] = face.name
+            plan.reaction_nodes[rule.region] = face.nodes
+            plan.applied.append(f"{rule.kind}:{rule.region}")
+            if rule.behavior != "rigid":
+                plan.skipped.append(
+                    condition_model.Note(
+                        f"구속 「{rule.name}」({rule.kind})",
+                        "면을 원격점에 **강체로** 묶어 풀었습니다 — CAD 는 변형체 거동을 "
+                        "적었습니다(Ansys 는 그 면이 휘는 것을 허용합니다). 묶인 면 근처의 "
+                        "응력은 조금 다를 수 있습니다.",
+                    )
+                )
+            continue
+        # **그룹이 강체 파트 여럿에 걸칠 수 있다** — 굽힘 시험의 「지지 롤러」 는 롤러 둘의
+        # 면, 「로딩 노즈」 는 노즈 둘의 면이다(CompCore 시험 규격, 2026-10-07). 한 파트에
+        # 다 들어야 강체 면으로 보던 때는 그 그룹이 변형체 길로 빠져, 고정 지지는 빈 절점
+        # 집합에 걸리고 원격 변위는 「못 거는 구속」 이 됐다.
+        members_here = held_nodes.get(rule.region) or set()
+        owners = [body for body in rigid if members_here & body.nodes] if members_here else []
+        if owners and members_here <= set().union(*(body.nodes for body in owners)):
+            on_rigid = owners[0]
+        if on_rigid is not None and members_here:
+            spread = owners if len(owners) > 1 else [on_rigid]
+            if (
+                len(spread) > 1
+                and rule.kind == "remote_displacement"
+                and any(value not in (None, 0) for value in rule.rotations)
+            ):
+                plan.refused.append(
+                    condition_model.Note(
+                        f"구속 「{rule.name}」({rule.kind})",
+                        "강체 파트 여럿에 걸친 원격 변위의 회전은 아직 못 겁니다 — 원격점 "
+                        "하나를 축으로 함께 돌려야 합니다. 솔버를 ansys 로 바꾸세요.",
+                    )
+                )
+                continue
+            rows_all: list[str] = []
+            failed: condition_model.Note | None = None
+            for order, owner in enumerate(spread):
+                rows, why = _rigid_hold(
+                    index if len(spread) == 1 else f"{index}R{order}", rule, owner, length_mm
+                )
+                if why is not None:
+                    failed = why
+                    break
+                rows_all += rows
+            if failed is not None:
+                plan.refused.append(failed)
+                continue
+            lines += rows_all
             # **반력은 강체 절점 전부의 합으로 읽는다.** 기준점에만 모이지 않는다 — 쉘이 강체에
             # 붙으면 ccx 가 그 몫을 강체 절점에 둔다(실측 2026-10-04: 기준점 0 · 강체 절점 합
-            # 66.0 N). 솔리드만 있을 때는 두 합이 같다(66.0 · 66.0).
-            plan.reaction_sets[rule.region] = on_rigid.name
+            # 66.0 N). 솔리드만 있을 때는 두 합이 같다(66.0 · 66.0). 파트 여럿이면 그
+            # 합이다.
+            if len(spread) == 1:
+                plan.reaction_sets[rule.region] = on_rigid.name
+                plan.reaction_nodes[rule.region] = on_rigid.nodes
+            else:
+                every = f"HOLD{index}A"
+                together = frozenset().union(*(body.nodes for body in spread))
+                lines += _nset(every, set(together))
+                plan.reaction_sets[rule.region] = every
+                plan.reaction_nodes[rule.region] = together
             plan.applied.append(f"{rule.kind}:{rule.region}")
             continue
         if rule.kind not in SUPPORTED_CONSTRAINTS:
@@ -651,13 +835,14 @@ def _holds(
             plan.applied.append(f"cylindrical:{rule.region}")
             continue
         if rule.kind == "displacement":
-            rows, why = _displacement(name, rule, members)
+            rows, why = _displacement(name, rule, members, length_mm)
             if why is not None:
                 plan.refused.append(why)
                 continue
             lines += rows
             # **반력을 읽을 자리다** — 변위로 당겼으면 그만큼 버틴 힘이 답이다(`*NODE PRINT`).
             plan.reaction_sets[rule.region] = name
+            plan.reaction_nodes[rule.region] = frozenset(members)
             plan.applied.append(f"displacement:{rule.region}")
             continue
         if rule.kind == "frictionless":
@@ -674,8 +859,61 @@ def _holds(
     return lines
 
 
+def _remote_points(
+    held_nodes: dict[str, set[int]],
+    given: condition_model.Conditions,
+    rigid: tuple[RigidBody, ...] | list[RigidBody],
+    nodes: dict[int, tuple[float, float, float]],
+    centers: dict[str, tuple[float, float, float]] | None = None,
+) -> dict[int, RigidBody]:
+    """**변형체 면의 원격 변위** → 구속 번호마다 면을 원격점 하나에 묶는 묶음.
+
+    원격점은 그룹 중심에 둔다 — 회전이 거기를 지나는 축으로 돈다(비틀림 시험이 끝면 중심을
+    축으로 돌린다). **중심은 CAD 가 잰 면적 중심이다**(`centers`, Ansys 의 원격점과 같은
+    자리). 절점 평균은 메시가 고르지 않은 만큼 비켜나고, 축이 비켜나면 6도 돌릴 때 면이 옆으로
+    밀려 옆 반력이 생긴다(실측 2026-10-08 비틀림, 요소 3 mm: 절점 평균 Fy 408 N · 면적 중심
+    4 N — 순수 비틀림이라 0 언저리여야 한다). 지문이 없을 때만 절점 평균으로 둔다. 면은 그
+    점에 **강체로** 묶는다(`*RIGID BODY`): 시편을 물리는 그립 · 누르는 노즈처럼 시험 기구는
+    강체라 그 뜻에 맞는다. 강체 파트의 면이면 그 파트의 기준점을 쓰므로 여기서 만들지 않는다
+    (`_rigid_hold`).
+
+    기준점 번호는 메시 절점 · 강체 파트의 기준점 다음부터다. 두 원격 변위가 모서리 절점을
+    나눠 가지면 먼저 온 쪽이 쥔다(한 절점이 두 묶음에 들면 ccx 가 거절한다).
+    """
+    if not nodes:
+        return {}
+    top = max([max(nodes), *(one.rot for one in rigid)])
+    taken = _bound(rigid)
+    made: dict[int, RigidBody] = {}
+    for index, rule in enumerate(given.constraints):
+        if rule.kind != "remote_displacement":
+            continue
+        members = held_nodes.get(rule.region) or set()
+        if not members or any(members <= body.nodes for body in rigid):
+            continue
+        free = members - taken
+        if not free:
+            continue
+        taken |= free
+        point = (centers or {}).get(rule.region) or tuple(
+            sum(nodes[node][axis] for node in free) / len(free) for axis in range(3)
+        )
+        made[index] = RigidBody(
+            part=rule.region,
+            name=f"REMOTE{len(made) + 1}",
+            nodes=frozenset(free),
+            ref=top + 2 * len(made) + 1,
+            rot=top + 2 * len(made) + 2,
+            point=point,  # type: ignore[arg-type]
+        )
+    return made
+
+
 def _rigid_hold(
-    index: int, rule: condition_model.Constraint, owner: RigidBody
+    index: int | str,
+    rule: condition_model.Constraint,
+    owner: RigidBody,
+    length_mm: float = 1.0,
 ) -> tuple[list[str], condition_model.Note | None]:
     """강체 파트 면의 구속 — **기준점 · 회전 절점**에 건다.
 
@@ -702,7 +940,7 @@ def _rigid_hold(
             "그 파트를 변형체로 두세요.",
         )
     held = [
-        (owner.ref, dof, value)
+        (owner.ref, dof, value * length_mm)
         for dof, value in enumerate(moves, start=1)
         if value is not None
     ] + [
@@ -719,7 +957,7 @@ def _rigid_hold(
 
 
 def _displacement(
-    name: str, rule: condition_model.Constraint, members: set[int]
+    name: str, rule: condition_model.Constraint, members: set[int], length_mm: float = 1.0
 ) -> tuple[list[str], condition_model.Note | None]:
     """변위 제어 — 성분마다 **정한 값만큼** 움직인다. `None` 은 자유다.
 
@@ -734,7 +972,7 @@ def _displacement(
             f"좌표계 「{rule.cs}」 의 변위 제어는 아직 못 겁니다 — 솔버를 ansys 로 바꾸세요.",
         )
     held = [
-        (dof, value)
+        (dof, value * length_mm)
         for dof, value in enumerate(rule.components[:3], start=1)
         if value is not None
     ]
@@ -848,6 +1086,8 @@ def write_harmonic(
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
     ties: tuple[Tie, ...] | list[Tie] = (),
+    centers: dict[str, tuple[float, float, float]] | None = None,
+    length_mm: float = 1.0,
 ) -> Plan:
     """조화 응답 덱 — **한 파일에 두 단계다.**
 
@@ -861,7 +1101,7 @@ def write_harmonic(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
-    lines += _holds(held_nodes, given, plan, shapes, rigid)
+    lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
 
     # ① 모드를 푸고 남긴다.
     lines += [
@@ -892,7 +1132,14 @@ def write_harmonic(
             plan.refused.append(refused)
             continue
         rows, why = _load_rows(
-            load, load_faces, load_areas, load_nodes, nodes, shapes, plan.local_frames
+            load,
+            load_faces,
+            load_areas,
+            load_nodes,
+            nodes,
+            shapes,
+            plan.local_frames,
+            _elsets(body_of, shells),
         )
         if why is not None:
             plan.refused.append(why)
@@ -919,7 +1166,7 @@ def write_harmonic(
             condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
         )
     lines += ["*NODE FILE", "U", "*END STEP"]
-    plan.text = _finish(lines, rigid, shells)
+    plan.text = _finish(lines, rigid, shells, points=bool(plan.remote_points))
     return plan
 
 
@@ -931,15 +1178,21 @@ def _load_rows(
     nodes: dict[int, tuple[float, float, float]] | None = None,
     shapes: dict[str, dict[str, Any]] | None = None,
     frames: dict[int, tuple[list[float], list[float]]] | None = None,
+    elsets: list[str] | None = None,
 ) -> tuple[list[str], condition_model.Note | None]:
-    """하중 한 줄 뭉치 — 압력은 요소면, 힘 · 베어링은 절점. 못 걸면 까닭을 돌려준다."""
+    """하중 한 줄 뭉치 — 압력은 요소면, 힘 · 베어링 · 모멘트는 절점, 가속도 · 중력은 요소 묶음
+    전부(`elsets`). 못 걸면 까닭을 돌려준다."""
     if load.kind not in SUPPORTED_LOADS:
         return [], condition_model.Note(
             f"하중 「{load.name}」({load.kind})",
             "CalculiX 경로가 아직 못 거는 하중입니다 — Ansys 로 돌리세요.",
         )
+    if load.kind in INERTIAL_LOADS:
+        return _inertia_rows(load, elsets or [])
     if load.magnitude is None:
         return [], condition_model.Note(f"하중 「{load.name}」", "크기가 없습니다.")
+    if load.kind == "moment":
+        return _moment_rows(load, load_nodes, nodes, frames)
     if load.kind == "pressure":
         faces = load_faces.get(load.region) or []
         if not faces:
@@ -981,6 +1234,244 @@ def _load_rows(
         if frame is not None:
             # **그 절점은 국부 계로 읽힌다** — 전역 성분을 그대로 적으면 힘이 반경 · 접선 ·
             # 축으로 뒤바뀐다(`Plan.local_frames` 참고).
+            vector = _to_local(vector, nodes, node, frame)
+        for axis, component in enumerate(vector, start=1):
+            if component:
+                rows.append(f"{node}, {axis}, {component:.8g}")
+    return rows, None
+
+
+def _elsets(
+    body_of: dict[str, int], shells: tuple[ShellSection, ...] | list[ShellSection] = ()
+) -> list[str]:
+    """요소 묶음 전부 — 솔리드(`E<번호>`) · 쉘. 몸 전체에 거는 하중(가속도 · 중력)이 쓴다."""
+    return [f"E{entity}" for entity in sorted(set(body_of.values()))] + [
+        sheet.name for sheet in shells
+    ]
+
+
+def _inertia_rows(
+    load: condition_model.Load, elsets: list[str]
+) -> tuple[list[str], condition_model.Note | None]:
+    """가속도 · 중력 — 몸 전체의 관성력(`*DLOAD … GRAV`).
+
+    **가속도는 관성으로 받는다**(Ansys 와 같다): +Z 로 가속하면 몸은 -Z 로 눌린다 — 「손잡이」
+    시험의 「무게 4배」 가 +Z 가속도 4g 로 온다. **중력은 그 반대 부호다**(CompCore
+    `해석-조건-설계.md` 4장): 방향이 곧 당기는 방향이고 크기는 표준 중력이다. ccx 의 `GRAV` 는
+    「그 방향으로 그 크기의 가속도가 몸을 당긴다」 이므로 가속도는 방향을 뒤집어 넣는다.
+    강체 파트의 요소도 넣는다 — 질량이 거기 있고, 묶음이 그 몫을 기준점으로 나른다.
+    """
+    what = f"하중 「{load.name}」({load.kind})"
+    if not elsets:
+        return [], condition_model.Note(what, "요소가 없습니다.")
+    if load.cs not in condition_model.GLOBAL_FRAMES:
+        return [], condition_model.Note(
+            what,
+            f"좌표계 「{load.cs}」 의 가속도는 아직 못 겁니다 — 솔버를 ansys 로 바꾸세요.",
+        )
+    pull: tuple[float, ...]
+    if load.kind == "standard_earth_gravity":
+        size = STANDARD_GRAVITY
+        pull = load.direction or (0.0, 0.0, -1.0)
+    else:
+        if load.magnitude is None or load.direction is None:
+            return [], condition_model.Note(what, "크기 · 방향이 있어야 합니다.")
+        scale = ACCELERATION_UNITS.get((load.unit or "mm/s^2").replace(" ", "").lower())
+        if scale is None:
+            return [], condition_model.Note(
+                what, f"가속도 단위 「{load.unit}」 를 모릅니다 — mm/s^2 · m/s^2 · g."
+            )
+        size = load.magnitude * scale
+        pull = tuple(-one for one in load.direction)
+    length = math.sqrt(sum(one * one for one in pull))
+    if length == 0 or size == 0:
+        return [], condition_model.Note(what, "크기나 방향이 0 입니다.")
+    if size < 0:
+        size, pull = -size, tuple(-one for one in pull)
+    unit = [one / length for one in pull]
+    return [
+        "*DLOAD",
+        *(
+            f"{elset}, GRAV, {size:.8g}, {unit[0]:.8g}, {unit[1]:.8g}, {unit[2]:.8g}"
+            for elset in elsets
+        ),
+    ], None
+
+
+def _gravity_of(rows: list[str]) -> list[float]:
+    """`_inertia_rows` 가 쓴 첫 줄(`E1, GRAV, 크기, 방향 x, y, z`)의 **질량당 힘**(mm/s²).
+
+    줄마다 같은 벡터다(요소 묶음만 다르다) — 첫 줄만 읽는다.
+    """
+    for row in rows:
+        parts = [one.strip() for one in row.split(",")]
+        if len(parts) == 6 and parts[1] == "GRAV":
+            size = float(parts[2])
+            return [size * float(one) for one in parts[3:6]]
+    return [0.0, 0.0, 0.0]
+
+
+def _inertia_offsets(
+    reaction_nodes: dict[str, frozenset[int]],
+    pull: list[float],
+    nodes: dict[int, tuple[float, float, float]],
+    solids: dict[int, list[tuple[int, list[int]]]],
+    body_of: dict[str, int],
+    materials: list[Material],
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+) -> dict[str, list[float]]:
+    """반력 영역 → **관성 하중이 그 절점에 얹은 몫의 반대**(N). 반력 합에 더한다.
+
+    ccx 의 RF 는 절점의 내력이다 — 그 절점에 직접 걸린 외력은 빠진다. 강체 파트를 고정하고
+    중력을 걸면 그 파트의 무게가 전부 자기 절점에 얹혀 **반력이 0 으로 나온다**(실측
+    2026-10-08: 강체 블록 + 쉘 브래킷에 1 g, 블록 바닥 0.238 N — 참값 약 5.3 N). Ansys 의
+    반력은 그 몫까지 받친다. 그래서 그 몫(질량 x 가속도)을 셈해 되돌린다:
+    참 반력 = RF - (그 절점에 얹힌 관성력).
+
+    요소마다 ccx 가 나누는 대로 나눈다 — 일차 사면체는 꼭짓점마다 1/4, 이차 사면체는
+    꼭짓점 -1/20 · 중간점 1/5(형상 함수의 적분), 일차 쉘 삼각형은 1/3, 이차는 중간점만 1/3.
+    """
+    density: dict[int, float] = {}
+    for one in materials:
+        for body in one.bodies:
+            entity = body_of.get(body)
+            if entity is not None:
+                density[entity] = one.density_kg_m3 / units.DENSITY_UNITS["tonne/mm3"]
+    carried: dict[int, float] = {}
+
+    def add(node: int, mass: float) -> None:
+        carried[node] = carried.get(node, 0.0) + mass
+
+    for entity in set(body_of.values()):
+        rho = density.get(entity)
+        if not rho:
+            continue
+        for _, ids in solids.get(entity, []):
+            a, b, c, d = (nodes[one] for one in ids[:4])
+            volume = (
+                abs(
+                    _triple(
+                        [b[i] - a[i] for i in range(3)],
+                        [c[i] - a[i] for i in range(3)],
+                        [d[i] - a[i] for i in range(3)],
+                    )
+                )
+                / 6
+            )
+            mass = rho * volume
+            if len(ids) >= 10:
+                for node in ids[:4]:
+                    add(node, -mass / 20)
+                for node in ids[4:10]:
+                    add(node, mass / 5)
+            else:
+                for node in ids[:4]:
+                    add(node, mass / 4)
+    for sheet in shells:
+        rho = sheet.material.density_kg_m3 / units.DENSITY_UNITS["tonne/mm3"]
+        for _, ids in sheet.elements:
+            a, b, c = (nodes[one] for one in ids[:3])
+            normal = _cross([b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)])
+            mass = rho * sheet.thickness * math.sqrt(sum(one * one for one in normal)) / 2
+            for node in ids[3:6] if len(ids) >= 6 else ids[:3]:
+                add(node, mass / 3)
+    out: dict[str, list[float]] = {}
+    for region, members in reaction_nodes.items():
+        mass = sum(carried.get(node, 0.0) for node in members)
+        if mass:
+            out[region] = [-mass * one for one in pull]
+    return out
+
+
+def _triple(first: list[float], second: list[float], third: list[float]) -> float:
+    """스칼라 삼중곱 — 사면체 부피의 6배."""
+    across = _cross(second, third)
+    return sum(first[axis] * across[axis] for axis in range(3))
+
+
+def _solve3(matrix: list[list[float]], vector: list[float]) -> list[float] | None:
+    """3x3 연립방정식(크라머) — 거의 특이하면 `None`."""
+
+    def det(m: list[list[float]]) -> float:
+        return (
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        )
+
+    whole = det(matrix)
+    scale = (sum(matrix[index][index] for index in range(3)) / 3) ** 3
+    if scale <= 0 or abs(whole) <= 1e-9 * scale:
+        return None
+    out: list[float] = []
+    for column in range(3):
+        swapped = [
+            [vector[row] if index == column else matrix[row][index] for index in range(3)]
+            for row in range(3)
+        ]
+        out.append(det(swapped) / whole)
+    return out
+
+
+def _moment_rows(
+    load: condition_model.Load,
+    load_nodes: dict[str, set[int]],
+    nodes: dict[int, tuple[float, float, float]] | None,
+    frames: dict[int, tuple[list[float], list[float]]] | None,
+) -> tuple[list[str], condition_model.Note | None]:
+    """모멘트 — 면 절점에 **강체 회전 꼴의 힘**으로 나눈다.
+
+    절점마다 F = Ω x r(r 은 절점 중심에서의 자리)로 두고 Ω 를 I Ω = M 으로 푼다(I = Σ(|r|²1 -
+    r rᵀ)). 그러면 힘의 합은 0(Σ r = 0)이고 모멘트의 합은 정확히 M 이다 — 면에 순수 모멘트만
+    걸린다. Ansys 의 변형체 원격점(고른 무게)과 같은 분포다. 절점이 한 줄 위에 있으면(엣지)
+    그 축의 모멘트를 나눌 수 없어 거절한다.
+    """
+    what = f"하중 「{load.name}」({load.kind})"
+    members = sorted(load_nodes.get(load.region) or set())
+    if not members or nodes is None:
+        return [], condition_model.Note(
+            f"하중 「{load.name}」", f"영역 「{load.region}」 의 절점을 못 찾았습니다."
+        )
+    if load.cs not in condition_model.GLOBAL_FRAMES:
+        return [], condition_model.Note(
+            what,
+            f"좌표계 「{load.cs}」 의 모멘트는 아직 못 겁니다 — 솔버를 ansys 로 바꾸세요.",
+        )
+    scale = MOMENT_UNITS.get((load.unit or "N*mm").replace(" ", "").lower())
+    if scale is None:
+        return [], condition_model.Note(
+            what, f"모멘트 단위 「{load.unit}」 를 모릅니다 — N*mm · N*m."
+        )
+    if load.direction is None or load.magnitude is None:
+        return [], condition_model.Note(what, "크기 · 회전축이 있어야 합니다.")
+    length = math.sqrt(sum(one * one for one in load.direction))
+    if length == 0:
+        return [], condition_model.Note(what, "회전축이 0 입니다.")
+    moment = [load.magnitude * scale * one / length for one in load.direction]
+    center = [sum(nodes[node][axis] for node in members) / len(members) for axis in range(3)]
+    offsets = [[nodes[node][axis] - center[axis] for axis in range(3)] for node in members]
+    inertia = [[0.0] * 3 for _ in range(3)]
+    for r in offsets:
+        squared = sum(one * one for one in r)
+        for row in range(3):
+            for column in range(3):
+                inertia[row][column] += (squared if row == column else 0.0) - r[row] * r[
+                    column
+                ]
+    spin = _solve3(inertia, moment)
+    if spin is None:
+        return [], condition_model.Note(
+            what, "절점이 한 줄 위에 있어 모멘트를 나눌 수 없습니다 — 면에 거세요."
+        )
+    rows = ["*CLOAD"]
+    for node, r in zip(members, offsets, strict=True):
+        vector = [
+            spin[1] * r[2] - spin[2] * r[1],
+            spin[2] * r[0] - spin[0] * r[2],
+            spin[0] * r[1] - spin[1] * r[0],
+        ]
+        frame = (frames or {}).get(node)
+        if frame is not None:
             vector = _to_local(vector, nodes, node, frame)
         for axis, component in enumerate(vector, start=1):
             if component:

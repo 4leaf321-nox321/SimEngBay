@@ -93,6 +93,7 @@ const SUMMARY_LABELS: Record<string, string> = {
   // 메시 수렴 점검이 줄일 기준 — 비면 Mechanical 기본 크기로 돌았다.
   element_size_mm: '전역 요소 크기',
   contact_pairs: '비선형 접촉',
+  large_deflection: '큰 변형',
   // CompCore 의 파트별 설정 — 무엇을 빼고 무엇을 굳혀 풀었나. 안 보이면 「질량이 왜 줄었지」 ·
   // 「주파수가 왜 올랐지」 를 설명할 길이 없다.
   rigid_bodies: '강체 파트',
@@ -130,6 +131,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
     '해석',
     [
       'recipe',
+      'large_deflection',
       'settings_from',
       'modes',
       'modes_requested',
@@ -176,6 +178,7 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
   if (key === 'element_size_mm' && typeof value === 'number') return `${value} mm`
   if (key === 'contact_pairs') return value ? '있음' : '없음'
+  if (key === 'large_deflection') return value ? '켬 (기하 비선형)' : '끔'
   if (key === 'shape_reused') return value ? '다시 씀' : '새로 만듦'
   if (key === 'mass_kg' && typeof value === 'number') return `${Number(value.toPrecision(4))} kg`
   if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(' · ')

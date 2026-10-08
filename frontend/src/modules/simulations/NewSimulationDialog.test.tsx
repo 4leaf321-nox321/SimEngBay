@@ -71,6 +71,7 @@ const SHEAR: ConditionsPreview = {
     ],
     unit_system: 'mm_n_tonne',
     prestressed: false,
+    drives: false,
   },
 }
 
@@ -393,14 +394,15 @@ describe('새 해석 작업', () => {
 
   it('집을 워커가 없는 솔버를 고르면 미리 말한다', async () => {
     // **영원히 대기하는 작업을 거는 자리에서 막는다** — 걸고 나면 아무도 그 사실을 말하지 않는다.
+    // 기본은 CalculiX(2026-10-08) — 그 워커는 있고, Ansys 를 집는 워커가 없다.
     vi.mocked(simulationApi.solvers).mockResolvedValue([
-      { solver: 'ansys', workers_alive: 1, queued: 0 },
-      { solver: 'calculix', workers_alive: 0, queued: 2 },
+      { solver: 'calculix', workers_alive: 1, queued: 0 },
+      { solver: 'ansys', workers_alive: 0, queued: 2 },
     ])
     openAt(DOE)
     await waitFor(() => expect(screen.getByRole('button', { name: '3건 실행' })).toBeEnabled())
     expect(screen.queryByText(/이 솔버를 집는 워커가 없습니다/)).toBeNull()
-    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
+    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'ansys')
     expect(screen.getByText(/이 솔버를 집는 워커가 없습니다/)).toBeDefined()
     expect(screen.getByText(/이미 2건 대기 중/)).toBeDefined()
   })
@@ -440,6 +442,8 @@ describe('새 해석 작업', () => {
     expect(screen.getByText(/걸 수 없는\(막음\) CAD 조건이 있어 이대로는 실행하지 않습니다/)).toBeDefined()
     expect(screen.getByRole('button', { name: '실행' })).toBeDisabled()
     await userEvent.click(screen.getByRole('checkbox', { name: /CAD 가 보낸 조건 사용/ }))
+    // CAD 조건을 끄면 CAD 의 요소 크기도 안 쓴다 — 기본 솔버 CalculiX 는 크기를 받아야 돈다.
+    await userEvent.type(screen.getByLabelText('요소 크기 (mm)'), '2.5')
     expect(screen.getByRole('button', { name: '실행' })).toBeEnabled()
   })
 
@@ -553,6 +557,7 @@ describe('새 해석 작업', () => {
     await openWithPoint()
     await userEvent.click(screen.getByRole('checkbox', { name: /CAD 가 보낸 조건 사용/ }))
     await userEvent.click(screen.getByRole('checkbox', { name: /당기는 끝/ }))
+    await userEvent.type(screen.getByLabelText('요소 크기 (mm)'), '2.5')
     // 하중이 빠지면 정적은 멈춘다 — 미리 말한다.
     expect(screen.getByText(/하중은 CAD 점 파일의 조건에서 옵니다/)).toBeDefined()
     await userEvent.click(screen.getByRole('button', { name: '실행' }))

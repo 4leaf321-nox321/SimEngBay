@@ -843,6 +843,39 @@ def test_쉘_브래킷이_손셈과_솔리드에_맞는다(ready: None, tmp_path
     assert 2.1 < t2["max_von_mises"] / t3["max_von_mises"] < 2.6
 
 
+def test_강체_지그를_받친_반력에_그_무게가_든다(ready: None, tmp_path: Path) -> None:
+    """하중을 1 g 가속도(+Z) 하나로 바꾸면 「블록 바닥」 이 받치는 힘은 **모델 전체의 무게**다.
+
+    ccx 의 RF 는 그 절점에 직접 걸린 외력을 빼고 낸다 — 강체 지그의 무게는 전부 자기
+    절점에 얹히므로 고치기 전에는 쉘 몫 0.238 N 만 나왔다(참값 5.32 N, 2026-10-08). 덱이 그
+    몫을 셈해 두고(`reaction_offsets`) 읽을 때 더한다.
+    """
+    work = tmp_path / "g"
+    _shell_point(work, 1)
+    payload = json.loads((work / "topology.json").read_text(encoding="utf-8"))
+    payload["conditions"]["loads"] = [
+        {
+            "name": "1 g",
+            "type": "acceleration",
+            "on": "",
+            "cs": "global",
+            "magnitude": 9806.65,
+            "unit": "mm/s^2",
+            "direction": [0, 0, 1],
+        }
+    ]
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    summary = _run(
+        work, {"recipe": "static", "solver": "calculix", "mesh": {"element_size_mm": 5}}
+    )
+    result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    weight = summary["mass_kg"] * 9.80665
+    # 가속도가 +Z 면 몸은 -Z 로 눌리고 바닥은 +Z 로 받친다.
+    assert result["reactions"]["블록 바닥"][2] == pytest.approx(weight, rel=0.01)
+
+
 def test_쉘_브래킷의_고유진동수가_솔리드와_맞는다(ready: None, tmp_path: Path) -> None:
     """질량 · 강성이 함께 맞아야 맞는다. 실측: 1차 쉘 620.4 · 솔리드 622.7 Hz(0.4%)."""
     spec = {

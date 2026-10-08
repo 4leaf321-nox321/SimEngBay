@@ -7,8 +7,8 @@
 
 ## 이 저장소가 무엇인가
 
-**SimEngBay — CAD 형상 · 물성 · 경계조건을 받아 Ansys Mechanical FE 모델을 자동으로
-만들고, 솔버에 넘긴 뒤 결과를 추출해 돌려주는 플랫폼.**
+**SimEngBay — CAD 형상 · 물성 · 경계조건을 받아 FE 모델(기본 CalculiX · 또는 Ansys
+Mechanical)을 자동으로 만들고, 솔버에 넘긴 뒤 결과를 추출해 돌려주는 플랫폼.**
 
 [StandardPlatform](../StandardPlatform) 을 포크했다([ADR 0005](docs/adr/0005-StandardPlatform-을-포크한다.md)).
 가져온 것은 도메인이 무엇이든 매번 다시 만들게 되는 것들이다:
@@ -145,7 +145,8 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
   없다** — `npm run build` 앞의 `prebuild` 가 `api:types` 를 부른다. 이 자리가 없던 동안 CI 는
   **23번 내리 빨간불이었다**(프론트 빌드 · 번들 빌드 두 단계, 2026-09-22 ~ 29). 내 PC 에는 그
   파일이 이미 있어서 로컬만 보면 멀쩡해 보인다 — 그것이 이 함정의 전부다.
-- **솔버가 둘이다.** `spec.solver` 가 `ansys`(기본) · `calculix` 를 가른다. 단계 분기는
+- **솔버가 둘이다.** `spec.solver` 가 `calculix`(기본, 2026-10-08 — 그 전에는 `ansys`) · `ansys` 를
+  가른다. 칸이 없는 옛 작업은 Ansys 다(`solver_of`). 단계 분기는
   `app/core/run.py` 한 곳에 있고, CalculiX 쪽은 `app/core/calculix/` 가 Ansys 쪽과 **역할이
   일대일로** 맞는다(build · solve · read). 조건 읽기 · 물성 · 바디 짝짓기 · 영역 매칭은 **둘이
   같은 코드를 쓴다** — 그래서 교차 검증이 뜻을 가진다(`tests/opensolver`).
@@ -156,6 +157,12 @@ PyMechanical · DPF 는 1.5단계부터다. 무엇을 어떤 순서로 만드는
 - **못 거는 조건은 까닭을 달아 거절한다.** 솔버마다 능력이 다르므로 능력표를 코드 위에 두고
   (`app/core/calculix/deck.py`), 거기 없는 것은 **멈춘다.** 조용히 빼면 구속 없는 해석이 끝까지
   돌고 0 Hz 여섯 개가 나오는데, 그 그림은 「해석이 됐다」 처럼 보인다.
+- **CalculiX 는 면 · 바디를 형상으로 잰다**(`mesh.measure` — gmsh 의 `Mass` · `CenterOfMass`). 메시로
+  재면 작은 면 · 작은 파트가 어긋난다(지름 1 mm 원이 13% 작게 — 짝짓기 허용오차는 5%). 메시가 쓰는 것과
+  **같은 머리**(읽기 · 지우기 · 쪼개기)를 지나야 번호가 같다.
+- **CompCore 시험 규격 폴더(`tests/fixtures/doe/시험규격/`, CompCore 6500479)는 CalculiX 로 끝까지
+  풀린다**(`tests/opensolver/test_test_standards.py` 가 대표를 돈다) — 조건 하나를 고칠 때 그것이 깨지면
+  시험 규격 하나가 다시 막힌 것이다.
 - **프런트엔드에는 포맷터가 없다 — `prettier` 를 돌리지 않는다.** 설정 파일이 없으므로 기본값이
   적용되고, 그러면 저장소의 스타일(홑따옴표 · 세미콜론 없음)이 **파일째 뒤집힌다** — 한 줄 고치려
   다 300줄 diff 를 만든다(2026-10-02 실측). 손으로 주변 코드에 맞춘다. 검사는 `npm run lint`

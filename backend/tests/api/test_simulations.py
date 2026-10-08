@@ -293,7 +293,10 @@ def test_워커는_제_솔버의_작업만_집는다(
     **Ansys 작업을 깨뜨린다** — 그 사고는 「해석이 실패했다」 로만 보인다.
     """
     monkeypatch.setattr(get_settings(), "jobs_inline", False)
-    ansys_job = _create(client, member, workspace=member.workspace)
+    # 기본 솔버는 CalculiX 다(2026-10-08) — Ansys 작업은 그렇게 적어 건다.
+    ansys_job = _create(
+        client, member, spec={**MODAL, "solver": "ansys"}, workspace=member.workspace
+    )
     assert ansys_job.status_code == 201
     open_job = _create(
         client, member, spec={**MODAL, "solver": "calculix"}, workspace=member.workspace
@@ -317,14 +320,21 @@ def test_워커는_제_솔버의_작업만_집는다(
 def test_솔버_칸이_없는_옛_작업은_ansys_로_본다(
     client: TestClient, db: Session, member: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """스펙의 기본값과 같게 본다.
+    """솔버 칸이 생기기 전의 작업은 Ansys 로 풀렸다 — 그렇게 본다.
 
-    안 그러면 옛 작업이 **아무 워커도 안 집어** 영원히 대기한다.
+    안 그러면 옛 작업이 **아무 워커도 안 집어** 영원히 대기한다. 기본값이 CalculiX 로 바뀐
+    뒤(2026-10-08)에도 같다 — 새 작업은 저장할 때 칸이 늘 채워지므로, 칸이 없는 것은 옛
+    작업뿐이다.
     """
     monkeypatch.setattr(get_settings(), "jobs_inline", False)
     created = _create(client, member, spec=MODAL, workspace=member.workspace)
     assert created.status_code == 201
     assert "solver" not in MODAL, "이 시험은 솔버 칸이 없는 스펙이어야 뜻이 있다"
+    # 새 작업은 기본값(calculix)이 채워진다 — 옛 작업처럼 칸을 지운다.
+    row = db.get(Simulation, uuid.UUID(created.json()["id"]))
+    assert row is not None and row.spec["solver"] == "calculix"
+    row.spec = {key: value for key, value in row.spec.items() if key != "solver"}
+    db.commit()
 
     assert services.claim_next(db, "open-worker", solvers=("calculix",)) is None
     picked = services.claim_next(db, "ansys-worker", solvers=("ansys",))
@@ -1185,7 +1195,8 @@ def test_정적_DOE_비교에_반력과_측정점이_실린다(client: TestClien
 
     body = client.get(f"/api/simulations/studies/{study_id}", headers=member.headers).json()
     assert body["recipe"] == "static"
-    assert body["solvers"] == ["ansys"]
+    # 솔버를 안 적었으므로 기본(CalculiX, 2026-10-08)이다.
+    assert body["solvers"] == ["calculix"]
     done = [one for one in body["points"] if one["status"] == "done"]
     assert len(done) == 4, [one["status"] for one in body["points"]]
     first = done[0]
@@ -1204,7 +1215,7 @@ def test_정적_DOE_비교에_반력과_측정점이_실린다(client: TestClien
 
     listed = client.get("/api/simulations/studies", headers=member.headers).json()
     row = next(one for one in listed if one["study_id"] == study_id)
-    assert row["recipe"] == "static" and row["solvers"] == ["ansys"]
+    assert row["recipe"] == "static" and row["solvers"] == ["calculix"]
 
     # **CSV 는 화면과 같은 값이다** — 두 길이 따로 계산하면 언젠가 갈린다.
     exported = client.get(

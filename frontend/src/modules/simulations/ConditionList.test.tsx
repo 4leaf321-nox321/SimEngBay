@@ -12,6 +12,7 @@ import { ConditionList } from '@/modules/simulations/ConditionList'
 const CONDITIONS = {
   unit_system: 'mm_n_tonne',
   prestressed: false,
+  drives: false,
   lines: [
     { kind: 'constraint', label: '바닥 고정', detail: 'fixed_support · 바닥', status: 'applied', why: '' },
     { kind: 'contact', label: '판-블록', detail: 'bonded · 블록 아랫면 ↔ 판 윗면', status: 'applied', why: '' },
@@ -40,7 +41,7 @@ describe('CAD 조건 목록', () => {
   it('조건이 없으면 아무것도 그리지 않는다', () => {
     // 사람이 준 스펙으로 돈 작업 — 빈 칸을 보여 줄 이유가 없다.
     const { container } = render(
-      <ConditionList conditions={{ lines: [], unit_system: '', prestressed: false }} />,
+      <ConditionList conditions={{ lines: [], unit_system: '', prestressed: false, drives: false }} />,
     )
     expect(container.firstChild).toBeNull()
   })

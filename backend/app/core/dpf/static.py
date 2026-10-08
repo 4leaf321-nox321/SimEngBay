@@ -77,7 +77,7 @@ def extract(
             strains=_strains(model) if probes.wanted(topology) else None,
         )
         # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다.
-        forces = _reactions(model, mesh, topology)
+        forces = _reactions(model, mesh, topology, workdir)
     except StageFailure:
         raise
     except Exception as failure:
@@ -157,8 +157,24 @@ def _strains(model: Any) -> Any:
     return None
 
 
-def _reactions(model: Any, mesh: Any, topology: dict[str, Any]) -> dict[str, list[float]]:
-    """변위로 당긴 영역마다 **반력 합**(N). CalculiX 쪽과 같은 열쇠(`reactions`)로 낸다."""
+def _reactions(
+    model: Any, mesh: Any, topology: dict[str, Any], workdir: Path | None = None
+) -> dict[str, list[float]]:
+    """변위로 당긴 영역마다 **반력 합**(N). CalculiX 쪽과 같은 열쇠(`reactions`)로 낸다.
+
+    모델링이 남긴 **그 영역의 메시 절점**(`reaction_nodes.json`)이 있으면 그 절점의 반력을
+    더한다 — 평면으로 찾으면 같은 평면의 다른 구속이 섞이고 첫 면만 센다
+    (`_write_reaction_nodes`).
+    없으면(옛 작업) 전처럼 평면으로 찾는다.
+    """
+    known: dict[str, list[int]] = {}
+    path = workdir / "reaction_nodes.json" if workdir is not None else None
+    if path is not None and path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            known = {str(key): [int(one) for one in value] for key, value in loaded.items()}
+        except (OSError, ValueError, TypeError, AttributeError):
+            logger.warning("reaction_nodes.json 을 못 읽었습니다 — 평면으로 찾습니다")
     try:
         from app.core import conditions as condition_model
 
@@ -176,6 +192,11 @@ def _reactions(model: Any, mesh: Any, topology: dict[str, Any]) -> dict[str, lis
             found[held] = total
     for rule in given.constraints:
         if rule.kind != "displacement":
+            continue
+        if rule.region in known:
+            total = probes.reaction_on(model, known[rule.region])
+            if total is not None:
+                found[rule.region] = total
             continue
         rows = regions.get(rule.region)
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):

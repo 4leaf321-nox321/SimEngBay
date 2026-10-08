@@ -90,7 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: LayoutGrid,
         to: "/simulations",
         summary:
-          "CAD 형상 · 물성 · 경계조건을 받아 Ansys Mechanical 모델을 만들고, 솔버에 넘긴 뒤 " +
+          "CAD 형상 · 물성 · 경계조건을 받아 FE 모델(CalculiX 기본 · Ansys)을 만들고, 솔버에 넘긴 뒤 " +
           "결과를 추출하는 작업(job)의 목록.",
       },
       {

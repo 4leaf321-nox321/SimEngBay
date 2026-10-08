@@ -4351,6 +4351,11 @@
             "type": "boolean",
             "title": "Prestressed",
             "default": false
+          },
+          "drives": {
+            "type": "boolean",
+            "title": "Drives",
+            "default": false
           }
         },
         "type": "object",
@@ -6638,7 +6643,8 @@
             "default": {
               "lines": [],
               "unit_system": "",
-              "prestressed": false
+              "prestressed": false,
+              "drives": false
             }
           }
         },

@@ -263,6 +263,22 @@ def reaction(
     return [round(float(one), 6) for one in total]
 
 
+def reaction_on(model: Any, node_ids: list[int]) -> list[float] | None:
+    """그 절점들의 **반력 합** `[Fx, Fy, Fz]` — 모델링이 남긴 구속 절점
+    (`reaction_nodes.json`)."""
+    try:
+        import numpy as np
+
+        field = model.results.reaction_force.eval()[0]
+        ids = np.asarray(field.scoping.ids, dtype=int)
+        data = np.asarray(field.data, dtype=float).reshape(-1, 3)
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("반력을 못 읽었습니다", exc_info=True)
+        return None
+    wanted = np.isin(ids, np.asarray(node_ids, dtype=int))
+    return [round(float(one), 6) for one in data[wanted].sum(axis=0)]
+
+
 def total_reaction(model: Any) -> list[float] | None:
     """모델 전체의 **반력 합** `[Fx, Fy, Fz]` — 구속이 하나일 때 그 구속이 버틴 힘이다."""
     try:

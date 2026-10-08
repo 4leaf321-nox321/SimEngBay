@@ -183,7 +183,12 @@ def test_다른_솔버로_점검하면_원래_크기도_그_솔버로_푼다(
     original = _create(
         client,
         member,
-        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+        {
+            "recipe": "modal",
+            "solver": "ansys",
+            "material": MATERIAL,
+            "mesh": {"element_size_mm": 5},
+        },
     )
     body = client.post(
         f"/api/simulations/{original['id']}/convergence",
@@ -399,12 +404,44 @@ def test_CAD_크기가_없어도_배율은_적고_안내는_없다(client: TestC
     assert not any("비례 정련" in one for one in made.json()["notes"])
 
 
+def test_솔버_칸이_없는_옛_작업을_점검하면_원래_솔버로_푼다(
+    client: TestClient, member: Signed, db: Session
+) -> None:
+    """솔버를 비우면 「원래 작업의 솔버로」 — 칸이 없는 옛 작업은 Ansys 다. 스펙을 그대로
+    베끼면 새 기본값(CalculiX)으로 만들어졌다(2026-10-08)."""
+    original = _create(
+        client,
+        member,
+        {
+            "recipe": "modal",
+            "solver": "ansys",
+            "material": MATERIAL,
+            "mesh": {"element_size_mm": 5},
+        },
+    )
+    row = db.get(Simulation, uuid.UUID(original["id"]))
+    assert row is not None
+    row.spec = {key: value for key, value in row.spec.items() if key != "solver"}
+    db.commit()
+    made = client.post(
+        f"/api/simulations/{original['id']}/convergence",
+        json={"ratios": [0.7]},
+        headers=member.headers,
+    )
+    assert made.status_code == 201, made.text
+    level = next(one for one in made.json()["levels"] if not one["is_original"])
+    job = client.get(f"/api/simulations/{level['simulation_id']}", headers=member.headers)
+    assert job.json()["spec"]["solver"] == "ansys"
+
+
 def test_원래_크기를_모르면_비율을_곱할_기준이_없다고_거절한다(
     client: TestClient, member: Signed, db: Session
 ) -> None:
     """Ansys 를 크기 없이(Mechanical 기본값으로) 푼 작업 — 짐작한 크기로 풀면 원래보다 성기게
     풀릴 수도 있다. 비율도 mm 도 둘 다 주거나 둘 다 안 주면 스펙에서 거절한다."""
-    original = _create(client, member, {"recipe": "modal", "material": MATERIAL})
+    original = _create(
+        client, member, {"recipe": "modal", "solver": "ansys", "material": MATERIAL}
+    )
     assert original["status"] == "done"
     # 모의 실행기는 크기를 늘 적는다 — Mechanical 기본값으로 돈 작업처럼 요약에서 뺀다.
     row = db.get(Simulation, uuid.UUID(original["id"]))

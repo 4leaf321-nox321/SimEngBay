@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Literal, cast
 
 from pydantic import ValidationError
-from sqlalchemy import Select, and_, func, or_, select, text, update
+from sqlalchemy import Select, and_, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -135,6 +135,8 @@ BEAT_EVERY = 15.0
 WORKER_LOST_AFTER = timedelta(minutes=2)
 #: 서버 화면에 보이는 워커 — 이보다 오래 소식이 없고 멈춘 워커는 목록에서 뺀다.
 SHOWN_FOR = timedelta(days=1)
+#: 이보다 오래 소식이 없는 워커 줄은 지운다(CompCore 와 같은 7일).
+FORGET_AFTER = timedelta(days=7)
 #: Ansys 라이선스를 쥐는 단계 — 모델링(Mechanical)과 솔버. 형상 준비 · 추출(DPF)은 안 쥔다.
 LICENSED_STATUSES = ("modeling", "solving")
 SOLVERS = ("ansys", "calculix")
@@ -346,7 +348,9 @@ def conditions_out(payload: dict[str, Any], *, recipe: str) -> ConditionsOut:
         lines.append(
             ConditionLine(kind="constraint", label=note.what, status="refused", why=note.why)
         )
-    return ConditionsOut(lines=lines, unit_system=system.key, prestressed=found.prestressed)
+    return ConditionsOut(
+        lines=lines, unit_system=system.key, prestressed=found.prestressed, drives=found.drives
+    )
 
 
 #: 메시 칸의 값 → 사람의 말(조건 줄).
@@ -1017,14 +1021,28 @@ def conditions_gap(
     """
     if spec.conditions_from == "spec" or not payload:
         return None
-    refused = condition_model.read(payload, recipe=spec.recipe).refused
-    if not refused:
-        return None
-    return (
-        "CAD 가 보낸 조건 중 걸 수 없는 것이 있습니다: "
-        + " · ".join(f"{one.what} — {one.why}" for one in refused)
-        + " (CAD 조건 없이 돌리려면 「CAD 가 보낸 조건 사용」 을 끄고 고정할 면을 고릅니다)"
-    )
+    given = condition_model.read(payload, recipe=spec.recipe)
+    refused = given.refused
+    if refused:
+        return (
+            "CAD 가 보낸 조건 중 걸 수 없는 것이 있습니다: "
+            + " · ".join(f"{one.what} — {one.why}" for one in refused)
+            + " (CAD 조건 없이 돌리려면 「CAD 가 보낸 조건 사용」 을 끄고 고정할 면을 "
+            "고릅니다)"
+        )
+    if spec.solver == "calculix":
+        from app.core.calculix import deck as calculix_deck
+
+        # **솔버가 못 거는 종류도 만들 때 막는다** — 조건 층은 솔버를 모르고(두 솔버가
+        # 같은 것을 읽는다), CalculiX 의 능력표는 덱 쪽에 있다.
+        cannot = calculix_deck.unsupported(given)
+        if cannot:
+            return (
+                "CalculiX 로는 아직 못 거는 조건이 있습니다: "
+                + " · ".join(cannot)
+                + " — 솔버를 ansys 로 바꾸세요."
+            )
+    return None
 
 
 def _doe_materials(doe: DoeFolder) -> list[str]:
@@ -1671,7 +1689,8 @@ def claim_next(
     있다.** 그래서 운영은 「Ansys 워커 하나 + CalculiX 워커 N개」 로 띄운다. 구분이 없으면
     CalculiX 를 늘리려고 워커를 늘렸다가 **Ansys 작업이 라이선스 오류로 실패한다.**
 
-    솔버 칸이 없는 옛 작업은 `ansys` 로 본다(스펙의 기본값과 같다).
+    솔버 칸이 없는 옛 작업은 `ansys` 로 본다 — 칸이 생기기 전에는 Ansys 로 풀었다(기본값이
+    CalculiX 로 바뀐 뒤에도 같다 — `spec.parse_stored_spec`).
     """
     where = "status = 'queued' AND deleted_at IS NULL"
     params: dict[str, Any] = {}
@@ -1922,6 +1941,9 @@ def request_convergence(
     )
     for size in wanted:
         spec = dict(original.spec or {})
+        # 칸이 없는 옛 작업이면 원래 솔버(Ansys)를 적어 둔다 — 안 그러면 새 기본값
+        # (CalculiX)으로 만들어져 「원래 작업의 솔버로」 가 깨진다.
+        spec.setdefault("solver", solver_of(original))
         spec["mesh"] = {**(spec.get("mesh") or {}), "element_size_mm": size}
         if base:
             # **비례 정련** — CAD 가 크기를 적은 파트 · 면도 전체 크기와 같은 비율로 줄인다.
@@ -2542,6 +2564,13 @@ def beat(
     처음 한 번 적고, 뒤의 신호는 상태 · 지금 작업 · 시각만 바꾼다."""
     row = db.get(SimulationWorker, worker_id)
     if row is None:
+        # **새 워커가 뜰 때 오래된 줄을 치운다.** 워커 id 가 호스트:PID 라 뜰 때마다 줄이 새로
+        # 생기는데 지우는 곳이 없어 4일에 119줄이 쌓였다(CompCore 가 알려 줬다, 2026-10-07).
+        db.execute(
+            delete(SimulationWorker).where(
+                SimulationWorker.last_seen_at < _now() - FORGET_AFTER
+            )
+        )
         row = SimulationWorker(
             id=worker_id,
             hostname=hostname,

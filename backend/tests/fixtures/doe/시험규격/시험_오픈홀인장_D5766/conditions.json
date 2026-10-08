@@ -1,0 +1,197 @@
+{
+  "analysis": {
+    "type": "static",
+    "large_deflection": false
+  },
+  "materials": [
+    {
+      "ref": {
+        "code": "M-000138",
+        "name": "SECC-EXAD87-DP_선언물성_0.8",
+        "source": "matnexus",
+        "fetched_at": "2026-09-28T00:00:00Z",
+        "material_id": "6c296526-322f-494d-a792-ea7b4ade4694"
+      },
+      "payload": {
+        "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+        "code": "M-000138",
+        "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+        "alias": null,
+        "grade": "SECC-EXAD87-DP",
+        "access": {
+          "reason": null,
+          "can_edit": true,
+          "registrant": "시스템 관리자",
+          "can_hand_over": true,
+          "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+          "edit_workspace": "기본 부서",
+          "edit_workspace_slug": "default"
+        },
+        "family": "Metal",
+        "density": 7850.0,
+        "details": "선언물성",
+        "category": "Steel",
+        "legacy_id": null,
+        "created_at": "2026-09-05T15:59:15.786123+09:00",
+        "updated_at": "2026-09-05T15:59:15.809514+09:00",
+        "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+        "density_unit": "kg/m3",
+        "sample_count": 0,
+        "applied_parts": [
+          "브라켓"
+        ],
+        "poisson_ratio": 0.29,
+        "spec_thickness": 0.0008,
+        "applied_products": [
+          "예시 제품"
+        ],
+        "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+        "declared_properties": [
+          {
+            "item": "비열",
+            "note": null,
+            "scale": null,
+            "points": [
+              {
+                "value": 470.0,
+                "value_si": 470.0,
+                "temperature_k": null
+              }
+            ],
+            "source": "literature",
+            "si_unit": "J/(kg.K)",
+            "reference": "탄소강 상온",
+            "input_unit": "J/(kg.K)"
+          },
+          {
+            "item": "열전도율",
+            "note": null,
+            "scale": null,
+            "points": [
+              {
+                "value": 50.0,
+                "value_si": 50.0,
+                "temperature_k": null
+              }
+            ],
+            "source": "literature",
+            "si_unit": "W/(m.K)",
+            "reference": "탄소강 상온",
+            "input_unit": "W/(m.K)"
+          },
+          {
+            "item": "선팽창계수(CTE)",
+            "note": null,
+            "scale": null,
+            "points": [
+              {
+                "value": 1.2e-05,
+                "value_si": 1.2e-05,
+                "temperature_k": null
+              }
+            ],
+            "source": "literature",
+            "si_unit": "1/K",
+            "reference": "탄소강 20~100 °C",
+            "input_unit": "1/K"
+          },
+          {
+            "item": "전단탄성계수",
+            "note": null,
+            "scale": null,
+            "points": [
+              {
+                "value": 80.0,
+                "value_si": 80000000000.0,
+                "temperature_k": null
+              }
+            ],
+            "source": "literature",
+            "si_unit": "Pa",
+            "reference": "E/(2(1+ν)), ν=0.29",
+            "input_unit": "GPa"
+          },
+          {
+            "item": "탄성계수",
+            "note": "예시",
+            "scale": null,
+            "points": [
+              {
+                "value": 205.0,
+                "value_si": 205000000000.0,
+                "temperature_k": null
+              }
+            ],
+            "source": "literature",
+            "si_unit": "Pa",
+            "reference": "KS D 3506 · 일반 강판 대표값",
+            "input_unit": "GPa"
+          }
+        ],
+        "spec_thickness_unit": "m",
+        "owner_workspace_name": "기본 부서"
+      },
+      "apply_to": [
+        "전체"
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "on": "고정 그립",
+      "name": "그립 고정",
+      "type": "fixed_support"
+    },
+    {
+      "x": "=늘림",
+      "y": 0,
+      "z": 0,
+      "on": "당김 그립",
+      "name": "그립 당김",
+      "type": "displacement"
+    }
+  ],
+  "schema_version": 1,
+  "named_selections": [
+    {
+      "name": "고정 그립",
+      "entity": "face",
+      "select": {
+        "any": [
+          {
+            "tag": "그립_1_위",
+            "what": "faces"
+          },
+          {
+            "tag": "그립_1_아래",
+            "what": "faces"
+          }
+        ]
+      }
+    },
+    {
+      "name": "당김 그립",
+      "entity": "face",
+      "select": {
+        "any": [
+          {
+            "tag": "그립_2_위",
+            "what": "faces"
+          },
+          {
+            "tag": "그립_2_아래",
+            "what": "faces"
+          }
+        ]
+      }
+    },
+    {
+      "name": "표점 구간",
+      "entity": "face",
+      "select": {
+        "tag": "표점",
+        "what": "faces"
+      }
+    }
+  ]
+}

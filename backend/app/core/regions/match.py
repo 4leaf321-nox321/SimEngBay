@@ -66,6 +66,10 @@ class FaceRecord:
     axis: tuple[float, float, float] | None = None
     """회전축의 방향(있으면). **CAD 가 곡면 지문에 `axis` 를 함께 보내므로**, 반지름과 중심이
     같은데 축이 다른 면을 가려낼 수 있다 — 지금은 메시에서 되맞추는 쪽만 이 값을 채운다."""
+    body: str = ""
+    """이 면이 속한 **CAD 파트 이름**(바디 짝짓기로 안 것 — 모르면 빈 글자). 조립의 지문에는
+    `body` 가 붙는다 — 구멍에 같은 지름의 핀이 끼면 구멍면과 핀 옆면이 중심 · 반지름 · 축까지
+    같아, 파트를 안 보면 구멍면 자리에 핀 옆면을 집는다(2026-10-08, CompCore 핀 베어링)."""
 
     @property
     def is_cylinder(self) -> bool:
@@ -142,6 +146,12 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
     if centroid is None:
         return False, math.inf, "중심 좌표가 없습니다"
     distance = _distance(centroid, face.centroid)
+
+    # **조립이면 파트부터 본다** — 지문이 「어느 파트의 면」 인지 말하고 우리도 그 면의 파트를
+    # 알 때만. 한쪽이라도 모르면 자리로만 고른다(전과 같다).
+    owner = str(wanted.get("body") or "").strip()
+    if owner and face.body and face.body != owner:
+        return False, distance, f"다른 파트(「{face.body}」)의 면입니다"
 
     radius = wanted.get("radius")
     if radius is not None:

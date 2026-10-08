@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from app.core.spec import HarmonicSpec, ModalSpec, StaticSpec, parse_spec
+from app.core.spec import HarmonicSpec, ModalSpec, StaticSpec, parse_stored_spec
 from app.core.stages import STAGES, ArtifactSpec, Stage, StageFailure, StageResult
 
 #: 결과 파일 이름. 단계마다 따로 둔다 — 한 폴더에서 네 단계가 차례로 돌고, 지난 단계의 기록이
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         raw = json.loads((workdir / "spec.json").read_text(encoding="utf-8"))
-        spec = parse_spec(raw)
+        spec = parse_stored_spec(raw)
         if not isinstance(spec, ModalSpec | StaticSpec | HarmonicSpec):  # pragma: no cover
             raise StageFailure("internal", f"{spec.recipe} 레시피는 실행기가 없습니다.")
         result = run_stage(

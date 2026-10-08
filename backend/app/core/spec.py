@@ -79,13 +79,16 @@ class ModalSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["modal"] = "modal"
-    solver: Literal["ansys", "calculix"] = "ansys"
-    """무엇으로 풀까. **`ansys` 가 기본**이다 — 보고서에 쓰는 값은 거기서 나온다.
+    solver: Literal["ansys", "calculix"] = "calculix"
+    """무엇으로 풀까. **`calculix` 가 기본**이다(2026-10-08 — 그 전에는 `ansys`).
 
     `calculix` 는 오픈소스 솔버로, **깔린 서버에서 바로 돌고 동시에 여러 점을 푼다**(라이선스
-    노드락이 없다). 대신 걸 수 있는 조건이 적다 — 못 거는 것은 모델링이 **까닭을 달아 거절**
-    한다(`app/core/calculix/deck.py` 의 능력표). 두 솔버의 수는 몇 % 갈리므로 결과에 **어느
-    쪽으로 풀었는지 도장**을 찍는다."""
+    노드락이 없다). CompCore 시험 규격 20개(가속도 · 모멘트 · 원격 변위까지)가 끝까지 풀린 뒤
+    기본으로 바꿨다. 못 거는 조건은 모델링이 **까닭을 달아 거절**한다(`calculix/deck.py` 의
+    능력표). `ansys` 는 라이선스가 있는 PC 에서 돈다. 두 솔버의 수는 몇 % 갈리므로 결과에
+    **어느 쪽으로 풀었는지 도장**을 찍는다. 칸이 없는 **옛 작업은 Ansys 다**(`solver_of`) —
+    기본값을 바꿔도 이미 저장된 작업의 솔버는 바뀌지 않는다(저장한 스펙에는 늘 이 칸이
+    있다)."""
     material: MaterialSpec | None = None
     """물성 한 벌 — **모든 바디에 같은 것이 붙는다.** 화면은 이 칸을 보내지 않는다: 물성은
     CompCore 가 점 파일에 파트마다 정해 보내고, 한 벌을 조립품 전체에 붙이는 것은 뜻이 없다.
@@ -129,7 +132,7 @@ class StaticSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["static"] = "static"
-    solver: Literal["ansys", "calculix"] = "ansys"
+    solver: Literal["ansys", "calculix"] = "calculix"
     """무엇으로 풀까 — `ModalSpec.solver` 참고."""
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
@@ -157,7 +160,7 @@ class HarmonicSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["harmonic"] = "harmonic"
-    solver: Literal["ansys", "calculix"] = "ansys"
+    solver: Literal["ansys", "calculix"] = "calculix"
     """무엇으로 풀까 — `ModalSpec.solver` 참고."""
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
@@ -192,3 +195,20 @@ class _SpecEnvelope(BaseModel):
 def parse_spec(raw: object) -> ModalSpec | StaticSpec | HarmonicSpec:
     """dict(JSON) → 스펙. 레시피 판별과 칸 검증을 한 번에 — 오류는 pydantic 의 것 그대로."""
     return _SpecEnvelope.model_validate({"spec": raw}).spec
+
+
+#: 솔버 칸이 생기기 전(2026-10-02)의 작업이 쓴 솔버.
+LEGACY_SOLVER = "ansys"
+
+
+def parse_stored_spec(raw: object) -> ModalSpec | StaticSpec | HarmonicSpec:
+    """**저장된** 스펙(작업 행 · `spec.json`)을 읽는다 — 솔버 칸이 없으면 옛 작업이라 Ansys 다.
+
+    새 요청은 `parse_spec` 으로 읽어 기본값(CalculiX)을 받는다. 저장된 스펙에 칸이 없는 것은
+    솔버 칸이 생기기 전의 작업뿐이고 그때는 Ansys 로 풀었다 — 큐(`claim_next`)도 그렇게 집는다.
+    기본값을 바꾼 뒤(2026-10-08) 이것 없이 읽으면 Ansys 워커가 집은 옛 작업을 CalculiX 로
+    풀었다(재시도 · 메시 수렴 점검).
+    """
+    if isinstance(raw, dict) and "solver" not in raw:
+        raw = {**raw, "solver": LEGACY_SOLVER}
+    return parse_spec(raw)

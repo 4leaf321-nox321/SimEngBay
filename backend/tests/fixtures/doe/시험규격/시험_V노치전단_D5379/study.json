@@ -1,0 +1,403 @@
+{
+  "id": "11f9c29d-0b72-4f03-a374-6f9d181c8a66",
+  "name": "시험_V노치전단_D5379",
+  "description": "",
+  "method": "factorial",
+  "samples": 1,
+  "seed": 1,
+  "factors": [],
+  "constraints": [],
+  "measures": [],
+  "batches": [],
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.5,
+    "short_edge": 0.1,
+    "narrow_face": 0.1
+  },
+  "recipe": {
+    "nodes": [
+      {
+        "id": "시편_윤곽",
+        "op": "sketch",
+        "label": "V 노치 시편",
+        "shapes": [
+          {
+            "type": "polyline",
+            "start": [
+              "=-길이 / 2",
+              "=-폭 / 2"
+            ],
+            "segments": [
+              {
+                "to": [
+                  "=-노치_입구",
+                  "=-폭 / 2"
+                ]
+              },
+              {
+                "to": [
+                  "=-노치_접점_x",
+                  "=-폭 / 2 + 노치_접점_깊이"
+                ]
+              },
+              {
+                "to": [
+                  "=노치_접점_x",
+                  "=-폭 / 2 + 노치_접점_깊이"
+                ],
+                "radius": "=노치_반지름"
+              },
+              {
+                "to": [
+                  "=노치_입구",
+                  "=-폭 / 2"
+                ]
+              },
+              {
+                "to": [
+                  "=길이 / 2",
+                  "=-폭 / 2"
+                ]
+              },
+              {
+                "to": [
+                  "=길이 / 2",
+                  "=폭 / 2"
+                ]
+              },
+              {
+                "to": [
+                  "=노치_입구",
+                  "=폭 / 2"
+                ]
+              },
+              {
+                "to": [
+                  "=노치_접점_x",
+                  "=폭 / 2 - 노치_접점_깊이"
+                ]
+              },
+              {
+                "to": [
+                  "=-노치_접점_x",
+                  "=폭 / 2 - 노치_접점_깊이"
+                ],
+                "radius": "=노치_반지름"
+              },
+              {
+                "to": [
+                  "=-노치_입구",
+                  "=폭 / 2"
+                ]
+              },
+              {
+                "to": [
+                  "=-길이 / 2",
+                  "=폭 / 2"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "시편_몸통",
+        "op": "extrude",
+        "label": "시편",
+        "sketch": "시편_윤곽",
+        "distance": "=두께"
+      },
+      {
+        "at": [
+          "=-(길이 / 2 - 0.5 + 물림_간격 / 2) / 2",
+          0,
+          "=두께"
+        ],
+        "id": "시편_물림_1_위",
+        "on": {
+          "role": "top"
+        },
+        "op": "divide_face",
+        "tag": "물림_1_위",
+        "size": [
+          "=길이 / 2 - 물림_간격 / 2 - 0.5",
+          "=폭 - 1"
+        ],
+        "label": "물림 자리",
+        "shape": "rect",
+        "target": "시편_몸통"
+      },
+      {
+        "at": [
+          "=-(길이 / 2 - 0.5 + 물림_간격 / 2) / 2",
+          0,
+          0
+        ],
+        "id": "시편_물림_1_아래",
+        "on": {
+          "role": "bottom"
+        },
+        "op": "divide_face",
+        "tag": "물림_1_아래",
+        "size": [
+          "=길이 / 2 - 물림_간격 / 2 - 0.5",
+          "=폭 - 1"
+        ],
+        "label": "물림 자리",
+        "shape": "rect",
+        "target": "시편_물림_1_위"
+      },
+      {
+        "at": [
+          "=(길이 / 2 - 0.5 + 물림_간격 / 2) / 2",
+          0,
+          "=두께"
+        ],
+        "id": "시편_물림_2_위",
+        "on": {
+          "role": "top"
+        },
+        "op": "divide_face",
+        "tag": "물림_2_위",
+        "size": [
+          "=길이 / 2 - 물림_간격 / 2 - 0.5",
+          "=폭 - 1"
+        ],
+        "label": "물림 자리",
+        "shape": "rect",
+        "target": "시편_물림_1_아래"
+      },
+      {
+        "at": [
+          "=(길이 / 2 - 0.5 + 물림_간격 / 2) / 2",
+          0,
+          0
+        ],
+        "id": "시편",
+        "on": {
+          "role": "bottom"
+        },
+        "op": "divide_face",
+        "tag": "물림_2_아래",
+        "size": [
+          "=길이 / 2 - 물림_간격 / 2 - 0.5",
+          "=폭 - 1"
+        ],
+        "label": "물림 자리",
+        "shape": "rect",
+        "target": "시편_물림_2_위"
+      }
+    ],
+    "params": {
+      "폭": 20.0,
+      "길이": 76.0,
+      "두께": 4.0,
+      "노치_각도": 90.0,
+      "노치_깊이": 3.8,
+      "노치_입구": "=노치_접점_x + 노치_접점_깊이 * tan(노치_각도 / 2)",
+      "물림_간격": 12.7,
+      "전단_변위": "=전단_변형률 * 물림_간격",
+      "노치_접점_x": "=노치_반지름 * cos(노치_각도 / 2)",
+      "노치_반지름": 1.3,
+      "전단_변형률": 0.01,
+      "노치_접점_깊이": "=노치_깊이 - 노치_반지름 + 노치_반지름 * sin(노치_각도 / 2)"
+    },
+    "version": 1
+  },
+  "conditions": {
+    "analysis": {
+      "type": "static",
+      "large_deflection": false
+    },
+    "materials": [
+      {
+        "ref": {
+          "code": "M-000138",
+          "name": "SECC-EXAD87-DP_선언물성_0.8",
+          "source": "matnexus",
+          "fetched_at": "2026-09-28T00:00:00Z",
+          "material_id": "6c296526-322f-494d-a792-ea7b4ade4694"
+        },
+        "payload": {
+          "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "code": "M-000138",
+          "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+          "alias": null,
+          "grade": "SECC-EXAD87-DP",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 7850.0,
+          "details": "선언물성",
+          "category": "Steel",
+          "legacy_id": null,
+          "created_at": "2026-09-05T15:59:15.786123+09:00",
+          "updated_at": "2026-09-05T15:59:15.809514+09:00",
+          "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [
+            "브라켓"
+          ],
+          "poisson_ratio": 0.29,
+          "spec_thickness": 0.0008,
+          "applied_products": [
+            "예시 제품"
+          ],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 470.0,
+                  "value_si": 470.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "열전도율",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 50.0,
+                  "value_si": 50.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 1.2e-05,
+                  "value_si": 1.2e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "탄소강 20~100 °C",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "전단탄성계수",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 80.0,
+                  "value_si": 80000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "E/(2(1+ν)), ν=0.29",
+              "input_unit": "GPa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "예시",
+              "scale": null,
+              "points": [
+                {
+                  "value": 205.0,
+                  "value_si": 205000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "KS D 3506 · 일반 강판 대표값",
+              "input_unit": "GPa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "apply_to": [
+          "전체"
+        ]
+      }
+    ],
+    "constraints": [
+      {
+        "on": "고정 물림",
+        "name": "물림 고정",
+        "type": "fixed_support"
+      },
+      {
+        "x": 0,
+        "y": "=전단_변위",
+        "z": 0,
+        "on": "가압 물림",
+        "name": "물림 가압",
+        "type": "displacement"
+      }
+    ],
+    "schema_version": 1,
+    "named_selections": [
+      {
+        "name": "고정 물림",
+        "entity": "face",
+        "select": {
+          "any": [
+            {
+              "tag": "물림_1_위",
+              "what": "faces"
+            },
+            {
+              "tag": "물림_1_아래",
+              "what": "faces"
+            }
+          ]
+        }
+      },
+      {
+        "name": "가압 물림",
+        "entity": "face",
+        "select": {
+          "any": [
+            {
+              "tag": "물림_2_위",
+              "what": "faces"
+            },
+            {
+              "tag": "물림_2_아래",
+              "what": "faces"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "owner": {
+    "name": "member",
+    "email": "member-b58157ab@example.local"
+  },
+  "requested_by": null,
+  "cloned_from": null
+}

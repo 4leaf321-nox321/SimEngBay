@@ -113,7 +113,7 @@ def _surface_with_displacement(model: Any, skin_mesh: Any, mode: int) -> Any:
     # 쪼개면 화면의 「요소」 선에 없는 대각선이 그려진다(2026-10-05). 솎기만 삼각형을 받으므로
     # 그때만 쪼갠다 — 솎은 그림의 선은 요소 경계가 아니다.
     linear = grid.linear_copy() if hasattr(grid, "linear_copy") else grid
-    surface = linear.extract_surface(algorithm="dataset_surface")
+    surface = _without_overlays(linear.extract_surface(algorithm="dataset_surface"))
     if surface.n_cells > DECIMATE_ABOVE_CELLS:
         surface = surface.triangulate()
         reduction = 1.0 - TARGET_CELLS / surface.n_cells
@@ -122,6 +122,40 @@ def _surface_with_displacement(model: Any, skin_mesh: Any, mode: int) -> Any:
     surface.point_data.pop("vtkOriginalPointIds", None)
     surface.cell_data.pop("vtkOriginalCellIds", None)
     return surface
+
+
+def _without_overlays(surface: Any) -> Any:
+    """**접촉 · 대상 요소가 덧씌운 면을 뺀다** — 같은 절점을 쓰는 면이 둘이면 하나만 남긴다.
+
+    결과 메시에는 솔리드 요소 말고도 접촉(CONTA174) · 대상(TARGE170) 표면 요소가 있다(실측
+    2026-10-08: 겹치기 이음 요소 14,879 중 1,210). 그 요소는 솔리드 겉면과 **같은 절점**을
+    써서, 겉면을 뽑으면 같은 면이 두 장 겹친다 — 그림에서는 얼룩이 지고, 닫힌 겉면으로 재는
+    파트 부피가 틀려 파트 이름을 못 붙였다(`_mark_parts`). 강체 파트는 솔리드가 없고 대상
+    요소만 있어 겹칠 짝이 없으므로 남는다(그림에 보인다).
+    """
+    import numpy as np
+
+    try:
+        flat = [int(one) for one in np.asarray(surface.faces)]
+        seen: set[tuple[int, ...]] = set()
+        twins: list[int] = []
+        at = 0
+        index = 0
+        while at < len(flat):
+            size = flat[at]
+            key = tuple(sorted(flat[at + 1 : at + 1 + size]))
+            if key in seen:
+                twins.append(index)
+            else:
+                seen.add(key)
+            at += size + 1
+            index += 1
+        if not twins or index != int(surface.n_cells):
+            return surface
+        return surface.remove_cells(twins)
+    except Exception:  # pragma: no cover - 형상에 따라 못 할 수 있다
+        logger.warning("겹친 면을 못 뺐습니다 — 그대로 그립니다", exc_info=True)
+        return surface
 
 
 def _mark_parts(surface: Any, skin_mesh: Any, workdir: Path) -> list[str]:

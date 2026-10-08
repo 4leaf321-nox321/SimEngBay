@@ -49,6 +49,8 @@ CONDITION_SWEEP = FIXTURES / "doe" / "조건_조건훑기"
 MATERIAL_SWEEP = FIXTURES / "doe" / "조건_재료훑기"
 SPEC = {
     "recipe": "modal",
+    # 기본 솔버는 CalculiX 다(2026-10-08) — 이 시험들은 Ansys 를 잰다.
+    "solver": "ansys",
     "material": {
         "name": "SS400",
         "youngs_modulus_gpa": 200,
@@ -565,6 +567,7 @@ def test_정적_해석이_변형과_응력을_낸다(workdir: Path) -> None:
     shutil.copy(TWO_BODIES / "points" / "p0001.json", workdir / "topology.json")
     spec = {
         "recipe": "static",
+        "solver": "ansys",
         "material": SPEC["material"],
         "mesh": {"element_size_mm": 8},
     }
@@ -623,6 +626,7 @@ def test_조화_응답이_공진에서_솟고_감쇠가_그_높이를_정한다(
     cache = workdir / "cache"
     spec = {
         "recipe": "harmonic",
+        "solver": "ansys",
         "material": SPEC["material"],
         "mesh": {"element_size_mm": 5},
         # **일부러 CAD 와 다르게 둔다** — 아래에서 CAD 가 이기는 것을 본다.
@@ -808,6 +812,7 @@ def test_전단_이음에서_마찰이_일을_한다_Ansys(workdir: Path) -> Non
         shutil.copy(SHEAR_JOINT / "points" / f"p{point:04d}.json", place / "topology.json")
         spec = {
             "recipe": "static",
+            "solver": "ansys",
             "material": SPEC["material"],
             "mesh": {"element_size_mm": 2.5},
         }
@@ -931,7 +936,7 @@ def _side_shake_body_settings(work: Path, settings: list[dict[str, Any]]) -> Non
 
 
 def _modal(work: Path) -> tuple[dict[str, Any], float]:
-    spec = {"recipe": "modal", "mesh": {"element_size_mm": 5}, "modes": 4}
+    spec = {"recipe": "modal", "solver": "ansys", "mesh": {"element_size_mm": 5}, "modes": 4}
     (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
     runner = _executor()
     summary: dict[str, Any] = {}
@@ -998,7 +1003,7 @@ def test_쉘_브래킷을_중간면과_두께로_푼다(workdir: Path) -> None:
         shutil.copy(points / f"p{number:04d}.step", work / "input.step")
         shutil.copy(points / f"p{number:04d}_mid.step", work / "input_mid.step")
         shutil.copy(points / f"p{number:04d}.json", work / "topology.json")
-        spec = {"recipe": "static"}
+        spec = {"recipe": "static", "solver": "ansys"}
         (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
         runner = _executor()
         summary: dict[str, Any] = {}

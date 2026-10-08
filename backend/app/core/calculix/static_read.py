@@ -150,16 +150,20 @@ _TOTAL = re.compile(r"total force \(fx,fy,fz\) for set (\S+) and time\s+(\S+)")
 def _reactions(workdir: Path) -> dict[str, list[float]]:
     """영역 이름 → **반력 합** `[Fx, Fy, Fz]`(N). 증분마다 찍히므로 **마지막 것**을 쓴다.
 
-    첫 것을 쓰면 하중의 일부만 걸린 상태다 — `.frd` 에서 이미 밟은 함정이다.
+    첫 것을 쓰면 하중의 일부만 걸린 상태다 — `.frd` 에서 이미 밟은 함정이다. 가속도 · 중력이
+    반력 절점에 얹은 몫은 ccx 가 빼고 내므로 덱을 쓸 때 셈해 둔 것을 더한다
+    (`reaction_offsets`, `deck._inertia_offsets`).
     """
     boundary = workdir / "boundary.json"
     data = workdir / "model.dat"
     if not boundary.is_file() or not data.is_file():
         return {}
     try:
-        sets = json.loads(boundary.read_text(encoding="utf-8")).get("reaction_sets") or {}
+        written = json.loads(boundary.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    sets = written.get("reaction_sets") or {}
+    offsets = written.get("reaction_offsets") or {}
     if not sets:
         return {}
     by_set: dict[str, list[float]] = {}
@@ -177,7 +181,12 @@ def _reactions(workdir: Path) -> dict[str, list[float]]:
                     continue
                 break
     return {
-        region: [round(one, 6) for one in by_set[name.upper()]]
+        region: [
+            round(one + extra, 6)
+            for one, extra in zip(
+                by_set[name.upper()], offsets.get(region) or (0.0, 0.0, 0.0), strict=True
+            )
+        ]
         for region, name in sets.items()
         if name.upper() in by_set
     }

@@ -157,3 +157,27 @@ def test_점_그룹은_면으로_짝짓지_않고_그_이유를_말한다() -> N
     assert found.faces == {}
     assert len(found.failures) == 1
     assert "점(vertex)" in found.failures[0].reason
+
+
+def test_조립의_지문은_그_파트의_면만_집는다() -> None:
+    """구멍에 같은 지름의 핀이 끼면 구멍면과 핀 옆면이 중심 · 반지름 · 축까지 같다 — 파트를 안
+    보면 「구멍면」 자리에 핀 옆면을 집는다(2026-10-08, CompCore 핀 베어링 D5961: 접촉의 양쪽이
+    다 강체 핀이 되어 「강체끼리의 접촉」 으로 막혔다)."""
+    pin = FaceRecord(
+        id=1, centroid=(0.0, 0.0, 5.0), area=200.0, surface="cylinder", radius=3.0, body="핀"
+    )
+    hole = FaceRecord(
+        id=2, centroid=(0.0, 0.0, 5.0), area=200.0, surface="cylinder", radius=3.0, body="시편"
+    )
+    topology = {
+        "regions": {
+            "구멍면": [{"centroid": [0, 0, 5], "radius": 3.0, "area": 200.0, "body": "시편"}],
+            "핀 옆면": [{"centroid": [0, 0, 5], "radius": 3.0, "area": 200.0, "body": "핀"}],
+        }
+    }
+    found = match_regions(topology, [pin, hole])
+    assert found.ok
+    assert found.faces == {"구멍면": [2], "핀 옆면": [1]}
+    # 파트를 모르는 면(메시에서 되찾은 CalculiX 의 면)은 자리로만 고른다 — 전과 같다.
+    unknown = [FaceRecord(id=3, centroid=(0.0, 0.0, 5.0), area=200.0, radius=3.0)]
+    assert match_regions(topology, unknown, wanted_regions=["구멍면"]).faces == {"구멍면": [3]}

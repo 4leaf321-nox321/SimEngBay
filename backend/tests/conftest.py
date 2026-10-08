@@ -15,10 +15,23 @@ bcrypt 라운드를 낮춘다. 시험 하나가 계정을 만들고(해시) 로�
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
+
+# **개발 폴더를 쓰지 않는다.** 시험이 작업을 만들 때마다 작업 폴더가 개발 filestore 에 생겨
+# 5,890개(941 MB)가 쌓였고(DB 의 작업은 15건뿐), 개발 `app.log` 에 시험 경고가 섞였다(CompCore
+# 가 알려 줬다, 2026-10-07). 파일 · 작업 · 로그 폴더를 시험마다 새 임시 폴더로 돌리고 끝나면
+# 지운다. `.env` 가 `WORK_DIR` 을 적어 두었어도(windows-bridge) 여기서 정한 것이 이긴다.
+_SCRATCH = Path(tempfile.mkdtemp(prefix="seb-test-"))
+os.environ["FILESTORE_DIR"] = str(_SCRATCH / "filestore")
+os.environ["WORK_DIR"] = str(_SCRATCH / "filestore" / "simulations")
+os.environ["LOG_DIR"] = str(_SCRATCH / "logs")
+atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
 
 # **시험은 실행기를 고르지 않는다 — 언제나 `fake` 다.**
 #

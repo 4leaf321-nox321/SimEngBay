@@ -57,8 +57,8 @@ export function SolverSelect({ id, value, onChange }: Props) {
         value={value}
         onChange={(event) => onChange(event.target.value as Solver)}
       >
-        <option value="ansys">Ansys (기본)</option>
-        <option value="calculix">CalculiX (오픈소스 · 서버에서 바로)</option>
+        <option value="calculix">CalculiX (기본 · 서버에서 바로)</option>
+        <option value="ansys">Ansys (라이선스 PC)</option>
       </select>
       <p className="text-muted-foreground text-xs">
         {value === 'ansys'

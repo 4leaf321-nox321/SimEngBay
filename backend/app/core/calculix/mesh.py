@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from app.core.bodies import BodyRecord
@@ -86,6 +86,8 @@ class Mesh:
 PROBE_MARK = "SEB_VOLUME"
 #: 쉘(중간면)의 면 하나 — 넓이 · 무게중심.
 SURFACE_MARK = "SEB_SURFACE"
+#: 메시가 쓰는 형상의 면 하나 — 넓이 · 무게중심(`measure`).
+FACE_MARK = "SEB_FACE"
 
 
 @dataclass(frozen=True)
@@ -225,11 +227,110 @@ def build_mesh(
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
         raise StageFailure("mesh_failed", f"gmsh 가 메시를 못 만들었습니다:\n{tail}")
     # 1차 통과는 **면만** 만든다 — 사면체가 없는 것이 정상이다.
-    return read_mesh(
+    mesh = read_mesh(
         msh,
         require_solid=not surface_only,
         shell_surfaces=frozenset(shell_sizes or {}) if shell_step is not None else frozenset(),
     )
+    try:
+        measured = measure(
+            step,
+            workdir,
+            fragment=fragment,
+            removed=removed,
+            shell_step=shell_step,
+            timeout_seconds=min(timeout_seconds, 300),
+        )
+    except (StageFailure, OSError):
+        # 형상을 못 재도 메시로 잰 값이 있다 — 작은 면 · 작은 파트만 짝을 못 찾을 수 있다.
+        logger.warning(
+            "형상의 넓이 · 부피를 못 쟀습니다 — 메시로 잰 값을 씁니다", exc_info=True
+        )
+        return mesh
+    return with_geometry(mesh, measured)
+
+
+def measure(
+    step: Path,
+    workdir: Path,
+    *,
+    fragment: bool = True,
+    removed: frozenset[int] = frozenset(),
+    shell_step: Path | None = None,
+    timeout_seconds: int = 300,
+) -> Probe:
+    """**형상에서** 면마다 넓이 · 무게중심, 부피마다 부피 · 무게중심(mm)을 잰다.
+
+    메시로 재면 작은 면 · 작은 파트가 어긋난다 — 삼각형은 곡선을 깎아 지름 1 mm 원(0.79 mm²)을
+    13% 작게 재고, 사면체는 작은 롤러(127 mm³)를 11% 작게 잰다. 짝짓기 허용오차는 넓이 · 부피
+    5%라 굽힘 시험의 대칭점 · 강체 롤러가 짝을 못 찾았다(CompCore 시험 규격, 2026-10-07). OCC
+    형상의 `Mass` · `CenterOfMass` 는 메시와 무관하게 정확하다.
+
+    `build_mesh` 와 **같은 머리**(읽기 · 지우기 · 쪼개기)를 지나야 번호가 같다. 메시를 만들지
+    않으므로 빠르다(`-0`).
+    """
+    geo = workdir / "measure.geo"
+    geo.write_text(
+        "\n".join(
+            [
+                *_head_lines(step, fragment, shell_step, removed),
+                "faces() = Surface{:};",
+                "For i In {0:#faces()-1}",
+                "  a = Mass Surface{faces(i)};",
+                "  c() = CenterOfMass Surface{faces(i)};",
+                f'  Printf("{FACE_MARK} %g %.12g %.12g %.12g %.12g", faces(i), a, c(0), c(1), '
+                "c(2));",
+                "EndFor",
+                "vols() = Volume{:};",
+                "For i In {0:#vols()-1}",
+                "  m = Mass Volume{vols(i)};",
+                "  c() = CenterOfMass Volume{vols(i)};",
+                f'  Printf("{PROBE_MARK} %g %.12g %.12g %.12g %.12g", vols(i), m, c(0), c(1), '
+                "c(2));",
+                "EndFor",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # `-v 3` 이어야 `Printf` 가 나온다(`probe_volumes` 와 같다).
+    done = tools.run(
+        tools.gmsh_bin(),
+        [str(geo), "-0", "-o", str(workdir / "measure.geo_unrolled"), "-nopopup", "-v", "3"],
+        cwd=workdir,
+        timeout_seconds=timeout_seconds,
+        what="gmsh",
+    )
+    text = done.stdout or ""
+    return Probe(volumes=parse_probe(text), surfaces=parse_probe(text, mark=FACE_MARK))
+
+
+def with_geometry(mesh: Mesh, measured: Probe) -> Mesh:
+    """메시로 잰 면 · 바디 지문을 **형상으로 잰 값으로** 바꾼다.
+
+    면은 넓이를 늘 바꾸고, 무게중심은 평면만 바꾼다 — 곡면은 CAD 와 같은 정의(경계상자 중심)로
+    맞추고 있고, 반지름 · 축은 메시에서 되맞춘 그대로다(`_classify`). 바디는 부피 · 무게중심을
+    바꾼다. 형상에 없는 번호(그럴 일은 없다)는 메시 값 그대로 둔다.
+    """
+    areas = {one.index: one for one in measured.surfaces}
+    volumes = {one.index: one for one in measured.volumes}
+    faces = [
+        replace(
+            face,
+            area=areas[face.id].volume,
+            centroid=face.centroid if face.is_cylinder else areas[face.id].centroid,
+        )
+        if face.id in areas and areas[face.id].volume > 0
+        else face
+        for face in mesh.faces
+    ]
+    bodies = [
+        replace(body, volume=volumes[body.index].volume, centroid=volumes[body.index].centroid)
+        if body.index in volumes and volumes[body.index].volume > 0
+        else body
+        for body in mesh.bodies
+    ]
+    return replace(mesh, faces=faces, bodies=bodies)
 
 
 def _head_lines(

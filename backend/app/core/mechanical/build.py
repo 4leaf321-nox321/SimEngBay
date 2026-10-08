@@ -172,12 +172,13 @@ def build(
             plan = harmonic_plan(spec, given_conditions)
             analysis = _add_harmonic(app, spec, upstream, plan)
         elif isinstance(spec, StaticSpec):
-            # **정적 해석은 하중이 답을 만든다.** 하중이 없으면 전부 0 이 나오는데 그 그림은
-            # 「해석이 됐다」 처럼 보인다 — 여기서 멈춘다.
-            if not given_conditions.loads:
+            # **정적 해석은 하중이나 강제 변위가 답을 만든다.** 둘 다 없으면 전부 0 이 나오는데
+            # 그 그림은 「해석이 됐다」 처럼 보인다 — 여기서 멈춘다. 변위로 당기는 시편 시험은
+            # 하중이 없어도 답이 있다(`Conditions.drives`).
+            if not given_conditions.driven:
                 raise StageFailure(
                     "internal",
-                    "정적 해석인데 하중이 하나도 없습니다 — CAD 조건에 하중을 넣거나 "
+                    "정적 해석인데 하중도 강제 변위도 없습니다 — CAD 조건에 하중을 넣거나 "
                     "모달로 돌리세요.",
                 )
             analysis = _add_static(app, large_deflection=spec.large_deflection)
@@ -220,6 +221,8 @@ def build(
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, view or {}, modelled
         )
+        # **변위로 당긴 자리의 절점을 남긴다** — 추출이 그 절점의 반력만 더한다.
+        _write_reaction_nodes(app, workdir, given_conditions, places)
         size_mm = _global_size_mm(spec, given_conditions, system)
 
         dat = workdir / "model.dat"
@@ -258,6 +261,11 @@ def build(
             artifacts.append(ArtifactSpec("mechdb", mechdb))
         except Exception:  # pragma: no cover - 저장 실패가 모델링을 망치지는 않는다
             logger.warning("mechdb 저장 실패 — 모델은 그대로 씁니다", exc_info=True)
+        # **두 덱이 끝까지 쓰였나** — mechdb 를 남긴 **뒤에** 본다(끊겼으면 그 파일을 열어
+        # 메시지를 봐야 한다). 조화 · 선응력은 구속 · 접촉이 앞선 해석에 걸리므로 그 덱도 본다.
+        if artifacts_extra:
+            _check_input_complete(workdir / UPSTREAM_NAME)
+        _check_input_complete(dat)
 
         return StageResult(
             artifacts=artifacts,
@@ -1011,6 +1019,80 @@ def _load_magnitude(
         made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
 
 
+#: Mechanical 이 솔버 입력 파일 끝에 쓰는 표지. 이것이 없으면 중간에 끊긴 것이다.
+INPUT_END_MARK = "/wb,file,end"
+
+
+def _check_input_complete(dat: Path) -> None:
+    """**Mechanical 이 입력 파일을 끝까지 썼나** — 끝 표지(`/wb,file,end`)를 본다.
+
+    `WriteInputFile` 은 중간에 멈춰도 오류를 내지 않는다(실측 2026-10-08, CompCore 시험
+    규격 「보드굽힘」: 강체 롤러 · 노즈의 접촉까지 쓰고 끊겨 구속 · 하중 · `solve` 가 없었다).
+    그대로 솔브에 넘기면 MAPDL 이 「입력 끝」 으로 멈춰 종료 코드 8 만 남는다 — 까닭이 안
+    보인다.
+    """
+    try:
+        with dat.open("rb") as stream:
+            stream.seek(max(0, dat.stat().st_size - 4096))
+            tail = stream.read().decode("ascii", errors="replace")
+    except OSError:  # pragma: no cover - 방금 쓴 파일이다
+        return
+    if INPUT_END_MARK in tail:
+        return
+    last = next(
+        (
+            line.removeprefix("/com,").strip(" *")
+            for line in reversed(tail.splitlines())
+            if line.lower().startswith("/com,***")
+        ),
+        "",
+    )
+    raise StageFailure(
+        "solver_failed",
+        "Mechanical 이 솔버 입력 파일을 끝까지 쓰지 못했습니다"
+        + (f"(「{last}」 다음에서 끊겼습니다)" if last else "")
+        + " — 그 뒤의 조건(구속 · 하중 · 원격점)을 Mechanical 이 만들지 못한 것입니다. "
+        "model.mechdb 를 Mechanical 에서 열어 메시지를 보거나, 솔버를 calculix 로 바꾸세요.",
+    )
+
+
+#: 변위로 당긴 영역 → 메시 절점 번호. 추출이 그 절점의 반력을 더한다(`dpf/static.py`).
+REACTION_NODES_NAME = "reaction_nodes.json"
+
+
+def _write_reaction_nodes(
+    app: Any, workdir: Path, given: condition_model.Conditions, places: dict[str, Any]
+) -> None:
+    """변위 구속 영역마다 **메시 절점 번호**를 남긴다 — 추출이 그 절점의 반력만 더한다.
+
+    전에는 추출이 그 영역 **첫 면의 평면 위** 절점의 반력을 더했다. 같은 평면에 다른 구속이
+    있으면 함께 더해지고(V 노치 전단의 두 물림은 같은 평면이라 서로 지워져 144 N — CalculiX
+    37.7 kN), 면이 여럿이면 첫 면만 셌다(겹치기 이음 2.9 kN — CalculiX 3.8 kN). CompCore 시험
+    규격으로 들켰다(2026-10-08). Mechanical 이 면마다 아는 메시 절점이 정본이다 — CalculiX
+    쪽도 구속을 건 절점 집합의 반력을 더한다.
+    """
+    wanted = [
+        one.region
+        for one in given.constraints
+        if one.kind == "displacement" and one.region in places
+    ]
+    if not wanted:
+        return
+    try:
+        model = app.ExtAPI.DataModel
+        data = model.MeshDataByName(model.MeshDataNames[0])
+        found: dict[str, list[int]] = {}
+        for region in wanted:
+            ids: set[int] = set()
+            for face in places[region].Location.Ids:
+                ids.update(int(one) for one in data.MeshRegionById(int(face)).NodeIds)
+            found[region] = sorted(ids)
+        (workdir / REACTION_NODES_NAME).write_text(json.dumps(found), encoding="utf-8")
+        logger.info("반력 절점 %s", {name: len(ids) for name, ids in found.items()})
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        logger.warning("반력 절점을 못 남겼습니다 — 추출이 평면으로 찾습니다", exc_info=True)
+
+
 def _write_boundary(
     workdir: Path,
     *,
@@ -1067,15 +1149,36 @@ def _mass_kg(used: Applied, bodies: list[Any], system: units.UnitSystem) -> floa
     return round(total, 4) if total > 0 else None
 
 
-def _face_records(bodies: list[Any]) -> list[FaceRecord]:
+def _part_names(
+    bodies: list[Any], topology: dict[str, Any], system: units.UnitSystem
+) -> dict[int, str]:
+    """형상 바디 번호 → **CAD 파트 이름**(바디 짝짓기 — 물성을 붙일 때와 같은 규칙).
+
+    면 짝짓기가 조립 지문의 `body` 를 보게 한다(`FaceRecord.body`). 못 짝지은 바디는 빠진다 —
+    그 바디의 면은 자리로만 고른다.
+    """
+    if not topology or not topology.get("bodies"):
+        return {}
+    try:
+        matched = match_bodies(topology, _body_records(bodies, system))
+        return {
+            int(bodies[index].GetGeoBody().Id): name for name, index in matched.bodies.items()
+        }
+    except Exception:  # pragma: no cover - 면 바디 등 부피가 없는 바디
+        logger.warning("면 짝짓기에 쓸 파트 이름을 못 얻었습니다", exc_info=True)
+        return {}
+
+
+def _face_records(bodies: list[Any], names: dict[int, str] | None = None) -> list[FaceRecord]:
     """Mechanical 의 면들을 **코어가 아는 모양**으로 옮긴다(`app/core/regions`).
 
     법선은 `Normals` 의 첫 셋을 쓴다 — 평면이면 어디서 재도 같고, 굽은 면은 한 값으로 말할
-    수 없어 매칭이 반지름 · 중심으로 간다.
+    수 없어 매칭이 반지름 · 중심으로 간다. `names` 를 주면 면마다 그 파트 이름을 붙인다.
     """
     found: list[FaceRecord] = []
     for body in bodies:
         geo = body.GetGeoBody()
+        part = (names or {}).get(int(geo.Id), "")
         for face in geo.Faces:
             radius = float(face.Radius)
             normal: tuple[float, float, float] | None = None
@@ -1094,6 +1197,7 @@ def _face_records(bodies: list[Any]) -> list[FaceRecord]:
                     surface=str(face.SurfaceType),
                     normal=normal,
                     radius=radius if radius > 0 else None,
+                    body=part,
                 )
             )
     return found
@@ -1188,7 +1292,13 @@ def _apply_given_conditions(
     if not wanted:
         return [], {}, set()
 
-    records = _face_records(bodies)
+    # 파트 이름은 **남은 파트로만** 짝짓는다 — 뺀 파트 · 쉘 파트도 CAD 바디 목록에 남아
+    # 있어, 부피가 비슷하면 남은 파트의 바디를 가로채 제 면을 「다른 파트의 면」 으로 막는다
+    # (물성과 같은 규칙 — `kept`).
+    kept_parts = (
+        without(topology, given.suppressed | set(given.shells)) if topology else topology
+    )
+    records = _face_records(bodies, _part_names(bodies, kept_parts, system))
     matched = match_regions(topology, records, wanted_regions=wanted)
     if not matched.ok:
         raise StageFailure(
@@ -1214,10 +1324,31 @@ def _apply_given_conditions(
                 f"하중 「{load.name}」({load.kind}): 강체 파트의 면에 건 하중은 아직 못 "
                 "겁니다 — 그 파트를 변형체로 두세요.",
             )
+    owner = _face_owner(bodies)
+
+    def pieces(region: str) -> list[Any]:
+        """**강체 파트 여럿에 걸친 그룹은 파트마다 나눈다** — 굽힘 시험의 「지지 롤러」 ·
+        「로딩 노즈」 는 롤러 · 노즈 둘의 면이다. 한 원격점 · 한 접촉에 강체 둘을 묶으면
+        Mechanical 이 입력 파일을 접촉 정의에서 끊었다(2026-10-08, 보드굽힘 · 숏빔 —
+        `_check_input_complete`).
+        """
+        if region not in rigid_of:
+            return [places[region]]
+        groups: dict[int | None, list[int]] = {}
+        for face in matched.faces[region]:
+            groups.setdefault(owner.get(int(face)), []).append(int(face))
+        if len(groups) < 2:
+            return [places[region]]
+        return [
+            _named_selection(app, f"{region} #{index}", ids)
+            for index, ids in enumerate(groups.values(), start=1)
+        ]
+
     for constraint in given.constraints:
         if constraint.region in rigid_of:
             constraint = _on_rigid(constraint)
-        _one_constraint(analysis, constraint, places[constraint.region], system, frames)
+        for place in pieces(constraint.region):
+            _one_constraint(analysis, constraint, place, system, frames)
         applied.append(f"{constraint.kind}:{constraint.region}")
         logger.info("구속 %s(%s) ← %s", constraint.name, constraint.kind, constraint.region)
     if given.contacts:
@@ -1231,7 +1362,7 @@ def _apply_given_conditions(
             applied.append(f"auto_contacts_removed:{removed}")
             logger.info("자동 접촉 %s 개를 지웠습니다 — CAD 가 접촉을 선언했습니다", removed)
     for contact in given.contacts:
-        source, target = places[contact.source], places[contact.target]
+        source_name, target_name = contact.source, contact.target
         if contact.source in rigid_of and contact.target in rigid_of:
             raise StageFailure(
                 "internal",
@@ -1241,23 +1372,35 @@ def _apply_given_conditions(
         if contact.source in rigid_of:
             # **강체는 대상면(target)이어야 한다** — 실측(2026-10-04): 강체가 접촉면(source)
             # 이면 `UnderDefined`. 본딩 · 마찰은 두 면을 바꿔도 같은 접촉이다.
-            source, target = target, source
+            source_name, target_name = target_name, source_name
             applied.append(f"contact_flipped:{contact.name}")
-        region = _one_contact(app, contact, source, target)
-        if contact.source in on_sheet or contact.target in on_sheet:
-            # **쉘의 두께를 접촉에 넣는다** — 중간면은 맞닿은 솔리드 면에서 두께의 절반만큼
-            # 떨어져 있다. 끄면 그 틈이 접촉 판정에 그대로 남는다.
-            try:
-                region.ShellThicknessEffect = True
-            except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
-                logger.warning(
-                    "접촉 %s 에 쉘 두께를 못 넣었습니다", contact.name, exc_info=True
-                )
+        # 강체 대상면이 파트 여럿이면 파트마다 접촉 하나(`pieces`).
+        for target in pieces(target_name):
+            region = _one_contact(app, contact, places[source_name], target)
+            if contact.source in on_sheet or contact.target in on_sheet:
+                # **쉘의 두께를 접촉에 넣는다** — 중간면은 맞닿은 솔리드 면에서 두께의
+                # 절반만큼 떨어져 있다. 끄면 그 틈이 접촉 판정에 그대로 남는다.
+                try:
+                    region.ShellThicknessEffect = True
+                except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+                    logger.warning(
+                        "접촉 %s 에 쉘 두께를 못 넣었습니다", contact.name, exc_info=True
+                    )
         applied.append(f"contact:{contact.kind}")
         logger.info(
             "접촉 %s(%s) %s ↔ %s", contact.name, contact.kind, contact.source, contact.target
         )
     return applied, places, flipped
+
+
+def _face_owner(bodies: list[Any]) -> dict[int, int]:
+    """면 번호 → 그 면이 속한 형상 바디 번호."""
+    owner: dict[int, int] = {}
+    for body in bodies:
+        geo = body.GetGeoBody()
+        for face in geo.Faces:
+            owner[int(face.Id)] = int(geo.Id)
+    return owner
 
 
 def _rigid_owner(
@@ -2007,7 +2150,14 @@ def _mesh_sizings(
 
     missing = [one.region for one in local if one.region not in places]
     if missing:
-        matched = match_regions(topology, _face_records(bodies), wanted_regions=missing)
+        kept_parts = (
+            without(topology, given.suppressed | set(given.shells)) if topology else topology
+        )
+        matched = match_regions(
+            topology,
+            _face_records(bodies, _part_names(bodies, kept_parts, system)),
+            wanted_regions=missing,
+        )
         for name in missing:
             ids = matched.faces.get(name)
             if ids:

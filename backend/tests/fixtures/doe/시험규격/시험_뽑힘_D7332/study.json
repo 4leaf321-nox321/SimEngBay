@@ -1,0 +1,403 @@
+{
+  "id": "4f70a58e-3f0f-4c05-bc90-a73bcbeeeae0",
+  "name": "시험_뽑힘_D7332",
+  "description": "",
+  "method": "factorial",
+  "samples": 1,
+  "seed": 1,
+  "factors": [],
+  "constraints": [],
+  "measures": [],
+  "batches": [],
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.5,
+    "short_edge": 0.1,
+    "narrow_face": 0.1
+  },
+  "recipe": {
+    "nodes": [
+      {
+        "id": "시편_판",
+        "op": "box",
+        "align": [
+          "center",
+          "center",
+          "min"
+        ],
+        "label": "시편",
+        "width": "=폭",
+        "height": "=두께",
+        "length": "=길이"
+      },
+      {
+        "at": [
+          [
+            0,
+            0
+          ]
+        ],
+        "id": "시편_몸통",
+        "op": "hole",
+        "label": "구멍",
+        "target": "시편_판",
+        "diameter": "=구멍_지름"
+      },
+      {
+        "id": "받침_고리",
+        "op": "sketch",
+        "label": "받침 고리",
+        "shapes": [
+          {
+            "type": "circle",
+            "radius": "=min(길이, 폭) / 2 - 1"
+          },
+          {
+            "mode": "cut",
+            "type": "circle",
+            "radius": "=받침_지름 / 2"
+          }
+        ]
+      },
+      {
+        "id": "시편_받침",
+        "on": {
+          "role": "bottom"
+        },
+        "op": "divide_face",
+        "tag": "받침",
+        "label": "받침 고리",
+        "shape": "sketch",
+        "sketch": "받침_고리",
+        "target": "시편_몸통"
+      },
+      {
+        "id": "시편",
+        "on": {
+          "role": "top"
+        },
+        "op": "divide_face",
+        "tag": "누름판",
+        "label": "누름 고리",
+        "shape": "sketch",
+        "sketch": "받침_고리",
+        "target": "시편_받침"
+      },
+      {
+        "at": [
+          0,
+          0,
+          "=두께"
+        ],
+        "id": "체결구_머리",
+        "op": "cylinder",
+        "axis": "Z",
+        "align": [
+          "center",
+          "center",
+          "min"
+        ],
+        "label": "체결구 머리",
+        "height": "=머리_높이",
+        "radius": "=머리_지름 / 2"
+      },
+      {
+        "at": [
+          0,
+          0,
+          "=-몸통_돌출"
+        ],
+        "id": "체결구_몸통",
+        "op": "cylinder",
+        "axis": "Z",
+        "align": [
+          "center",
+          "center",
+          "min"
+        ],
+        "label": "체결구 몸통",
+        "height": "=두께 + 몸통_돌출",
+        "radius": "=구멍_지름 / 2"
+      },
+      {
+        "id": "체결구",
+        "op": "union",
+        "label": "체결구",
+        "targets": [
+          "체결구_머리",
+          "체결구_몸통"
+        ]
+      },
+      {
+        "id": "뽑힘",
+        "op": "group",
+        "label": "체결구 뽑힘",
+        "targets": [
+          "시편",
+          "체결구"
+        ]
+      }
+    ],
+    "params": {
+      "폭": 100.0,
+      "길이": 100.0,
+      "당김": 0.2,
+      "두께": 4.0,
+      "마찰계수": 0.1,
+      "구멍_지름": 6.35,
+      "머리_높이": 3.0,
+      "머리_지름": 12.7,
+      "몸통_돌출": 10.0,
+      "받침_지름": 50.0
+    },
+    "version": 1
+  },
+  "conditions": {
+    "analysis": {
+      "type": "static",
+      "large_deflection": true
+    },
+    "contacts": [
+      {
+        "name": "머리-판",
+        "type": "frictional",
+        "source": "머리 아랫면",
+        "target": "판 윗면",
+        "behavior": "asymmetric",
+        "friction": "=마찰계수",
+        "interface_treatment": "adjust_to_touch"
+      }
+    ],
+    "materials": [
+      {
+        "ref": {
+          "code": "M-000138",
+          "name": "SECC-EXAD87-DP_선언물성_0.8",
+          "source": "matnexus",
+          "fetched_at": "2026-09-28T00:00:00Z",
+          "material_id": "6c296526-322f-494d-a792-ea7b4ade4694"
+        },
+        "payload": {
+          "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "code": "M-000138",
+          "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+          "alias": null,
+          "grade": "SECC-EXAD87-DP",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 7850.0,
+          "details": "선언물성",
+          "category": "Steel",
+          "legacy_id": null,
+          "created_at": "2026-09-05T15:59:15.786123+09:00",
+          "updated_at": "2026-09-05T15:59:15.809514+09:00",
+          "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [
+            "브라켓"
+          ],
+          "poisson_ratio": 0.29,
+          "spec_thickness": 0.0008,
+          "applied_products": [
+            "예시 제품"
+          ],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 470.0,
+                  "value_si": 470.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "열전도율",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 50.0,
+                  "value_si": 50.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 1.2e-05,
+                  "value_si": 1.2e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "탄소강 20~100 °C",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "전단탄성계수",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 80.0,
+                  "value_si": 80000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "E/(2(1+ν)), ν=0.29",
+              "input_unit": "GPa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "예시",
+              "scale": null,
+              "points": [
+                {
+                  "value": 205.0,
+                  "value_si": 205000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "KS D 3506 · 일반 강판 대표값",
+              "input_unit": "GPa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "apply_to": [
+          "전체"
+        ]
+      }
+    ],
+    "constraints": [
+      {
+        "on": "받침 고리",
+        "name": "받침 고정",
+        "type": "fixed_support"
+      },
+      {
+        "on": "누름 고리",
+        "name": "누름판 고정",
+        "type": "fixed_support"
+      },
+      {
+        "x": 0,
+        "y": 0,
+        "z": "=-당김",
+        "on": "체결구 끝면",
+        "rx": 0,
+        "ry": 0,
+        "rz": 0,
+        "name": "체결구 끝면 이동",
+        "type": "remote_displacement",
+        "behavior": "rigid"
+      }
+    ],
+    "schema_version": 1,
+    "named_selections": [
+      {
+        "name": "받침 고리",
+        "entity": "face",
+        "select": {
+          "tag": "받침",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "누름 고리",
+        "entity": "face",
+        "select": {
+          "tag": "누름판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "머리 아랫면",
+        "entity": "face",
+        "select": {
+          "body": "체결구",
+          "near": [
+            0,
+            0,
+            4.0
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
+        }
+      },
+      {
+        "name": "판 윗면",
+        "entity": "face",
+        "select": {
+          "body": "시편",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      {
+        "name": "체결구 끝면",
+        "entity": "face",
+        "select": {
+          "body": "체결구",
+          "near": [
+            0,
+            0,
+            -10.0
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
+        }
+      }
+    ]
+  },
+  "owner": {
+    "name": "member",
+    "email": "member-ac49bda6@example.local"
+  },
+  "requested_by": null,
+  "cloned_from": null
+}

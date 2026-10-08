@@ -1,0 +1,2 @@
+﻿point,status,step_file,point_file,unresolved,interference,warnings,error
+1,ok,points/p0001.step,points/p0001.json,,ok,"벽 두께 0.2 mm (기준 0.5), 위치 (-4.233, -8.467, 1.62) 부근",

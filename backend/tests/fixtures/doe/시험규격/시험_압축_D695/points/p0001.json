@@ -1,0 +1,390 @@
+{
+  "units": "mm",
+  "bodies": [
+    {
+      "name": "전체",
+      "step_product": "body_1",
+      "volume": 4096.766,
+      "centroid": [
+        0.0,
+        0.0,
+        12.7
+      ],
+      "bbox": [
+        [
+          -6.35,
+          -6.35,
+          0.0
+        ],
+        [
+          6.35,
+          6.35,
+          25.4
+        ]
+      ]
+    }
+  ],
+  "regions": {
+    "아래 가압면": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "area": 161.29,
+        "normal": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      }
+    ],
+    "위 가압면": [
+      {
+        "centroid": [
+          0.0,
+          0.0,
+          25.4
+        ],
+        "area": 161.29,
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    ]
+  },
+  "unresolved": [],
+  "quality": {
+    "valid": true,
+    "solids": 1,
+    "faces": 6,
+    "edges": 12,
+    "min_wall": 12.7,
+    "min_wall_at": [
+      -6.35,
+      4.233,
+      4.233
+    ],
+    "shortest_edge": 12.7,
+    "short_edges": 0,
+    "narrowest_face": 6.35,
+    "narrow_faces": 0,
+    "warnings": [],
+    "notes": []
+  },
+  "point": {
+    "number": 1,
+    "study": {
+      "id": "a618ab36-1da9-4dae-9b34-4ada6abd04cc",
+      "name": "시험_압축_D695",
+      "method": "factorial",
+      "seed": 1
+    },
+    "params": {},
+    "step_file": "points/p0001.step"
+  },
+  "conditions": {
+    "schema_version": 1,
+    "units": {
+      "system": "mm_n_tonne",
+      "label": "mm · N · tonne (MPa)",
+      "length": "mm",
+      "mass": "tonne",
+      "time": "s",
+      "force": "N",
+      "stress": "MPa",
+      "temperature": "C",
+      "density": "tonne/mm3",
+      "conductivity": "mW/(mm.K)",
+      "specific_heat": "mJ/(tonne.K)",
+      "per_temperature": "1/K",
+      "temperature_abs": "K",
+      "duration": "s",
+      "frequency": "1/s",
+      "viscosity": "N.s/mm2",
+      "force_per_length": "N/mm",
+      "diffusivity": "mm^2/s",
+      "energy": "mJ",
+      "moment": "N*mm",
+      "acceleration": "mm/s^2",
+      "angular_velocity": "rad/s"
+    },
+    "named_selections": [
+      {
+        "name": "아래 가압면",
+        "entity": "face",
+        "select": {
+          "role": "bottom",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "위 가압면",
+        "entity": "face",
+        "select": {
+          "role": "top",
+          "what": "faces"
+        }
+      }
+    ],
+    "materials": [
+      {
+        "apply_to": [
+          "전체"
+        ],
+        "ref": {
+          "source": "matnexus",
+          "code": "M-000138",
+          "material_id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "name": "SECC-EXAD87-DP_선언물성_0.8",
+          "fetched_at": "2026-09-28T00:00:00Z"
+        },
+        "payload": {
+          "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "code": "M-000138",
+          "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+          "alias": null,
+          "grade": "SECC-EXAD87-DP",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 7850.0,
+          "details": "선언물성",
+          "category": "Steel",
+          "legacy_id": null,
+          "created_at": "2026-09-05T15:59:15.786123+09:00",
+          "updated_at": "2026-09-05T15:59:15.809514+09:00",
+          "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [
+            "브라켓"
+          ],
+          "poisson_ratio": 0.29,
+          "spec_thickness": 0.0008,
+          "applied_products": [
+            "예시 제품"
+          ],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 470.0,
+                  "value_si": 470.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "열전도율",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 50.0,
+                  "value_si": 50.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 1.2e-05,
+                  "value_si": 1.2e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "탄소강 20~100 °C",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "전단탄성계수",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 80.0,
+                  "value_si": 80000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "E/(2(1+ν)), ν=0.29",
+              "input_unit": "GPa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "예시",
+              "scale": null,
+              "points": [
+                {
+                  "value": 205.0,
+                  "value_si": 205000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "KS D 3506 · 일반 강판 대표값",
+              "input_unit": "GPa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "deck_formats": [],
+        "converted": {
+          "system": "mm_n_tonne",
+          "density": 7.85e-09,
+          "density_unit": "tonne/mm3",
+          "density_key": "physical.density",
+          "poisson_ratio": 0.29,
+          "poisson_key": "mechanical.poisson_ratio",
+          "properties": [
+            {
+              "item": "비열",
+              "key": "thermal.specific_heat",
+              "unit": "mJ/(tonne.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 470000000.0
+                }
+              ]
+            },
+            {
+              "item": "열전도율",
+              "key": "thermal.conductivity",
+              "unit": "mW/(mm.K)",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 50.0
+                }
+              ]
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "key": "thermal.expansion_linear",
+              "unit": "1/K",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 1.2e-05
+                }
+              ]
+            },
+            {
+              "item": "전단탄성계수",
+              "key": "mechanical.shear_modulus",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 80000.0
+                }
+              ]
+            },
+            {
+              "item": "탄성계수",
+              "key": "mechanical.youngs_modulus",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 205000.0
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "constraints": [
+      {
+        "name": "받침 고정",
+        "type": "fixed_support",
+        "on": "아래 가압면",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": null,
+        "y": null,
+        "z": null,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      },
+      {
+        "name": "누름",
+        "type": "displacement",
+        "on": "위 가압면",
+        "cs": "global",
+        "location": "centroid",
+        "behavior": "deformable",
+        "x": 0.0,
+        "y": 0.0,
+        "z": -0.254,
+        "rx": null,
+        "ry": null,
+        "rz": null,
+        "stiffness": null,
+        "radial": "fixed",
+        "axial": "fixed",
+        "tangential": "fixed"
+      }
+    ],
+    "loads": [],
+    "contacts": [],
+    "initial": [],
+    "analysis": {
+      "type": "static",
+      "large_deflection": false,
+      "steps": 1,
+      "substeps": null,
+      "solver": "program_controlled"
+    },
+    "mesh_hints": [],
+    "body_settings": [],
+    "coordinate_systems": []
+  },
+  "length_units": {
+    "geometry": "mm",
+    "regions": "mm",
+    "midsurface": "mm",
+    "coordinate_systems": "mm"
+  }
+}

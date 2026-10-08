@@ -35,13 +35,13 @@ logger = logging.getLogger(__name__)
 AnySpec = ModalSpec | StaticSpec | HarmonicSpec
 
 BOUNDARY_NAME = "boundary.json"
-#: 면을 못 찾았을 때 덧붙이는 말. **메시에서 되찾는 길의 한계**다 — 삼각형에는 「이 면이
-#: 원통인가」 가 없다. 평면 · 넓이 · 법선으로 찾는 지문은 풀리고, 곡면 지문(원통 반지름 등)은
-#: 아직 못 푼다(실측 2026-10-03: `조건_원통_SI` 의 구멍면). 그것까지 하려면 메시에 원통을
-#: 맞춰 보는 일이 필요하다.
+#: 면을 못 찾았을 때 덧붙이는 말. 넓이 · 중심은 **형상에서** 재고(`mesh.measure`), 곡면의
+#: 반지름 · 축은 메시에서 되맞춘다(`_classify`) — 그래도 못 찾으면 CAD 의 지문과 형상이 다른
+#: 것이다. 전에는 「곡면 지문은 못 푼다」 고 적었는데, 곡면을 되맞춘 뒤로는 틀린 말이었고
+#: 넓이로 막힌 평면에도 그렇게 적었다(2026-10-07 — 굽힘 시험의 지름 1 mm 대칭점).
 MESH_LIMIT = (
-    "CalculiX 경로는 **메시에서** 면을 되찾으므로 곡면 지문(원통 반지름 등)은 아직 못 풉니다 "
-    "— 그 조건이 필요하면 솔버를 ansys 로 돌리세요."
+    "CAD 가 보낸 면 지문과 형상의 면이 맞지 않습니다 — CAD 폴더를 지금 형상으로 다시 "
+    "내보냈는지 보세요."
 )
 TOPOLOGY_NAME = "topology.json"
 DECK_NAME = "model.inp"
@@ -83,11 +83,40 @@ def build(
     # 그래서 모달 · 조화는 **맞닿은 면의 절점을 공유시켜**(메시를 쪼개) 붙은 것으로 푼다 —
     # Ansys 의 bonded 와 1차에서 0.23% 차이였다. 접촉이 중요한 선응력 모달이 필요하면 Ansys 로
     # 돌린다(그쪽은 선형 섭동에 접촉 상태를 물고 간다).
-    use_contact = (
-        isinstance(spec, StaticSpec)
-        and bool(given.loads)
-        and any(one.kind in deck_writer.NONLINEAR_CONTACTS for one in given.contacts)
+    #
+    # **변위로 당기는 시험도 접촉을 쓴다**(`given.driven`) — 하중만 보던 때는 뽑힘 시험의 마찰
+    # 접촉이 붙은 것으로 풀렸다(반력 22.3 kN — 마찰로 풀면 15.8 kN, 2026-10-08). 다만 **강체
+    # 파트에 닿는 마찰 접촉은 아직 못 푼다** — 그때는 전처럼 붙여서 풀고 그렇게 적는다(굽힘의
+    # 롤러 · 노즈, 핀 베어링의 핀). 붙이면 시편이 지지점에서 돌지 못해 덜 휜다(보드굽힘
+    # 8.1 mm — Ansys 마찰 12.3 mm).
+    static_driven = isinstance(spec, StaticSpec) and given.driven
+    frictional = [one for one in given.contacts if one.kind in deck_writer.NONLINEAR_CONTACTS]
+    on_rigid = [one for one in frictional if _touches_rigid(topology, given, one)]
+    use_contact = static_driven and bool(frictional) and not on_rigid
+    contact_notes = (
+        [
+            condition_model.Note(
+                f"접촉 「{one.name}」({one.kind})",
+                "강체 파트와의 마찰 접촉은 CalculiX 가 아직 못 풀어 **붙은 것으로** "
+                "풀었습니다 — 지지점에서 미끄러지거나 도는 것이 답을 바꾸는 시험(굽힘 · 핀 "
+                "베어링)은 덜 휘게 나옵니다. 그 값이 중요하면 솔버를 ansys 로 돌리세요.",
+            )
+            for one in on_rigid
+        ]
+        if static_driven
+        else []
     )
+    if on_rigid and isinstance(spec, StaticSpec) and spec.large_deflection:
+        # **붙인 채 큰 변형으로 풀면 답이 크게 틀린다** — 시편이 양 끝 지지점에 묶인 채 모양이
+        # 바뀌어 막처럼 당겨 버틴다. 보드굽힘 실측(2026-10-08): 반력 19.2 kN(선형) → 296.7 kN
+        # (큰 변형), 15배. 메모 한 줄로 넘기기에는 너무 그럴듯한 수라 막는다.
+        raise StageFailure(
+            "internal",
+            "강체 파트와의 마찰 접촉을 붙여서 풀면서 큰 변형을 켤 수 없습니다 — 시편이 "
+            "지지점에 묶인 채 휘어 반력이 수 배로 나옵니다(보드굽힘 실측 15배). 큰 변형을 "
+            "끄거나 솔버를 ansys 로 바꾸세요.",
+            details={"contacts": [one.name for one in on_rigid]},
+        )
     # 1차 통과도 **같은 쪼개기 규칙**을 따른다 — 안 그러면 접합면 두 장이 하나로 합쳐져서 한쪽
     # 면에 걸린 메시 힌트가 「법선이 180도 틀어져 있다」 로 빠진다(실측 2026-10-03).
     # **파트별 설정** — 뺄 파트 · 파트 크기는 메시 전에 정한다(`mesh.py` 머리말).
@@ -155,6 +184,10 @@ def build(
     held = _held_nodes(topology, given, mesh)
     constrained = plan_constrained(given, spec)
     shapes = _region_shapes(topology)
+    # 원격점 자리 — 세 레시피가 같은 것을 쓴다(`deck._holds`). 강제 변위는 선언된 단위계의
+    # 길이로 오므로 `system.length_mm` 을 함께 준다.
+    centers = _region_centers(topology)
+    refused_loads: list[condition_model.Note] = []
     if isinstance(spec, HarmonicSpec):
         places, areas, faces = _load_places(topology, given, mesh)
         shake = harmonic_plan(spec, given)
@@ -175,6 +208,8 @@ def build(
             rigid=rigid,
             shells=shells,
             ties=ties,
+            centers=centers,
+            length_mm=system.length_mm,
         )
     elif isinstance(spec, StaticSpec):
         places, areas, faces = _load_places(topology, given, mesh)
@@ -191,10 +226,13 @@ def build(
             shapes=shapes,
             contact_faces=_contact_faces(topology, given, mesh) if use_contact else None,
             element_size_mm=size,
+            large_deflection=spec.large_deflection,
             second_order=mesh.second_order,
             rigid=rigid,
             shells=shells,
             ties=ties,
+            centers=centers,
+            length_mm=system.length_mm,
         )
     else:
         preload: list[str] | None = None
@@ -221,8 +259,15 @@ def build(
                 rigid=rigid,
                 shells=shells,
                 ties=ties,
+                centers=centers,
+                length_mm=system.length_mm,
             )
             preload = ahead.load_rows or None
+            # **앞 정적 단계가 못 건 하중은 이 해석의 답을 바꾼다** — 조이는 하중이 빠진 채
+            # 선응력 모달이 돌면 그냥 모달과 같은 값이 그럴듯하게 나온다. 그래서 막는다.
+            # 구속 · 접촉의 말은 모달 덱이 똑같이 하고, 「하중이 없다」 는 접촉만 있는
+            # 모달에서는 뜻이 없다 — 하중의 말만 옮긴다.
+            refused_loads = [one for one in ahead.refused if one.what.startswith("하중 「")]
         plan = deck_writer.write_modal(
             nodes=mesh.nodes,
             solids=mesh.solids,
@@ -241,8 +286,11 @@ def build(
             rigid=rigid,
             shells=shells,
             ties=ties,
+            centers=centers,
+            length_mm=system.length_mm,
         )
-    plan.skipped += layout.skipped
+    plan.skipped += layout.skipped + contact_notes
+    plan.refused += refused_loads
     if plan.refused:
         # **못 거는 조건은 조용히 빼지 않는다.** 그대로 풀면 구속 없는 해석이 끝까지 돌고,
         # 그 결과는 0 Hz 여섯 개를 달고 나온다.
@@ -264,6 +312,9 @@ def build(
     if plan.reaction_sets:
         # **반력을 읽을 자리** — 추출 단계가 `.dat` 의 합에서 영역 이름으로 되찾는다.
         boundary["reaction_sets"] = plan.reaction_sets
+        if plan.reaction_offsets:
+            # 관성 하중이 반력 절점에 얹은 몫 — 읽을 때 더한다(`deck._inertia_offsets`).
+            boundary["reaction_offsets"] = plan.reaction_offsets
     # **측정점이 어느 바디의 것인가** — 같은 자리에 두 바디의 꼭짓점이 겹치면(이음 입구) 바디로
     # 갈라야 미끄럼을 잴 수 있다. 추출이 그 바디의 절점 안에서만 가장 가까운 것을 찾는다.
     boundary["bodies"] = {name: entity for name, entity in body_of.items()}
@@ -321,6 +372,12 @@ def build(
             # (`contact_stiffness`). 크기를 바꾸면 메시와 접촉 모델이 함께 바뀐다 — 수렴
             # 점검이 그 사실을 적는다.
             **({"contact_pairs": True} if use_contact else {}),
+            # 「큰 변형」 을 받아 기하 비선형으로 풀었나(`deck.write_static`).
+            **(
+                {"large_deflection": True}
+                if isinstance(spec, StaticSpec) and spec.large_deflection
+                else {}
+            ),
             "constrained_regions": plan.applied,
             "mass_kg": mass,
             "unit_system": system.key,
@@ -545,6 +602,23 @@ class _Layout:
     """중간면의 면 번호 → 쉘 파트 이름."""
     skipped: list[condition_model.Note] = field(default_factory=list)
     """CalculiX 가 못 따르는 파트 메시 칸 — 바람이므로 멈추지 않고 적는다."""
+
+
+def _touches_rigid(
+    topology: dict[str, Any] | None,
+    given: condition_model.Conditions,
+    contact: condition_model.Contact,
+) -> bool:
+    """그 접촉의 한쪽 면이 **강체 파트의 것**인가 — 조립 지문의 `body` 로 본다."""
+    rigid = given.rigid
+    if not rigid:
+        return False
+    regions = (topology or {}).get("regions") or {}
+    return any(
+        isinstance(row, dict) and str(row.get("body") or "") in rigid
+        for name in (contact.source, contact.target)
+        for row in regions.get(name) or []
+    )
 
 
 def _layout(
@@ -1008,6 +1082,34 @@ def _region_shapes(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:
     for name, rows in (topology.get("regions") or {}).items():
         if isinstance(rows, list) and rows and isinstance(rows[0], dict):
             found[name] = rows[0]
+    return found
+
+
+def _region_centers(topology: dict[str, Any]) -> dict[str, tuple[float, float, float]]:
+    """영역 이름 → **면적 중심**(Σ 면적 x 중심 / Σ 면적, mm) — 원격점 자리다.
+
+    Ansys 의 원격점(「centroid」)이 거기 선다. 면이 여럿이면 면적으로 무게를 준다 — 지문이
+    재 둔 값이라 메시가 고르지 않아도 비켜나지 않는다(`deck._remote_points`). 면적이 없는
+    지문이 하나라도 있으면 그 영역은 빼서 절점 평균으로 미룬다.
+    """
+    found: dict[str, tuple[float, float, float]] = {}
+    for name, rows in (topology.get("regions") or {}).items():
+        if not isinstance(rows, list) or not rows:
+            continue
+        total = 0.0
+        moment = [0.0, 0.0, 0.0]
+        for row in rows:
+            area = row.get("area") if isinstance(row, dict) else None
+            center = row.get("centroid") if isinstance(row, dict) else None
+            if not isinstance(area, (int, float)) or area <= 0:
+                break
+            if not isinstance(center, list) or len(center) != 3:
+                break
+            total += area
+            for axis in range(3):
+                moment[axis] += area * float(center[axis])
+        else:
+            found[name] = (moment[0] / total, moment[1] / total, moment[2] / total)
     return found
 
 

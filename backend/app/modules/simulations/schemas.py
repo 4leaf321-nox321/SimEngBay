@@ -80,6 +80,9 @@ class ConditionsOut(BaseModel):
     lines: list[ConditionLine] = []
     unit_system: str = ""
     prestressed: bool = False
+    drives: bool = False
+    """0 이 아닌 강제 변위 · 원격 변위가 있나 — 하중 없이도 정적 해석에 답이 있다(변위로 당기는
+    시편 시험). 창이 「하중이 없으면 멈춘다」 를 그때는 말하지 않는다."""
 
 
 class RegionOut(BaseModel):

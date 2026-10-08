@@ -309,6 +309,25 @@ class Conditions:
         return next((one for one in self.mesh_hints if one.whole), None)
 
     @property
+    def drives(self) -> bool:
+        """**강제로 움직이는 구속이 있나** — 0 이 아닌 변위 · 원격 변위(회전 포함).
+
+        시편 시험은 대부분 힘이 아니라 변위로 당긴다(그립 고정 · 그립 강제 변위). 그런 정적
+        해석은 하중이 없어도 답이 있다 — 「걸린 하중이 하나도 없다」 로 막으면 안 된다
+        (CompCore 시험 규격 픽스처, 2026-10-07: E8 · D5766 · D695 … 일곱이 그 점검에 막혔다).
+        """
+        return any(
+            one.kind in ("displacement", "remote_displacement")
+            and any(value not in (None, 0) for value in (*one.components, *one.rotations))
+            for one in self.constraints
+        )
+
+    @property
+    def driven(self) -> bool:
+        """답을 만들 것이 있나 — 하중이 있거나 강제로 움직인다(정적 · 조화의 점검)."""
+        return bool(self.loads) or self.drives
+
+    @property
     def prestressed(self) -> bool:
         """정적 해석을 먼저 풀어야 하나 — **하중이 있고 선응력을 켰을 때**."""
         return bool(self.loads) and self.analysis.prestressed

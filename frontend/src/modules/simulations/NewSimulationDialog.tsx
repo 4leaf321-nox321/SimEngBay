@@ -271,6 +271,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     if (isRecipe(found.recipe)) setRecipe(found.recipe)
     if (found.suggested_modes) setModes(String(found.suggested_modes))
     if (isOrder(found.suggested_order)) setOrder(found.suggested_order)
+    // 큰 변형도 CAD 가 적은 대로 — 늘 적어 보내므로 사람이 바꾼 것만 CAD 와 다르다.
+    if (typeof found.suggested_large_deflection === 'boolean') setLargeDeflection(found.suggested_large_deflection)
     setConditionsFromCad(true)
   }
 
@@ -829,6 +831,11 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                       <span className="text-muted-foreground block text-xs">
                         변형이 커서 모양이 바뀌면 켭니다 — 비선형이라 느립니다.
                       </span>
+                      {typeof preview?.suggested_large_deflection === 'boolean' && (
+                        <span className="text-muted-foreground block text-xs">
+                          CAD 가 적은 값 {preview.suggested_large_deflection ? '켬' : '끔'}
+                        </span>
+                      )}
                     </span>
                   </label>
                 )}

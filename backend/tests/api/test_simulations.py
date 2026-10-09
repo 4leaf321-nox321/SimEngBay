@@ -519,6 +519,8 @@ def test_CAD_점_파일을_걸기_전에_읽어_준다(client: TestClient, membe
     assert body["suggested_element_size_mm"] == 2.5
     # 「전체」 요소 차수도 제안한다 — 창이 미리 채운다.
     assert body["suggested_order"] == "quadratic"
+    # 정적의 큰 변형도 — CompCore 는 정적이면 늘 적는다(이 폴더는 끔).
+    assert body["suggested_large_deflection"] is False
     # **파트가 여럿이면 파트마다 붙을 재료를 보여 준다** — 모델링과 같은 규칙으로 짝짓는다.
     assert [(one["name"], one["material"]) for one in body["bodies"]] == [
         ("아래판", "SECC-EXAD87-DP_선언물성_0.8"),

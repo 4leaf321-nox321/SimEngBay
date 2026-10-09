@@ -44,6 +44,7 @@ from app.core.stages import (
     StageFailure,
     StageResult,
 )
+from app.core.statics import StaticPlan, static_plan
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ def build(
         _rigid_mass(active, used, rigid_ids, system)
         constrained = bool(given_conditions.constraints or spec.constraints)
         plan: HarmonicPlan | None = None
+        statics: StaticPlan | None = None
         if isinstance(spec, HarmonicSpec):
             # **조화 응답은 모달이 앞에 선다**(모드 중첩) — 그 모드로 응답을 쌓는다.
             upstream = _add_modal_for_harmonic(app, spec)
@@ -181,7 +183,18 @@ def build(
                     "정적 해석인데 하중도 강제 변위도 없습니다 — CAD 조건에 하중을 넣거나 "
                     "모달로 돌리세요.",
                 )
-            analysis = _add_static(app, large_deflection=spec.large_deflection)
+            # **큰 변형은 사람이 적었으면 그것, 비웠으면 CAD 가 적은 것이다**
+            # (`statics.static_plan`). 초기 부단계 수는 비선형일 때만 건다 — 선형 모델에
+            # 걸면 같은 답을 그 수만큼 다시 푼다.
+            statics = static_plan(spec, given_conditions)
+            nonlinear = statics.large_deflection or any(
+                one.kind in NONLINEAR_CONTACT_KINDS for one in given_conditions.contacts
+            )
+            analysis = _add_static(
+                app,
+                large_deflection=statics.large_deflection,
+                substeps=statics.substeps if nonlinear else None,
+            )
             upstream = analysis
         else:
             # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을
@@ -310,6 +323,12 @@ def build(
                 # **무슨 물성으로 돌았나.** 적지 않으면 「CAD 가 보낸 재료로 돈 것인지」 를
                 # 나중에 알 방법이 없다 — 재료를 훑는 DOE 에서 그것이 결과의 절반이다.
                 "conditions_from": "cad" if given_conditions.constraints else "spec",
+                # 큰 변형을 켰나 · 누가 정했나(`statics.static_plan`).
+                **(
+                    {"large_deflection": True, "large_deflection_from": statics.source}
+                    if statics is not None and statics.large_deflection
+                    else {}
+                ),
                 **(
                     {
                         "damping_ratio": plan.damping_ratio,
@@ -879,13 +898,23 @@ def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any, plan: HarmonicPlan) 
     return harmonic
 
 
-def _add_static(app: Any, *, large_deflection: bool | None = None) -> Any:
+#: Mechanical 이 비선형으로 푸는 접촉 — 초기 부단계 수가 뜻을 가진다.
+NONLINEAR_CONTACT_KINDS = ("frictional", "frictionless", "rough")
+
+
+def _add_static(
+    app: Any, *, large_deflection: bool | None = None, substeps: int | None = None
+) -> Any:
     """정적 해석. 구속과 하중이 여기 걸린다.
 
     선응력의 디딤돌로 쓸 때는(모달이 뒤따를 때) **재시작 파일을 남기라고 이른다**
     (`RESCONTROL,LINEAR`). 그것이 없으면 모달의 재시작 덱이 「multiframe restart 파일이 없다」
     로 죽는다 — MAPDL 이 그렇게 시키라고 적어 준 그대로다. 정적 해석 자체로 풀 때는 필요
     없으므로 `large_deflection` 을 준 경우(=정적 레시피)에는 안 붙인다.
+
+    `substeps`(CAD 의 「초기 부단계 수」)를 주면 자동 시간 단계를 부단계로 정하고 처음을 그
+    수로 나눈다(`NSUBST`). 최대는 넉넉히(그 10배 · 적어도 1000) 둬 수렴이 어려우면 더 잘게
+    나누게 한다 — 최대를 먼저 넣어야 처음 값이 범위를 넘지 않는다.
     """
     static = app.Model.AddStaticStructuralAnalysis()
     if large_deflection is None:
@@ -894,7 +923,16 @@ def _add_static(app: Any, *, large_deflection: bool | None = None) -> Any:
             "! SimEngBay: keep restart files for the modal perturbation\nRESCONTROL,LINEAR\n"
         )
         return static
-    static.AnalysisSettings.LargeDeflection = bool(large_deflection)
+    settings = static.AnalysisSettings
+    settings.LargeDeflection = bool(large_deflection)
+    if substeps:
+        enums = _global("Ansys").Mechanical.DataModel.Enums
+        settings.AutomaticTimeStepping = enums.AutomaticTimeStepping.On
+        settings.DefineBy = enums.TimeStepDefineByType.Substeps
+        settings.MaximumSubsteps = max(substeps * 10, 1000)
+        settings.InitialSubsteps = substeps
+        settings.MinimumSubsteps = 1
+        logger.info("초기 부단계 %s (CAD)", substeps)
     return static
 
 

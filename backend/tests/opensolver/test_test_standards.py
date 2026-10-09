@@ -51,7 +51,15 @@ def _solve(name: str, size: float, workdir: Path) -> tuple[dict[str, Any], dict[
     shutil.copy(folder / "p0001.json", workdir / "topology.json")
     point = json.loads((folder / "p0001.json").read_text(encoding="utf-8"))
     recipe = point["conditions"]["analysis"]["type"]
-    spec = {"recipe": recipe, "solver": "calculix", "mesh": {"element_size_mm": size}}
+    spec: dict[str, Any] = {
+        "recipe": recipe,
+        "solver": "calculix",
+        "mesh": {"element_size_mm": size},
+    }
+    if recipe == "static":
+        # 여기서는 **막던 셋**을 본다 — CAD 가 적은 큰 변형(비틀림 등)을 따르면 같은 답을
+        # 열 배 넘게 오래 푼다(비틀림 2 mm 30 → 535 초). 큰 변형은 아래 따로 본다.
+        spec["large_deflection"] = False
     summary: dict[str, Any] = {}
     for stage in STAGES:
         done = run_stage(
@@ -163,20 +171,56 @@ def test_선응력_모달의_앞_정적이_못_건_하중은_막는다(ready: No
     assert "이상한 가속" in str(failure.value)
 
 
-def test_강체_마찰을_붙여_풀면서_큰_변형은_막는다(ready: None, tmp_path: Path) -> None:
-    """보드굽힘은 롤러 · 노즈(강체)와의 마찰을 아직 붙여서 푼다. 그 채로 큰 변형을 켜면 판이
-    양 끝에 묶여 막처럼 버텨 반력이 15배로 나왔다(19.2 → 296.7 kN, 2026-10-08)."""
+def test_강체_지지점과의_마찰을_접촉으로_푼다(ready: None, tmp_path: Path) -> None:
+    """보드굽힘의 롤러 · 노즈(강체)와 판 사이는 마찰 접촉이다. 전에는 붙여서 풀어 판이
+    지지점에서 미끄러지지도 돌지도 못했다 — 반력이 손셈의 16배(9,966 N — 약 600 N). 이제
+    접촉 쌍으로 풀고 **강체 면을 독립(master) 쪽에** 둔다: 강체 절점은 `*RIGID BODY` 가 이미
+    쥐어, 종속 면이 되면 같은 자유도를 두 번 묶는다. CAD 가 적은 큰 변형 · 초기 부단계 수(20)도
+    그대로 받는다."""
     folder = STANDARDS / "시험_보드굽힘_JESD22" / "points"
     shutil.copy(folder / "p0001.step", tmp_path / "input.step")
     shutil.copy(folder / "p0001.json", tmp_path / "topology.json")
     spec = parse_spec(
-        {
-            "recipe": "static",
-            "solver": "calculix",
-            "mesh": {"element_size_mm": 1},
-            "large_deflection": True,
-        }
+        {"recipe": "static", "solver": "calculix", "mesh": {"element_size_mm": 3}}
     )
-    with pytest.raises(StageFailure) as failure:
-        build(spec, tmp_path, input_name="input.step", timeout_seconds=600)
-    assert "큰 변형" in str(failure.value)
+    done = build(spec, tmp_path, input_name="input.step", timeout_seconds=600)
+    assert done.summary["contact_pairs"] is True
+    assert "붙은 것으로" not in done.summary.get("conditions_skipped", "")
+    assert done.summary["large_deflection"] is True
+    deck = (tmp_path / "model.inp").read_text(encoding="utf-8")
+    assert "*STEP, NLGEOM\n*STATIC\n0.05, 1.0\n" in deck
+    # 접촉 쌍 둘 — 둘째 줄의 둘째가 독립 면이다. 강체(롤러 · 노즈) 쪽 면이 그 자리에 선다.
+    pairs = deck.count("*CONTACT PAIR")
+    assert pairs == 2
+    assert "*FRICTION\n0.1," in deck
+
+
+def test_핀과_구멍을_파트로_갈라_접촉으로_푼다(ready: None, tmp_path: Path) -> None:
+    """핀 베어링(D5961) — 같은 지름의 핀이 구멍에 끼어 구멍면 · 핀 옆면이 같은 자리의 두
+    면이다. 메시를 쪼개지 않으면(접촉) 둘이 따로 남아, 파트를 안 보면 「구멍면」 자리에 핀
+    옆면을 집고 「양쪽이 다 강체」 로 멈췄다. 면마다 가진 파트를 달아 가른다
+    (`_with_face_parts`)."""
+    folder = STANDARDS / "시험_핀베어링_D5961" / "points"
+    shutil.copy(folder / "p0001.step", tmp_path / "input.step")
+    shutil.copy(folder / "p0001.json", tmp_path / "topology.json")
+    spec = parse_spec(
+        {"recipe": "static", "solver": "calculix", "mesh": {"element_size_mm": 3}}
+    )
+    done = build(spec, tmp_path, input_name="input.step", timeout_seconds=600)
+    assert done.summary["contact_pairs"] is True
+    assert "*CONTACT PAIR" in (tmp_path / "model.inp").read_text(encoding="utf-8")
+
+
+def test_CAD_가_적은_큰_변형으로_푼다(ready: None, tmp_path: Path) -> None:
+    """겹치기 이음(D1002)은 CAD 가 큰 변형을 적었다 — 스펙을 비우면 그대로 기하 비선형으로
+    푼다(요약에 출처). 한 겹 이음은 하중 경로가 펴지며 굳는다: 반력 3,781 N(선형) → 4,529 N."""
+    folder = STANDARDS / "시험_겹치기이음_D1002" / "points"
+    shutil.copy(folder / "p0001.step", tmp_path / "input.step")
+    shutil.copy(folder / "p0001.json", tmp_path / "topology.json")
+    spec = parse_spec(
+        {"recipe": "static", "solver": "calculix", "mesh": {"element_size_mm": 2}}
+    )
+    done = build(spec, tmp_path, input_name="input.step", timeout_seconds=600)
+    assert done.summary["large_deflection"] is True
+    assert done.summary["large_deflection_from"] == "cad"
+    assert "*STEP, NLGEOM" in (tmp_path / "model.inp").read_text(encoding="utf-8")

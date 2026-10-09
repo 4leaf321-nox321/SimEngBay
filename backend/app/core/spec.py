@@ -141,8 +141,10 @@ class StaticSpec(BaseModel):
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     constraints: list[Constraint] = Field(default_factory=list)
     """사람이 고른 구속. **CAD 조건이 있으면 그것이 먼저다**(`conditions_from`)."""
-    large_deflection: bool = False
-    """변형이 커서 모양이 바뀌면 켠다 — 비선형이라 느리다."""
+    large_deflection: bool | None = None
+    """변형이 커서 모양이 바뀌면 켠다 — 비선형이라 느리다. **비우면 CAD 가 적은 대로**
+    (`analysis.large_deflection`, 없으면 끈다 — `statics.static_plan`). 새 작업 창은 CAD 값을
+    미리 채워 늘 적어 보낸다."""
 
     @model_validator(mode="after")
     def _own_material(self) -> Self:

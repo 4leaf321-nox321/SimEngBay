@@ -94,6 +94,7 @@ const SUMMARY_LABELS: Record<string, string> = {
   element_size_mm: '전역 요소 크기',
   contact_pairs: '비선형 접촉',
   large_deflection: '큰 변형',
+  large_deflection_from: '큰 변형 출처',
   // CompCore 의 파트별 설정 — 무엇을 빼고 무엇을 굳혀 풀었나. 안 보이면 「질량이 왜 줄었지」 ·
   // 「주파수가 왜 올랐지」 를 설명할 길이 없다.
   rigid_bodies: '강체 파트',
@@ -132,6 +133,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
     [
       'recipe',
       'large_deflection',
+      'large_deflection_from',
       'settings_from',
       'modes',
       'modes_requested',
@@ -171,7 +173,7 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'first_elastic_hz' && typeof value === 'number') return `${value.toFixed(2)} Hz`
   if (key === 'peak_hz' && typeof value === 'number') return `${value.toFixed(1)} Hz`
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
-  if (key === 'material_from' || key === 'settings_from')
+  if (key === 'material_from' || key === 'settings_from' || key === 'large_deflection_from')
     return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
   if (key === 'solver') return SOLVER_LABELS[String(value)] ?? String(value)
   if (key === 'damping_ratio' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`

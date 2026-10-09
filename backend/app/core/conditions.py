@@ -245,6 +245,12 @@ class Analysis:
     damping_ratio: float | None = None
     #: 범위를 몇 점으로 나눠 푸나. 점이 적으면 **봉우리가 점 사이로 빠져나간다**(실측).
     intervals: int | None = None
+    #: 정적의 큰 변형(기하 비선형). CompCore 는 정적이면 늘 적는다(기본 거짓) — 안 적었으면
+    #: `None`(정적 폴더가 아니거나 옛 폴더).
+    large_deflection: bool | None = None
+    #: 정적의 **초기 부단계 수** — 비선형(큰 변형 · 접촉)을 몇 걸음으로 나눠 시작하나. 비면
+    #: 받는 쪽이 정한다.
+    substeps: int | None = None
 
 
 @dataclass(frozen=True)
@@ -946,6 +952,8 @@ def _analysis(block: dict[str, Any]) -> Analysis:
             pair = (low, high)
     modes = block.get("modes")
     intervals = block.get("solution_intervals")
+    large = block.get("large_deflection")
+    substeps = block.get("substeps")
     return Analysis(
         kind=str(block.get("type") or "modal"),
         modes=int(modes) if isinstance(modes, int) else None,
@@ -953,6 +961,12 @@ def _analysis(block: dict[str, Any]) -> Analysis:
         prestressed=bool(block.get("prestressed")),
         damping_ratio=_number(block.get("damping_ratio")),
         intervals=int(intervals) if isinstance(intervals, int) else None,
+        large_deflection=large if isinstance(large, bool) else None,
+        substeps=(
+            substeps
+            if isinstance(substeps, int) and not isinstance(substeps, bool) and substeps > 0
+            else None
+        ),
     )
 
 

@@ -445,6 +445,8 @@ def write_static(
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     large_deflection: bool = False,
+    substeps: int | None = None,
+    masters: set[str] | frozenset[str] = frozenset(),
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
     「해석이 됐다」 처럼 보인다. 그래서 하중이 없으면 거절한다.
@@ -454,7 +456,8 @@ def write_static(
 
     `large_deflection`(화면의 「큰 변형」)이면 기하 비선형(`NLGEOM`)으로 증분을 밟는다 —
     Ansys 의 `LargeDeflection` 과 같은 자리다. 기본 솔버가 CalculiX 가 된 뒤(2026-10-08)로는
-    이것을 안 받으면 그 체크가 조용히 무시된다.
+    이것을 안 받으면 그 체크가 조용히 무시된다. `substeps`(CAD 의 「초기 부단계 수」)가 있으면
+    비선형 단계의 첫 증분을 1/그 수로 잡는다 — 없으면 0.1(열 걸음).
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
@@ -468,6 +471,7 @@ def write_static(
             plan,
             nonlinear=True,
             stiffness=contact_stiffness(materials, element_size_mm),
+            masters=masters,
         )
     else:
         # 접촉 쌍을 안 쓰면 절점 공유로 붙였다. 접촉 쌍을 쓰면(위) 마찰은 마찰대로 걸렸으니
@@ -492,7 +496,7 @@ def write_static(
     lines.append("*STEP, NLGEOM" if nonlinear else "*STEP")
     lines.append("*STATIC")
     if nonlinear:
-        lines.append("0.1, 1.0")
+        lines.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
     applied_loads = 0
     pull = [0.0, 0.0, 0.0]
     for load in given.loads:
@@ -1555,6 +1559,7 @@ def contact_block(
     *,
     nonlinear: bool,
     stiffness: float,
+    masters: set[str] | frozenset[str] = frozenset(),
 ) -> list[str]:
     """접촉 쌍 — `*SURFACE` 둘 + `*SURFACE INTERACTION` + `*CONTACT PAIR`.
 
@@ -1564,6 +1569,11 @@ def contact_block(
 
     `nonlinear` 가 거짓이면 접착만 쓴다 — 모달 단독처럼 하중이 없는 해석에서는 마찰 접촉이
     정해지지 않으므로(열려 있는지 붙어 있는지 모른다) 붙은 것으로 푸는 쪽이 예측 가능하다.
+
+    `*CONTACT PAIR` 의 둘째 줄은 **종속(slave) · 독립(master)** 차례다. 지금까지는 대상면을
+    종속으로 적었다. `masters` 에 든 영역(**강체 파트의 면**)은 늘 독립 쪽에 둔다 — 강체의
+    절점은 이미 `*RIGID BODY` 가 쥔 종속 자유도라, 그 면을 종속 면으로 두면 같은 자유도를 두 번
+    묶는다.
     """
     lines: list[str] = []
     for index, pair in enumerate(contacts):
@@ -1598,9 +1608,12 @@ def contact_block(
             if pair.kind == "frictional" and pair.friction:
                 # 미끄러짐 강성은 마찰계수와 접촉 강성에서 잡는다(CalculiX 의 두 번째 칸).
                 lines += ["*FRICTION", f"{pair.friction:g}, {stiffness / 10:g}"]
+        slave, master = (
+            (f"{name}S", f"{name}T") if pair.target in masters else (f"{name}T", f"{name}S")
+        )
         lines += [
             f"*CONTACT PAIR, INTERACTION={name}I, TYPE=SURFACE TO SURFACE",
-            f"{name}T, {name}S",
+            f"{slave}, {master}",
         ]
         plan.applied.append(f"{'bonded' if tied else pair.kind}:{pair.source}↔{pair.target}")
         if tied and pair.kind in NONLINEAR_CONTACTS:

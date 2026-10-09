@@ -28,6 +28,7 @@ from app.core.harmonic import harmonic_plan
 from app.core.regions import match_regions
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
 from app.core.stages import MIDSURFACE_NAME, ArtifactSpec, StageFailure, StageResult
+from app.core.statics import static_plan
 
 logger = logging.getLogger(__name__)
 
@@ -85,38 +86,18 @@ def build(
     # 돌린다(그쪽은 선형 섭동에 접촉 상태를 물고 간다).
     #
     # **변위로 당기는 시험도 접촉을 쓴다**(`given.driven`) — 하중만 보던 때는 뽑힘 시험의 마찰
-    # 접촉이 붙은 것으로 풀렸다(반력 22.3 kN — 마찰로 풀면 15.8 kN, 2026-10-08). 다만 **강체
-    # 파트에 닿는 마찰 접촉은 아직 못 푼다** — 그때는 전처럼 붙여서 풀고 그렇게 적는다(굽힘의
-    # 롤러 · 노즈, 핀 베어링의 핀). 붙이면 시편이 지지점에서 돌지 못해 덜 휜다(보드굽힘
-    # 8.1 mm — Ansys 마찰 12.3 mm).
+    # 접촉이 붙은 것으로 풀렸다(반력 22.3 kN — 마찰로 풀면 15.8 kN, 2026-10-08).
+    #
+    # **강체 파트에 닿는 마찰도 접촉으로 푼다**(2026-10-08). 전에는 붙여서 풀었는데, 시편이
+    # 지지점에서 미끄러지지도 돌지도 못해 4점 굽힘(보드굽힘)의 반력이 손셈의 16배였다(9,966 N —
+    # 손셈 약 600 N, 처짐 4.2 · 5.85 mm). 강체 면을 접촉의 독립(master) 쪽에 두면 풀린다 —
+    # 요소 3 mm 에서 715 N · 6.0 mm(`_rigid_contact_regions`, `deck.contact_block`).
     static_driven = isinstance(spec, StaticSpec) and given.driven
     frictional = [one for one in given.contacts if one.kind in deck_writer.NONLINEAR_CONTACTS]
-    on_rigid = [one for one in frictional if _touches_rigid(topology, given, one)]
-    use_contact = static_driven and bool(frictional) and not on_rigid
-    contact_notes = (
-        [
-            condition_model.Note(
-                f"접촉 「{one.name}」({one.kind})",
-                "강체 파트와의 마찰 접촉은 CalculiX 가 아직 못 풀어 **붙은 것으로** "
-                "풀었습니다 — 지지점에서 미끄러지거나 도는 것이 답을 바꾸는 시험(굽힘 · 핀 "
-                "베어링)은 덜 휘게 나옵니다. 그 값이 중요하면 솔버를 ansys 로 돌리세요.",
-            )
-            for one in on_rigid
-        ]
-        if static_driven
-        else []
-    )
-    if on_rigid and isinstance(spec, StaticSpec) and spec.large_deflection:
-        # **붙인 채 큰 변형으로 풀면 답이 크게 틀린다** — 시편이 양 끝 지지점에 묶인 채 모양이
-        # 바뀌어 막처럼 당겨 버틴다. 보드굽힘 실측(2026-10-08): 반력 19.2 kN(선형) → 296.7 kN
-        # (큰 변형), 15배. 메모 한 줄로 넘기기에는 너무 그럴듯한 수라 막는다.
-        raise StageFailure(
-            "internal",
-            "강체 파트와의 마찰 접촉을 붙여서 풀면서 큰 변형을 켤 수 없습니다 — 시편이 "
-            "지지점에 묶인 채 휘어 반력이 수 배로 나옵니다(보드굽힘 실측 15배). 큰 변형을 "
-            "끄거나 솔버를 ansys 로 바꾸세요.",
-            details={"contacts": [one.name for one in on_rigid]},
-        )
+    use_contact = static_driven and bool(frictional)
+    # **큰 변형은 사람이 적었으면 그것, 비웠으면 CAD 가 적은 것이다**(`statics.static_plan`).
+    statics = static_plan(spec, given) if isinstance(spec, StaticSpec) else None
+    large = statics.large_deflection if statics is not None else False
     # 1차 통과도 **같은 쪼개기 규칙**을 따른다 — 안 그러면 접합면 두 장이 하나로 합쳐져서 한쪽
     # 면에 걸린 메시 힌트가 「법선이 180도 틀어져 있다」 로 빠진다(실측 2026-10-03).
     # **파트별 설정** — 뺄 파트 · 파트 크기는 메시 전에 정한다(`mesh.py` 머리말).
@@ -167,9 +148,14 @@ def build(
     # 뺀 파트는 메시에 없다 — 짝짓기 · 물성은 **남은 파트로만** 본다.
     kept = without(topology, given.suppressed | set(given.shells))
     body_of, materials, material_from = _materials(spec, kept, system, mesh)
+    mesh = _with_face_parts(mesh, body_of)
     rigid = _rigid(kept, given, mesh)
-    if rigid and use_contact:
-        _no_contact_on_rigid(topology, given, mesh, rigid)
+    # **강체 파트의 접촉면은 독립(master) 쪽에 둔다**(`deck.contact_block`).
+    masters = (
+        _rigid_contact_regions(topology, given, mesh, rigid)
+        if rigid and use_contact
+        else set()
+    )
     # **쉘 파트의 영역은 중간면에서 찾는다**(지문의 `mid`) — 뒤의 짝짓기가 모두 이 판을 본다.
     topology = (
         condition_model.shell_view(topology, set(given.shells)) if topology else topology
@@ -225,8 +211,10 @@ def build(
             given=given,
             shapes=shapes,
             contact_faces=_contact_faces(topology, given, mesh) if use_contact else None,
+            masters=masters,
             element_size_mm=size,
-            large_deflection=spec.large_deflection,
+            large_deflection=large,
+            substeps=statics.substeps if statics is not None else None,
             second_order=mesh.second_order,
             rigid=rigid,
             shells=shells,
@@ -289,7 +277,7 @@ def build(
             centers=centers,
             length_mm=system.length_mm,
         )
-    plan.skipped += layout.skipped + contact_notes
+    plan.skipped += layout.skipped
     plan.refused += refused_loads
     if plan.refused:
         # **못 거는 조건은 조용히 빼지 않는다.** 그대로 풀면 구속 없는 해석이 끝까지 돌고,
@@ -374,8 +362,8 @@ def build(
             **({"contact_pairs": True} if use_contact else {}),
             # 「큰 변형」 을 받아 기하 비선형으로 풀었나(`deck.write_static`).
             **(
-                {"large_deflection": True}
-                if isinstance(spec, StaticSpec) and spec.large_deflection
+                {"large_deflection": True, "large_deflection_from": statics.source}
+                if large and statics is not None
                 else {}
             ),
             "constrained_regions": plan.applied,
@@ -602,23 +590,6 @@ class _Layout:
     """중간면의 면 번호 → 쉘 파트 이름."""
     skipped: list[condition_model.Note] = field(default_factory=list)
     """CalculiX 가 못 따르는 파트 메시 칸 — 바람이므로 멈추지 않고 적는다."""
-
-
-def _touches_rigid(
-    topology: dict[str, Any] | None,
-    given: condition_model.Conditions,
-    contact: condition_model.Contact,
-) -> bool:
-    """그 접촉의 한쪽 면이 **강체 파트의 것**인가 — 조립 지문의 `body` 로 본다."""
-    rigid = given.rigid
-    if not rigid:
-        return False
-    regions = (topology or {}).get("regions") or {}
-    return any(
-        isinstance(row, dict) and str(row.get("body") or "") in rigid
-        for name in (contact.source, contact.target)
-        for row in regions.get(name) or []
-    )
 
 
 def _layout(
@@ -957,31 +928,62 @@ def _rigid(
     return made
 
 
-def _no_contact_on_rigid(
+def _with_face_parts(mesh: Any, body_of: dict[str, int]) -> Any:
+    """면마다 **그 면을 가진 파트 이름**을 단다(`FaceRecord.body`) — 짝짓기가 파트로 가른다.
+
+    접촉을 쓰면 메시를 쪼개지 않아, 구멍에 같은 지름의 핀이 끼면 구멍면과 핀 옆면이 중심 ·
+    반지름 · 축까지 같은 **두 면**으로 남는다. 파트를 안 보면 「구멍면」 자리에 핀 옆면을
+    집는다(핀 베어링 D5961, 2026-10-08 — Ansys 경로가 먼저 밟았다). 두 파트가 나눠 가진
+    면(쪼개 붙인 메시의 접합면)은 어느 쪽이라 할 수 없어 비워 둔다 — 그 면은 전처럼 모양으로만
+    짝짓는다.
+    """
+    owners = {
+        entity: {node for _, ids in rows for node in ids}
+        for entity, rows in mesh.solids.items()
+    }
+    name_of = {entity: name for name, entity in body_of.items()}
+    faces = []
+    for face in mesh.faces:
+        members = mesh.face_nodes.get(face.id) or set()
+        found = [entity for entity, nodes in owners.items() if members and members <= nodes]
+        if len(found) == 1 and found[0] in name_of:
+            face = replace(face, body=name_of[found[0]])
+        faces.append(face)
+    return replace(mesh, faces=faces)
+
+
+def _rigid_contact_regions(
     topology: dict[str, Any],
     given: condition_model.Conditions,
     mesh: Any,
     rigid: list[deck_writer.RigidBody],
-) -> None:
-    """비선형 접촉(정적)이 강체 면에 걸리면 멈춘다 — 그 길은 아직 다지지 않았다."""
+) -> set[str]:
+    """접촉면 중 **강체 파트의 것** — 접촉 쌍의 독립(master) 쪽에 둔다(`deck.contact_block`).
+
+    양쪽이 다 강체면 멈춘다 — 둘 다 변형하지 않으니 접촉이 풀 것이 없고, 둘 다 독립 면이 될 수
+    없다.
+    """
     regions = sorted(
         {one.source for one in given.contacts} | {one.target for one in given.contacts}
     )
     if not regions:
-        return
+        return set()
     found = match_regions(topology, mesh.faces, wanted_regions=regions)
+    on_rigid: set[str] = set()
     for name, ids in found.faces.items():
         members: set[int] = set()
         for face in ids:
             members |= mesh.face_nodes.get(face, set())
-        owner = next((one for one in rigid if members and members <= one.nodes), None)
-        if owner is not None:
+        if any(members and members <= one.nodes for one in rigid):
+            on_rigid.add(name)
+    for pair in given.contacts:
+        if pair.source in on_rigid and pair.target in on_rigid:
             raise StageFailure(
                 "internal",
-                f"접촉면 「{name}」 이 강체 파트 「{owner.part}」 에 있습니다 — CalculiX "
-                "경로는 강체의 비선형 접촉을 아직 못 겁니다. 솔버를 ansys 로 바꾸거나 그 "
-                "파트를 변형체로 두세요.",
+                f"접촉 「{pair.name}」 의 양쪽이 다 강체 파트의 면입니다 — 둘 다 변형하지 "
+                "않아 풀 것이 없습니다. 한쪽 파트를 변형체로 두세요.",
             )
+    return on_rigid
 
 
 def _local_sizes(

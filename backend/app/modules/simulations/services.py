@@ -816,6 +816,7 @@ def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
         suggested_recipe=analysis.recipe,
         suggested_element_size_mm=analysis.element_size_mm,
         suggested_order=analysis.order,
+        suggested_large_deflection=analysis.large_deflection,
     )
 
 
@@ -828,6 +829,8 @@ class _DoeAnalysis:
     element_size_mm: float | None = None
     order: str | None = None
     """「전체」 요소 차수(`linear` · `quadratic`) — 적혀 있을 때만."""
+    large_deflection: bool | None = None
+    """정적의 큰 변형 — CompCore 는 정적이면 늘 적는다(`statics.static_plan`)."""
 
 
 def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
@@ -855,6 +858,7 @@ def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
         modes=given.analysis.modes,
         element_size_mm=round(whole * system.length_mm, 6) if whole is not None else None,
         order=hint.order if hint is not None and hint.order else None,
+        large_deflection=given.analysis.large_deflection,
     )
 
 
@@ -936,6 +940,7 @@ def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOu
         suggested_modes=analysis.modes,
         suggested_element_size_mm=analysis.element_size_mm,
         suggested_order=analysis.order,
+        suggested_large_deflection=analysis.large_deflection,
         conditions=conditions_out(payload, recipe=wanted),
     )
 
@@ -956,6 +961,10 @@ def _stored_spec(spec: ModalSpec | StaticSpec | HarmonicSpec) -> dict[str, Any]:
     mesh = stored.get("mesh")
     if isinstance(mesh, dict) and mesh.get("local_scale") == 1.0:
         del mesh["local_scale"]
+    # 「큰 변형」 을 비웠으면(CAD 를 따른다) 적지 않는다 — 옛 워커는 `null` 을 참 · 거짓으로
+    # 못 읽고, 칸이 없으면 끈 것으로 읽는다(그때까지의 뜻 그대로).
+    if "large_deflection" in stored and stored["large_deflection"] is None:
+        del stored["large_deflection"]
     return stored
 
 

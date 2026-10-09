@@ -140,6 +140,8 @@ class ConditionsPreviewOut(BaseModel):
     suggested_element_size_mm: float | None = None
     suggested_order: str | None = None
     """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
+    suggested_large_deflection: bool | None = None
+    """CAD 가 정적에 적은 큰 변형 — 창이 미리 채운다(사람이 고칠 수 있다)."""
     conditions: ConditionsOut
     """그 해석 종류에서 조건이 어떻게 다뤄지나 — 반영 · 넘김 · 막음."""
 
@@ -205,6 +207,8 @@ class DoePreviewOut(BaseModel):
     """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
     """CAD 가 「전체」 로 적은 요소 크기(mm). **CalculiX 는 이것이나 사람이 준 값이 있어야
     돈다** — 둘 다 없으면 설계점마다 메시 단계에서 멈춘다."""
+    suggested_large_deflection: bool | None = None
+    """CAD 가 정적에 적은 큰 변형 — 창이 미리 채운다(사람이 고칠 수 있다)."""
     conditions: ConditionsOut | None = None
     """조건이 든 첫 점의 조건이 그 해석 종류에서 어떻게 다뤄지나(반영 · 넘김 · 막음). 조건 없는
     폴더면 비운다."""

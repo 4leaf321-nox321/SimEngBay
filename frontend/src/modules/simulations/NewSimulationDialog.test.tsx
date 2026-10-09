@@ -519,6 +519,20 @@ describe('새 해석 작업', () => {
     expect(spec.mesh.order).toBe('linear')
   })
 
+  it('CAD 가 정적에 적은 큰 변형을 미리 채우고, 끄면 끈 채로 보낸다', async () => {
+    // 전에는 CAD 의 analysis.large_deflection 을 아무도 안 읽어 굽힘 · 이음 시험이 선형으로 풀렸다.
+    vi.mocked(simulationApi.previewConditions).mockResolvedValue({ ...SHEAR, suggested_large_deflection: true })
+    await openWithPoint()
+    const large = screen.getByRole('checkbox', { name: /큰 변형/ })
+    expect(large).toBeChecked()
+    expect(screen.getByText('CAD 가 적은 값 켬')).toBeDefined()
+    await userEvent.click(large)
+    await userEvent.click(screen.getByRole('button', { name: '실행' }))
+    await waitFor(() => expect(simulationApi.create).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.create).mock.calls[0][0].spec as Record<string, any>
+    expect(spec.large_deflection).toBe(false)
+  })
+
   it('쉘 파트가 있으면 중간면 형상을 받아야 실행한다', async () => {
     // CompCore 의 쉘 파트(body_settings representation: shell) — 중간면 + 두께로 푼다.
     vi.mocked(simulationApi.previewConditions).mockResolvedValue({

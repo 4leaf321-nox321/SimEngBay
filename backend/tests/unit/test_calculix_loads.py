@@ -219,32 +219,6 @@ def test_강체_파트_여럿에_걸친_그룹은_파트마다_기준점을_묶�
     assert plan.reaction_sets["노즈"] == "HOLD1A"
 
 
-def test_강체_파트에_닿는_마찰_접촉을_가려낸다() -> None:
-    """변위로 당기는 시험도 마찰 접촉을 쓰지만, 강체에 닿는 것은 아직 못 풀어 붙여서 푼다 —
-    그 가름은 조립 지문의 `body` 로 한다."""
-    from app.core.calculix.build import _touches_rigid
-
-    topology = {
-        "regions": {
-            "구멍면": [{"centroid": [0, 0, 0], "body": "시편"}],
-            "핀 옆면": [{"centroid": [0, 0, 0], "body": "핀"}],
-            "머리": [{"centroid": [0, 0, 9], "body": "시편"}],
-        }
-    }
-    given = condition_model.Conditions(
-        body_settings=[condition_model.BodySetting(name="핀", rigid=True)]
-    )
-    pin = condition_model.Contact(
-        name="핀-구멍", kind="frictional", source="핀 옆면", target="구멍면"
-    )
-    head = condition_model.Contact(
-        name="머리", kind="frictional", source="머리", target="구멍면"
-    )
-    assert _touches_rigid(topology, given, pin)
-    assert not _touches_rigid(topology, given, head)
-    assert not _touches_rigid(topology, condition_model.Conditions(), pin)
-
-
 def test_원격점은_CAD_가_잰_면적_중심에_선다() -> None:
     """절점 평균은 메시가 고르지 않은 만큼 비켜난다 — 비틀림 시험에서 축이 0.05 mm 비켜나
     옆 반력이 408 N 나왔다(순수 비틀림이라 0 언저리여야 한다 — 면적 중심에 두면 4 N). 지문의
@@ -482,3 +456,25 @@ def test_큰_변형이면_기하_비선형으로_증분을_밟는다() -> None:
         large_deflection=True,
     )
     assert "*STEP, NLGEOM\n*STATIC\n0.1, 1.0\n" in big.text
+
+
+def test_강체_면은_접촉_쌍의_독립_쪽에_선다() -> None:
+    """`*CONTACT PAIR` 둘째 줄은 종속 · 독립 차례다. 강체 파트의 면은 늘 독립(master) 쪽 —
+    강체 절점은 `*RIGID BODY` 가 이미 쥐어, 종속 면이 되면 같은 자유도를 두 번 묶는다."""
+    rub = condition_model.Contact(
+        name="판-롤러", kind="frictional", source="판", target="롤러", friction=0.1
+    )
+    faces = {"판": [(1, "P4")], "롤러": [(2, "P1")]}
+
+    def pair_line(masters: set[str]) -> str:
+        lines = deck.contact_block(
+            [rub], faces, deck.Plan(), nonlinear=True, stiffness=1000.0, masters=masters
+        )
+        return lines[lines.index(next(one for one in lines if one.startswith("*CONTACT"))) + 1]
+
+    # 지금까지의 차례(대상면이 종속) — 강체가 없으면 그대로다.
+    assert pair_line(set()) == "C0T, C0S"
+    # 대상면이 강체면 뒤집어 강체 면을 독립 쪽에 둔다.
+    assert pair_line({"롤러"}) == "C0S, C0T"
+    # 원천면이 강체면 지금 차례가 이미 그렇다.
+    assert pair_line({"판"}) == "C0T, C0S"

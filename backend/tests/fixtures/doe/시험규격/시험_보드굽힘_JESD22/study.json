@@ -1,5 +1,5 @@
 {
-  "id": "8e8ce3df-c827-4f0d-b508-25a70c832408",
+  "id": "ac79c938-6a83-4be9-89d8-c3e707d46960",
   "name": "시험_보드굽힘_JESD22",
   "description": "",
   "method": "factorial",
@@ -111,7 +111,7 @@
       "폭": 77.0,
       "길이": 132.0,
       "두께": 1.0,
-      "처짐": "=변형률 * (3 * 지지_간격 ** 2 - (지지_간격 - 하중_간격) ** 2) / (12 * 두께)",
+      "처짐": "=변형률 * (지지_간격 - 하중_간격) * (지지_간격 + 2 * 하중_간격) / (6 * 두께)",
       "변형률": 0.002,
       "마찰계수": 0.1,
       "롤러_길이": "=폭 + 10",
@@ -402,7 +402,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-92b1b0aa@example.local"
+    "email": "member-3ad25962@example.local"
   },
   "requested_by": null,
   "cloned_from": null

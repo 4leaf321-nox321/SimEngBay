@@ -262,7 +262,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "8e8ce3df-c827-4f0d-b508-25a70c832408",
+      "id": "ac79c938-6a83-4be9-89d8-c3e707d46960",
       "name": "시험_보드굽힘_JESD22",
       "method": "factorial",
       "seed": 1
@@ -613,7 +613,7 @@
         "behavior": "rigid",
         "x": 0.0,
         "y": 0.0,
-        "z": -5.84583333333,
+        "z": -3.03333333333,
         "rx": 0,
         "ry": 0,
         "rz": 0,

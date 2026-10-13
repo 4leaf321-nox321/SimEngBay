@@ -144,7 +144,11 @@ def test_끝나지_않은_작업은_점검하지_않는다(
     client: TestClient, member: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(get_settings(), "jobs_inline", False)
-    waiting = _create(client, member, {"recipe": "modal", "material": MATERIAL})
+    waiting = _create(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+    )
     got = client.post(
         f"/api/simulations/{waiting['id']}/convergence",
         json={"sizes_mm": [2.0]},

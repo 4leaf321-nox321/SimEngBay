@@ -33,6 +33,7 @@ from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
+from app.modules.ontology import routes as ontology_routes
 from app.modules.server import routes as server_routes
 from app.modules.simulations import routes as simulations_routes
 from app.modules.simulations import services as simulations_services
@@ -68,6 +69,7 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(workspaces_routes.router)
     router.include_router(notices_routes.router)
     router.include_router(notifications_routes.router)
+    router.include_router(ontology_routes.router)
     router.include_router(files_routes.router)
     router.include_router(audit_routes.router)
     router.include_router(server_routes.router)

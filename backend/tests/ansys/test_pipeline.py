@@ -717,6 +717,31 @@ def test_조화_응답이_공진에서_솟고_감쇠가_그_높이를_정한다(
     assert 760 < taller_column["peak"]["frequency_hz"] < 890
 
 
+def test_구속이_여럿이어도_원격_변위의_반력을_낸다(workdir: Path) -> None:
+    """핀 베어링(D5961) — 시편 그립은 고정, 강체 핀은 원격 변위로 0.2 mm 당긴다.
+
+    전에는 원격 변위 · 강체 구속의 반력을 그 구속이 **모델의 유일한 구속일 때만** 냈다(모델
+    전체 반력 합). 이 시험은 구속이 둘이라 핀 반력이 비어 나왔다 — CalculiX 는 75,958 N(붙임)
+    · 56,009 N(접촉)을 냈다. 원격 변위마다 원격점 절점을 찾아 그 절점의 반력을 더한다.
+
+    실측(2026-10-13, 2025 R2 · 요소 1 mm): 핀 끝면 53,741 N — CalculiX(접촉 · 2 mm) 56,009 N 과
+    4% 안.
+    """
+    folder = FIXTURES / "doe" / "시험규격" / "시험_핀베어링_D5961" / "points"
+    shutil.copy(folder / "p0001.step", workdir / "input.step")
+    shutil.copy(folder / "p0001.json", workdir / "topology.json")
+    spec = {"recipe": "static", "solver": "ansys", "mesh": {"element_size_mm": 1}}
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    runner = _executor()
+    for stage in STAGES:
+        runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+    reactions = json.loads((workdir / "result.json").read_text(encoding="utf-8"))["reactions"]
+    pull = reactions["핀 끝면"]
+    assert pull[0] == pytest.approx(53741, rel=0.1)
+    assert abs(pull[1]) < 0.01 * pull[0] and abs(pull[2]) < 0.01 * pull[0]
+
+
 def test_같은_형상은_두_번_임포트하지_않는다(workdir: Path) -> None:
     """**형상 캐시** — STEP 임포트가 모델링 시간의 거의 전부다(실측: 임포트 18.9초 · 메시
     1.7초 · 캐시 다시 열기 0.7초).

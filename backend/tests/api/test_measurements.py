@@ -71,7 +71,11 @@ def _upload(
 def test_공진을_올리면_모드와_짝짓고_영률로_차이를_설명한다(
     client: TestClient, member: Signed
 ) -> None:
-    job = _create(client, member, {"recipe": "modal", "material": MATERIAL, "modes": 4})
+    job = _create(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "modes": 4, "mesh": {"element_size_mm": 5}},
+    )
     result = client.get(f"/api/simulations/{job['id']}/result", headers=member.headers).json()
     elastic = [one["frequency_hz"] for one in result["modes"] if not one["rigid_body"]]
     # 실측이 모든 모드에서 √(195/200) 배 — 영률 195 GPa 로 설명된다.
@@ -95,7 +99,7 @@ def test_정적_변위와_변형률을_같은_자리에서_견준다(client: Tes
     job = _create(
         client,
         member,
-        {"recipe": "static", "material": MATERIAL},
+        {"recipe": "static", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
         topology=DOE / "조건_전단이음" / "points" / "p0002.json",
     )
     result = client.get(f"/api/simulations/{job['id']}/result", headers=member.headers).json()
@@ -136,7 +140,11 @@ def test_FRF_를_측정점_곡선과_겹친다(client: TestClient, member: Signe
 
 
 def test_틀린_표는_줄_번호와_함께_전부_돌려준다(client: TestClient, member: Signed) -> None:
-    job = _create(client, member, {"recipe": "modal", "material": MATERIAL})
+    job = _create(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+    )
     got = _upload(
         client,
         member,
@@ -155,7 +163,11 @@ def test_화면의_표는_JSON_으로_오고_가운데_빈_줄도_줄_번호를_
     """화면의 실측 표(`MeasurementEntry`)는 로컬 파일 없이 **표 그대로 JSON** 으로 보낸다
     (회사 PC 의 DRM). 칸마다 열 이름이 붙고 빈 칸은 빈 글이다. 가운데 빈 줄도 보내야 서버의 줄
     번호가 화면의 줄 번호(+1, 머리줄)와 맞는다."""
-    job = _create(client, member, {"recipe": "modal", "material": MATERIAL})
+    job = _create(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+    )
     blank = {"측정점": "", "종류": "", "주파수": "", "값": "", "단위": "", "성분": ""}
     rows = [
         {**blank, "종류": "공진", "주파수": "1250"},
@@ -228,7 +240,11 @@ def test_내린_실측은_목록에서_빠지고_남의_실측은_못_내린다(
     client: TestClient, db: Session, workspace: Workspace, member: Signed, manager: Signed
 ) -> None:
     """**올린 사람이거나 그 부서의 관리자**가 내린다 — 같은 부서의 다른 멤버는 못 내린다."""
-    job = _create(client, member, {"recipe": "modal", "material": MATERIAL})
+    job = _create(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+    )
     body = _upload(
         client, member, f"/api/simulations/{job['id']}/measurements", "종류,주파수\n공진,300\n"
     ).json()

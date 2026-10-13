@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -214,11 +215,12 @@ def build(
         # CAD 조건이든 스펙 구속이든 같은 자리여야 한다.
         held = upstream if upstream is not None else analysis
         if given_conditions.constraints or given_conditions.contacts:
-            regions, places, flipped = _apply_given_conditions(
+            regions, places, flipped, remote_tags = _apply_given_conditions(
                 app, given_conditions, system, view or {}, modelled, held, rigid_ids
             )
         else:
             flipped = set()
+            remote_tags = {}
             regions = _apply_constraints(app, spec, workdir, active, held)
         if isinstance(spec, HarmonicSpec):
             # **조화 응답의 하중은 흔드는 힘이다** — 앞선 모달이 아니라 조화 쪽에 건다.
@@ -279,6 +281,8 @@ def build(
         if artifacts_extra:
             _check_input_complete(workdir / UPSTREAM_NAME)
         _check_input_complete(dat)
+        # **원격 변위의 반력 자리** — 원격점 절점은 입력 파일을 써야 번호가 생긴다.
+        _write_remote_reaction_nodes(workdir, dat, remote_tags)
 
         return StageResult(
             artifacts=artifacts,
@@ -1131,6 +1135,69 @@ def _write_reaction_nodes(
         logger.warning("반력 절점을 못 남겼습니다 — 추출이 평면으로 찾습니다", exc_info=True)
 
 
+#: 원격 변위에 붙이는 이름표의 머리 — 입력 파일의 「Remote Point Used by "…"」 에 그대로
+#: 나온다.
+REMOTE_TAG = "SEB_RD_"
+_REMOTE_USED_BY = re.compile(r'Remote Point Used by "([^"]+)"')
+_PILOT_NODE = re.compile(r"^\*set,_npilot,(\d+)", re.IGNORECASE)
+
+
+def remote_pilots(dat: Path, tags: dict[str, str]) -> dict[str, list[int]]:
+    """입력 파일에서 **원격 변위마다 원격점 절점**을 찾는다 → 영역 → 절점들.
+
+    Mechanical 은 원격 변위마다 원격점을 만들고(`*set,_npilot,31809`) 변위를 그 절점에
+    건다(`d,31809,ux,0.2`). 강체 파트의 면이면 그 원격점이 강체의 질량 절점에 묶인다. 그래서
+    **그 절점의 반력이 그 구속이 버틴 힘**이다 — 면 위 절점에는 반력이 없다(실측
+    2026-10-13, 핀 베어링). 원격점 앞의 주석 「Remote Point Used by "<구속 이름>"」 으로
+    짝짓는다 — 이름은 우리가 붙인 이름표(`REMOTE_TAG`)다. 강체 파트 여럿에 걸친 그룹은
+    원격점이 여럿이라 다 모은다.
+    """
+    found: dict[str, list[int]] = {}
+    pending: list[str] = []
+    try:
+        with dat.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                used = _REMOTE_USED_BY.search(line)
+                if used:
+                    pending = [one for one in _REMOTE_USED_BY.findall(line) if one in tags]
+                    continue
+                pilot = _PILOT_NODE.match(line.strip())
+                if pilot and pending:
+                    for tag in pending:
+                        found.setdefault(tags[tag], []).append(int(pilot.group(1)))
+                    pending = []
+    except OSError:  # pragma: no cover - 방금 쓴 파일이다
+        return {}
+    return found
+
+
+def _write_remote_reaction_nodes(workdir: Path, dat: Path, tags: dict[str, str]) -> None:
+    """원격 변위 영역 → 원격점 절점을 `reaction_nodes.json` 에 더한다.
+
+    전에는 원격 변위 · 강체 구속의 반력을 그 구속이 **모델의 유일한 구속일 때만** 냈다(모델
+    전체 반력 합). 시험 지그는 구속이 여럿이라 핀 베어링의 핀 · 굽힘의 롤러 · 노즈 · 비틀림
+    끝면 반력이 비어 나왔다 — CalculiX 는 낸다(2026-10-08 두 솔버 대조).
+    """
+    if not tags:
+        return
+    pilots = remote_pilots(dat, tags)
+    missing = sorted(set(tags.values()) - set(pilots))
+    if missing:
+        logger.warning("원격점 절점을 못 찾은 영역: %s — 그 반력은 비어 나갑니다", missing)
+    if not pilots:
+        return
+    path = workdir / REACTION_NODES_NAME
+    try:
+        known = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    known.update(pilots)
+    path.write_text(json.dumps(known, ensure_ascii=False), encoding="utf-8")
+    logger.info("원격점 반력 절점 %s", pilots)
+
+
 def _write_boundary(
     workdir: Path,
     *,
@@ -1312,7 +1379,7 @@ def _apply_given_conditions(
     bodies: list[Any],
     analysis: Any,
     rigid_ids: set[int] | None = None,
-) -> tuple[list[str], dict[str, Any], set[str]]:
+) -> tuple[list[str], dict[str, Any], set[str], dict[str, str]]:
     """**CAD 가 보낸 구속 · 접촉을 건다** — 종류마다 Mechanical 의 짝으로.
 
     매핑표는 우리 것이다(CompCore 는 솔버를 모른다). 칸 이름은 **실측으로 쟀다**
@@ -1328,7 +1395,7 @@ def _apply_given_conditions(
         | {one.region for one in given.loads if one.region}
     )
     if not wanted:
-        return [], {}, set()
+        return [], {}, set(), {}
 
     # 파트 이름은 **남은 파트로만** 짝짓는다 — 뺀 파트 · 쉘 파트도 CAD 바디 목록에 남아
     # 있어, 부피가 비슷하면 남은 파트의 바디를 가로채 제 면을 「다른 파트의 면」 으로 막는다
@@ -1382,11 +1449,21 @@ def _apply_given_conditions(
             for index, ids in enumerate(groups.values(), start=1)
         ]
 
+    # 원격 변위마다 이름표(ASCII) → 영역. 입력 파일에서 그 원격점 절점을 찾는다
+    # (`_write_remote_reaction_nodes`).
+    remote_tags: dict[str, str] = {}
     for constraint in given.constraints:
         if constraint.region in rigid_of:
             constraint = _on_rigid(constraint)
         for place in pieces(constraint.region):
-            _one_constraint(analysis, constraint, place, system, frames)
+            support = _one_constraint(analysis, constraint, place, system, frames)
+            if constraint.kind == "remote_displacement":
+                tag = f"{REMOTE_TAG}{len(remote_tags) + 1}"
+                try:
+                    support.Name = tag
+                    remote_tags[tag] = constraint.region
+                except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+                    logger.warning("원격 변위 %s 에 이름을 못 붙였습니다", tag, exc_info=True)
         applied.append(f"{constraint.kind}:{constraint.region}")
         logger.info("구속 %s(%s) ← %s", constraint.name, constraint.kind, constraint.region)
     if given.contacts:
@@ -1428,7 +1505,7 @@ def _apply_given_conditions(
         logger.info(
             "접촉 %s(%s) %s ↔ %s", contact.name, contact.kind, contact.source, contact.target
         )
-    return applied, places, flipped
+    return applied, places, flipped, remote_tags
 
 
 def _face_owner(bodies: list[Any]) -> dict[int, int]:
@@ -1943,8 +2020,9 @@ def _one_constraint(
     place: Any,
     system: units.UnitSystem,
     frames: dict[str, Any],
-) -> None:
-    """구속 하나를 Mechanical 에. **못 거는 종류는 여기 오지 않는다**(조건 층이 막는다)."""
+) -> Any:
+    """구속 하나를 Mechanical 에 — 만든 구속을 돌려준다. **못 거는 종류는 여기 오지
+    않는다**(조건 층이 막는다)."""
     kind = constraint.kind
     try:
         if kind == "fixed_support":
@@ -1992,6 +2070,7 @@ def _one_constraint(
                     )
                 support.CoordinateSystem = found
             _components(support, constraint, system, rotations=kind == "remote_displacement")
+        return support
     except StageFailure:
         raise
     except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다

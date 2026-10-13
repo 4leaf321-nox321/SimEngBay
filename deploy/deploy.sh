@@ -141,7 +141,7 @@ elif [[ "$HA_ROLE" == "master" ]]; then DB_HOST="$SELF_IP"
 else DB_HOST="localhost"; fi
 DB_HOST="${DB_HOST_OVERRIDE:-$DB_HOST}"
 
-# 데이터 소스 동기화 타이머 — 화면에서 간격을 정한 소스를 몇 분마다 돌린다. 앱과 같은 SIF.
+# 동기화 타이머 — Standard Platform 의 온톨로지를 받는다(scripts/sync_ontology.py --due). 앱과 같은 SIF.
 SYNC_SERVICE_NAME="${APP_SLUG}-sync"
 SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
 SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
@@ -603,7 +603,7 @@ setup_sync_timer() {
     systemctl daemon-reload
     systemctl enable --now "${SYNC_SERVICE_NAME}.timer" >/dev/null 2>&1 \
         || warn "동기화 타이머 기동 실패 — 'systemctl status ${SYNC_SERVICE_NAME}.timer' 확인"
-    info "동기화 타이머: 5분마다 차례가 된 데이터 소스를 돌립니다 (journalctl -u $SYNC_SERVICE_NAME)"
+    info "동기화 타이머: 5분마다 온톨로지 수신 차례를 봅니다 (journalctl -u $SYNC_SERVICE_NAME)"
 }
 
 # ── 백업 타이머 — 백업 폴더를 알 때만. 이중화면 두 서버 모두 걸리고, backup.sh 가 「오늘

@@ -34,6 +34,7 @@ ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
 #  app.service.template  worker.service.template
 #  backup.service.template  backup.timer.template
+#  sync.service.template  sync.timer.template   (온톨로지 수신 타이머)
 #  .env.example  BUILD_INFO  README.md  쉬운-설치.md
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
 ```
@@ -236,6 +237,43 @@ sudo mount -a && mount | grep exchange
 
 > **공유 스토리지가 없는 배치라면** 폴더로는 주고받을 수 없다. 그때는 CAD 쪽에 번들 내려받기
 > API 를 두고 이 서버가 받아 오는 방식이 필요하다 — 아직 없다(정해지면 이 자리에 설정이 는다).
+
+### 온톨로지 — Standard Platform 에서 기준정보를 받으려면
+
+Standard Platform(SP)이 정의하고 **코어로 공개한** 타입 · 객체 · 관계를 이 서버가 주기적으로 받아
+「온톨로지」 화면에 둔다. 규약은 SP 의 `docs/외부-시스템-연동-지침서.md` §4.2(코어 API)다.
+
+1. SP 시스템 관리자에게 **이 서버 전용** 개인 접근 토큰을 받는다 — 범위는 `core:read` 하나.
+   (토큰은 시스템마다 따로 — 한 곳을 끊어도 나머지가 산다.)
+2. 서버의 `.env`(`/etc/platform-instances/<slug>.env` 가 아니라 설치 폴더의 `.env`)에 적는다:
+
+   ```bash
+   ONTOLOGY_SOURCE_URL=https://sp.example.com/api        # …/api/core 도 된다
+   ONTOLOGY_SOURCE_TOKEN=standardplatform_pat_xxxxxxxx
+   # ONTOLOGY_SYNC_MINUTES=1440   # 몇 분마다(기본 하루 1회). 0 이면 화면의 「지금 받기」 로만
+   # ONTOLOGY_FULL_DAYS=7         # 며칠마다 전량 대조(사라진 것을 찾는다)
+   ```
+
+3. 앱을 다시 띄우고(`sudo systemctl restart <slug>`), 「온톨로지」 화면에서 시스템 관리자가 **「지금
+   받기」** 로 첫 적재를 한다. **건수 · 표본을 SP 화면과 대조한 뒤** 주기에 맡긴다(지침서 §12-A 5).
+
+| | |
+| --- | --- |
+| 주기 | 타이머(`<slug>-sync.timer`, `install` · `update` 가 깐다)가 5분마다 「차례가 됐나」 를 묻고, 차례(`ONTOLOGY_SYNC_MINUTES`)가 되면 받는다. 설정이 없으면 아무것도 안 하고 끝난다 |
+| 수동 | 화면의 「지금 받기」 · 「처음부터 전량 받기」(시스템 관리자). 명령으로는 컨테이너 안에서 `python scripts/sync_ontology.py --now` |
+| 기록 | 화면의 「수신 기록」 탭 — 타입마다 받은 · 만든 · 고친 · 끈 행과 막힌 까닭. SP 쪽 **코어 › 「최근 조회 이력」** 과 맞대 본다 |
+| 여기서 고치나 | **못 고친다**(공개한 쪽이 이긴다). 고칠 것은 SP 에서 고치고 다음 수신을 기다린다 |
+| 지운 것 | 행을 지우지 않고 「꺼짐」 으로 둔다(사유: SP 에서 지움 · 합쳐짐 · 토큰으로 안 보임 · 전량 대조에서 안 옴) |
+| 이중화 | 두 서버의 타이머가 같은 시각에 돌아도 DB 잠금이 한 대만 받게 한다 |
+
+**안 받힐 때** — 「수신 기록」 의 까닭을 먼저 본다:
+
+- 「SP 가 거절했습니다(인증 · 범위)」 → 토큰이 만료됐거나 범위에 `core:read` 가 없다. SP 의 코어 ›
+  「액세스 토큰」 탭에서 확인한다.
+- 「코어 창구를 못 찾았습니다」 → 주소가 SP 의 `/api` 가 아니다.
+- 「전량 대조에서 … 절반이 넘어 끄지 않았습니다」 → 토큰 주인의 부서 · 공개 범위가 바뀌었다. 끄지
+  않았으니 데이터는 그대로다 — SP 쪽을 확인한 뒤 「처음부터 전량 받기」.
+- 타이머 자체는 `systemctl list-timers '<slug>-sync*'` · `journalctl -u <slug>-sync -n 50`.
 
 > **워커 수는 한 번 정하면 기억한다** — `sudo WORKER_COUNT=4 ./deploy.sh update`(기본 1).
 > 워커 하나가 한 번에 작업 하나를 돌린다. 1.5단계에서 진짜 Mechanical 이 붙으면

@@ -76,3 +76,38 @@ def test_CAD_의_초기_부단계_수를_자동_시간_단계로_건다(
     static.AnalysisSettings = plain
     mechanical._add_static(app, large_deflection=False)
     assert plain.order == ["LargeDeflection"]
+
+
+#: 실제 입력 파일의 원격점 자리(핀 베어링, 2025 R2) — 강체 핀의 질량 절점 31808 에 원격점
+#: 31809 가 묶이고, 변위는 원격점에 걸린다.
+REMOTE_DECK = """\
+/com,*********** Create Remote Point "Internal Remote Point" ***********
+! -------- Remote Point Used by "SEB_RD_1" --------
+! ********* Create Contact to Connect To Rigid Body Mass Node ***********
+tshape,pilo
+en,25551,31808
+tshape
+*set,_npilot,31809
+_npilot52=_npilot
+/com,*********** Create Remote Point "Internal Remote Point 2" ***********
+! -------- Remote Point Used by "SEB_RD_2" --------
+*set,_npilot,31811
+/com,*********** Create Remote Point "Internal Remote Point 3" ***********
+! -------- Remote Point Used by "SEB_RD_3" --------
+*set,_npilot,31813
+/com,*********** Create Remote Point "Internal Remote Point 4" ***********
+! -------- Remote Point Used by "Remote Displacement" --------
+*set,_npilot,31815
+d,31809,ux,0.2
+"""
+
+
+def test_원격_변위마다_원격점_절점을_찾는다(tmp_path: Path) -> None:
+    """원격 변위의 반력은 그 원격점 절점에 있다 — 면 위 절점에는 없다. 강체 파트 여럿에 걸친
+    그룹(롤러 둘)은 원격점이 여럿이라 다 모은다. 우리가 이름 붙이지 않은 것은 안 집는다."""
+    from app.core.mechanical.build import remote_pilots
+
+    dat = tmp_path / "model.dat"
+    dat.write_text(REMOTE_DECK, encoding="utf-8")
+    tags = {"SEB_RD_1": "핀 끝면", "SEB_RD_2": "지지 롤러", "SEB_RD_3": "지지 롤러"}
+    assert remote_pilots(dat, tags) == {"핀 끝면": [31809], "지지 롤러": [31811, 31813]}

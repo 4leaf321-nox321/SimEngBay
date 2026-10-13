@@ -108,7 +108,16 @@ def test_집을_워커가_없는_솔버의_대기를_센다(
         ]
         if one["solver"] == "calculix"
     )["queued"]
-    _queue(client, member, {"recipe": "modal", "solver": "calculix", "material": MATERIAL})
+    _queue(
+        client,
+        member,
+        {
+            "recipe": "modal",
+            "solver": "calculix",
+            "material": MATERIAL,
+            "mesh": {"element_size_mm": 5},
+        },
+    )
 
     body = client.get("/api/simulations/workers", headers=admin.headers).json()
     line = next(one for one in body["queues"] if one["solver"] == "calculix")
@@ -131,7 +140,11 @@ def test_신호가_끊긴_워커의_작업은_곧바로_되살린다(
 ) -> None:
     """**3시간을 기다리지 않는다.** 신호를 적는 워커가 2분 조용하면 죽은 것이다."""
     worker_id = f"dying:{uuid.uuid4().hex[:6]}"
-    job_id = _queue(client, member, {"recipe": "modal", "material": MATERIAL})
+    job_id = _queue(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+    )
     services.beat(db, worker_id, state="idle", solvers=[])
     picked = None
     # 다른 시험이 남긴 대기 작업이 먼저 집힐 수 있다 — 내 것이 나올 때까지.
@@ -162,7 +175,11 @@ def test_취소를_요청받은_채_죽었으면_되살리지_않고_취소로_�
     client: TestClient, db: Session, member: Signed
 ) -> None:
     worker_id = f"dying:{uuid.uuid4().hex[:6]}"
-    job_id = _queue(client, member, {"recipe": "modal", "material": MATERIAL})
+    job_id = _queue(
+        client,
+        member,
+        {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+    )
     services.beat(db, worker_id, state="idle")
     for _ in range(200):
         picked = services.claim_next(db, worker_id)
@@ -206,7 +223,14 @@ def test_돌고_있는_Ansys_작업이_라이선스를_쥔_것으로_보인다(
 
     # CalculiX 작업은 라이선스를 쥐지 않는다.
     open_id = _queue(
-        client, member, {"recipe": "modal", "solver": "calculix", "material": MATERIAL}
+        client,
+        member,
+        {
+            "recipe": "modal",
+            "solver": "calculix",
+            "material": MATERIAL,
+            "mesh": {"element_size_mm": 5},
+        },
     )
     other = db.get(Simulation, uuid.UUID(open_id))
     assert other is not None
@@ -271,7 +295,13 @@ def test_다른_워커가_집어_간_작업에는_결과를_덮어쓰지_않는�
 ) -> None:
     """**두 워커가 같은 작업에 쓰지 않는다.** 신호가 끊긴 사이 되살려진 작업을 원래 워커가
     끝까지 돌면, 집어 간 워커의 기록을 덮어 「취소됨」 이나 「완료」 로 바꿔 놓는다."""
-    job_id = uuid.UUID(_queue(client, member, {"recipe": "modal", "material": MATERIAL}))
+    job_id = uuid.UUID(
+        _queue(
+            client,
+            member,
+            {"recipe": "modal", "material": MATERIAL, "mesh": {"element_size_mm": 5}},
+        )
+    )
     simulation = db.get(Simulation, job_id)
     assert simulation is not None
     simulation.worker_id = "me:1"

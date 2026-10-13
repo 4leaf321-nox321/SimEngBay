@@ -614,6 +614,9 @@ def create(
     blocked = conditions_gap(spec, payload)
     if blocked:
         raise AppError(code("SIMULATIONS", 30), blocked, status=400)
+    sizeless = size_gap(spec, payload)
+    if sizeless:
+        raise AppError(code("SIMULATIONS", 32), sizeless, status=400)
     missing_mid = midsurface_gap(payload, has_midsurface=bool(midsurface))
     if missing_mid:
         # 만들 때 말한다 — 걸어 두면 모델링에서 멈춘다.
@@ -1054,6 +1057,32 @@ def conditions_gap(
     return None
 
 
+def size_gap(
+    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
+) -> str | None:
+    """CalculiX 작업인데 **요소 크기를 어디서도 못 얻나** — 있으면 까닭, 없으면 `None`.
+
+    CalculiX 모델링은 크기를 스펙에서, 비면 CAD 의 「전체」 메시 힌트에서 얻고, 둘 다 없으면
+    멈춘다(`calculix/build._global_size` — gmsh 가 제 나름으로 잡으면 같은 형상이 실행마다 다른
+    메시로 풀린다). 화면은 미리 막지만 API 는 받았다 — 기본 솔버가 CalculiX 가 된 뒤로는 솔버도
+    크기도 안 적은 요청이 워커에서야 「요소 크기가 없습니다」 로 멈췄다. 규칙은 모델링과 같다:
+    「내 스펙으로」(`conditions_from="spec"`)면 CAD 힌트를 안 읽는다.
+    """
+    if spec.solver != "calculix" or spec.mesh.element_size_mm is not None:
+        return None
+    if spec.conditions_from == "cad" and payload:
+        try:
+            hint = condition_model.read(payload, recipe=spec.recipe).whole_mesh
+        except ValueError:
+            hint = None
+        if hint is not None and hint.element_size is not None:
+            return None
+    return (
+        "CalculiX 는 요소 크기가 필요합니다 — 스펙의 mesh.element_size_mm 에 넣거나, CAD 가 "
+        "「전체」 메시 힌트로 크기를 보내야 합니다(CAD 조건을 끄면 그 힌트도 안 읽습니다)."
+    )
+
+
 def _doe_materials(doe: DoeFolder) -> list[str]:
     """폴더가 함께 보낸 재료 이름 — 훑어볼 때 보여 준다.
 
@@ -1156,6 +1185,7 @@ def import_doe(
         gap = (
             material_gap(spec, payload)
             or conditions_gap(spec, payload)
+            or size_gap(spec, payload)
             or midsurface_gap(payload, has_midsurface=point.mid_step is not None)
         )
         if gap:

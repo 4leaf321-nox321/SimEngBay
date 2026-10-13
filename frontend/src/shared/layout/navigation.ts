@@ -20,6 +20,7 @@ import {
   Home,
   LayoutGrid,
   Megaphone,
+  Network,
   ScrollText,
   Server,
   UserCog,
@@ -113,7 +114,18 @@ export const NAV_GROUPS: NavGroup[] = [
     // 도메인이 「기준정보」 같은 것을 여기 더하게 되어 있고, 그때 이름을 다시
     // 정하지 않아도 되도록 제목을 단다.
     title: "공통",
-    items: [{ label: "공지", icon: Megaphone, to: "/notices" }],
+    items: [
+      {
+        // **기준정보는 Standard Platform 이 정본이다** — 여기는 받아 둔 사본을 읽기만 한다.
+        label: "온톨로지",
+        icon: Network,
+        to: "/ontology",
+        summary:
+          "Standard Platform 이 정의하고 코어로 공개한 타입 · 객체 · 관계. 주기적으로 받아 둔 " +
+          "사본이라 여기서는 고치지 않는다.",
+      },
+      { label: "공지", icon: Megaphone, to: "/notices" },
+    ],
   },
   {
     // **사슬이 아닌 둘.** 부서 사람과 그 부서에서 무엇이 바뀌었나.

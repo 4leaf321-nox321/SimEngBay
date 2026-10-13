@@ -1905,6 +1905,344 @@
         }
       }
     },
+    "/api/ontology/status": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Status",
+        "operationId": "status_api_ontology_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyStatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Types",
+        "operationId": "list_types_api_ontology_types_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OntologyTypeOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Types Api Ontology Types Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}": {
+      "patch": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Patch Type",
+        "description": "「받나」 를 켜고 끈다. 끄면 받아 둔 것은 남기고 다음 수신부터 안 받는다.",
+        "operationId": "patch_type_api_ontology_types__slug__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyTypePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyTypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/objects": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Objects",
+        "operationId": "list_objects_api_ontology_types__slug__objects_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Inactive"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_OntologyObjectOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/object": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Get Object",
+        "description": "객체 하나와 그 선. `key` 는 쿼리로 받는다 — 식별자에 `/` 가 들어 있을 수 있다.",
+        "operationId": "get_object_api_ontology_types__slug__object_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyObjectDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/runs": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Runs",
+        "operationId": "list_runs_api_ontology_runs_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OntologyRunOut"
+                  },
+                  "title": "Response List Runs Api Ontology Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/sync": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Start Sync",
+        "description": "「지금 받기」 — 기록을 열고 실을 띄운다. 끝나기를 기다리지 않는다(화면이 기록을\n본다).",
+        "operationId": "start_sync_api_ontology_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologySyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyRunOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/attachments": {
       "post": {
         "tags": [
@@ -5953,6 +6291,592 @@
         ],
         "title": "NotificationOut"
       },
+      "OntologyEdgeOut": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "src_type": {
+            "type": "string",
+            "title": "Src Type"
+          },
+          "src_key": {
+            "type": "string",
+            "title": "Src Key"
+          },
+          "src_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Src Label"
+          },
+          "dst_type": {
+            "type": "string",
+            "title": "Dst Type"
+          },
+          "dst_key": {
+            "type": "string",
+            "title": "Dst Key"
+          },
+          "dst_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dst Label"
+          },
+          "evidence_note": {
+            "type": "string",
+            "title": "Evidence Note"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "src_type",
+          "src_key",
+          "dst_type",
+          "dst_key",
+          "evidence_note",
+          "properties"
+        ],
+        "title": "OntologyEdgeOut"
+      },
+      "OntologyObjectDetailOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "removed_reason": {
+            "type": "string",
+            "title": "Removed Reason"
+          },
+          "merged_into": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Into"
+          },
+          "previous_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Previous Keys"
+          },
+          "source_updated_at": {
+            "type": "string",
+            "title": "Source Updated At"
+          },
+          "synced_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Synced At"
+          },
+          "outgoing": {
+            "items": {
+              "$ref": "#/components/schemas/OntologyEdgeOut"
+            },
+            "type": "array",
+            "title": "Outgoing"
+          },
+          "incoming": {
+            "items": {
+              "$ref": "#/components/schemas/OntologyEdgeOut"
+            },
+            "type": "array",
+            "title": "Incoming"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "key",
+          "label",
+          "status",
+          "properties",
+          "active",
+          "removed_reason",
+          "merged_into",
+          "previous_keys",
+          "source_updated_at",
+          "synced_at",
+          "outgoing",
+          "incoming"
+        ],
+        "title": "OntologyObjectDetailOut"
+      },
+      "OntologyObjectOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "removed_reason": {
+            "type": "string",
+            "title": "Removed Reason"
+          },
+          "merged_into": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Into"
+          },
+          "previous_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Previous Keys"
+          },
+          "source_updated_at": {
+            "type": "string",
+            "title": "Source Updated At"
+          },
+          "synced_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Synced At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "key",
+          "label",
+          "status",
+          "properties",
+          "active",
+          "removed_reason",
+          "merged_into",
+          "previous_keys",
+          "source_updated_at",
+          "synced_at"
+        ],
+        "title": "OntologyObjectOut"
+      },
+      "OntologyPropertyOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": ""
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type",
+            "default": ""
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "enum_options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum Options"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "multi": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multi"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "title": "OntologyPropertyOut"
+      },
+      "OntologyRunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger"
+          },
+          "full": {
+            "type": "boolean",
+            "title": "Full"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "actor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Name"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "trigger",
+          "full",
+          "status",
+          "revision",
+          "summary",
+          "error",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "OntologyRunOut"
+      },
+      "OntologyStatusOut": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "sync_minutes": {
+            "type": "integer",
+            "title": "Sync Minutes"
+          },
+          "full_days": {
+            "type": "integer",
+            "title": "Full Days"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due At"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OntologyRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OntologyRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "types": {
+            "type": "integer",
+            "title": "Types"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "relations": {
+            "type": "integer",
+            "title": "Relations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured",
+          "source",
+          "sync_minutes",
+          "full_days",
+          "next_due_at",
+          "running",
+          "last_run",
+          "revision",
+          "types",
+          "objects",
+          "relations"
+        ],
+        "title": "OntologyStatusOut"
+      },
+      "OntologySyncRequest": {
+        "properties": {
+          "full": {
+            "type": "boolean",
+            "title": "Full",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "OntologySyncRequest"
+      },
+      "OntologyTypeOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "properties": {
+            "items": {
+              "$ref": "#/components/schemas/OntologyPropertyOut"
+            },
+            "type": "array",
+            "title": "Properties"
+          },
+          "relations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Relations"
+          },
+          "source_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Count"
+          },
+          "active_count": {
+            "type": "integer",
+            "title": "Active Count"
+          },
+          "inactive_count": {
+            "type": "integer",
+            "title": "Inactive Count"
+          },
+          "relation_count": {
+            "type": "integer",
+            "title": "Relation Count"
+          },
+          "published": {
+            "type": "boolean",
+            "title": "Published"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synced At"
+          },
+          "full_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full At"
+          },
+          "last_error": {
+            "type": "string",
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "properties",
+          "relations",
+          "source_count",
+          "active_count",
+          "inactive_count",
+          "relation_count",
+          "published",
+          "enabled",
+          "synced_at",
+          "full_at",
+          "last_error"
+        ],
+        "title": "OntologyTypeOut"
+      },
+      "OntologyTypePatch": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "OntologyTypePatch"
+      },
       "Page_AccessLogOut_": {
         "properties": {
           "items": {
@@ -6014,6 +6938,37 @@
           "offset"
         ],
         "title": "Page[AuditEntryOut]"
+      },
+      "Page_OntologyObjectOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OntologyObjectOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[OntologyObjectOut]"
       },
       "Page_SimulationSummaryOut_": {
         "properties": {

@@ -96,6 +96,18 @@ const CONVERGENCE: Record<string, { label: string; tone: Tone }> = {
   insufficient: { label: '수준 부족', tone: 'neutral' },
 }
 
+/**
+ * 온톨로지 수신 한 번. **일부 막힘은 주의다** — 나머지 타입은 받았고, 막힌 타입의 까닭이 기록에
+ * 있다. 건너뜀은 나쁨이 아니다(다른 수신이 돌고 있었다).
+ */
+const ONTOLOGY_SYNC: Record<string, { label: string; tone: Tone }> = {
+  running: { label: '받는 중', tone: 'neutral' },
+  ok: { label: '완료', tone: 'good' },
+  partial: { label: '일부 막힘', tone: 'warn' },
+  failed: { label: '실패', tone: 'bad' },
+  skipped: { label: '건너뜀', tone: 'neutral' },
+}
+
 const TABLES = {
   account: ACCOUNT,
   convergence: CONVERGENCE,
@@ -104,6 +116,7 @@ const TABLES = {
   worker: WORKER,
   object: OBJECT,
   notice: NOTICE,
+  ontologySync: ONTOLOGY_SYNC,
   workspace: WORKSPACE,
 } as const
 

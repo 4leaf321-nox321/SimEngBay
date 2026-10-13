@@ -35,6 +35,7 @@ const AccountsAdminPage = lazy(
 const AuditPage = lazy(() => import("@/modules/audit/AuditPage"));
 const MembersPage = lazy(() => import("@/modules/workspaces/MembersPage"));
 const NoticesPage = lazy(() => import("@/modules/notices/NoticesPage"));
+const OntologyPage = lazy(() => import("@/modules/ontology/OntologyPage"));
 const NotificationsPage = lazy(
   () => import("@/modules/notifications/NotificationsPage"),
 );
@@ -128,6 +129,7 @@ export const router = createBrowserRouter(
             { path: "me", element: <ProfilePage /> },
 
             // 공통
+            { path: "ontology", element: <OntologyPage /> },
             { path: "notices", element: <NoticesPage /> },
             { path: "audit", element: <AuditPage /> },
 

@@ -35,7 +35,14 @@ MATERIAL = {
     "poisson_ratio": 0.3,
     "density_kg_m3": 7850,
 }
-MODAL: dict[str, Any] = {"recipe": "modal", "material": MATERIAL, "modes": 5}
+#: 요소 크기를 함께 적는다 — 기본 솔버(CalculiX)는 크기가 없으면 만들 때
+#: 거절한다(SIMULATIONS-0032).
+MODAL: dict[str, Any] = {
+    "recipe": "modal",
+    "material": MATERIAL,
+    "modes": 5,
+    "mesh": {"element_size_mm": 5},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -122,7 +129,7 @@ def test_정적_해석도_걸_수_있다(client: TestClient, member: Signed) -> 
     구속은 CAD 조건에서 오므로 스펙에는 없어도 된다 — 지문 없이 구속을 적으면 그때는 거절한다
     (아래 시험이 그 자리다).
     """
-    static = {"recipe": "static", "material": MATERIAL}
+    static = {"recipe": "static", "material": MATERIAL, "mesh": {"element_size_mm": 5}}
     response = _create(client, member, spec=static, workspace=member.workspace)
     assert response.status_code == 201, response.text
     assert response.json()["recipe"] == "static"
@@ -643,7 +650,14 @@ def test_못_거는_CAD_조건이_있으면_만들_때_막는다(client: TestCli
     mine = _create_with_point(
         client,
         member,
-        {"recipe": "modal", "conditions_from": "spec", "constraints": []},
+        {
+            "recipe": "modal",
+            "conditions_from": "spec",
+            "constraints": [],
+            # CAD 조건을 끄면 CAD 의 「전체」 크기도 안 읽는다 — CalculiX 는 크기를
+            # 받아야 한다.
+            "mesh": {"element_size_mm": 5},
+        },
         point,
     )
     assert mine.status_code == 201, mine.text

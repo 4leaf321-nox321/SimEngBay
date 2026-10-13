@@ -160,12 +160,13 @@ def _strains(model: Any) -> Any:
 def _reactions(
     model: Any, mesh: Any, topology: dict[str, Any], workdir: Path | None = None
 ) -> dict[str, list[float]]:
-    """변위로 당긴 영역마다 **반력 합**(N). CalculiX 쪽과 같은 열쇠(`reactions`)로 낸다.
+    """변위로 당긴 · 원격 변위로 붙든 영역마다 **반력 합**(N). CalculiX 쪽과 같은
+    열쇠(`reactions`)로 낸다.
 
-    모델링이 남긴 **그 영역의 메시 절점**(`reaction_nodes.json`)이 있으면 그 절점의 반력을
-    더한다 — 평면으로 찾으면 같은 평면의 다른 구속이 섞이고 첫 면만 센다
-    (`_write_reaction_nodes`).
-    없으면(옛 작업) 전처럼 평면으로 찾는다.
+    모델링이 남긴 **그 영역의 절점**(`reaction_nodes.json`)이 있으면 그 절점의 반력을 더한다 —
+    변위면 그 면의 메시 절점(`_write_reaction_nodes`), 원격 변위 · 강체 구속이면 그 원격점
+    절점이다(`_write_remote_reaction_nodes`). 없으면(옛 작업) 전처럼 변위는 평면으로 찾고,
+    강체 구속은 그것이 유일한 구속일 때만 모델 전체의 반력 합으로 낸다.
     """
     known: dict[str, list[int]] = {}
     path = workdir / "reaction_nodes.json" if workdir is not None else None
@@ -186,17 +187,17 @@ def _reactions(
     regions = topology.get("regions") or {}
     found: dict[str, list[float]] = {}
     held = _rigid_hold(given, regions)
-    if held is not None:
+    if held is not None and held not in known:
         total = probes.total_reaction(model)
         if total is not None:
             found[held] = total
     for rule in given.constraints:
-        if rule.kind != "displacement":
-            continue
-        if rule.region in known:
+        if rule.region in known and rule.region not in found:
             total = probes.reaction_on(model, known[rule.region])
             if total is not None:
                 found[rule.region] = total
+            continue
+        if rule.kind != "displacement" or rule.region in found:
             continue
         rows = regions.get(rule.region)
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):

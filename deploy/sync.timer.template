@@ -1,0 +1,12 @@
+[Unit]
+Description=@@APP_NAME@@ 온톨로지 수신 타이머
+
+[Timer]
+# 5분마다 「차례가 됐나」 만 묻는다. 받는 간격은 .env 의 ONTOLOGY_SYNC_MINUTES 가 정한다 —
+# 이 값은 그 간격을 얼마나 촘촘히 확인하느냐일 뿐이다.
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

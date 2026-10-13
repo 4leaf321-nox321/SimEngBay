@@ -174,6 +174,25 @@ class Settings(BaseSettings):
     """작업 폴더의 뿌리. 비우면 `filestore_dir/simulations`. **windows-bridge 면 NTFS 쪽**
     (`/mnt/c/simengbay/work`)을 준다 — Ansys 가 `\\wsl$` 에 쓰면 느리고 잠금 문제가 난다."""
 
+    # ── 온톨로지 — Standard Platform 의 코어 API 에서 주기적으로 받아 온다 ──────────────
+    ontology_source_url: str = ""
+    """Standard Platform 주소 — `https://sp.example.com/api` 나 `…/api/core` 둘 다 받는다.
+    **비우면 수신을 안 한다**(화면은 무엇을 설정해야 하는지 말한다). 연동 규약은 SP 의
+    `docs/외부-시스템-연동-지침서.md` §4.2 다."""
+
+    ontology_source_token: str = ""
+    """SP 가 발급한 개인 접근 토큰. **범위는 `core:read` 하나**로 청한다 — 코어 밖을 못 읽는
+    토큰이라, 이 칸이 새어도 사내 전체가 열리지 않는다(지침서 §4.1)."""
+
+    ontology_sync_minutes: int = 1440
+    """몇 분마다 받아 오나. 기본은 하루 한 번(지침서 §12-A 1 — 야간 1회 + 수동 실행). 타이머
+    (`<slug>-sync.timer`)는 5분마다 「차례가 됐나」 만 묻고, 차례는 이 값이 정한다. 0 이면
+    타이머로는 안 받고 화면의 「지금 받기」 로만 받는다."""
+
+    ontology_full_days: int = 7
+    """며칠마다 **처음부터 전량**을 받아 대조하나. 증분만으로는 토큰 주인의 소속이 줄어 못
+    보게 된 것을 들을 길이 없다(지침서 §4.2 받는 쪽 규칙 7 — 「주 1회쯤 전량」)."""
+
     datasource_dir: Path | None = None
     """데이터 소스가 **파일**(CSV·Excel·JSON)을 읽어도 되는 폴더. 비우면 URL 로만 읽는다.
 

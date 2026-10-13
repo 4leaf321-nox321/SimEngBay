@@ -19,6 +19,12 @@ from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
+from app.modules.ontology.models import (
+    OntologyObject,
+    OntologyRelation,
+    OntologySyncRun,
+    OntologyType,
+)
 from app.modules.simulations.models import (
     Simulation,
     SimulationArtifact,
@@ -35,6 +41,10 @@ __all__ = [
     "Notice",
     "NoticeRead",
     "Notification",
+    "OntologyObject",
+    "OntologyRelation",
+    "OntologySyncRun",
+    "OntologyType",
     "PersonalAccessToken",
     "RefreshToken",
     "Simulation",

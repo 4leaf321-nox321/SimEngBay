@@ -169,3 +169,23 @@ def test_도는_중이면_하나_더_걸지_않는다(
     refused = client.post("/api/ontology/sync", json={}, headers=admin.headers)
     assert refused.status_code == 409
     assert refused.json()["error"]["code"].endswith("ONTOLOGY-0002")
+
+
+def test_참조_칸은_가리키는_객체의_이름을_함께_준다(
+    client: TestClient, admin: Signed, core: FakeCore
+) -> None:
+    """참조 칸의 값은 상대의 `key` 다(재료의 공급사 = `ACME-001`). 그 타입도 받아 두었으면
+    이름을 함께 준다. 상대의 식별자가 나중에 바뀌어도 이미 받은 값은 다시 오지 않으므로 옛
+    식별자로 남는다 — 그것도 `previous_keys` 로 풀어 찾는다(지침서 §4.2 규칙 10)."""
+    _sync(client, admin)
+    listed = client.get("/api/ontology/types/material/objects", headers=admin.headers).json()
+    steel = next(one for one in listed["items"] if one["key"] == "SS400")
+    assert steel["ref_labels"] == {"ACME-001": "ACME 정밀"}
+
+    core.rename("vendor", "ACME-001", "ACME-100")
+    _sync(client, admin)
+    detail = client.get(
+        "/api/ontology/types/material/object", params={"key": "SS400"}, headers=admin.headers
+    ).json()
+    assert detail["properties"]["supplier"] == "ACME-001"
+    assert detail["ref_labels"] == {"ACME-001": "ACME 정밀"}

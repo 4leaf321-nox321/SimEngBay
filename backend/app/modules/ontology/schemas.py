@@ -90,6 +90,9 @@ class OntologyObjectOut(BaseModel):
     previous_keys: list[str]
     source_updated_at: str
     synced_at: datetime
+    ref_labels: dict[str, str] = {}
+    """참조 칸의 값(상대 `key`) → 그 이름. 가리키는 타입도 받아 두었으면 채운다 — 옛 식별자로
+    남은 값도 `previous_keys` 로 풀어 찾는다(지침서 §4.2 규칙 10)."""
 
 
 class OntologyEdgeOut(BaseModel):

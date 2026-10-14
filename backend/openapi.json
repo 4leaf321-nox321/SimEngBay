@@ -6415,6 +6415,14 @@
             "format": "date-time",
             "title": "Synced At"
           },
+          "ref_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ref Labels",
+            "default": {}
+          },
           "outgoing": {
             "items": {
               "$ref": "#/components/schemas/OntologyEdgeOut"
@@ -6505,6 +6513,14 @@
             "type": "string",
             "format": "date-time",
             "title": "Synced At"
+          },
+          "ref_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ref Labels",
+            "default": {}
           }
         },
         "type": "object",

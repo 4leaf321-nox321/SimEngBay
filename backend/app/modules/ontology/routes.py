@@ -85,7 +85,9 @@ def _type_out(kind: OntologyType, counts: dict[str, int]) -> OntologyTypeOut:
     )
 
 
-def _object_out(row: OntologyObject) -> OntologyObjectOut:
+def _object_out(
+    row: OntologyObject, ref_labels: dict[str, str] | None = None
+) -> OntologyObjectOut:
     return OntologyObjectOut(
         type_slug=row.type_slug,
         key=row.key,
@@ -98,6 +100,7 @@ def _object_out(row: OntologyObject) -> OntologyObjectOut:
         previous_keys=list(row.previous_keys or []),
         source_updated_at=row.source_updated_at,
         synced_at=row.synced_at,
+        ref_labels=ref_labels or {},
     )
 
 
@@ -169,13 +172,17 @@ def list_objects(
     _: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Page[OntologyObjectOut]:
-    services.get_type(db, slug)
+    kind = services.get_type(db, slug)
     size = clamp_limit(limit)
     rows, total = services.objects(
         db, slug, q=q, include_inactive=include_inactive, limit=size, offset=offset
     )
+    found = services.ref_labels(db, kind, rows)
     return Page[OntologyObjectOut](
-        items=[_object_out(row) for row in rows], total=total, limit=size, offset=offset
+        items=[_object_out(row, services.row_ref_labels(kind, row, found)) for row in rows],
+        total=total,
+        limit=size,
+        offset=offset,
     )
 
 
@@ -187,7 +194,9 @@ def get_object(
     db: Session = Depends(get_db),
 ) -> OntologyObjectDetailOut:
     """객체 하나와 그 선. `key` 는 쿼리로 받는다 — 식별자에 `/` 가 들어 있을 수 있다."""
+    kind = services.get_type(db, slug)
     row = services.one_object(db, slug, key)
+    refs = services.row_ref_labels(kind, row, services.ref_labels(db, kind, [row]))
     outgoing, incoming = services.edges(db, slug, key)
     pairs = {(one.dst_type, one.dst_key) for one in outgoing} | {
         (one.src_type, one.src_key) for one in incoming
@@ -208,7 +217,7 @@ def get_object(
         )
 
     return OntologyObjectDetailOut(
-        **_object_out(row).model_dump(),
+        **_object_out(row, refs).model_dump(),
         outgoing=[edge(one) for one in outgoing],
         incoming=[edge(one) for one in incoming],
     )

@@ -301,10 +301,17 @@ function TypeTable({
   )
 }
 
-/** 칸 값 한 개를 사람 말로 — 여러 값은 「;」 로, 단위는 칸 정의에서. */
-function shownValue(value: unknown, property?: OntologyProperty): string {
+/**
+ * 칸 값 한 개를 사람 말로 — 여러 값은 「;」 로, 단위는 칸 정의에서. 참조 칸은 상대의 `key` 라
+ * 받아 둔 이름이 있으면 「이름 (key)」 로 보인다.
+ */
+function shownValue(value: unknown, property?: OntologyProperty, refLabels: Record<string, string> = {}): string {
   if (value === null || value === undefined) return ''
-  const text = Array.isArray(value) ? value.map((one) => String(one)).join('; ') : String(value)
+  const shownOne = (one: unknown) => {
+    const text = String(one)
+    return property?.data_type === 'object_ref' && refLabels[text] ? `${refLabels[text]} (${text})` : text
+  }
+  const text = Array.isArray(value) ? value.map(shownOne).join('; ') : shownOne(value)
   return property?.unit && text ? `${text} ${property.unit}` : text
 }
 
@@ -380,7 +387,7 @@ function ObjectBrowser({ kind, types }: { kind: OntologyType; types: OntologyTyp
                 <TableCell className="font-mono text-xs">{row.key}</TableCell>
                 <TableCell>{row.label}</TableCell>
                 {columns.map((one) => (
-                  <TableCell key={one.key}>{shownValue(row.properties[one.key], one)}</TableCell>
+                  <TableCell key={one.key}>{shownValue(row.properties[one.key], one, row.ref_labels)}</TableCell>
                 ))}
                 <TableCell>
                   {row.active ? (
@@ -437,7 +444,7 @@ function ObjectDialog({
           <div className="max-h-[60vh] space-y-4 overflow-y-auto text-sm">
             <dl className="grid grid-cols-[10rem_1fr] gap-x-4 gap-y-1">
               {kind.properties.map((one) => (
-                <PropertyRow key={one.key} label={one.label || one.key} value={shownValue(data.properties[one.key], one)} />
+                <PropertyRow key={one.key} label={one.label || one.key} value={shownValue(data.properties[one.key], one, data.ref_labels)} />
               ))}
               {extra.map((key) => (
                 <PropertyRow key={key} label={key} value={shownValue(data.properties[key])} />

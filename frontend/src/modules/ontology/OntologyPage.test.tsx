@@ -92,6 +92,7 @@ const SS400: OntologyObjectDetail = {
   previous_keys: [],
   source_updated_at: AT,
   synced_at: AT,
+  ref_labels: { 'ACME-001': 'ACME 정밀' },
   outgoing: [
     {
       relation: 'supplied_by',
@@ -157,10 +158,13 @@ describe('온톨로지', () => {
   it('타입을 고르면 객체가 나오고, 객체를 열면 칸과 선이 보인다', async () => {
     show()
     await userEvent.click(await screen.findByText('재료'))
-    // 칸은 카탈로그의 이름과 단위로 보인다.
+    // 칸은 카탈로그의 이름과 단위로 보이고, 참조 칸은 받아 둔 이름을 함께 보인다.
     expect(await screen.findByText('7850 kg/m3')).toBeDefined()
+    expect(screen.getByText('ACME 정밀 (ACME-001)')).toBeDefined()
     await userEvent.click(screen.getByText('SS400'))
-    expect(await screen.findByText(/ACME 정밀/)).toBeDefined()
+    expect(await screen.findByText('나가는 선')).toBeDefined()
+    // 표 · 칸 · 선 — 공급사 이름이 세 자리에 보인다.
+    expect(screen.getAllByText(/ACME 정밀/).length).toBeGreaterThan(2)
     expect(ontologyApi.object).toHaveBeenCalledWith('material', 'SS400')
   })
 

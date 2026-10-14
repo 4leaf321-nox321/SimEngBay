@@ -321,6 +321,60 @@ def labels_for(db: Session, pairs: set[tuple[str, str]]) -> dict[tuple[str, str]
     return found
 
 
+def _references(kind: OntologyType) -> dict[str, str]:
+    """참조 칸 → 가리키는 타입(카탈로그의 `object_ref` · `ref_type_slug`)."""
+    return {
+        str(one["key"]): str(one["ref_type_slug"])
+        for one in kind.properties or []
+        if one.get("data_type") == "object_ref" and one.get("ref_type_slug") and one.get("key")
+    }
+
+
+def _ref_values(row: OntologyObject, references: dict[str, str]) -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+    for prop, ref_type in references.items():
+        value = (row.properties or {}).get(prop)
+        for one in value if isinstance(value, list) else [value]:
+            if isinstance(one, str) and one:
+                found.add((ref_type, one))
+    return found
+
+
+def ref_labels(
+    db: Session, kind: OntologyType, rows: list[OntologyObject]
+) -> dict[tuple[str, str], str]:
+    """그 행들의 참조 값 → 이름. 참조 칸의 값은 **보낼 때의 `key`** 라, 가리키는 쪽의 식별자가
+    나중에 바뀌면 옛 값으로 남는다 — 그때는 `previous_keys` 로 풀어 찾는다(규칙 10)."""
+    references = _references(kind)
+    wanted: set[tuple[str, str]] = set()
+    for row in rows:
+        wanted |= _ref_values(row, references)
+    found = labels_for(db, wanted)
+    for ref_type, key in sorted(wanted - found.keys()):
+        renamed = db.scalar(
+            select(OntologyObject.label)
+            .where(
+                OntologyObject.type_slug == ref_type,
+                OntologyObject.previous_keys.contains([key]),
+            )
+            .limit(1)
+        )
+        if renamed is not None:
+            found[(ref_type, key)] = renamed
+    return found
+
+
+def row_ref_labels(
+    kind: OntologyType, row: OntologyObject, found: dict[tuple[str, str], str]
+) -> dict[str, str]:
+    """한 행의 참조 값 → 이름(못 찾은 것은 뺀다)."""
+    return {
+        key: found[(ref_type, key)]
+        for ref_type, key in _ref_values(row, _references(kind))
+        if (ref_type, key) in found
+    }
+
+
 def source_shown(settings: Settings | None = None) -> str:
     """화면에 보일 SP 주소 — 토큰은 안 보인다. 주소의 사용자 · 암호도 지운다."""
     settings = settings or get_settings()

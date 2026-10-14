@@ -42,7 +42,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.modules.ontology.models import (
@@ -63,6 +63,10 @@ TIMEOUT_SECONDS = 60.0
 ABSENCE_GUARD = 0.5
 #: 이보다 적게 가진 타입은 비율을 안 본다 — 몇 개뿐인 타입에서 절반은 흔한 변화다.
 ABSENCE_GUARD_MIN = 10
+#: 한꺼번에 끄거나 지울 때 한 번에 넘기는 식별자 수.
+CHUNK = 1000
+#: 받는 도중 이만큼(이상) 새로 넣으면 표의 통계를 다시 잰다(`_Stats`).
+ANALYZE_EVERY = 5000
 
 
 class CoreError(Exception):
@@ -437,6 +441,7 @@ def _pull_objects(
     report.full = whole
     seen: set[str] | None = set() if whole else None
     last: dict[str, Any] = {}
+    stats = _Stats(db, "ontology_objects")
     for body, restarted in _pages(
         client, kind.slug, None if whole else kind.rows_as_of, relations=False
     ):
@@ -446,6 +451,7 @@ def _pull_objects(
         items = [one for one in body.get("items") or [] if isinstance(one, dict)]
         _apply_objects(db, kind.slug, items, report, seen)
         db.flush()
+        stats.grew(report.rows)
         last = body
     if seen is not None:
         _absent_objects(db, kind.slug, seen, report)
@@ -454,6 +460,31 @@ def _pull_objects(
         # **끝까지 받았을 때만 시각을 옮긴다**(규칙 2) — `next` 가 남은 쪽의 `as_of` 는
         # null 이다.
         kind.rows_as_of = str(as_of)
+
+
+class _Stats:
+    """받는 도중 표가 크게 자라면 **그 표의 통계를 다시 잰다**(`ANALYZE`).
+
+    큰 타입을 처음 받으면 한 트랜잭션 안에서 표가 0 → 13만 건으로 자라는데, 통계는 「빈 표」
+    그대로라 쪽마다 내는 「가진 것 찾기」 가 색인 대신 표 전체를 훑는다 — 쪽당 시간이 표 크기를
+    따라 늘어 13만 건이 4분 걸렸다(2026-10-13 실측, SP 개발 설치의 「시장 서비스」 규모).
+    ANALYZE 는 트랜잭션 안에서도 되고 자기가 넣은 행을 센다. 통계가 아는 행 수만큼 새로 들어올
+    때마다(적어도 `ANALYZE_EVERY`) 다시 잰다 — 몇 번이면 끝난다.
+    """
+
+    def __init__(self, db: Session, table: str) -> None:
+        self.db = db
+        self.table = table
+        known = db.execute(
+            text("SELECT reltuples FROM pg_class WHERE relname = :name"), {"name": table}
+        ).scalar()
+        self.next_at = max(ANALYZE_EVERY, int(known or 0))
+
+    def grew(self, added: int) -> None:
+        if added < self.next_at:
+            return
+        self.db.execute(text(f"ANALYZE {self.table}"))
+        self.next_at = added * 2
 
 
 def _apply_objects(
@@ -536,19 +567,32 @@ def _apply_objects(
 
 
 def _absent_objects(db: Session, slug: str, seen: set[str], report: TypeReport) -> None:
-    """전량을 끝까지 받은 뒤 **이번에 안 온 것을 끈다**(규칙 7) — 절반 넘게면 끄지 않는다."""
+    """전량을 끝까지 받은 뒤 **이번에 안 온 것을 끈다**(규칙 7) — 절반 넘게면 끄지 않는다.
+
+    식별자만 읽고 한꺼번에 끈다 — 객체를 통째로 올리면 큰 타입(SP 개발 설치의 「시장 서비스」
+    13만 건)에서 메모리가 그만큼 찬다.
+    """
+    db.flush()
     active = list(
         db.scalars(
-            select(OntologyObject).where(
+            select(OntologyObject.key).where(
                 OntologyObject.type_slug == slug, OntologyObject.active.is_(True)
             )
         )
     )
-    missing = [one for one in active if one.key not in seen]
+    missing = [key for key in active if key not in seen]
     _guard(len(active), len(missing), "객체")
-    for one in missing:
-        one.active, one.removed_reason = False, "absent"
-        report.deactivated += 1
+    for start in range(0, len(missing), CHUNK):
+        db.execute(
+            update(OntologyObject)
+            .where(
+                OntologyObject.type_slug == slug,
+                OntologyObject.key.in_(missing[start : start + CHUNK]),
+            )
+            .values(active=False, removed_reason="absent")
+            .execution_options(synchronize_session=False)
+        )
+    report.deactivated += len(missing)
 
 
 def _guard(held: int, missing: int, what: str) -> None:
@@ -582,68 +626,92 @@ def _pull_relations(
     report.relations_full = whole
     seen: set[Edge] | None = set() if whole else None
     last: dict[str, Any] = {}
+    stats = _Stats(db, "ontology_relations")
     for body, restarted in _pages(
         client, kind.slug, None if whole else kind.relations_as_of, relations=True
     ):
         if restarted:
             report.relations_full, seen = True, set()
             continue
-        for item in body.get("items") or []:
-            if isinstance(item, dict):
-                _apply_edge(db, kind.slug, item, report, seen)
+        items = [one for one in body.get("items") or [] if isinstance(one, dict)]
+        _apply_edges(db, kind.slug, items, report, seen)
         db.flush()
+        stats.grew(report.relations)
         last = body
     if seen is not None:
-        held = list(
-            db.scalars(select(OntologyRelation).where(OntologyRelation.src_type == kind.slug))
-        )
-        missing = [
-            one
-            for one in held
-            if (one.src_key, one.relation, one.dst_key, one.dst_type) not in seen
-        ]
+        db.flush()
+        held = db.execute(
+            select(
+                OntologyRelation.id,
+                OntologyRelation.src_key,
+                OntologyRelation.relation,
+                OntologyRelation.dst_key,
+                OntologyRelation.dst_type,
+            ).where(OntologyRelation.src_type == kind.slug)
+        ).all()
+        missing = [row.id for row in held if tuple(row[1:]) not in seen]
         _guard(len(held), len(missing), "선")
-        for one in missing:
-            db.delete(one)
-            report.relations_removed += 1
+        for start in range(0, len(missing), CHUNK):
+            db.execute(
+                delete(OntologyRelation)
+                .where(OntologyRelation.id.in_(missing[start : start + CHUNK]))
+                .execution_options(synchronize_session=False)
+            )
+        report.relations_removed += len(missing)
     as_of = last.get("as_of")
     if as_of:
         kind.relations_as_of = str(as_of)
 
 
-def _apply_edge(
-    db: Session, slug: str, item: dict[str, Any], report: TypeReport, seen: set[Edge] | None
+def _apply_edges(
+    db: Session,
+    slug: str,
+    items: list[dict[str, Any]],
+    report: TypeReport,
+    seen: set[Edge] | None,
 ) -> None:
-    src = str(item.get("src") or "").strip()
-    relation = str(item.get("relation") or "").strip()
-    dst = str(item.get("dst") or "").strip()
-    dst_type = str(item.get("dst_type") or "").strip()
-    if not (src and relation and dst):
+    """한 쪽의 선 — 이미 가진 선을 **한 번에** 찾아 둔다(한 줄씩 물으면 큰 타입에서 그만큼
+    오래 걸린다)."""
+    wanted: list[tuple[Edge, dict[str, Any]]] = []
+    for item in items:
+        src = str(item.get("src") or "").strip()
+        relation = str(item.get("relation") or "").strip()
+        dst = str(item.get("dst") or "").strip()
+        if src and relation and dst:
+            wanted.append(
+                ((src, relation, dst, str(item.get("dst_type") or "").strip()), item)
+            )
+    if not wanted:
         return
-    report.relations += 1
-    edge = db.scalar(
-        select(OntologyRelation).where(
-            OntologyRelation.src_type == slug,
-            OntologyRelation.src_key == src,
-            OntologyRelation.relation == relation,
-            OntologyRelation.dst_key == dst,
-            OntologyRelation.dst_type == dst_type,
+    sources = {edge[0] for edge, _ in wanted}
+    found: dict[Edge, OntologyRelation] = {
+        (one.src_key, one.relation, one.dst_key, one.dst_type): one
+        for one in db.scalars(
+            select(OntologyRelation).where(
+                OntologyRelation.src_type == slug, OntologyRelation.src_key.in_(sources)
+            )
         )
-    )
-    if item.get("deleted"):
-        # 선은 상태가 아니라 있음/없음이다 — 끊긴 선은 지운다.
-        if edge is not None:
-            db.delete(edge)
-            report.relations_removed += 1
-        return
-    if edge is None:
-        edge = OntologyRelation(
-            src_type=slug, src_key=src, relation=relation, dst_key=dst, dst_type=dst_type
-        )
-        db.add(edge)
-    edge.evidence_note = str(item.get("evidence_note") or "")
-    properties = item.get("properties")
-    edge.properties = dict(properties) if isinstance(properties, dict) else {}
-    edge.source_updated_at = str(item.get("updated_at") or "")
-    if seen is not None:
-        seen.add((src, relation, dst, dst_type))
+    }
+    for edge, item in wanted:
+        report.relations += 1
+        row = found.get(edge)
+        if item.get("deleted"):
+            # 선은 상태가 아니라 있음/없음이다 — 끊긴 선은 지운다.
+            if row is not None:
+                db.delete(row)
+                found.pop(edge)
+                report.relations_removed += 1
+            continue
+        if row is None:
+            src, relation, dst, dst_type = edge
+            row = OntologyRelation(
+                src_type=slug, src_key=src, relation=relation, dst_key=dst, dst_type=dst_type
+            )
+            db.add(row)
+            found[edge] = row
+        row.evidence_note = str(item.get("evidence_note") or "")
+        properties = item.get("properties")
+        row.properties = dict(properties) if isinstance(properties, dict) else {}
+        row.source_updated_at = str(item.get("updated_at") or "")
+        if seen is not None:
+            seen.add(edge)

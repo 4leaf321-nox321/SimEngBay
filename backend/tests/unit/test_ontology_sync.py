@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest
@@ -364,3 +365,27 @@ def test_타이머는_차례가_됐을_때만_받는다(db: Session) -> None:
     assert services.next_due(db, manual_only) is None
     unconfigured = settings.model_copy(update={"ontology_source_token": ""})
     assert services.next_due(db, unconfigured) is None
+
+
+def test_받는_도중_표가_크게_자라면_통계를_다시_잰다(db: Session) -> None:
+    """한 트랜잭션 안에서 표가 0 → 13만 건으로 자라면 통계는 「빈 표」 그대로라 쪽마다 표
+    전체를 훑었다(13만 건 238초 → 다시 재게 한 뒤 21초, 2026-10-13). 통계가 아는 만큼 새로
+    들어올 때마다 다시 잰다 — 몇 번이면 끝난다."""
+    ran: list[str] = []
+
+    class Recorder:
+        def execute(self, statement: Any, params: Any = None) -> Any:
+            ran.append(str(statement))
+
+            class Result:
+                def scalar(self) -> int:
+                    return -1  # 한 번도 안 잰 표
+
+            return Result()
+
+    stats = sync._Stats(Recorder(), "ontology_objects")  # type: ignore[arg-type]
+    for added in range(0, 40_001, 500):
+        stats.grew(added)
+    analyzed = [one for one in ran if one.startswith("ANALYZE")]
+    # 5천 · 1만 · 2만 · 4만 — 두 배씩.
+    assert len(analyzed) == 4

@@ -46,6 +46,12 @@ os.environ["FAKE_STAGE_SECONDS"] = "0"
 # 여는 문이 되지 않게), 붙박이 폴더가 있는 자리를 뿌리로 준다.
 os.environ["DOE_ROOTS"] = str(Path(__file__).resolve().parent / "fixtures" / "doe")
 
+# **온톨로지 수신원도 시험이 정한다 — 비운다.** 개발 `.env` 에 SP 개발 서버 주소 · 토큰을 적어
+# 두면(실제로 받아 보려고 그렇게 한다) 시험이 「설정이 있다」 로 읽고, 받는 시험은 진짜 SP 에
+# 붙을 수 있다(2026-10-16). 수신 시험은 가짜 SP 를 끼운다(`tests/ontology_fake.py`).
+os.environ["ONTOLOGY_SOURCE_URL"] = ""
+os.environ["ONTOLOGY_SOURCE_TOKEN"] = ""
+
 
 def _test_database_url() -> str:
     """개발 접속 정보에서 시험 DB 주소를 만든다.

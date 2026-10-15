@@ -128,7 +128,7 @@ def _probe(
         payload = json.loads(topology.read_text(encoding="utf-8"))
         if not probes.wanted(payload):
             return []
-        mesh = read_mesh(msh)
+        mesh = read_mesh(msh, require_solid=False)
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return []
@@ -206,7 +206,7 @@ def _draw(
     if not msh.is_file():
         return {}
     try:
-        mesh = read_mesh(msh)
+        mesh = read_mesh(msh, require_solid=False)
         try:
             triangles, parts, names = vtp.parted(mesh, workdir)
         except Exception:  # pragma: no cover - 나누기만 못 한다

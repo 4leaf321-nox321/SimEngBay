@@ -119,3 +119,38 @@ def test_바디_지문이_없으면_짝지을_것도_없다() -> None:
     """옛 폴더(형상만)에는 `bodies` 가 없다 — 오류가 아니다."""
     found = match_bodies({}, [])
     assert found.ok and found.bodies == {}
+
+
+SHELL_ASSEMBLY = FIXTURE.parent / "셸모델_시트받침조립"
+
+
+def test_시트는_부피로_짝짓지_않고_솔리드만_짝짓는다() -> None:
+    """두께 없는 시트(셸 모델, CompCore 2026-10-15)는 `kind: "sheet"` · 부피 0 · 넓이로 온다.
+    시트는 중간면이 곧 형상이라 쉘로만 풀고, 짝짓기는 중간면 쪽이 한다 — 부피 바디에서
+    찾으면 「부피를 안 보냈다」 로 멈췄다(2026-10-16)."""
+    from app.core.bodies import place_settings
+    from app.core.conditions import BodySetting, sheet_parts
+
+    point = json.loads((SHELL_ASSEMBLY / "points" / "p0001.json").read_text(encoding="utf-8"))
+    assert sheet_parts(point) == {"skin"}
+    # 해석 쪽 부피 바디는 받침 하나뿐이다(시트는 부피가 없다).
+    base = next(one for one in point["bodies"] if one["name"] == "base")
+    records = [BodyRecord(index=7, volume=float(base["volume"]), centroid=(10.0, 10.0, 5.0))]
+    settings = [
+        BodySetting(name="skin", shell=True, thickness=1.2),
+        BodySetting(name="base", element_size=4.0),
+    ]
+    placed, failures = place_settings(settings, point, records)
+    assert failures == []
+    assert {index: one.name for index, one in placed.items()} == {7: "base"}
+
+    # 시트를 솔리드로 두면(쉘이 아니면) 무엇을 고칠지 말한다.
+    solid_sheet = [BodySetting(name="skin", element_size=2.0)]
+    _, failures = place_settings(solid_sheet, point, records)
+    assert failures and "쉘로 두고 두께를 적으십시오" in failures[0]
+
+
+def test_kind_가_없는_옛_점_파일은_솔리드로_읽는다() -> None:
+    from app.core.conditions import sheet_parts
+
+    assert sheet_parts(_point(1)) == set()

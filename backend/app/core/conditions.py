@@ -81,6 +81,12 @@ MESH_ORDERS = ("program_controlled", "linear", "quadratic")
 ALL_BODIES = "전체"
 #: 메시 힌트가 「모델 전체」 를 가리키는 이름.
 WHOLE_REGIONS = ("전체", "all")
+#: 두께 없는 시트 파트(`bodies[].kind`, CompCore 2026-10-15). 부피가 0 이고 넓이가 온다.
+SHEET = "sheet"
+SHEET_AS_SOLID = (
+    "두께 없는 시트(셸 모델)라 솔리드로 풀 수 없습니다 — CompCore 의 파트 설정에서 쉘로 두고 "
+    "두께를 적으십시오"
+)
 
 Hold = Literal["fixed", "free"]
 
@@ -367,6 +373,13 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     middle = _midsurface(payload)
     for row in _rows(block, "body_settings"):
         _body_setting(row, made, middle)
+    # **시트는 쉘로 풀거나 뺀다** — 부피가 0 이라 솔리드로 풀 길이 없다. 설정 줄이 이미 막힌
+    # 시트(두께를 못 받은 쉘)는 그 까닭이 먼저 섰다.
+    halted = {str(row.get("name") or "").strip() for row in _rows(block, "body_settings")}
+    halted -= {one.name for one in made.body_settings}
+    for name in loose_sheets(payload, made):
+        if name not in halted:
+            made.refused.append(Note(f"파트 「{name}」", SHEET_AS_SOLID))
     gone = _on_suppressed(payload, made.suppressed)
     flat = _off_midsurface(payload, set(made.shells))
     entities = {
@@ -681,6 +694,39 @@ class _Middle:
 
     thickness: dict[str, float] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
+
+
+def sheet_parts(payload: Any) -> set[str]:
+    """두께 없는 시트(셸 모델) 파트의 이름 — `bodies[].kind == "sheet"`.
+
+    이 날(2026-10-15) 전의 점 파일에는 `kind` 가 없다 — 그때는 모두 솔리드로 읽는다.
+    """
+    return {
+        str(one.get("name") or "").strip()
+        for one in _dict(payload).get("bodies") or []
+        if isinstance(one, dict) and one.get("kind") == SHEET
+    }
+
+
+def loose_sheets(payload: Any, given: Conditions) -> list[str]:
+    """쉘로도 안 풀고 빼지도 않은 시트 — **풀 길이가 없다.**"""
+    return sorted(sheet_parts(payload) - given.suppressed - set(given.shells))
+
+
+def sheet_gap(payload: Any, given: Conditions, *, from_cad: bool) -> str:
+    """풀 길이 없는 시트가 있으면 그 까닭 한 줄, 없으면 "".
+
+    **조용히 빠지면 안 된다** — 두 솔버 모두 본 형상의 시트를 지운다(쉘이면 중간면이 그 자리를
+    맡고, 빼면 빠진다). 쉘로 안 둔 시트를 그대로 두면 그 파트 없이 풀리고, 그 결과는 그럴듯하게
+    틀린다. 쉘 두께는 CAD 의 파트 설정으로만 온다 — CAD 조건을 끄면 시트를 풀 길이가 없다.
+    """
+    loose = loose_sheets(payload, given)
+    if not loose:
+        return ""
+    why = f"시트 파트({' · '.join(loose)})를 풀 길이가 없습니다: {SHEET_AS_SOLID}"
+    if not from_cad:
+        why += " (쉘 두께는 CAD 조건으로 옵니다 — 「CAD 가 보낸 조건 사용」 을 켜십시오)"
+    return why
 
 
 def scaled(given: Conditions, factor: float) -> Conditions:

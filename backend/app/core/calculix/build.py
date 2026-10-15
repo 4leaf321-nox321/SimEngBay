@@ -71,6 +71,9 @@ def build(
     topology = _topology(workdir)
     system = units.declared_in(topology) if topology else units.DEFAULT
     given = _declared_conditions(spec, topology)
+    loose = condition_model.sheet_gap(topology, given, from_cad=spec.conditions_from == "cad")
+    if loose:
+        raise StageFailure("region_unresolved", loose)
 
     size = _global_size(spec, given, system)
     second_order = spec.mesh.order == "quadratic"
@@ -136,6 +139,7 @@ def build(
         volume_sizes=layout.sizes,
         shell_step=layout.shell_step,
         shell_sizes=layout.shell_sizes,
+        sheets=layout.sheets,
     )
     logger.info(
         "메시: 절점 %s · 요소 %s · 면 %s · 솔리드 %s",
@@ -148,7 +152,7 @@ def build(
     # 뺀 파트는 메시에 없다 — 짝짓기 · 물성은 **남은 파트로만** 본다.
     kept = without(topology, given.suppressed | set(given.shells))
     body_of, materials, material_from = _materials(spec, kept, system, mesh)
-    mesh = _with_face_parts(mesh, body_of)
+    mesh = _with_face_parts(mesh, body_of, layout.shell_parts)
     rigid = _rigid(kept, given, mesh)
     # **강체 파트의 접촉면은 독립(master) 쪽에 둔다**(`deck.contact_block`).
     masters = (
@@ -588,6 +592,8 @@ class _Layout:
     """중간면의 면 번호 → 요소 크기(mm)."""
     shell_parts: dict[int, str] = field(default_factory=dict)
     """중간면의 면 번호 → 쉘 파트 이름."""
+    sheets: bool = False
+    """본 형상에 시트 파트가 있다 — 메시 전에 지운다(`mesh._head_lines`)."""
     skipped: list[condition_model.Note] = field(default_factory=list)
     """CalculiX 가 못 따르는 파트 메시 칸 — 바람이므로 멈추지 않고 적는다."""
 
@@ -606,7 +612,7 @@ def _layout(
 ) -> _Layout:
     """파트별 설정 → **뺄 부피 · 부피별 크기**. 메시 전에 gmsh 로 부피를 재서 짝짓는다
     (`probe_volumes`). 뺄 것도 크기도 없으면 그 통과를 건너뛴다."""
-    made = _Layout()
+    made = _Layout(sheets=bool(condition_model.sheet_parts(topology)))
     global_order = "quadratic" if second_order else "linear"
     whole = given.whole_mesh
     if whole is not None and whole.method not in ("", "automatic", "tetrahedrons"):
@@ -660,6 +666,7 @@ def _layout(
         fragment=fragment,
         timeout_seconds=min(timeout_seconds, 300),
         shell_step=made.shell_step,
+        sheets=made.sheets,
     )
     records = probe.volumes
     placed, failures = place_settings(wanted, topology, records)
@@ -928,7 +935,9 @@ def _rigid(
     return made
 
 
-def _with_face_parts(mesh: Any, body_of: dict[str, int]) -> Any:
+def _with_face_parts(
+    mesh: Any, body_of: dict[str, int], shell_parts: dict[int, str] | None = None
+) -> Any:
     """면마다 **그 면을 가진 파트 이름**을 단다(`FaceRecord.body`) — 짝짓기가 파트로 가른다.
 
     접촉을 쓰면 메시를 쪼개지 않아, 구멍에 같은 지름의 핀이 끼면 구멍면과 핀 옆면이 중심 ·
@@ -936,6 +945,11 @@ def _with_face_parts(mesh: Any, body_of: dict[str, int]) -> Any:
     집는다(핀 베어링 D5961, 2026-10-08 — Ansys 경로가 먼저 밟았다). 두 파트가 나눠 가진
     면(쪼개 붙인 메시의 접합면)은 어느 쪽이라 할 수 없어 비워 둔다 — 그 면은 전처럼 모양으로만
     짝짓는다.
+
+    **쉘 파트의 면에도 그 파트 이름을 단다**(`shell_parts` — 중간면의 면 번호 → 쉘 파트).
+    시트 바디를 솔리드 위에 그대로 얹으면(CompCore 「시트 받침 조립」) 시트의 접착 띠와
+    받침 윗면이 같은 자리 · 같은 넓이의 두 면이라, 파트를 안 보면 「받침 윗면」 자리에 시트
+    면을 집어 「쉘끼리의 접촉」 으로 멈췄다(2026-10-16).
     """
     owners = {
         entity: {node for _, ids in rows for node in ids}
@@ -944,6 +958,10 @@ def _with_face_parts(mesh: Any, body_of: dict[str, int]) -> Any:
     name_of = {entity: name for name, entity in body_of.items()}
     faces = []
     for face in mesh.faces:
+        sheet = (shell_parts or {}).get(face.id)
+        if sheet is not None:
+            faces.append(replace(face, body=sheet))
+            continue
         members = mesh.face_nodes.get(face.id) or set()
         found = [entity for entity, nodes in owners.items() if members and members <= nodes]
         if len(found) == 1 and found[0] in name_of:
@@ -1021,9 +1039,17 @@ def _local_sizes(
             timeout_seconds=timeout_seconds,
             surface_only=True,
             fragment=fragment,
-            # 뺀 파트를 같이 지워야 면 번호가 본 통과와 같다.
+            # 뺀 파트를 같이 지우고 중간면을 같이 읽어야 면 번호가 본 통과와 같다 — 중간면은
+            # 먼저 읽혀 번호 앞자리를 차지한다. 빠뜨렸더니 쉘이 있는 모델에서 솔리드 면의
+            # 힌트가 중간면 면 수만큼 밀린 다른 면에 걸렸다(2026-10-16, 「받침 바닥」 5 → 7).
             removed=layout.removed if layout else frozenset(),
+            shell_step=layout.shell_step if layout else None,
+            sheets=layout.sheets if layout else False,
         )
+        if layout and layout.shell_parts:
+            # 쉘 면에 그 파트 이름을 단다 — 같은 자리의 솔리드 면(시트를 얹은 받침 윗면)과
+            # 가른다(`_with_face_parts`).
+            rough = _with_face_parts(rough, {}, layout.shell_parts)
         found = match_regions(topology, rough.faces, wanted_regions=list(wanted))
     except StageFailure:
         # **힌트를 못 걸어도 해석은 한다** — 전역 크기로 풀린다. 다만 조용히 넘기지 않는다.

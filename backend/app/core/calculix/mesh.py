@@ -105,6 +105,7 @@ def probe_volumes(
     fragment: bool = True,
     timeout_seconds: int = 300,
     shell_step: Path | None = None,
+    sheets: bool = False,
 ) -> Probe:
     """메시 없이 **gmsh 부피 번호마다 부피 · 무게중심**(mm)을 잰다 — 파트와 짝짓는 데 쓴다.
     중간면이 있으면 **면 번호마다 넓이 · 무게중심**도 잰다(쉘 파트에 나눠 준다).
@@ -116,7 +117,7 @@ def probe_volumes(
         "\n".join(
             [
                 # 쪼개기 없이 잰다 — 지우기는 쪼개기 전에 하므로 그때의 번호가 필요하다.
-                *_head_lines(step, False, shell_step),
+                *_head_lines(step, False, shell_step, sheets=sheets),
                 "vols() = Volume{:};",
                 "For i In {0:#vols()-1}",
                 "  m = Mass Volume{vols(i)};",
@@ -150,10 +151,12 @@ def probe_volumes(
         what="gmsh",
     )
     found = parse_probe(done.stdout or "")
-    if not found:
+    surfaces = parse_probe(done.stdout or "", mark=SURFACE_MARK)
+    # **쉘만 있는 모델**(시트 하나 — 셸 모델)은 부피가 없다. 중간면의 면이 있으면 정상이다.
+    if not found and not surfaces:
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
         raise StageFailure("mesh_failed", f"gmsh 가 형상의 부피를 읽지 못했습니다:\n{tail}")
-    return Probe(volumes=found, surfaces=parse_probe(done.stdout or "", mark=SURFACE_MARK))
+    return Probe(volumes=found, surfaces=surfaces)
 
 
 def parse_probe(text: str, *, mark: str = PROBE_MARK) -> list[BodyRecord]:
@@ -189,6 +192,7 @@ def build_mesh(
     volume_sizes: dict[int, float] | None = None,
     shell_step: Path | None = None,
     shell_sizes: dict[int, float] | None = None,
+    sheets: bool = False,
 ) -> Mesh:
     """gmsh 를 불러 메시를 만들고 읽는다. `.geo` 와 `.msh` 가 작업 폴더에 남는다.
 
@@ -213,6 +217,7 @@ def build_mesh(
             volume_sizes=volume_sizes or {},
             shell_step=shell_step,
             shell_sizes=shell_sizes or {},
+            sheets=sheets,
         ),
         encoding="utf-8",
     )
@@ -239,6 +244,7 @@ def build_mesh(
             fragment=fragment,
             removed=removed,
             shell_step=shell_step,
+            sheets=sheets,
             timeout_seconds=min(timeout_seconds, 300),
         )
     except (StageFailure, OSError):
@@ -257,6 +263,7 @@ def measure(
     fragment: bool = True,
     removed: frozenset[int] = frozenset(),
     shell_step: Path | None = None,
+    sheets: bool = False,
     timeout_seconds: int = 300,
 ) -> Probe:
     """**형상에서** 면마다 넓이 · 무게중심, 부피마다 부피 · 무게중심(mm)을 잰다.
@@ -273,7 +280,7 @@ def measure(
     geo.write_text(
         "\n".join(
             [
-                *_head_lines(step, fragment, shell_step, removed),
+                *_head_lines(step, fragment, shell_step, removed, sheets=sheets),
                 "faces() = Surface{:};",
                 "For i In {0:#faces()-1}",
                 "  a = Mass Surface{faces(i)};",
@@ -338,6 +345,8 @@ def _head_lines(
     fragment: bool,
     shell_step: Path | None = None,
     removed: frozenset[int] = frozenset(),
+    *,
+    sheets: bool = False,
 ) -> list[str]:
     """형상 읽기 · 지우기 · 쪼개기 — **부피 · 면 번호가 여기서 정해진다**(모든 통과가 같이
     지난다).
@@ -357,6 +366,23 @@ def _head_lines(
         # **절대경로로 적는다** — gmsh 는 `.geo` 가 있는 폴더를 기준으로 찾으므로
         # 상대경로를 주면 「파일을 못 읽는다」 로 끝난다(실측 2026-10-03).
         f'v() = ShapeFromFile("{step.resolve()}");',
+        # **본 형상의 시트(어느 부피의 경계도 아닌 면)는 지운다**(`sheets` — 점 파일에 시트
+        # 파트가 있을 때만). 시트 바디(두께 없는 셸 모델, CompCore `bodies[].kind: "sheet"`)는
+        # 쉘로 풀면 중간면이 곧 형상이라 `_mid.step` 에 같은 면이 한 벌 더 있고(두면 두 번
+        # 메시된다), 해석에서 빼면 지워야 한다. 쉘로도 안 두고 빼지도 않은 시트는 조건
+        # 점검이 먼저 막는다(`conditions.sheet_gap`).
+        *(
+            [
+                "free() = Surface{:};",
+                "free() -= Abs(Boundary{ Volume{:}; });",
+                *(["free() -= sh();"] if shell_step else []),
+                "If (#free() > 0)",
+                "  Recursive Delete { Surface{free()}; }",
+                "EndIf",
+            ]
+            if sheets
+            else []
+        ),
         *(f"Recursive Delete {{ Volume{{{tag}}}; }}" for tag in sorted(removed)),
         # **맞닿은 면을 하나로 — 절점을 공유해야 붙은 모델이 된다.**
         #
@@ -378,18 +404,19 @@ def _geo(
     volume_sizes: dict[int, float] | None = None,
     shell_step: Path | None = None,
     shell_sizes: dict[int, float] | None = None,
+    sheets: bool = False,
 ) -> str:
     """gmsh 에게 줄 쪽지. **`.geo` 파일이 경계다** — 파이썬 API 를 안 쓴다(`tools` 참고)."""
     parts = dict(volume_sizes or {})
-    sheets = dict(shell_sizes or {})
+    shell_faces = dict(shell_sizes or {})
     # 파트 크기가 전역보다 크면 상한을, 작으면 하한을 그만큼 넓힌다 — 안 그러면 gmsh 가 그
     # 파트를 전역 범위 안으로 되돌린다.
-    largest = max([size, *parts.values(), *sheets.values()])
-    smallest = min([size, *parts.values(), *sheets.values()])
+    largest = max([size, *parts.values(), *shell_faces.values()])
+    smallest = min([size, *parts.values(), *shell_faces.values()])
     return (
         "\n".join(
             [
-                *_head_lines(step, fragment, shell_step, removed),
+                *_head_lines(step, fragment, shell_step, removed, sheets=sheets),
                 f"Mesh.MeshSizeMax = {largest:g};",
                 f"Mesh.MeshSizeMin = {smallest / 4:g};",
                 f"Mesh.ElementOrder = {2 if second_order else 1};",
@@ -408,7 +435,7 @@ def _geo(
                 # 쉘 면은 그 파트의 크기(없으면 전역) — 중간면 점에 준다.
                 *(
                     f"MeshSize{{ PointsOf{{ Surface{{{tag}}}; }} }} = {value:g};"
-                    for tag, value in sorted(sheets.items(), key=lambda pair: -pair[1])
+                    for tag, value in sorted(shell_faces.items(), key=lambda pair: -pair[1])
                 ),
                 # **영역별 힌트는 그 면의 점에 크기를 준다.** `MeshSize{ PointsOf{ … } }` 는
                 # gmsh 의 고전적인 방법이고, 필드를 세우는 것보다 읽기 쉽다. 전역 크기보다 큰
@@ -450,7 +477,11 @@ def read_mesh(
         if kind in TRIANGLE_KINDS and entity in shell_surfaces:
             number += 1
             shells[entity].append((number, list(ids)))
-    if not solids and require_solid:
+            # **쉘만 있는 모델은 차수를 쉘에서 읽는다** — 사면체로만 보면 1차(`S3`)로
+            # 떨어져, 6절점 삼각형을 3절점 요소로 적었다(시트 외팔보가 30% 단단하게
+            # 나왔다, 2026-10-16).
+            second_order = second_order or kind == 9
+    if not solids and not shells and require_solid:
         raise StageFailure(
             "mesh_failed", "메시에 사면체가 없습니다 — 형상이 솔리드인지 보세요."
         )

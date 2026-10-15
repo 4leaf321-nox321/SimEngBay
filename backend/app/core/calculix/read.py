@@ -161,7 +161,7 @@ def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, 
         payload = condition_model.shell_view(payload, set(shells)) if shells else payload
         if not probes.wanted(payload):
             return []
-        mesh = read_mesh(msh)
+        mesh = read_mesh(msh, require_solid=False)
         blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
@@ -201,7 +201,7 @@ def _draw_modes(
     if not wanted or not result.is_file() or not msh.is_file():
         return [], []
     try:
-        mesh = read_mesh(msh)
+        mesh = read_mesh(msh, require_solid=False)
         blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("모드 형상을 못 읽었습니다 — 그림 없이 갑니다", exc_info=True)

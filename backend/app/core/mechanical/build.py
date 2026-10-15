@@ -104,6 +104,11 @@ def build(
     # **CAD 가 보낸 조건** — 못 거는 것이 하나라도 있으면 여기서 멈춘다(Mechanical 을 띄우기
     # 전에). 조용히 빼면 「조건을 넣었는데 왜 결과가 같지」 를 사람이 물을 자리가 없다.
     given_conditions = _declared_conditions(spec, topology)
+    loose = condition_model.sheet_gap(
+        topology, given_conditions, from_cad=spec.conditions_from == "cad"
+    )
+    if loose:
+        raise StageFailure("region_unresolved", loose)
 
     # **형상 캐시** — STEP 임포트가 모델링 시간의 거의 전부다(실측 2026-10-02: 임포트 18.9초 ·
     # 메시 1.7초 · 다시 열기 0.7초). 같은 형상 · 같은 메시면 한 번 만들어 두고 **연다.**
@@ -115,10 +120,21 @@ def build(
         reused = _open_cached(app, cached)
         bodies = _bodies_of(app) if reused else _import_geometry(app, step)
         shells = given_conditions.shells
+        if not reused:
+            # **본 형상의 시트(두께 없는 셸 모델)는 뺀다** — 쉘로 풀면 중간면 형상으로 같은
+            # 면이 한 벌 더 들어오고(CompCore `source: "sheet"` — 중간면이 곧 형상), 해석에서
+            # 빼면 그대로 빠져야 한다. 두면 두께 없는 면 바디가 남아 Mechanical 이 입력 파일을
+            # 「Send Sheet Properties」 에서 끊었다(2026-10-16). 솔리드만 있으면 아무 일도 안
+            # 한다.
+            for body in bodies:
+                if _is_sheet(body):
+                    body.Suppressed = True
         if shells and not reused:
             # **쉘 파트는 중간면으로 푼다** — 두 번째 형상으로 들여온다(면 바디).
             bodies = _import_midsurface(app, workdir, shells)
-        sheets = [body for body in bodies if _is_sheet(body)]
+        # **뺀 시트는 쉘 후보가 아니다** — 형상 캐시를 다시 열면 뺀 본 형상의 시트도 함께 온다.
+        # 솔리드는 뺀 것도 남긴다: 파트별 설정(해석 제외 · 쉘 파트의 솔리드)이 그것을 짝짓는다.
+        sheets = [body for body in bodies if _is_sheet(body) and not _suppressed(body)]
         bodies = [body for body in bodies if not _is_sheet(body)]
         # **파트별 설정** — 형상을 읽은 직후에 건다(메시 · 물성 · 조건이 모두 그 뒤다). 캐시는
         # 그 설정까지 담고(열쇠에 들어간다 — `_cache_path`), 다시 열면 이미 걸려 있다.
@@ -1700,6 +1716,13 @@ def _is_sheet(body: Any) -> bool:
     """면 바디(쉘)인가 — 중간면 형상의 바디다(실측: `GeoBodySheet`, 부피 0)."""
     try:
         return "Sheet" in str(body.GetGeoBody().BodyType)
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        return False
+
+
+def _suppressed(body: Any) -> bool:
+    try:
+        return bool(body.Suppressed)
     except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
         return False
 

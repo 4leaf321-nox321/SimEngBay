@@ -219,6 +219,41 @@ def test_중간면이_없는_쉘_파트는_막는다() -> None:
     assert "판이 아닙니다" in failed.refused[0].why
 
 
+def test_시트는_쉘로_두거나_빼야_한다() -> None:
+    """두께 없는 시트(셸 모델, CompCore 2026-10-15)는 부피가 0 이라 **솔리드로 풀 길이가
+    없다.** 두 솔버 모두 본 형상의 시트를 지우므로(쉘이면 중간면이 대신한다) 쉘로도 안 두고
+    빼지도 않은 시트는 그대로 두면 그 파트 없이 풀린다 — 막는다."""
+    point = _point("셸모델_시트받침조립")
+    assert conditions.sheet_parts(point) == {"skin"}
+    assert conditions.read(point).refused == []
+
+    def with_skin(row: dict[str, Any] | None) -> conditions.Conditions:
+        changed = json.loads(json.dumps(point))
+        rows = [one for one in changed["conditions"]["body_settings"] if one["name"] != "skin"]
+        changed["conditions"]["body_settings"] = rows + ([row] if row else [])
+        return conditions.read(changed)
+
+    for row in ({"name": "skin", "representation": "solid"}, None):
+        found = with_skin(row)
+        assert [(one.what, one.why) for one in found.refused] == [
+            ("파트 「skin」", conditions.SHEET_AS_SOLID)
+        ]
+    off = with_skin({"name": "skin", "suppressed": True})
+    assert off.refused == [] and conditions.loose_sheets(point, off) == []
+
+    # 두께를 못 받은 시트는 CompCore 의 까닭 하나만 — 같은 파트를 두 번 말하지 않는다.
+    bare = conditions.read(_point("셸모델_두께없음"))
+    assert [one.what for one in bare.refused] == ["파트 「전체」 쉘 표현"]
+    assert "두께가 없습니다" in bare.refused[0].why
+
+    # CAD 조건을 끄면 쉘 두께가 올 길이 없다 — 켜라고 말한다.
+    assert conditions.sheet_gap(point, conditions.read(point), from_cad=True) == ""
+    blocked = conditions.sheet_gap(point, conditions.Conditions(), from_cad=False)
+    assert "skin" in blocked and "CAD 가 보낸 조건 사용" in blocked
+    # 옛 점 파일(`kind` 없음)은 모두 솔리드다.
+    assert conditions.sheet_parts(_point(SHELL_FOLDER)) == set()
+
+
 SHELL_FOLDER = "조건_강체지그_쉘브래킷"
 
 

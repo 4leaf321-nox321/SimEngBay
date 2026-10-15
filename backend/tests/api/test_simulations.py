@@ -663,6 +663,60 @@ def test_못_거는_CAD_조건이_있으면_만들_때_막는다(client: TestCli
     assert mine.status_code == 201, mine.text
 
 
+SHEET_ASSEMBLY = TWO_BODY_FOLDER.parent / "셸모델_시트받침조립"
+
+
+def test_풀_길이_없는_시트는_만들_때_막는다(client: TestClient, member: Signed) -> None:
+    """두께 없는 시트(CompCore 2026-10-15)는 쉘로 두거나 빼야 풀린다 — 두 솔버 모두 본 형상의
+    시트를 지우므로, 그대로 걸면 그 파트 없이 그럴듯한 답이 나온다. 미리보기 · 만들기가 같은
+    말을 하고, CAD 조건을 끄라는 안내는 하지 않는다(끄면 쉘 두께가 올 길이가 없다)."""
+    payload = json.loads((SHEET_ASSEMBLY / "points" / "p0001.json").read_text("utf-8"))
+    payload["conditions"]["body_settings"] = [
+        one for one in payload["conditions"]["body_settings"] if one["name"] != "skin"
+    ]
+    loose = json.dumps(payload, ensure_ascii=False).encode()
+    static = {"recipe": "static", "mesh": {"element_size_mm": 2}}
+
+    preview = client.post(
+        "/api/simulations/conditions/preview",
+        files={"file": ("p0001.json", io.BytesIO(loose), "application/json")},
+        headers=member.headers,
+    )
+    assert preview.status_code == 200, preview.text
+    assert any(
+        one["status"] == "refused" and "쉘로 두고 두께를" in one["why"]
+        for one in preview.json()["conditions"]["lines"]
+    )
+    blocked = _create_with_point(client, member, static, loose)
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["code"].endswith("SIMULATIONS-0030")
+    message = blocked.json()["error"]["message"]
+    assert "skin" in message and "끄고" not in message
+
+    # CAD 조건을 끄면 — 시트의 쉘 설정이 있어도 읽지 않으니 풀 길이가 없다.
+    whole = (SHEET_ASSEMBLY / "points" / "p0001.json").read_bytes()
+    mine = _create_with_point(
+        client,
+        member,
+        {
+            "recipe": "modal",
+            "conditions_from": "spec",
+            "constraints": [],
+            "mesh": {"element_size_mm": 2},
+        },
+        whole,
+    )
+    assert mine.status_code == 400, mine.text
+    assert mine.json()["error"]["code"].endswith("SIMULATIONS-0033")
+    assert "CAD 가 보낸 조건 사용" in mine.json()["error"]["message"]
+
+    # 두께를 못 받은 시트는 CompCore 의 까닭 그대로.
+    bare = (SHEET_ASSEMBLY.parent / "셸모델_두께없음" / "points" / "p0001.json").read_bytes()
+    thin = _create_with_point(client, member, static, bare)
+    assert thin.status_code == 400, thin.text
+    assert "두께가 없습니다" in thin.json()["error"]["message"]
+
+
 def test_DOE_는_못_거는_조건이_있는_점을_걸지_않고_까닭을_단다(
     client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

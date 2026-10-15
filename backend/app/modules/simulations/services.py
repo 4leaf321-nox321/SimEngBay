@@ -617,6 +617,9 @@ def create(
     sizeless = size_gap(spec, payload)
     if sizeless:
         raise AppError(code("SIMULATIONS", 32), sizeless, status=400)
+    loose = sheet_gap(spec, payload)
+    if loose:
+        raise AppError(code("SIMULATIONS", 33), loose, status=400)
     missing_mid = midsurface_gap(payload, has_midsurface=bool(midsurface))
     if missing_mid:
         # 만들 때 말한다 — 걸어 두면 모델링에서 멈춘다.
@@ -1039,8 +1042,13 @@ def conditions_gap(
         return (
             "CAD 가 보낸 조건 중 걸 수 없는 것이 있습니다: "
             + " · ".join(f"{one.what} — {one.why}" for one in refused)
-            + " (CAD 조건 없이 돌리려면 「CAD 가 보낸 조건 사용」 을 끄고 고정할 면을 "
-            "고릅니다)"
+            # 시트가 있으면 CAD 조건을 꺼도 못 푼다 — 쉘 두께가 그 조건으로 온다.
+            + (
+                ""
+                if condition_model.sheet_parts(payload)
+                else " (CAD 조건 없이 돌리려면 「CAD 가 보낸 조건 사용」 을 끄고 고정할 면을 "
+                "고릅니다)"
+            )
         )
     if spec.solver == "calculix":
         from app.core.calculix import deck as calculix_deck
@@ -1055,6 +1063,26 @@ def conditions_gap(
                 + " — 솔버를 ansys 로 바꾸세요."
             )
     return None
+
+
+def sheet_gap(
+    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
+) -> str | None:
+    """두께 없는 시트(셸 모델)를 **쉘로도 안 풀고 빼지도 않았나** — 있으면 까닭, 없으면 `None`.
+
+    규칙은 모델링과 같다(`conditions.sheet_gap`). 「CAD 가 보낸 조건 사용」 을 켰으면 조건 점검
+    (`conditions_gap`)이 같은 말을 먼저 한다 — 이것은 그 점검이 못 보는 길(CAD 조건을 껐거나
+    조건 블록이 없는 점)을 막는다.
+    """
+    if not payload:
+        return None
+    from_cad = spec.conditions_from == "cad"
+    given = (
+        condition_model.read(payload, recipe=spec.recipe)
+        if from_cad
+        else condition_model.Conditions()
+    )
+    return condition_model.sheet_gap(payload, given, from_cad=from_cad) or None
 
 
 def size_gap(
@@ -1186,6 +1214,7 @@ def import_doe(
             material_gap(spec, payload)
             or conditions_gap(spec, payload)
             or size_gap(spec, payload)
+            or sheet_gap(spec, payload)
             or midsurface_gap(payload, has_midsurface=point.mid_step is not None)
         )
         if gap:

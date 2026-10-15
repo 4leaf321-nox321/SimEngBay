@@ -28,7 +28,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.conditions import ALL_BODIES, BodySetting
+from app.core.conditions import ALL_BODIES, SHEET, SHEET_AS_SOLID, BodySetting, sheet_parts
 
 #: 부피가 이 비율 안으로 같으면 「닮았다」 로 본다. STEP 을 다시 읽어 생기는 차이는 0.1% 도 안
 #: 되지만(실측 0.01%), 메시 · 곡면 재현이 걸리면 조금 더 벌어질 수 있다.
@@ -81,6 +81,12 @@ def match_bodies(topology: dict[str, Any], records: list[BodyRecord]) -> BodyMat
     for part in wanted:
         name = str(part.get("name") or "").strip()
         if not name:
+            continue
+        if part.get("kind") == SHEET:
+            # **시트는 부피가 0 이다** — 부피로 짝지을 바디가 없다. 시트는 쉘로만 풀고(중간면이
+            # 곧 형상), 쉘 파트는 여기 오기 전에 빠진다(`without`). 여기 왔으면 쉘로 안 둔
+            # 것이다.
+            result.failures.append(_sheet_as_solid(name))
             continue
         volume = part.get("volume")
         if not isinstance(volume, int | float) or float(volume) <= 0:
@@ -160,10 +166,17 @@ def place_settings(
     whole = next((one for one in settings if one.name == ALL_BODIES), None)
     if whole is not None:
         return {one.index: whole for one in records}, []
-    matched = match_bodies(topology, records)
+    sheets = sheet_parts(topology)
+    # 시트는 부피 바디가 아니다 — 쉘 설정은 중간면 쪽에서 붙는다(셸 파트 짝짓기).
+    matched = match_bodies(without(topology, sheets), records)
     placed: dict[int, BodySetting] = {}
     failures: list[str] = []
     for one in settings:
+        if one.name in sheets:
+            # 시트는 쉘로 풀거나(중간면 쪽에서 붙는다) 뺀다 — 둘 다 부피 바디가 아니다.
+            if not (one.shell or one.suppressed):
+                failures.append(_sheet_as_solid(one.name))
+            continue
         index = matched.bodies.get(one.name)
         if index is None:
             why = next(
@@ -174,6 +187,10 @@ def place_settings(
             continue
         placed[index] = one
     return placed, failures
+
+
+def _sheet_as_solid(name: str) -> str:
+    return f"{name}: {SHEET_AS_SOLID}"
 
 
 def without(topology: dict[str, Any], names: set[str]) -> dict[str, Any]:

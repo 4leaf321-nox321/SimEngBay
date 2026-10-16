@@ -386,3 +386,20 @@ def test_비례_정련은_파트와_면_크기를_같은_비율로_줄이고_전
     # 원본은 그대로, 1 이면 같은 것.
     assert {one.name: one.element_size for one in found.body_settings} == {"기둥": 1.5}
     assert conditions.scaled(found, 1) is found
+
+
+def test_중간면으로_옮긴_판에서_읽어도_쉘_파트의_조건이_남는다() -> None:
+    """`shell_view` 는 쉘 파트의 영역을 중간면의 것으로 바꾼다 — 옮긴 행에는 `mid` 가 없다.
+    그 판으로 조건을 다시 읽으면 「CompCore 가 중간면으로 옮기지 못했다」 로 모두 막혀, Ansys
+    추출이 쉘 파트의 구속을 잃고 반력을 비워 냈다(2026-10-16, 시트 외팔보)."""
+    point = _point("셸모델_시트외팔보")
+    raw = conditions.read(point, recipe="static")
+    view = conditions.shell_view(point, set(raw.shells))
+    again = conditions.read(view, recipe="static")
+    assert again.refused == []
+    assert [one.region for one in again.constraints] == ["물림 띠"]
+    assert [one.region for one in again.loads] == ["하중면"]
+    # 원래 판에서 못 옮긴 자리는 여전히 막는다.
+    broken = json.loads(json.dumps(point))
+    broken["regions"]["물림 띠"][0]["mid"] = []
+    assert "못했습니다" in conditions.read(broken, recipe="static").refused[0].why

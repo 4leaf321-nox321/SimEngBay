@@ -291,6 +291,37 @@ def test_정적_해석이_변형과_응력을_낸다(ready: None, tmp_path: Path
     assert 1.0 < result["max_von_mises"] < 4.0
     # 변형 그림도 남는다 — 모달의 모드 형상과 같은 길이라 화면이 그대로 읽는다.
     assert (tmp_path / "mode_01.vtp").is_file()
+    # **고정 지지의 반력** = 압력 x 하중면(1.5 MPa x 1,600 mm²).
+    assert result["reactions"]["바닥"] == pytest.approx([0.0, 0.0, 2400.0], abs=0.01)
+
+
+def test_구속면에_직접_걸린_압력도_반력에_든다(ready: None, tmp_path: Path) -> None:
+    """ccx 의 RF 는 구속 절점에 직접 걸린 외력을 빼고 낸다 — 구속면 자체에 압력을 걸면 그
+    몫이 통째로 빠진다. 덱이 되돌린 반력은 평형 그대로다: 윗면 1.5 MPa x 1,600 mm² 아래로,
+    바닥 0.1 MPa x 6,000 mm² 위로 → 받침이 1,800 N(2026-10-16 — 이차 사면체 면의 몫을 중간
+    절점에만 나눈다)."""
+    two_bodies = FIXTURES / "doe" / "조건_두바디_두재료"
+    shutil.copy(two_bodies / "points" / "p0001.step", tmp_path / "input.step")
+    payload = json.loads((two_bodies / "points" / "p0001.json").read_text(encoding="utf-8"))
+    payload["conditions"]["loads"].append(
+        {
+            "name": "바닥 압력",
+            "type": "pressure",
+            "on": "바닥",
+            "magnitude": 0.1,
+            "unit": "MPa",
+            "direction": "normal",
+        }
+    )
+    (tmp_path / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec["recipe"] = "static"
+    spec["mesh"] = {"element_size_mm": 8}
+    _run(tmp_path, spec)
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["reactions"]["바닥"] == pytest.approx([0.0, 0.0, 1800.0], abs=0.01)
 
 
 def test_조화_응답이_공진에서_솟고_CAD_감쇠를_쓴다(ready: None, tmp_path: Path) -> None:
@@ -638,6 +669,15 @@ def test_전단_이음에서_마찰이_일을_한다(ready: None, tmp_path: Path
     strain = spots["이음 입구 위판"]["strain"]
     assert len(strain) == 3
     assert 1e-6 < abs(strain[0]) < 1e-2, f"εxx {strain[0]}"
+    # **반력은 평형이다** — 고정단 · 마찰 없는 바닥 · 당기는 끝의 합이 클램프(12.5 MPa x
+    # 800 mm² = 10 kN)를 받친다. 고정단과 바닥이 나눈 모서리 절점은 고정단 몫이다 — 둘 다에
+    # 더하면 바닥이 X 로 -259 N 을 「버티고」 합이 102 N 어긋났다(2026-10-16).
+    for done in (bonded, rubbing):
+        forces = done["reactions"]
+        total = [sum(one[axis] for one in forces.values()) for axis in range(3)]
+        # 마찰은 비선형 증분이라 수렴 허용치(0.01%)만큼 흔들린다(실측 10,001.3 N).
+        assert total == pytest.approx([0.0, 0.0, 10000.0], abs=10.0)
+        assert abs(forces["바닥"][0]) < 1e-6
 
 
 def test_메시를_줄이면_1차_주파수가_수렴하고_GCI_가_그만큼을_말한다(

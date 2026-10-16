@@ -478,3 +478,153 @@ def test_강체_면은_접촉_쌍의_독립_쪽에_선다() -> None:
     assert pair_line({"롤러"}) == "C0S, C0T"
     # 원천면이 강체면 지금 차례가 이미 그렇다.
     assert pair_line({"판"}) == "C0T, C0S"
+
+
+def test_고정_지지도_반력을_읽고_그_절점에_직접_걸린_하중을_되돌린다() -> None:
+    """ccx 의 RF 는 그 절점에 직접 걸린 외력을 빼고 낸다 — 관성만이 아니다. 하중면이 구속면과
+    모서리를 나누면 그 모서리 절점의 압력이 반력에서 빠졌다(실측 2026-10-16: CompCore 시트
+    외팔보 1.7945 N — 손셈 1.8 N). 덱이 그 몫을 셈해 둔다."""
+    push = condition_model.Load(
+        name="누름", kind="force", region="끝", magnitude=5.0, direction=(0, 0, -1)
+    )
+    plan = deck.write_static(
+        nodes=NODES,
+        solids=SOLIDS,
+        body_of={"부품": 1, "지그": 2},
+        materials=[_material("부품", "지그")],
+        held_nodes={"바닥": {1, 2, 3}},
+        load_nodes={"끝": {2}},
+        load_faces={},
+        load_areas={"끝": {2: 1.0}},
+        given=condition_model.Conditions(constraints=[FIXED], loads=[push]),
+        second_order=False,
+    )
+    assert plan.reaction_sets == {"바닥": "HOLD0"}
+    assert "*NODE PRINT, NSET=HOLD0, TOTALS=ONLY, GLOBAL=YES" in plan.text
+    # 절점 2 에 걸린 -5 N 은 받침이 바로 받는다 — 반력에 +5 N 을 더한다.
+    assert plan.reaction_offsets["바닥"] == pytest.approx([0, 0, 5.0])
+
+    # 압력은 ccx 가 나누는 대로 — 바닥 면(1-2-3, 넓이 50)에 0.1 MPa 면 몸을 +Z 로 5 N 민다
+    # (바깥 법선 -Z 의 반대). 일차 면은 꼭짓점마다 1/3, 셋 다 받침 절점이다.
+    pressure = condition_model.Load(
+        name="밑 압력", kind="pressure", region="밑면", magnitude=0.1, unit="MPa"
+    )
+    pressed = deck.write_static(
+        nodes=NODES,
+        solids=SOLIDS,
+        body_of={"부품": 1, "지그": 2},
+        materials=[_material("부품", "지그")],
+        held_nodes={"바닥": {1, 2, 3}},
+        load_nodes={"밑면": {1, 2, 3}},
+        load_faces={"밑면": [(1, "P1")]},
+        load_areas={},
+        given=condition_model.Conditions(constraints=[FIXED], loads=[pressure]),
+        second_order=False,
+    )
+    assert pressed.reaction_offsets["바닥"] == pytest.approx([0, 0, -5.0])
+
+
+def test_이차_면의_압력은_중간_절점에만_나눈다() -> None:
+    """평평한 이차 삼각형에 고른 압력을 걸면 꼭짓점 몫은 0, 중간 절점마다 넓이의 1/3 이다."""
+    nodes = {
+        **NODES,
+        6: (5.0, 0.0, 0.0),
+        7: (5.0, 5.0, 0.0),
+        8: (0.0, 5.0, 0.0),
+        9: (0.0, 0.0, 5.0),
+        10: (5.0, 0.0, 5.0),
+        11: (0.0, 5.0, 5.0),
+    }
+    tet = {1: [(1, [1, 2, 3, 4, 6, 7, 8, 9, 10, 11])]}
+    rows = ["*DLOAD", "1, P1, 0.1"]
+    corners = deck._load_offsets({"꼭짓점": frozenset({1, 2, 3})}, rows, nodes, tet)
+    middles = deck._load_offsets({"중간": frozenset({6, 7, 8})}, rows, nodes, tet)
+    assert corners == {}
+    assert middles["중간"] == pytest.approx([0, 0, -5.0])
+
+
+def test_모서리를_나눈_구속의_절점은_축마다_그_축을_막는_쪽만_반력에_센다() -> None:
+    """고정단과 바닥처럼 모서리를 나누는 구속은 그 절점을 둘 다 가진다 — 두 영역에 다 더하면
+    두 번 센다(실측 2026-10-16: CompCore 전단 이음, 마찰 없는 바닥이 X 로 -259 N). 그 절점의
+    각 축은 그 축을 막는 구속 중 더 많이 막는 쪽의 몫이다. 경계 조건의 집합은 그대로다 — 읽는
+    집합만 따로 세우고, 반력은 전역 성분으로 찍는다(원통 지지의 국부 성분이 섞이지 않게)."""
+    side = condition_model.Constraint(
+        name="옆 밀기",
+        kind="displacement",
+        region="옆",
+        components=(0.01, None, None),
+    )
+    plan = deck.write_static(
+        nodes=NODES,
+        solids=SOLIDS,
+        body_of={"부품": 1, "지그": 2},
+        materials=[_material("부품", "지그")],
+        held_nodes={"바닥": {1, 2, 3}, "옆": {1, 2, 4}},
+        load_nodes={},
+        load_faces={},
+        load_areas={},
+        given=condition_model.Conditions(constraints=[side, FIXED]),
+        second_order=False,
+    )
+    assert plan.reaction_sets == {"옆": "HOLD0R1", "바닥": "HOLD1"}
+    assert plan.printed_sets == {
+        "HOLD0R1": frozenset({4}),
+        "HOLD1": frozenset({1, 2, 3}),
+    }
+    lines = plan.text.splitlines()
+    # 변위는 원래 집합(1 · 2 · 4)에 그대로 걸린다.
+    assert lines[lines.index("*NSET, NSET=HOLD0") + 1] == "1, 2, 4"
+    assert lines[lines.index("*NSET, NSET=HOLD0R1") + 1] == "4"
+    assert "*NODE PRINT, NSET=HOLD0R1, TOTALS=ONLY, GLOBAL=YES" in plan.text
+    # 읽지 않는 원래 집합은 찍지 않는다.
+    assert "*NODE PRINT, NSET=HOLD0," not in plan.text
+
+
+def test_대칭면_둘이_나눈_모서리는_축마다_제_면이_갖는다() -> None:
+    """X 대칭면과 Y 대칭면이 모서리(절점 1 · 4)를 나누면 그 모서리의 X 반력은 X 면, Y 반력은
+    Y 면의 것이다. 막는 자유도 수로만 가르면 앞의 면이 모서리를 통째로 가져가 뒤의 면이
+    모자랐다(2026-10-16 검토)."""
+    x_plane = condition_model.Constraint(
+        name="X 대칭", kind="displacement", region="X 면", components=(0.0, None, None)
+    )
+    y_plane = condition_model.Constraint(
+        name="Y 대칭", kind="displacement", region="Y 면", components=(None, 0.0, None)
+    )
+    plan = deck.write_static(
+        nodes=NODES,
+        solids=SOLIDS,
+        body_of={"부품": 1, "지그": 2},
+        materials=[_material("부품", "지그")],
+        held_nodes={"X 면": {1, 3, 4}, "Y 면": {1, 2, 4}},
+        load_nodes={},
+        load_faces={},
+        load_areas={},
+        given=condition_model.Conditions(constraints=[x_plane, y_plane]),
+        second_order=False,
+    )
+    x_names, y_names = plan.reaction_sets["X 면"], plan.reaction_sets["Y 면"]
+    assert isinstance(x_names, list) and isinstance(y_names, list)
+    nodes_of = [
+        [plan.printed_sets[name] if name else frozenset() for name in names]
+        for names in (x_names, y_names)
+    ]
+    # X 면: X 는 모서리까지, Y 는 모서리 빼고(그 Y 는 Y 면 몫), Z 는 아무도 막지 않아 그대로.
+    assert nodes_of[0] == [frozenset({1, 3, 4}), frozenset({3}), frozenset({1, 3, 4})]
+    assert nodes_of[1] == [frozenset({2}), frozenset({1, 2, 4}), frozenset({1, 2, 4})]
+
+
+def test_축마다_가른_반력은_제_집합의_성분만_읽는다(tmp_path: Path) -> None:
+    from app.core.calculix.static_read import _reactions
+
+    (tmp_path / "boundary.json").write_text(
+        json.dumps({"reaction_sets": {"X 면": ["HOLD0", "HOLD0R1", None]}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "model.dat").write_text(
+        " total force (fx,fy,fz) for set HOLD0 and time  0.1000000E+01\n\n"
+        "  3.000000E+00  7.000000E+00  9.000000E+00\n"
+        " total force (fx,fy,fz) for set HOLD0R1 and time  0.1000000E+01\n\n"
+        "  1.000000E+00  2.000000E+00  4.000000E+00\n",
+        encoding="utf-8",
+    )
+    assert _reactions(tmp_path) == {"X 면": [3.0, 2.0, 0.0]}

@@ -168,14 +168,25 @@ def _reactions(
     절점이다(`_write_remote_reaction_nodes`). 없으면(옛 작업) 전처럼 변위는 평면으로 찾고,
     강체 구속은 그것이 유일한 구속일 때만 모델 전체의 반력 합으로 낸다.
     """
-    known: dict[str, list[int]] = {}
+    known: dict[str, list[int] | dict[str, list[int]]] = {}
     path = workdir / "reaction_nodes.json" if workdir is not None else None
-    if path is not None and path.is_file():
+    # **파일이 있으면 그것이 정본이다** — 빠진 영역은 그 절점이 다 다른 구속의 몫이라 뺀 것이다
+    # (`statics.separate_reactions`). 평면으로 다시 찾으면 그 절점을 두 번 센다. 평면은 그
+    # 파일이 없던 옛 작업만 쓴다.
+    written = path is not None and path.is_file()
+    if path is not None and written:
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
-            known = {str(key): [int(one) for one in value] for key, value in loaded.items()}
+            for key, value in loaded.items():
+                # 축마다 절점이 다르면 {"x": [...], "y": [...], "z": [...]} 다.
+                known[str(key)] = (
+                    {axis: [int(one) for one in value.get(axis) or []] for axis in "xyz"}
+                    if isinstance(value, dict)
+                    else [int(one) for one in value]
+                )
         except (OSError, ValueError, TypeError, AttributeError):
             logger.warning("reaction_nodes.json 을 못 읽었습니다 — 평면으로 찾습니다")
+            written = False
     try:
         from app.core import conditions as condition_model
 
@@ -197,7 +208,7 @@ def _reactions(
             if total is not None:
                 found[rule.region] = total
             continue
-        if rule.kind != "displacement" or rule.region in found:
+        if written or rule.kind != "displacement" or rule.region in found:
             continue
         rows = regions.get(rule.region)
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):

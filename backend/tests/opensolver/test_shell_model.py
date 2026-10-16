@@ -81,7 +81,7 @@ def _solve(workdir: Path, spec: dict[str, Any]) -> tuple[dict[str, Any], dict[st
 
 
 def test_시트_외팔보가_손셈에_맞는다(ready: None, tmp_path: Path) -> None:
-    """100 x 20 x t1.2 시트 외팔보, 끝에 1.8 N. 손셈 끝 처짐 0.278 mm(보 이론 — 판 이론의
+    """100 x 20 x t1.2 시트 외팔보, 하중면에 1.8 N. 손셈 끝 처짐 0.278 mm(보 이론 — 판 이론의
     아래 한계 0.254), 뿌리 응력 16.9 MPa. 실측(2026-10-16): 0.2766 mm · 17.18 MPa.
 
     부피가 하나도 없는 형상이다 — 고치기 전에는 메시 전에 멈췄고, 고친 뒤에도 S3 에 6절점을
@@ -97,6 +97,9 @@ def test_시트_외팔보가_손셈에_맞는다(ready: None, tmp_path: Path) ->
     assert result["max_von_mises"] == pytest.approx(16.9, rel=0.1)
     # 질량 = 넓이 x 두께 x 밀도(2000 mm² x 1.2 mm x 7850 kg/m³).
     assert summary["mass_kg"] == pytest.approx(0.0188, rel=0.01)
+    # 반력 = 압력 x 하중면(0.001 MPa x 90 x 20) — 손셈 1.8 N. 하중면이 물림 띠와 모서리를
+    # 나눠 그 절점의 압력이 RF 에서 빠지던 몫(1.7945 N)을 덱이 되돌린다.
+    assert result["reactions"]["물림 띠"] == pytest.approx([0.0, 0.0, 1.8], abs=1e-4)
     # 솔리드가 없어도 그림이 나온다.
     assert (tmp_path / "mode_01.vtp").is_file()
 
@@ -116,6 +119,8 @@ def test_시트를_솔리드_받침에_접착해_푼다(ready: None, tmp_path: P
     assert result["max_displacement"] == pytest.approx(0.173, rel=0.05)
     # 받침(4000 mm³) + 시트(2000 mm² x 1.2 mm) = 6400 mm³ x 7850 kg/m³.
     assert summary["mass_kg"] == pytest.approx(0.0502, rel=0.01)
+    # 반력 — 손셈 1.6 N(0.001 MPa x 80 x 20). 시트가 *TIE 로 받침에 얹혀 받침 바닥이 받는다.
+    assert result["reactions"]["받침 바닥"] == pytest.approx([0.0, 0.0, 1.6], abs=1e-4)
 
 
 def test_쉘이_있어도_솔리드_면의_메시_힌트가_그_면에_걸린다(
@@ -173,22 +178,32 @@ def test_CAD_조건을_끄면_시트를_풀_길이가_없다(ready: None, tmp_pa
 
 
 @pytest.mark.ansys
-def test_두_솔버가_시트_외팔보를_같게_푼다(ready: None, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("folder", "held", "tip", "force"),
+    [(CANTILEVER, "물림 띠", 0.278, 1.8), (ASSEMBLY, "받침 바닥", 0.173, 1.6)],
+    ids=["외팔보", "받침조립"],
+)
+def test_두_솔버가_시트_모델을_같게_푼다(
+    ready: None, tmp_path: Path, folder: Path, held: str, tip: float, force: float
+) -> None:
     """**교차 검증 — 시트.** Ansys 는 본 형상의 시트를 빼고 중간면의 시트를 쉘로 푼다.
-    실측(2026-10-16): CalculiX 0.2766 · Ansys 0.2714 mm(1.9%).
+    실측(2026-10-16, 손셈 / CalculiX / Ansys): 외팔보 0.278 / 0.2766 / 0.2714 mm · 반력 1.8 N
+    셋 다, 받침조립 0.173 / 0.1767 / 0.1702 mm · 반력 1.6 N 셋 다.
 
     본 형상의 시트를 그대로 두면 두께 없는 면 바디가 남아 Mechanical 이 입력 파일을 「Send
-    Sheet Properties」 에서 끊었다.
+    Sheet Properties」 에서 끊었다. 쉘 파트의 구속은 추출이 중간면 판으로 조건을 읽다 「못
+    옮겼다」 로 잃어 반력이 비었다. 받침조립의 쉘은 전체 차수가 거절되면 1차(SHELL181)로 떨어져
+    0.1757 mm 가 났다 — 면 바디마다 차수를 못 박는다(SHELL281).
     """
     import os
 
     from app.core import executors
     from app.core.stages import StageContext
 
-    found: dict[str, float] = {}
+    found: dict[str, dict[str, Any]] = {}
     for solver in ("calculix", "ansys"):
         work = tmp_path / solver
-        _place(CANTILEVER, work)
+        _place(folder, work)
         spec = _spec(solver=solver)
         (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
         if solver == "calculix":
@@ -204,7 +219,9 @@ def test_두_솔버가_시트_외팔보를_같게_푼다(ready: None, tmp_path: 
             )
             for stage in STAGES:
                 runner.run(StageContext(stage=stage, spec=spec, workdir=work))
-        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
-        found[solver] = result["max_displacement"]
-    assert found["calculix"] == pytest.approx(found["ansys"], rel=0.04), found
-    assert found["ansys"] == pytest.approx(0.278, rel=0.05), found
+            deck = (work / "model.dat").read_text(encoding="utf-8", errors="replace")
+            assert re.search(r"^et,\d+,281", deck, re.M), "쉘이 2차(SHELL281)가 아니다"
+        found[solver] = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    for solver, result in found.items():
+        assert result["max_displacement"] == pytest.approx(tip, rel=0.05), solver
+        assert result["reactions"][held] == pytest.approx([0.0, 0.0, force], abs=1e-3), solver

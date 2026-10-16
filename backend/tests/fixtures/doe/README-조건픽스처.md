@@ -378,6 +378,14 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 
 ## 읽을 때 알아 둘 것
 
+- **2026-10-16 — 시트 파트는 늘 쉘.** 점 파일의 `body_settings` 에 시트 파트는 `representation:
+  "shell"` · `behavior: "deformable"` 로 실린다 — 사람이 그 파트의 설정을 안 고쳤어도(줄을 더해
+  싣는다). 시트를 솔리드 · 강체로 적은 조건은 CompCore 가 저장 · DOE 만들기에서 막는다(해석
+  제외는 된다). 두께는 **`midsurface.bodies[].thickness` 를 읽는다** — 시트면 사람이 적은
+  `body_settings[].thickness` 와 같고, 솔리드를 쉘로 풀면 형상에서 잰 값이다(솔리드에 두께를
+  적는 것은 이제 막는다 — 적어도 쓰이지 않아 두 칸이 갈렸다). `body_settings[].thickness` 도 이제
+  선언한 계로 옮긴다(SI 면 m — 그 전에는 mm 그대로 나갔다). 중간면 쪽은 늘 mm 다
+  (`length_units.midsurface`).
 - **2026-10-15 — 시트 바디(셸 모델).** 점 파일 `bodies[]` 에 `kind`(`sheet` · `solid`) · `area`,
   `midsurface.bodies[]` 에 `source`(`sheet` · `solid`), 조건 `body_settings[]` 에 `thickness`(시트
   파트의 쉘 두께 — 솔리드를 쉘로 풀 때는 `null`, 두께는 형상에서 잰다)가 늘었다. 더한 열쇠뿐이고,

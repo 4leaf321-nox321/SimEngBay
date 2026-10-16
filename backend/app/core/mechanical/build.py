@@ -45,7 +45,14 @@ from app.core.stages import (
     StageFailure,
     StageResult,
 )
-from app.core.statics import StaticPlan, static_plan
+from app.core.statics import (
+    Axes,
+    StaticPlan,
+    held_axes,
+    held_directions,
+    separate_reactions,
+    static_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +150,7 @@ def build(
         if not reused:
             _apply_body_settings(app, placed, bodies, system)
             _apply_whole_method(app, given_conditions, placed, bodies)
-            _apply_sheet_settings(app, sheet_of, given_conditions, system)
+            _apply_sheet_settings(app, sheet_of, given_conditions, system, spec.mesh.order)
         order_note = condition_model.whole_order_note(given_conditions, spec.mesh.order)
         if order_note is not None:
             given_conditions.skipped.append(order_note)
@@ -252,8 +259,8 @@ def build(
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, view or {}, modelled
         )
-        # **변위로 당긴 자리의 절점을 남긴다** — 추출이 그 절점의 반력만 더한다.
-        _write_reaction_nodes(app, workdir, given_conditions, places)
+        # **반력을 읽는 구속의 절점을 남긴다** — 추출이 그 절점의 반력만 더한다.
+        _write_reaction_nodes(app, workdir, given_conditions, places, topology)
         size_mm = _global_size_mm(spec, given_conditions, system)
 
         dat = workdir / "model.dat"
@@ -454,6 +461,9 @@ def _cache_path(
         mid = step.with_name(MIDSURFACE_NAME)
         if mid.is_file():
             digest.update(mid.read_bytes())
+        # 면 바디의 차수를 못 박기 전(2026-10-16)에 담은 모델은 다시 만든다
+        # (`_apply_sheet_settings`).
+        digest.update(b"sheet-order:1")
     if given.body_settings:
         # **파트별 설정도 모델이다** — 강체 · 제외 · 파트 메시가 캐시에 같이 담긴다. 다르면
         # 다른 열쇠여야 다음 점이 앞 점의 설정을 물려받지 않는다.
@@ -1119,36 +1129,68 @@ REACTION_NODES_NAME = "reaction_nodes.json"
 
 
 def _write_reaction_nodes(
-    app: Any, workdir: Path, given: condition_model.Conditions, places: dict[str, Any]
+    app: Any,
+    workdir: Path,
+    given: condition_model.Conditions,
+    places: dict[str, Any],
+    topology: dict[str, Any] | None = None,
 ) -> None:
-    """변위 구속 영역마다 **메시 절점 번호**를 남긴다 — 추출이 그 절점의 반력만 더한다.
+    """반력을 읽는 구속 영역마다 **메시 절점 번호**를 남긴다 — 추출이 그 절점의 반력만 더한다.
 
     전에는 추출이 그 영역 **첫 면의 평면 위** 절점의 반력을 더했다. 같은 평면에 다른 구속이
     있으면 함께 더해지고(V 노치 전단의 두 물림은 같은 평면이라 서로 지워져 144 N — CalculiX
     37.7 kN), 면이 여럿이면 첫 면만 셌다(겹치기 이음 2.9 kN — CalculiX 3.8 kN). CompCore 시험
     규격으로 들켰다(2026-10-08). Mechanical 이 면마다 아는 메시 절점이 정본이다 — CalculiX
     쪽도 구속을 건 절점 집합의 반력을 더한다.
+
+    변위 · **고정 지지 · 마찰 없는 지지**(2026-10-16 — CompCore 셸 모델 손셈의 반력과 견준다).
+    모서리를 나누는 구속은 그 절점의 **축마다** 그 축을 막는 쪽에만 준다
+    (`statics.separate_reactions` — 두 솔버가 같은 규칙). 축마다 절점이 다르면
+    `{"x": [...], "y": [...], "z": [...]}` 로 적는다. **강체 파트의 면은 뺀다** — 원격점
+    절점으로 읽고(`_write_remote_reaction_nodes`), 그것도 못 찾으면 추출이 모델 전체 반력으로
+    대신한다(`dpf/static._rigid_hold`). 면 절점을 적어 두면 그 길을 막고 0 에 가까운 값을
+    낸다.
     """
-    wanted = [
-        one.region
-        for one in given.constraints
-        if one.kind == "displacement" and one.region in places
-    ]
+    regions = (topology or {}).get("regions") or {}
+    wanted: list[tuple[str, int, Axes]] = []
+    for one in given.constraints:
+        rows = regions.get(one.region) or []
+        normal = rows[0].get("normal") if rows and isinstance(rows[0], dict) else None
+        axes = held_axes(one, normal)
+        if axes is None or one.region not in places:
+            continue
+        bodies = {str(row.get("body") or "") for row in rows if isinstance(row, dict)}
+        if given.rigid and bodies and bodies <= given.rigid:
+            continue
+        wanted.append((one.region, held_directions(one), axes))
     if not wanted:
         return
     try:
         model = app.ExtAPI.DataModel
         data = model.MeshDataByName(model.MeshDataNames[0])
-        found: dict[str, list[int]] = {}
-        for region in wanted:
+    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+        logger.warning("반력 절점을 못 남겼습니다", exc_info=True)
+        return
+    rows_: list[tuple[str, int, Axes, frozenset[int]]] = []
+    for region, rank, axes in wanted:
+        try:
             ids: set[int] = set()
             for face in places[region].Location.Ids:
                 ids.update(int(one) for one in data.MeshRegionById(int(face)).NodeIds)
-            found[region] = sorted(ids)
-        (workdir / REACTION_NODES_NAME).write_text(json.dumps(found), encoding="utf-8")
-        logger.info("반력 절점 %s", {name: len(ids) for name, ids in found.items()})
-    except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
-        logger.warning("반력 절점을 못 남겼습니다 — 추출이 평면으로 찾습니다", exc_info=True)
+        except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
+            logger.warning("영역 %s 의 반력 절점을 못 얻었습니다", region, exc_info=True)
+            continue
+        if ids:
+            rows_.append((region, rank, axes, frozenset(ids)))
+    found: dict[str, Any] = {}
+    for region, own in separate_reactions(rows_).items():
+        if own[0] == own[1] == own[2]:
+            found[region] = sorted(own[0])
+        else:
+            found[region] = {name: sorted(ids) for name, ids in zip("xyz", own, strict=True)}
+    # 추출은 이 파일이 있으면 평면으로 찾지 않는다 — 빈 파일도 남긴다(다 다른 구속의 몫).
+    (workdir / REACTION_NODES_NAME).write_text(json.dumps(found), encoding="utf-8")
+    logger.info("반력 절점 %s", sorted(found))
 
 
 #: 원격 변위에 붙이는 이름표의 머리 — 입력 파일의 「Remote Point Used by "…"」 에 그대로
@@ -1788,29 +1830,55 @@ def _apply_sheet_settings(
     sheet_of: dict[str, Any],
     given: condition_model.Conditions,
     system: units.UnitSystem,
+    order: str = "quadratic",
 ) -> None:
-    """면 바디에 **두께**(mm)와 파트 요소 크기를 준다. 두께는 점 파일의 값이다."""
+    """면 바디에 **두께**(mm) · 파트 요소 크기 · **요소 차수**를 준다. 두께는 점 파일의 값이다.
+
+    **차수는 면 바디마다 못 박는다.** 전체 차수(`_mesh`)가 「읽기 전용」 으로 간헐적으로
+    거절되면 `ProgramControlled` 로 가는데, 솔리드가 섞인 모델에서 그것은 면 바디를
+    **1차**(SHELL181)로 푼다 — 같은 시트 받침 조립이 한 번은 SHELL181 로 0.1757 mm, 한 번은
+    SHELL281 로 0.1702 mm 가 나왔다(2026-10-16). 파트가 차수를 적었으면 그것, 아니면 작업의
+    차수다.
+    """
     if not sheet_of:
         return
     quantity = _global("Quantity")
     selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
+    enums = _global("Ansys").Mechanical.DataModel.Enums
     sizes = {
         one.name: one.element_size
         for one in given.body_settings
         if one.element_size is not None
     }
+    orders = {
+        one.name: one.order
+        for one in given.body_settings
+        if one.order in ("linear", "quadratic")
+    }
     for name, sheet in sheet_of.items():
         try:
             sheet.Thickness = quantity(f"{given.shells[name]} [mm]")
+            info = app.ExtAPI.SelectionManager.CreateSelectionInfo(
+                selection_type.GeometryEntities
+            )
+            info.Ids = [sheet.GetGeoBody().Id]
             if name in sizes:
-                info = app.ExtAPI.SelectionManager.CreateSelectionInfo(
-                    selection_type.GeometryEntities
-                )
-                info.Ids = [sheet.GetGeoBody().Id]
                 sizing = app.Model.Mesh.AddSizing()
                 sizing.Location = info
                 sizing.ElementSize = quantity(f"{sizes[name]} [{system.length_label}]")
-            logger.info("쉘 %s → 두께 %s mm", name, given.shells[name])
+            method = app.Model.Mesh.AddAutomaticMethod()
+            method.Location = info
+            method.ElementOrder = (
+                enums.ElementOrder.Quadratic
+                if orders.get(name, order) == "quadratic"
+                else enums.ElementOrder.Linear
+            )
+            logger.info(
+                "쉘 %s → 두께 %s mm · %s차",
+                name,
+                given.shells[name],
+                2 if orders.get(name, order) == "quadratic" else 1,
+            )
         except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
             raise _translated(
                 failure, "internal", f"쉘 파트 「{name}」 의 두께를 넣지 못했습니다"
@@ -2240,8 +2308,10 @@ def _mesh(
         try:
             mesh.ElementOrder = wanted
         except Exception as failure:
-            # 요청이 2차이고 지금이 `ProgramControlled` 면 **결과가 같다**(실측: 같은 형상 ·
-            # 같은 요소 크기에서 절점 1328 · 요소 179 로 동일) — 경고만 남기고 간다.
+            # 요청이 2차이고 지금이 `ProgramControlled` 면 **솔리드는 결과가 같다**(실측: 같은
+            # 형상 · 같은 요소 크기에서 절점 1328 · 요소 179 로 동일) — 경고만 남기고 간다.
+            # 면 바디는 솔리드가 섞이면 1차로 떨어지므로 차수를 따로 못 박아 둔다
+            # (`_apply_sheet_settings`).
             # 그 밖에는 멈춘다. 1차 요소로 조용히 풀면 강성이 과하게 나오는데, 그 수는
             # 그럴듯해 보인다.
             if spec.mesh.order != "quadratic" or str(mesh.ElementOrder) != "ProgramControlled":

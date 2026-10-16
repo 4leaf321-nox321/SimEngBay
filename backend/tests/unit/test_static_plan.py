@@ -92,3 +92,41 @@ def test_초기_부단계_수가_비선형_단계의_첫_증분이다() -> None:
         substeps=20,
     )
     assert "*STEP, NLGEOM\n*STATIC\n0.05, 1.0\n" in plan.text
+
+
+def test_반력_절점은_축마다_더_많이_막는_구속이_갖고_같으면_앞의_것이_갖는다() -> None:
+    from app.core.statics import ALL_AXES, held_axes, held_directions, separate_reactions
+
+    fixed = condition_model.Constraint(name="고정", kind="fixed_support", region="고정단")
+    slide = condition_model.Constraint(name="바닥", kind="frictionless", region="바닥")
+    pull = condition_model.Constraint(
+        name="당김", kind="displacement", region="끝", components=(0.04, 0.0, None)
+    )
+    remote = condition_model.Constraint(name="원격", kind="remote_displacement", region="원격")
+    assert [held_directions(one) for one in (fixed, slide, pull, remote)] == [3, 1, 2, 0]
+    assert held_axes(fixed) == ALL_AXES
+    assert held_axes(slide, [0.0, 0.0, -1.0]) == (False, False, True)
+    # 축에 나란하지 않은 면의 법선 반력은 세 성분에 다 실린다.
+    assert held_axes(slide, [0.0, 0.6, 0.8]) == ALL_AXES
+    assert held_axes(pull) == (True, True, False)
+    assert held_axes(remote) is None
+
+    z_only = (False, False, True)
+    split = separate_reactions(
+        [
+            ("바닥", 1, z_only, {1, 2, 3, 4}),
+            ("고정단", 3, ALL_AXES, {3, 4, 5}),
+            ("끝", 2, (True, True, False), {5, 6, 2}),
+        ]
+    )
+    # 고정단이 모든 축을 먼저 갖는다. 끝은 X · Y 를 갖고(5 는 고정단 몫), Z 는 막지 않으니
+    # 아무도 Z 를 막지 않는 절점(6)만 센다. 바닥은 Z 를 갖되 2 의 Z 는 바닥 몫이다.
+    assert split["고정단"] == (frozenset({3, 4, 5}),) * 3
+    assert split["끝"] == (frozenset({6, 2}), frozenset({6, 2}), frozenset({6}))
+    assert split["바닥"] == (frozenset({1}), frozenset({1}), frozenset({1, 2}))
+    # 같은 영역에 구속이 둘이면 합친다 — 뒤의 줄이 앞의 줄을 덮지 않는다.
+    assert separate_reactions([("A", 3, ALL_AXES, {1, 2}), ("A", 1, z_only, {1, 2, 3})]) == {
+        "A": (frozenset({1, 2, 3}),) * 3
+    }
+    # 다른 구속에 다 넘어간 영역은 뺀다.
+    assert "B" not in separate_reactions([("A", 3, ALL_AXES, {1, 2}), ("B", 1, z_only, {1})])

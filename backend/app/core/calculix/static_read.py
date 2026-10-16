@@ -180,16 +180,19 @@ def _reactions(workdir: Path) -> dict[str, list[float]]:
                 except ValueError:
                     continue
                 break
-    return {
-        region: [
-            round(one + extra, 6)
-            for one, extra in zip(
-                by_set[name.upper()], offsets.get(region) or (0.0, 0.0, 0.0), strict=True
-            )
+    out: dict[str, list[float]] = {}
+    for region, names in sets.items():
+        # 축마다 집합이 다르면 [X, Y, Z] 이름이다 — 그 축의 성분만 제 집합에서 읽는다(겹친
+        # 절점을 축마다 가른 것, `deck._separate_reactions`). 비어 있는 축은 0 이다.
+        row = names if isinstance(names, list) else [names, names, names]
+        if any(name and str(name).upper() not in by_set for name in row):
+            continue
+        extra = offsets.get(region) or (0.0, 0.0, 0.0)
+        out[region] = [
+            round((by_set[str(name).upper()][axis] if name else 0.0) + extra[axis], 6)
+            for axis, name in enumerate(row)
         ]
-        for region, name in sets.items()
-        if name.upper() in by_set
-    }
+    return out
 
 
 def _draw(

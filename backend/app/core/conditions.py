@@ -83,6 +83,8 @@ ALL_BODIES = "전체"
 WHOLE_REGIONS = ("전체", "all")
 #: 두께 없는 시트 파트(`bodies[].kind`, CompCore 2026-10-15). 부피가 0 이고 넓이가 온다.
 SHEET = "sheet"
+#: `shell_view` 가 옮긴 판에 다는 표 — 그 쉘 파트 이름들.
+SHELL_VIEW = "_shell_view"
 SHEET_AS_SOLID = (
     "두께 없는 시트(셸 모델)라 솔리드로 풀 수 없습니다 — CompCore 의 파트 설정에서 쉘로 두고 "
     "두께를 적으십시오"
@@ -381,7 +383,10 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         if name not in halted:
             made.refused.append(Note(f"파트 「{name}」", SHEET_AS_SOLID))
     gone = _on_suppressed(payload, made.suppressed)
-    flat = _off_midsurface(payload, set(made.shells))
+    # **이미 중간면으로 옮긴 판**(`shell_view`)이면 옮겼나를 다시 묻지 않는다 — 옮긴 행에는
+    # `mid` 가 없어 모두 「못 옮겼다」 로 막혔다. 그 판으로 조건을 읽던 Ansys 추출이 쉘 파트의
+    # 구속을 통째로 잃고 반력을 비워 냈다(2026-10-16, 시트 외팔보).
+    flat = {} if _dict(payload).get(SHELL_VIEW) else _off_midsurface(payload, set(made.shells))
     entities = {
         str(one.get("name") or ""): str(one.get("entity") or "face")
         for one in _rows(block, "named_selections")
@@ -862,7 +867,7 @@ def shell_view(payload: dict[str, Any], shells: set[str]) -> dict[str, Any]:
                 elif isinstance(one.get("edge"), dict):
                     made.append({**one["edge"], "body": body})
         regions[name] = made
-    return {**payload, "regions": regions}
+    return {**payload, "regions": regions, SHELL_VIEW: sorted(shells)}
 
 
 def _body_setting(

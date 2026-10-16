@@ -24,6 +24,7 @@ from app.core import conditions as condition_model
 from app.core import units
 from app.core.harmonic import HarmonicPlan
 from app.core.materials import Material
+from app.core.statics import Axes, held_axes, held_directions, separate_reactions
 
 logger = logging.getLogger(__name__)
 
@@ -74,14 +75,20 @@ class Plan:
     text: str = ""
     #: 하중 줄들 — **선응력 모달이 그대로 다시 쓴다**(정적 단계에 같은 하중을 걸어야 한다).
     load_rows: list[str] = field(default_factory=list)
-    #: 반력을 읽을 영역 → 절점 집합 이름. 변위로 당긴 자리다 — 거기서 버틴 힘이 답이다.
-    reaction_sets: dict[str, str] = field(default_factory=dict)
-    #: 그 집합의 절점 — 관성 하중의 몫을 되돌려 줄 때 쓴다(`reaction_offsets`).
+    #: 반력을 읽을 영역 → 절점 집합 이름. 축마다 집합이 다르면 [X, Y, Z] 이름이다(`None` 인
+    #: 축은 0 — `_separate_reactions`). 그 구속이 버틴 힘이 답이다.
+    reaction_sets: dict[str, str | list[str | None]] = field(default_factory=dict)
+    #: 그 영역의 절점 전부 — 겹친 절점을 가를 때 · 강체 · 원격점 묶음의 몫을 셀 때 쓴다.
     reaction_nodes: dict[str, frozenset[int]] = field(default_factory=dict)
+    #: 반력으로 찍을 집합 이름 → 절점(`*NODE PRINT`). 관성 · 하중의 몫도 집합마다 센다.
+    printed_sets: dict[str, frozenset[int]] = field(default_factory=dict)
     #: 영역 → `.dat` 의 반력 합에 **더할** 벡터(N). ccx 의 RF 는 그 절점에 직접 걸린 외력을
     #: 빼고 낸다 — 가속도 · 중력이 반력 절점에 얹은 몫(강체 파트면 그 파트의 무게 전부)이
     #: 빠진다(`_inertia_offsets`).
     reaction_offsets: dict[str, list[float]] = field(default_factory=dict)
+    #: 변형체 면 구속의 반력 영역 → (막는 병진 자유도 수, 막는 전역 축). 겹친 절점을 축마다
+    #: 가를 때 쓴다(`_separate_reactions`).
+    reaction_holds: dict[str, tuple[int, Axes]] = field(default_factory=dict)
     #: 국부 좌표계가 걸린 절점 → (축 위의 점, 축 방향).
     #:
     #: **그 절점에서는 `*CLOAD` 의 자유도 번호도 국부로 읽힌다**(1 반경 · 2 접선 · 3 축) —
@@ -462,6 +469,7 @@ def write_static(
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
     lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
+    lines += _separate_reactions(plan)
     nonlinear = large_deflection
     if contact_faces is not None:
         nonlinear = nonlinear or any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
@@ -525,10 +533,28 @@ def write_static(
             pull = [
                 mine + theirs for mine, theirs in zip(pull, _gravity_of(rows), strict=True)
             ]
-    if any(pull) and plan.reaction_nodes:
-        plan.reaction_offsets = _inertia_offsets(
-            plan.reaction_nodes, pull, nodes, solids, body_of, materials, shells
+    if plan.printed_sets:
+        # ccx 의 RF 는 그 절점에 직접 걸린 외력을 빼고 낸다 — 관성 하중의 몫과 압력 · 힘의 몫을
+        # 둘 다 되돌린다. 찍는 집합마다 세고, 영역은 축마다 제 집합의 성분을 갖는다.
+        inertia = (
+            _inertia_offsets(
+                plan.printed_sets, pull, nodes, solids, body_of, materials, shells
+            )
+            if any(pull)
+            else {}
         )
+        pushed = _load_offsets(
+            plan.printed_sets, plan.load_rows, nodes, solids, shells, plan.local_frames
+        )
+        zero = [0.0, 0.0, 0.0]
+        for region, names in plan.reaction_sets.items():
+            row = names if isinstance(names, list) else [names, names, names]
+            vector = [
+                inertia.get(name, zero)[axis] + pushed.get(name, zero)[axis] if name else 0.0
+                for axis, name in enumerate(row)
+            ]
+            if any(vector):
+                plan.reaction_offsets[region] = vector
 
     # **변위로 당기는 시험은 하중이 없어도 답이 있다**(`Conditions.drives`) — 그립 고정 ·
     # 그립 강제 변위. 둘 다 없을 때만 막는다.
@@ -539,11 +565,14 @@ def write_static(
             )
         )
 
-    for region, nset in plan.reaction_sets.items():
-        # **반력 합** — 변위로 당긴 자리가 버틴 힘. `TOTALS=ONLY` 면 `.dat` 에 합만 찍힌다
-        # (절점마다 찍으면 수천 줄이다). 증분마다 찍히므로 마지막 것을 읽는다.
-        lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY", "RF"]
-        logger.info("반력 자리 %s → %s", region, nset)
+    for nset in plan.printed_sets:
+        # **반력 합** — 그 구속이 버틴 힘. `TOTALS=ONLY` 면 `.dat` 에 합만 찍힌다(절점마다
+        # 찍으면 수천 줄이다). 증분마다 찍히므로 마지막 것을 읽는다. **전역 성분으로
+        # 찍는다**(`GLOBAL=YES`) — 원통 지지와 절점을 나눈 고정면이면 그 절점은 국부 좌표계라,
+        # 안 그러면 반경 · 접선 · 축 성분이 X · Y · Z 에 섞여 더해진다.
+        lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY, GLOBAL=YES", "RF"]
+    if plan.reaction_sets:
+        logger.info("반력 자리 %s", plan.reaction_sets)
     lines += [
         "*NODE FILE",
         "U",
@@ -845,8 +874,7 @@ def _holds(
                 continue
             lines += rows
             # **반력을 읽을 자리다** — 변위로 당겼으면 그만큼 버틴 힘이 답이다(`*NODE PRINT`).
-            plan.reaction_sets[rule.region] = name
-            plan.reaction_nodes[rule.region] = frozenset(members)
+            _hold_reaction(plan, rule, name, members)
             plan.applied.append(f"displacement:{rule.region}")
             continue
         if rule.kind == "frictionless":
@@ -855,11 +883,105 @@ def _holds(
                 plan.refused.append(why)
                 continue
             lines += rows
+            # 전역 축 하나를 막으므로 반력 합도 전역 성분이다(법선 성분만 남는다).
+            _hold_reaction(
+                plan,
+                rule,
+                name,
+                members,
+                ((shapes or {}).get(rule.region) or {}).get("normal"),
+            )
             plan.applied.append(f"frictionless:{rule.region}")
             continue
         lines += _nset(name, members)
         lines += ["*BOUNDARY", f"{name}, 1, 3, 0.0"]
+        # **고정 지지도 반력을 읽는다** — 하중이 어디로 빠졌는지가 첫 검산이다(CompCore 손셈의
+        # 반력과 견준다, 2026-10-16). 원통 지지는 국부 좌표계라 절점마다 축이 달라 합이 뜻이
+        # 없다 — 읽지 않는다.
+        _hold_reaction(plan, rule, name, members)
         plan.applied.append(f"{rule.kind}:{rule.region}")
+    return lines
+
+
+def _hold_reaction(
+    plan: Plan,
+    rule: condition_model.Constraint,
+    name: str,
+    members: set[int],
+    normal: list[float] | None = None,
+) -> None:
+    """변형체 면 구속 하나를 반력 자리로 적는다 — 집합 `name` 은 부른 쪽이 이미 썼다. 같은
+    영역에 구속이 둘이면 막는 축 · 절점을 합친다(겹친 절점은 `_separate_reactions` 가
+    가른다)."""
+    axes = held_axes(rule, normal)
+    if axes is None:
+        return
+    rank = held_directions(rule)
+    nodes = frozenset(members)
+    plan.printed_sets[name] = nodes
+    before = plan.reaction_holds.get(rule.region)
+    if before is not None:
+        rank = max(rank, before[0])
+        axes = (axes[0] or before[1][0], axes[1] or before[1][1], axes[2] or before[1][2])
+        nodes = nodes | plan.reaction_nodes[rule.region]
+    else:
+        plan.reaction_sets[rule.region] = name
+    plan.reaction_holds[rule.region] = (rank, axes)
+    plan.reaction_nodes[rule.region] = nodes
+
+
+def _separate_reactions(plan: Plan) -> list[str]:
+    """변형체 면 구속의 반력 절점을 **축마다 겹치지 않게** 가르고
+    (`statics.separate_reactions`), 새로 필요한 집합을 세운다. 경계 조건의 집합은 그대로
+    둔다. 강체 · 원격점 묶음은 건드리지 않는다 — 그 절점은 변형체 구속에서 이미
+    뺐다(`bound`). 찍지 않을 집합은 지운다."""
+    split = separate_reactions(
+        [
+            (region, rank, axes, plan.reaction_nodes[region])
+            for region, (rank, axes) in plan.reaction_holds.items()
+        ]
+    )
+    named = {nodes: name for name, nodes in plan.printed_sets.items()}
+    lines: list[str] = []
+    for region in plan.reaction_holds:
+        base = str(plan.reaction_sets[region])
+        own = split.get(region)
+        if own is None:
+            logger.info("반력 %s — 절점이 모두 다른 구속의 몫이라 읽지 않습니다", region)
+            del plan.reaction_sets[region], plan.reaction_nodes[region]
+            continue
+        names: list[str | None] = []
+        for nodes in own:
+            if not nodes:
+                names.append(None)
+                continue
+            name = named.get(nodes)
+            if name is None:
+                name = f"{base}R{sum(1 for one in plan.printed_sets if one.startswith(base))}"
+                lines += _nset(name, set(nodes))
+                plan.printed_sets[name] = nodes
+                named[nodes] = name
+            names.append(name)
+        if names[0] is not None and names[0] == names[1] == names[2]:
+            plan.reaction_sets[region] = names[0]
+        else:
+            plan.reaction_sets[region] = names
+        if own != (plan.reaction_nodes[region],) * 3:
+            logger.info(
+                "반력 %s — 다른 구속과 나눈 절점은 축마다 그쪽 몫으로 뺐습니다", region
+            )
+    for region, value in plan.reaction_sets.items():
+        if isinstance(value, str) and region not in plan.reaction_holds:
+            plan.printed_sets.setdefault(value, plan.reaction_nodes[region])
+    used = {
+        one
+        for value in plan.reaction_sets.values()
+        for one in ([value] if isinstance(value, str) else value)
+        if one
+    }
+    plan.printed_sets = {
+        name: nodes for name, nodes in plan.printed_sets.items() if name in used
+    }
     return lines
 
 
@@ -1387,6 +1509,103 @@ def _inertia_offsets(
     return out
 
 
+#: C3D10 의 모서리 → 중간 절점 자리(0부터) — `TET_FACES` 의 면에서 중간 절점을 찾는다.
+_TET_MIDDLES = {(0, 1): 4, (1, 2): 5, (0, 2): 6, (0, 3): 7, (1, 3): 8, (2, 3): 9}
+
+
+def _load_offsets(
+    reaction_nodes: dict[str, frozenset[int]],
+    rows: list[str],
+    nodes: dict[int, tuple[float, float, float]],
+    solids: dict[int, list[tuple[int, list[int]]]],
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    frames: dict[int, tuple[list[float], list[float]]] | None = None,
+) -> dict[str, list[float]]:
+    """반력 영역 → **압력 · 힘이 그 절점에 직접 얹은 몫의 반대**(N). 반력 합에 더한다.
+
+    관성 하중과 같은 까닭이다(`_inertia_offsets`) — ccx 의 RF 는 그 절점에 걸린 외력을 빼고
+    낸다. 하중면이 구속면과 모서리를 나누면 그 모서리 절점에 걸린 압력이 반력에서 빠진다
+    (실측 2026-10-16: CompCore 시트 외팔보 1.7945 N — 손셈 1.8 N, Ansys 는 그 몫까지 받친다).
+
+    덱에 쓴 하중 줄을 그대로 읽는다 — `*CLOAD` 는 절점 성분 그대로, `*DLOAD` 압력은 ccx 가
+    나누는 대로: 평평한 이차 삼각형은 중간 절점마다 넓이의 1/3(꼭짓점 0), 일차는 꼭짓점마다
+    1/3. 솔리드 면은 바깥 법선의 반대로 밀고, 쉘(`P`)은 요소 법선 쪽으로 민다. 국부 좌표계가
+    걸린 절점(원통 지지)의 `*CLOAD` 는 국부 성분이라 전역으로 되돌린다 — 반력은 전역으로
+    찍는다(`GLOBAL=YES`).
+    """
+    elements: dict[int, list[int]] = {
+        number: ids for rows_ in solids.values() for number, ids in rows_
+    }
+    elements.update({number: ids for sheet in shells for number, ids in sheet.elements})
+    pushed: dict[int, list[float]] = {}
+
+    def add(node: int, vector: list[float]) -> None:
+        mine = pushed.setdefault(node, [0.0, 0.0, 0.0])
+        for axis in range(3):
+            mine[axis] += vector[axis]
+
+    block = ""
+    for row in rows:
+        if row.startswith("*"):
+            block = row.split(",")[0].strip().upper()
+            continue
+        parts = [one.strip() for one in row.split(",")]
+        if block == "*CLOAD" and len(parts) == 3:
+            node, axis = int(parts[0]), int(parts[1])
+            if 1 <= axis <= 3:
+                vector = [0.0, 0.0, 0.0]
+                vector[axis - 1] = float(parts[2])
+                frame = (frames or {}).get(node)
+                # 국부 좌표계가 걸린 절점의 성분은 국부(반경 · 접선 · 축)다 — 전역으로
+                # 되돌린다.
+                add(node, _to_global(vector, nodes, node, frame) if frame else vector)
+            continue
+        if block != "*DLOAD" or len(parts) != 3:
+            continue  # 관성(GRAV)은 줄이 길다 — `_inertia_offsets` 가 맡는다.
+        ids = elements.get(int(parts[0]))
+        label, value = parts[1].upper(), float(parts[2])
+        if ids is None:
+            continue
+        if label == SHELL_PRESSURE:
+            corners = (0, 1, 2)
+            middles = list(ids[3:6]) if len(ids) >= 6 else []
+            sign = 1.0  # 쉘 압력은 요소 법선 쪽으로 민다.
+        elif label in TET_FACES:
+            corners = TET_FACES[label]
+            middles = (
+                [ids[_TET_MIDDLES[(min(pair), max(pair))]] for pair in _face_edges(corners)]
+                if len(ids) >= 10
+                else []
+            )
+            sign = -1.0  # 솔리드 면 압력은 바깥 법선의 반대(안쪽)로 민다.
+        else:
+            continue
+        a, b, c = (nodes[ids[one]] for one in corners)
+        twice = _cross([b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)])
+        if label in TET_FACES:
+            # 바깥 법선으로 세운다 — 남은 꼭짓점의 반대쪽이다.
+            rest = nodes[ids[({0, 1, 2, 3} - set(corners)).pop()]]
+            if sum(twice[i] * (rest[i] - a[i]) for i in range(3)) > 0:
+                twice = [-one for one in twice]
+        total = [sign * value * one / 2 for one in twice]
+        share = [one / 3 for one in total]
+        for node in middles or [ids[one] for one in corners]:
+            add(node, share)
+    out: dict[str, list[float]] = {}
+    for region, members in reaction_nodes.items():
+        carried = [
+            sum(pushed.get(node, [0.0, 0.0, 0.0])[axis] for node in members)
+            for axis in range(3)
+        ]
+        if any(carried):
+            out[region] = [-one for one in carried]
+    return out
+
+
+def _face_edges(corners: tuple[int, int, int]) -> list[tuple[int, int]]:
+    return [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])]
+
+
 def _triple(first: list[float], second: list[float], third: list[float]) -> float:
     """스칼라 삼중곱 — 사면체 부피의 6배."""
     across = _cross(second, third)
@@ -1483,6 +1702,30 @@ def _moment_rows(
     return rows, None
 
 
+def _cylinder_basis(
+    nodes: dict[int, tuple[float, float, float]] | None,
+    node: int,
+    frame: tuple[list[float], list[float]],
+) -> tuple[list[float], list[float], list[float]] | None:
+    """그 절점에서 원통 국부계의 단위벡터(반경 · 접선 · 축). 못 세우면 `None`."""
+    point = (nodes or {}).get(node)
+    if point is None:
+        return None
+    origin, axis = frame
+    size = math.sqrt(sum(one * one for one in axis))
+    if size == 0:
+        return None
+    unit_axis = [one / size for one in axis]
+    offset = [point[index] - origin[index] for index in range(3)]
+    along = sum(offset[index] * unit_axis[index] for index in range(3))
+    radial = [offset[index] - along * unit_axis[index] for index in range(3)]
+    length = math.sqrt(sum(one * one for one in radial))
+    if length == 0:
+        return None
+    unit_radial = [one / length for one in radial]
+    return unit_radial, _cross(unit_axis, unit_radial), unit_axis
+
+
 def _to_local(
     vector: list[float],
     nodes: dict[int, tuple[float, float, float]] | None,
@@ -1495,26 +1738,23 @@ def _to_local(
     좌표를 모르면(있을 수 없는 일이지만) 바꾸지 않고 둔다 — 틀린 변환보다 안 바꾸는 편이 덜
     위험하다.
     """
-    point = (nodes or {}).get(node)
-    if point is None:
+    basis = _cylinder_basis(nodes, node, frame)
+    if basis is None:
         return vector
-    origin, axis = frame
-    size = math.sqrt(sum(one * one for one in axis))
-    if size == 0:
+    return [sum(vector[index] * one[index] for index in range(3)) for one in basis]
+
+
+def _to_global(
+    vector: list[float],
+    nodes: dict[int, tuple[float, float, float]] | None,
+    node: int,
+    frame: tuple[list[float], list[float]],
+) -> list[float]:
+    """원통 국부 성분(반경 · 접선 · 축) → 전역 성분 — `_to_local` 의 역이다."""
+    basis = _cylinder_basis(nodes, node, frame)
+    if basis is None:
         return vector
-    unit_axis = [one / size for one in axis]
-    offset = [point[index] - origin[index] for index in range(3)]
-    along = sum(offset[index] * unit_axis[index] for index in range(3))
-    radial = [offset[index] - along * unit_axis[index] for index in range(3)]
-    length = math.sqrt(sum(one * one for one in radial))
-    if length == 0:
-        return vector
-    unit_radial = [one / length for one in radial]
-    unit_tangent = _cross(unit_axis, unit_radial)
-    return [
-        sum(vector[index] * basis[index] for index in range(3))
-        for basis in (unit_radial, unit_tangent, unit_axis)
-    ]
+    return [sum(vector[k] * basis[k][index] for k in range(3)) for index in range(3)]
 
 
 def _cross(first: list[float], second: list[float]) -> list[float]:

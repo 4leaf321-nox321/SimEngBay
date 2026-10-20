@@ -378,6 +378,10 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 
 ## 읽을 때 알아 둘 것
 
+- **2026-10-20 — 모든 픽스처를 v0.16.0 으로 다시 뽑았다**(「셸모델_*」 셋은 이미 그 판이라 두었다).
+  바뀐 것은 2026-10-15 에 더한 열쇠뿐이다 — `bodies[].kind` · `area`, `body_settings[].thickness`
+  (`null`), `midsurface.bodies[].source`. 값 · 열 · 파일 목록은 같다. STEP 은 머리글의 시각과 조립
+  구성(`NEXT_ASSEMBLY_USAGE_OCCURRENCE`)의 일련번호만 다르다 — 형상 · 이름은 같다.
 - **2026-10-16 — 시트 파트는 늘 쉘.** 점 파일의 `body_settings` 에 시트 파트는 `representation:
   "shell"` · `behavior: "deformable"` 로 실린다 — 사람이 그 파트의 설정을 안 고쳤어도(줄을 더해
   싣는다). 시트를 솔리드 · 강체로 적은 조건은 CompCore 가 저장 · DOE 만들기에서 막는다(해석
@@ -389,8 +393,8 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 - **2026-10-15 — 시트 바디(셸 모델).** 점 파일 `bodies[]` 에 `kind`(`sheet` · `solid`) · `area`,
   `midsurface.bodies[]` 에 `source`(`sheet` · `solid`), 조건 `body_settings[]` 에 `thickness`(시트
   파트의 쉘 두께 — 솔리드를 쉘로 풀 때는 `null`, 두께는 형상에서 잰다)가 늘었다. 더한 열쇠뿐이고,
-  이 날짜 전에 뽑은 픽스처에는 없다 — 없으면 `solid` · `null` 로 읽는다. 「셸모델_*」 셋만 새로
-  뽑았다.
+  이 날짜 전에 뽑은 픽스처에는 없다 — 없으면 `solid` · `null` 로 읽는다(이 폴더의 것은 2026-10-20
+  에 모두 다시 뽑아 이제 다 있다).
 - **2026-10-04 — `study.json` 에 `cloned_from` 이 늘었다.** 「내 것으로 복제」 한 DOE 면 원본
   `{id, name, owner}`, 아니면 `null`(README 에도 「복제 원본」 한 줄). 복제본의 점은 번호 · 값이 원본과
   같다. 이 날짜 전에 뽑은 픽스처에는 이 열쇠가 없다 — 없으면 `null` 로 읽는다. 공유 폴더로는 이제

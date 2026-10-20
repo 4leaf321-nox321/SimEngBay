@@ -5,6 +5,8 @@
       "name": "피착재_1",
       "step_product": "1",
       "volume": 4180.637,
+      "kind": "solid",
+      "area": 5572.76,
       "centroid": [
         -44.45,
         -0.0,
@@ -27,6 +29,8 @@
       "name": "접착층",
       "step_product": "body_2",
       "volume": 64.516,
+      "kind": "solid",
+      "area": 660.4,
       "centroid": [
         0.0,
         -0.0,
@@ -49,6 +53,8 @@
       "name": "피착재_2",
       "step_product": "2",
       "volume": 4180.637,
+      "kind": "solid",
+      "area": 5572.76,
       "centroid": [
         44.45,
         -0.0,
@@ -246,7 +252,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "88b0789a-d066-4a14-91f3-17f451b2fb35",
+      "id": "65d4fc99-3e26-4872-ab96-5958d55cf654",
       "name": "시험_겹치기이음_D1002",
       "method": "factorial",
       "seed": 1

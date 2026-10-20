@@ -5,6 +5,8 @@
       "name": "시편",
       "step_product": "body_1",
       "volume": 19326.903,
+      "kind": "solid",
+      "area": 11106.85,
       "centroid": [
         -0.29,
         -0.0,
@@ -27,6 +29,8 @@
       "name": "핀",
       "step_product": "body_2",
       "volume": 395.841,
+      "kind": "solid",
+      "area": 320.442,
       "centroid": [
         49.5,
         0.0,
@@ -164,7 +168,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "fcd114c3-6599-4604-99d3-ce6abb9bef86",
+      "id": "aa041d19-ee27-4611-a6b9-becf79aa987f",
       "name": "시험_핀베어링_D5961",
       "method": "factorial",
       "seed": 1
@@ -508,6 +512,7 @@
         "name": "핀",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,

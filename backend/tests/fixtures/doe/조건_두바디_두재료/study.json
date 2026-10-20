@@ -1,5 +1,5 @@
 {
-  "id": "ce8f5ba4-f238-4a0b-8e29-581be8192700",
+  "id": "b82bbe21-4907-4af8-9a6f-45ef81ba1ff2",
   "name": "조건_두바디_두재료",
   "description": "",
   "method": "factorial",
@@ -463,7 +463,8 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-60232d4c@example.local"
+    "email": "member-7306d875@example.local"
   },
-  "requested_by": null
+  "requested_by": null,
+  "cloned_from": null
 }

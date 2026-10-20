@@ -5,6 +5,8 @@
       "name": "아래판",
       "step_product": "body_1",
       "volume": 12500.0,
+      "kind": "solid",
+      "area": 6250.0,
       "centroid": [
         50.0,
         0.0,
@@ -27,6 +29,8 @@
       "name": "위판",
       "step_product": "body_2",
       "volume": 12500.0,
+      "kind": "solid",
+      "area": 6250.0,
       "centroid": [
         110.0,
         0.0,
@@ -190,7 +194,7 @@
   "point": {
     "number": 4,
     "study": {
-      "id": "787171c5-ead4-46be-87cd-eb513782f087",
+      "id": "bf4405f7-fbaf-471d-9900-f52ff82b6024",
       "name": "조건_전단이음",
       "method": "table",
       "seed": 1

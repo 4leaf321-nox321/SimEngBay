@@ -5,6 +5,8 @@
       "name": "전체",
       "step_product": "body_1",
       "volume": 35886.903,
+      "kind": "solid",
+      "area": 20306.85,
       "centroid": [
         0.0,
         -0.0,
@@ -119,7 +121,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "81aa9794-b905-454a-85f3-b48f07abb560",
+      "id": "4b9c361e-eefd-4c27-8e2a-b6ecccbff25b",
       "name": "시험_오픈홀인장_D5766",
       "method": "factorial",
       "seed": 1

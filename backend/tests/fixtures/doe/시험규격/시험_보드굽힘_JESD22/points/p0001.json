@@ -5,6 +5,8 @@
       "name": "시편",
       "step_product": "body_1",
       "volume": 10164.0,
+      "kind": "solid",
+      "area": 20746.0,
       "centroid": [
         0.0,
         -0.0,
@@ -27,6 +29,8 @@
       "name": "롤러_1",
       "step_product": "1",
       "volume": 2459.867,
+      "kind": "solid",
+      "area": 1696.46,
       "centroid": [
         -55.0,
         0.0,
@@ -49,6 +53,8 @@
       "name": "롤러_2",
       "step_product": "2",
       "volume": 2459.867,
+      "kind": "solid",
+      "area": 1696.46,
       "centroid": [
         55.0,
         0.0,
@@ -71,6 +77,8 @@
       "name": "로딩_노즈_1",
       "step_product": "1",
       "volume": 2459.867,
+      "kind": "solid",
+      "area": 1696.46,
       "centroid": [
         -37.5,
         0.0,
@@ -93,6 +101,8 @@
       "name": "로딩_노즈_2",
       "step_product": "2",
       "volume": 2459.867,
+      "kind": "solid",
+      "area": 1696.46,
       "centroid": [
         37.5,
         0.0,
@@ -262,7 +272,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "ac79c938-6a83-4be9-89d8-c3e707d46960",
+      "id": "25f3bb03-4b34-44c6-9928-61f93db6bcf9",
       "name": "시험_보드굽힘_JESD22",
       "method": "factorial",
       "seed": 1
@@ -662,6 +672,7 @@
         "name": "롤러_1",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,
@@ -673,6 +684,7 @@
         "name": "롤러_2",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,
@@ -684,6 +696,7 @@
         "name": "로딩_노즈_1",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,
@@ -695,6 +708,7 @@
         "name": "로딩_노즈_2",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,

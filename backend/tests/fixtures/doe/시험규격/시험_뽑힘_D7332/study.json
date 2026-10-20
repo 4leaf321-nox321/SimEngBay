@@ -1,5 +1,5 @@
 {
-  "id": "4f70a58e-3f0f-4c05-bc90-a73bcbeeeae0",
+  "id": "7b88729c-5b4c-4805-8f08-1dedd5b0faaa",
   "name": "시험_뽑힘_D7332",
   "description": "",
   "method": "factorial",
@@ -396,7 +396,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-ac49bda6@example.local"
+    "email": "member-7401361b@example.local"
   },
   "requested_by": null,
   "cloned_from": null

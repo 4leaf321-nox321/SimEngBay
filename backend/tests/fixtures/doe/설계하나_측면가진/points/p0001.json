@@ -5,6 +5,8 @@
       "name": "받침판",
       "step_product": "body_1",
       "volume": 64000.0,
+      "kind": "solid",
+      "area": 16000.0,
       "centroid": [
         0.0,
         0.0,
@@ -27,6 +29,8 @@
       "name": "기둥",
       "step_product": "body_2",
       "volume": 10000.0,
+      "kind": "solid",
+      "area": 4200.0,
       "centroid": [
         0.0,
         0.0,
@@ -144,7 +148,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "905cd5c1-f597-43b7-a02e-730d8cccf5e0",
+      "id": "db734ea2-7b18-4b23-9633-2a9bfa9cbfe0",
       "name": "설계하나_측면가진",
       "method": "factorial",
       "seed": 1

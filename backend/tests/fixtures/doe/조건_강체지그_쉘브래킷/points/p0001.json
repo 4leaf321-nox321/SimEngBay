@@ -5,6 +5,8 @@
       "name": "지그블록",
       "step_product": "body_1",
       "volume": 64000.0,
+      "kind": "solid",
+      "area": 11200.0,
       "centroid": [
         40.0,
         0.0,
@@ -27,6 +29,8 @@
       "name": "브래킷",
       "step_product": "body_2",
       "volume": 5151.239,
+      "kind": "solid",
+      "area": 5614.655,
       "centroid": [
         40.125,
         0.0,
@@ -49,6 +53,8 @@
       "name": "명판",
       "step_product": "body_3",
       "volume": 300.0,
+      "kind": "solid",
+      "area": 680.0,
       "centroid": [
         75.0,
         -20.5,
@@ -222,7 +228,8 @@
             70.0
           ]
         ],
-        "step_product": "body_2"
+        "step_product": "body_2",
+        "source": "solid"
       }
     ],
     "area": 2575.62,
@@ -249,7 +256,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "a9482c00-9b1a-468e-85aa-15e489e21c1b",
+      "id": "fd990b0b-d31b-435d-81f8-4c34cfacd9b7",
       "name": "조건_강체지그_쉘브래킷",
       "method": "factorial",
       "seed": 1
@@ -872,6 +879,7 @@
         "name": "지그블록",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": 10.0,
@@ -883,6 +891,7 @@
         "name": "브래킷",
         "behavior": "deformable",
         "representation": "shell",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": 2.0,
@@ -894,6 +903,7 @@
         "name": "명판",
         "behavior": "deformable",
         "representation": "solid",
+        "thickness": null,
         "suppressed": true,
         "mesh": {
           "element_size": null,

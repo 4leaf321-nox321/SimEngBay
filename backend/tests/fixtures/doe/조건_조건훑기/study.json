@@ -1,5 +1,5 @@
 {
-  "id": "54819e2d-431e-4f02-ae10-476b289505ee",
+  "id": "8ef5780f-dff6-4ce6-a5a1-947fb883eeea",
   "name": "조건_조건훑기",
   "description": "",
   "method": "factorial",
@@ -489,7 +489,8 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-60232d4c@example.local"
+    "email": "member-7306d875@example.local"
   },
-  "requested_by": null
+  "requested_by": null,
+  "cloned_from": null
 }

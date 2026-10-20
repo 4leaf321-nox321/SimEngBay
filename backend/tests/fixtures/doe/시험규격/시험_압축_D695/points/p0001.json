@@ -5,6 +5,8 @@
       "name": "전체",
       "step_product": "body_1",
       "volume": 4096.766,
+      "kind": "solid",
+      "area": 1612.9,
       "centroid": [
         0.0,
         0.0,
@@ -78,7 +80,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "a618ab36-1da9-4dae-9b34-4ada6abd04cc",
+      "id": "6cf4f110-a410-4b33-9587-c36747213f8f",
       "name": "시험_압축_D695",
       "method": "factorial",
       "seed": 1

@@ -5,6 +5,8 @@
       "name": "전체",
       "step_product": "body_1",
       "volume": 69587.257,
+      "kind": "solid",
+      "area": 16644.248,
       "centroid": [
         -0.0,
         -0.0,
@@ -63,7 +65,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "f95d2ab8-b7ce-472a-95f0-c5a0b0d50d8d",
+      "id": "5b83ae28-3b15-457d-96b8-248f2df5d03b",
       "name": "시험_손잡이",
       "method": "factorial",
       "seed": 1

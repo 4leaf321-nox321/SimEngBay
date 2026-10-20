@@ -5,6 +5,8 @@
       "name": "전체",
       "step_product": "body_1",
       "volume": 69587.257,
+      "kind": "solid",
+      "area": 16644.248,
       "centroid": [
         0.0,
         -0.0,
@@ -78,7 +80,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "aa904eb0-387f-4094-97e8-c1727bd3de5a",
+      "id": "1d65e8e9-289d-421b-9cfb-5fd4f32d50ad",
       "name": "시험_정하중_T2",
       "method": "factorial",
       "seed": 1

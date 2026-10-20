@@ -5,6 +5,8 @@
       "name": "시편",
       "step_product": "body_1",
       "volume": 768.0,
+      "kind": "solid",
+      "area": 640.0,
       "centroid": [
         0.0,
         0.0,
@@ -27,6 +29,8 @@
       "name": "롤러_1",
       "step_product": "1",
       "volume": 127.235,
+      "kind": "solid",
+      "area": 183.783,
       "centroid": [
         -8.0,
         0.0,
@@ -49,6 +53,8 @@
       "name": "롤러_2",
       "step_product": "2",
       "volume": 127.235,
+      "kind": "solid",
+      "area": 183.783,
       "centroid": [
         8.0,
         0.0,
@@ -71,6 +77,8 @@
       "name": "로딩_노즈",
       "step_product": "body_4",
       "volume": 508.938,
+      "kind": "solid",
+      "area": 395.841,
       "centroid": [
         -0.0,
         0.0,
@@ -225,7 +233,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "6bf0ceed-42b2-47eb-85ec-602ea6c92364",
+      "id": "ea81f3de-a256-4661-a4ed-65c20c346260",
       "name": "시험_숏빔전단_D2344",
       "method": "factorial",
       "seed": 1
@@ -616,6 +624,7 @@
         "name": "롤러_1",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,
@@ -627,6 +636,7 @@
         "name": "롤러_2",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,
@@ -638,6 +648,7 @@
         "name": "로딩_노즈",
         "behavior": "rigid",
         "representation": "solid",
+        "thickness": null,
         "suppressed": false,
         "mesh": {
           "element_size": null,

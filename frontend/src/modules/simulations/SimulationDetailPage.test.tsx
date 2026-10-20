@@ -8,6 +8,13 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const auth = vi.hoisted(() => ({ id: 'me' }))
+
+// 화면이 「건 사람인가」 를 본다(`ownsWork`) — 기본은 건 사람, 남으로 바꿔 읽기 전용을 본다.
+vi.mock('@/shared/auth/AuthContext', () => ({
+  useAuth: () => ({ user: { id: auth.id, is_system_admin: false, memberships: [] } }),
+}))
+
 vi.mock('@/modules/simulations/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/modules/simulations/api')>()
   return {
@@ -19,6 +26,9 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       result: vi.fn(),
       convergence: vi.fn(),
       measurements: vi.fn(),
+      publish: vi.fn(),
+      unpublish: vi.fn(),
+      downloadAll: vi.fn(),
       solvers: vi.fn().mockResolvedValue([]),
     },
   }
@@ -41,6 +51,9 @@ function job(status: string): Simulation {
     source_kind: 'upload',
     source_ref: '',
     source_meta: {},
+    requested_by_id: 'me',
+    requested_by_name: '나',
+    published_at: null,
     attempts: 1,
     artifacts: [],
     conditions: {
@@ -84,6 +97,7 @@ function show(path = '/simulations/sim') {
 
 describe('해석 작업 화면', () => {
   beforeEach(() => {
+    auth.id = 'me'
     vi.mocked(simulationApi.get).mockReset().mockResolvedValue(job('done'))
     vi.mocked(simulationApi.status).mockReset().mockResolvedValue(job('done'))
     vi.mocked(simulationApi.result).mockReset().mockResolvedValue(RESULT as never)
@@ -179,5 +193,52 @@ describe('해석 작업 화면', () => {
     await userEvent.click(screen.getByRole('button', { name: '다른 작업' }))
     await waitFor(() => expect(screen.getByText(/작업을 찾을 수 없습니다/)).toBeDefined())
     expect(screen.queryByText('측면가진')).toBeNull()
+  })
+
+  it('내 끝난 작업은 확인을 받고 게시한다 — 게시되면 표시와 단추가 바뀐다', async () => {
+    const published = {
+      ...job('done'),
+      published_at: '2026-10-20T01:00:00Z',
+      published_by_name: '나',
+    } as Simulation
+    vi.mocked(simulationApi.publish).mockReset().mockResolvedValue(published)
+    show()
+    await userEvent.click(await screen.findByRole('button', { name: '게시' }))
+    // **누구나 본다** — 누르기 전에 무엇이 바뀌는지 말한다.
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('조직의 누구나')
+    await userEvent.click(within(dialog).getByRole('button', { name: '게시' }))
+    await waitFor(() => expect(simulationApi.publish).toHaveBeenCalledWith('sim'))
+    expect(await screen.findByRole('button', { name: '게시 해제' })).toBeDefined()
+    expect(screen.getAllByText('게시됨').length).toBeGreaterThan(0)
+  })
+
+  it('남의 게시 결과는 읽기만 한다 — 바꾸는 단추가 없다', async () => {
+    auth.id = 'someone-else'
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('done'),
+      published_at: '2026-10-20T01:00:00Z',
+      published_by_name: '나',
+    } as Simulation)
+    show()
+    await screen.findByRole('region', { name: '한눈에 보기' })
+    expect(screen.getByText(/다른 사람의 결과라 읽기만 합니다/)).toBeDefined()
+    for (const name of ['게시', '게시 해제', '중간 파일 정리', '다시 실행', '취소']) {
+      expect(screen.queryByRole('button', { name })).toBeNull()
+    }
+  })
+
+  it('파일 탭에서 산출물 전부를 한 번에 받는다', async () => {
+    vi.mocked(simulationApi.downloadAll).mockReset().mockResolvedValue(undefined)
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('done'),
+      artifacts: [
+        { id: 'a1', kind: 'result_json', filename: 'result.json', stage: 'extracting', size_bytes: 2048 },
+        { id: 'a2', kind: 'rst', filename: 'file.rst', stage: 'solving', size_bytes: 3 * 1024 * 1024 },
+      ],
+    } as Simulation)
+    show('/simulations/sim?tab=files')
+    await userEvent.click(await screen.findByRole('button', { name: /전체 다운로드/ }))
+    expect(simulationApi.downloadAll).toHaveBeenCalledWith('sim', '측면가진_파일.zip')
   })
 })

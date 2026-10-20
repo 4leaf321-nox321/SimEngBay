@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.core import measured as core_measured
 from app.database import get_db
@@ -31,6 +32,7 @@ from app.modules.simulations.schemas import (
     DoeListingOut,
     DoePreviewOut,
     MeasurementOut,
+    PublishOut,
     RecipeOut,
     SimulationOut,
     SimulationSummaryOut,
@@ -168,11 +170,13 @@ def add_study_measurement(
 
 @router.get("/studies", response_model=list[StudySummaryOut])
 def list_studies(
+    scope: Literal["mine", "published"] | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[StudySummaryOut]:
-    """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다."""
-    return services.list_studies(db, user=user)
+    """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. `scope` 로
+    좁힌다: `mine` 내가 건 점이 있는 것 · `published` 게시된 점이 있는 것."""
+    return services.list_studies(db, user=user, scope=scope)
 
 
 @router.get("/studies/{study_id}", response_model=StudyOut)
@@ -279,11 +283,14 @@ def preview_doe_point(
 def list_simulations(
     status: str | None = None,
     workspace_slug: str | None = None,
+    scope: Literal["mine", "published"] | None = None,
     limit: int | None = None,
     offset: int = 0,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Page[SimulationSummaryOut]:
+    """볼 수 있는 작업 — 내가 건 것과 게시된 것(시스템 관리자는 전부). `scope` 로 좁힌다:
+    `mine` 내가 건 것 · `published` 게시된 것."""
     size = clamp_limit(limit)
     rows, total = services.list_visible(
         db,
@@ -292,6 +299,7 @@ def list_simulations(
         workspace_slug=workspace_slug,
         limit=size,
         offset=max(0, offset),
+        scope=scope,
     )
     return Page(
         items=[services.to_summary(db, one) for one in rows],
@@ -415,6 +423,46 @@ def tidy_study(
     return services.tidy_study(db, user=user, study_id=study_id)
 
 
+@router.post("/studies/{study_id}/publish", response_model=PublishOut)
+def publish_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> PublishOut:
+    """DOE 한 벌의 끝난 설계점을 게시한다(내가 건 점만) — 누구나 본다(읽기만)."""
+    return PublishOut(**services.publish_study(db, user=user, study_id=study_id))
+
+
+@router.post("/studies/{study_id}/unpublish", response_model=PublishOut)
+def unpublish_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> PublishOut:
+    """DOE 한 벌의 게시를 해제한다(내가 건 점만)."""
+    return PublishOut(**services.unpublish_study(db, user=user, study_id=study_id))
+
+
+@router.post("/{simulation_id}/publish", response_model=SimulationOut)
+def publish(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SimulationOut:
+    """끝난 작업을 게시한다 — 누구나 본다(읽기만). 메시 수렴 수준도 함께."""
+    return services.to_out(db, services.publish(db, user=user, simulation_id=simulation_id))
+
+
+@router.post("/{simulation_id}/unpublish", response_model=SimulationOut)
+def unpublish(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SimulationOut:
+    """게시를 해제한다 — 다시 건 사람과 시스템 관리자만 본다."""
+    return services.to_out(db, services.unpublish(db, user=user, simulation_id=simulation_id))
+
+
 @router.post("/{simulation_id}/tidy")
 def tidy(
     simulation_id: uuid.UUID,
@@ -433,6 +481,24 @@ def cancel(
 ) -> SimulationOut:
     """작업을 멈춘다. **대기 중이면 곧바로, 돌고 있으면 곧**(워커가 몇 초 안에 본다)."""
     return services.to_out(db, services.cancel(db, user=user, simulation_id=simulation_id))
+
+
+@router.get("/{simulation_id}/artifacts.zip", include_in_schema=False)
+def download_all_artifacts(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """산출물 전부를 ZIP 하나로 — 「파일」 탭의 「전체 다운로드」. 보낸 뒤 임시 파일을 지운다.
+    못 넣은 것은 묶음 안의 `빠진_파일.txt` 가 말한다."""
+    path, filename = services.artifacts_archive(db, user=user, simulation_id=simulation_id)
+    disposition = "attachment; filename=\"download.zip\"; filename*=UTF-8''" + quote(filename)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        headers={"Content-Disposition": disposition},
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
 
 
 @router.get("/{simulation_id}/artifacts/{artifact_id}/content", include_in_schema=False)

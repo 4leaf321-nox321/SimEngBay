@@ -9,28 +9,52 @@
  *
  * 아직 안 끝난 점은 안 끝난 대로 보인다. DOE 하나가 다 도는 데 점 수 x 1~2분이 걸리고,
  * 다 끝나야 보여 주면 그동안 아무것도 못 본다.
+ *
+ * **탭으로 가른다**(해석 작업 화면과 같은 꼴, 2026-10-20) — 비교(그림 · 행렬) · 설계점(점마다 상태 ·
+ * 오류 — 작업 화면의 「진행」) · 검증(실측). 한 장에 다 두면 실측 표가 그림 아래 멀리 밀려 있어
+ * 있는 줄도 몰랐다. 탭은 주소의 `?tab=` 이 정본이다.
  */
 
 import { useState } from 'react'
-import { Download, Eraser, RotateCcw } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { Download, Eraser, RefreshCw, RotateCcw } from 'lucide-react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
+import type { StudyPoint } from '@/modules/simulations/api'
 import { RECIPE_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
+import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { StudyMeasurements } from '@/modules/simulations/StudyMeasurements'
 import { StudyOverview } from '@/modules/simulations/StudyOverview'
 import { StudyValues } from '@/modules/simulations/StudyValues'
 import { ApiError } from '@/shared/api/client'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { ownsWork } from '@/shared/auth/roles'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
+import { StatusBadge } from '@/shared/components/StatusBadge'
 import { Button } from '@/shared/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/shared/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
+
+/** DOE 화면의 탭 — 주소의 `?tab=` 이 정본이다. */
+type StudyTab = 'compare' | 'points' | 'checks'
+const STUDY_TABS: StudyTab[] = ['compare', 'points', 'checks']
 
 export default function StudyDetailPage() {
   const { id = '' } = useParams()
   const study = useResource(() => simulationApi.study(id), [id])
+  const { user } = useAuth()
+  const [params, setParams] = useSearchParams()
   const [failed, setFailed] = useState<ApiError | Error | null>(null)
   const [tidying, setTidying] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -90,13 +114,51 @@ export default function StudyDetailPage() {
   const modal = study.data.recipe === 'modal'
   const retryable = points.filter((one) => one.status === 'failed' || one.status === 'canceled').length
   const solvers = study.data.solvers ?? []
+  // **남의 게시 DOE 는 읽기만 한다** — 바꾸는 단추는 그 점들을 건 사람과 시스템 관리자에게만.
+  const mine = ownsWork(user, study.data.owner_id)
+  const finishedPoints = points.filter((one) => one.status === 'done').length
+  // **끝난 점이 없으면 비교할 것이 없다** — 그때는 설계점(진행) 탭이 먼저다(작업 화면과 같다).
+  const comparable = finishedPoints > 0
+  const asked = params.get('tab') as StudyTab | null
+  const tab: StudyTab =
+    asked && STUDY_TABS.includes(asked) && (asked !== 'compare' || comparable)
+      ? asked
+      : comparable
+        ? 'compare'
+        : 'points'
+  function setTab(next: StudyTab) {
+    const after = new URLSearchParams(params)
+    after.set('tab', next)
+    setParams(after, { replace: true })
+  }
+  const running = points.filter((one) => !['done', 'failed', 'canceled'].includes(one.status)).length
+  const failedPoints = points.filter((one) => one.status === 'failed').length
+  const published = study.data.published ?? 0
+
+  async function setPublished(next: boolean) {
+    const done = await (next ? simulationApi.publishStudy(id) : simulationApi.unpublishStudy(id))
+    setNotice(
+      next
+        ? `설계점 ${done.points}개를 게시했습니다 — 조직의 누구나 읽을 수 있습니다.`
+        : `설계점 ${done.points}개의 게시를 해제했습니다.`,
+    )
+    study.reload()
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={study.data.name}
+        title={
+          <span className="flex items-center gap-2">
+            {study.data.name}
+            {published > 0 && <PublishedBadge />}
+          </span>
+        }
         description={
           <>
+            {study.data.owner_name ?? '—'} ·{' '}
+            {published > 0 && `게시 ${published}/${points.length} · `}
+            {!mine && '다른 사람의 결과라 읽기만 합니다 · '}
             {RECIPE_LABELS[study.data.recipe] ?? study.data.recipe} ·{' '}
             {solvers.map((one) => SOLVER_LABELS[one] ?? one).join(' + ') || '—'} · 설계점{' '}
             {points.length}개 · 변수 {study.data.factors.join(' · ') || '없음'}
@@ -113,19 +175,42 @@ export default function StudyDetailPage() {
             )}
           </>
         }
-        back={{ to: '/simulations/studies', label: 'DOE 비교' }}
+        back={
+          mine
+            ? { to: '/simulations/studies', label: '개인 작업 · DOE' }
+            : { to: '/simulations/studies?scope=published', label: '공용 작업공간 · DOE' }
+        }
         actions={
           <>
-            {retryable > 0 && (
+            {/* **끝난 점만 게시한다.** 게시 뒤에 끝난 점이 있으면 「게시」 가 나머지를 마저 게시한다. */}
+            {mine && finishedPoints > published && (
+              <PublishControl
+                published={false}
+                subject="이 DOE 의 끝난 설계점"
+                onPublish={() => setPublished(true)}
+                onUnpublish={() => setPublished(false)}
+              />
+            )}
+            {mine && published > 0 && (
+              <PublishControl
+                published
+                subject="이 DOE 의 게시된 설계점"
+                onPublish={() => setPublished(true)}
+                onUnpublish={() => setPublished(false)}
+              />
+            )}
+            {mine && retryable > 0 && (
               <Button variant="outline" size="sm" onClick={retryFailed} disabled={retrying}>
                 <RotateCcw className="size-4" />
                 {retrying ? '다시 실행 중…' : `실패한 점 다시 실행 (${retryable})`}
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={() => setTidying(true)}>
-              <Eraser className="size-4" />
-              중간 파일 정리
-            </Button>
+            {mine && (
+              <Button variant="outline" size="sm" onClick={() => setTidying(true)}>
+                <Eraser className="size-4" />
+                중간 파일 정리
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={exportCsv}>
               <Download className="size-4" />
               CSV 내보내기
@@ -172,20 +257,100 @@ export default function StudyDetailPage() {
         </p>
       )}
 
-      {points.every((one) => one.status !== 'done') ? (
-        <EmptyState
-          title="아직 끝난 설계점이 없습니다"
-          hint="설계점이 차례로 돕니다. 한 건에 1~2분 걸리고, 끝난 것부터 여기에 나타납니다."
-        />
-      ) : modal ? (
-        <StudyOverview study={study.data} />
-      ) : (
-        // 정적 · 조화는 **모드가 아니라 값**을 견준다 — 모드 지도 · 질량 대 주파수는 뜻이 없다.
-        <StudyValues study={study.data} />
-      )}
+      <Tabs value={tab} onValueChange={(next) => setTab(next as StudyTab)}>
+        <TabsList variant="line">
+          <TabsTrigger
+            value="compare"
+            disabled={!comparable}
+            title={comparable ? undefined : '끝난 설계점이 생기면 나옵니다'}
+          >
+            비교
+          </TabsTrigger>
+          <TabsTrigger value="points">
+            설계점 ({finishedPoints}/{points.length})
+          </TabsTrigger>
+          <TabsTrigger value="checks">검증</TabsTrigger>
+        </TabsList>
 
-      {/* **실측에 가장 가까운 설계점** — 물성 · 감쇠를 훑은 DOE 면 그 값이 차이를 설명한다. */}
-      <StudyMeasurements studyId={id} factors={study.data.factors} />
+        <TabsContent value="compare" className="space-y-6 pt-4">
+          {comparable &&
+            (modal ? (
+              <StudyOverview study={study.data} />
+            ) : (
+              // 정적 · 조화는 **모드가 아니라 값**을 견준다 — 모드 지도 · 질량 대 주파수는 뜻이 없다.
+              <StudyValues study={study.data} />
+            ))}
+        </TabsContent>
+
+        <TabsContent value="points" className="space-y-3 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-muted-foreground text-sm">
+              완료 {finishedPoints}
+              {running > 0 && ` · 진행 ${running}`}
+              {failedPoints > 0 && <span className="text-destructive"> · 실패 {failedPoints}</span>}
+              {!comparable && ' — 설계점이 차례로 돕니다. 한 건에 1~2분 걸리고, 끝난 것부터 비교에 나타납니다.'}
+            </p>
+            {/* 이 화면은 스스로 다시 묻지 않는다 — 200점을 몇 초마다 묻지 않으려고. */}
+            <Button variant="outline" size="sm" onClick={study.reload}>
+              <RefreshCw className="size-4" />
+              새로 고침
+            </Button>
+          </div>
+          <StudyPoints points={points} factors={study.data.factors} />
+        </TabsContent>
+
+        <TabsContent value="checks" className="space-y-6 pt-4">
+          {/* **실측에 가장 가까운 설계점** — 물성 · 감쇠를 훑은 DOE 면 그 값이 차이를 설명한다. */}
+          <StudyMeasurements studyId={id} factors={study.data.factors} readOnly={!mine} />
+        </TabsContent>
+      </Tabs>
     </div>
+  )
+}
+
+/**
+ * 설계점마다 **상태 · 오류 · 솔버 · 게시** — 작업 화면의 「진행」 에 해당한다. 결과 값은 비교
+ * 탭의 행렬에 있다(여기는 「어느 점이 왜 안 끝났나」 를 보는 자리).
+ */
+function StudyPoints({ points, factors }: { points: StudyPoint[]; factors: string[] }) {
+  if (points.length === 0) {
+    return <EmptyState title="설계점이 없습니다" hint="가져온 점이 여기에 표시됩니다." />
+  }
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>점</TableHead>
+          {factors.map((one) => (
+            <TableHead key={one}>{one}</TableHead>
+          ))}
+          <TableHead>상태</TableHead>
+          <TableHead>오류</TableHead>
+          <TableHead>솔버</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {points.map((point) => (
+          <TableRow key={point.simulation_id}>
+            <TableCell>
+              <Link to={`/simulations/${point.simulation_id}`} className="font-mono hover:underline">
+                p{String(point.number).padStart(4, '0')}
+              </Link>
+              {point.published && <PublishedBadge className="ml-1" />}
+            </TableCell>
+            {factors.map((one) => (
+              <TableCell key={one} className="font-mono">
+                {point.params[one] ?? '—'}
+              </TableCell>
+            ))}
+            <TableCell>
+              <StatusBadge kind="simulation" value={point.status} />
+            </TableCell>
+            <TableCell className="text-destructive font-mono text-xs">{point.error_code ?? ''}</TableCell>
+            <TableCell>{SOLVER_LABELS[point.solver] ?? point.solver}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }

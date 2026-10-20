@@ -237,9 +237,15 @@ def test_스터디에_붙이면_설계점마다_견주고_가장_가까운_점�
 
 
 def test_내린_실측은_목록에서_빠지고_남의_실측은_못_내린다(
-    client: TestClient, db: Session, workspace: Workspace, member: Signed, manager: Signed
+    client: TestClient,
+    db: Session,
+    workspace: Workspace,
+    member: Signed,
+    manager: Signed,
+    admin: Signed,
 ) -> None:
-    """**올린 사람이거나 그 부서의 관리자**가 내린다 — 같은 부서의 다른 멤버는 못 내린다."""
+    """**올린 사람이나 시스템 관리자**가 내린다 — 같은 부서의 다른 멤버도, 부서 관리자도 못
+    내린다(2026-10-20 — 작업은 건 사람의 것이다)."""
     job = _create(
         client,
         member,
@@ -254,7 +260,8 @@ def test_내린_실측은_목록에서_빠지고_남의_실측은_못_내린다(
     other_headers = {"Authorization": f"Bearer {_login(client, other.email)}"}
     assert client.delete(path, headers=other_headers).status_code == 403
 
-    assert client.delete(path, headers=manager.headers).status_code == 204
+    assert client.delete(path, headers=manager.headers).status_code == 403
+    assert client.delete(path, headers=admin.headers).status_code == 204
     listed = client.get(f"/api/simulations/{job['id']}/measurements", headers=member.headers)
     assert listed.json() == []
     # 이미 내린 것은 없는 것이다.

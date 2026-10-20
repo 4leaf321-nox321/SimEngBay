@@ -26,6 +26,7 @@ import { StudyOverview } from '@/modules/simulations/StudyOverview'
 /** 실측에서 나온 모양 — 두께를 올리면 1차는 조금 오르고 질량은 크게 는다. */
 const STUDY: Study = {
   study_id: '3f9a21',
+  published: 0,
   name: '브래킷_두께훑기',
   factors: ['두께'],
   recipe: 'modal',
@@ -42,6 +43,7 @@ const STUDY: Study = {
       number: 1,
       params: { 두께: 6 },
       status: 'done',
+      published: false,
       recipe: 'modal',
       solver: 'ansys',
       first_elastic_hz: 1336,
@@ -54,6 +56,7 @@ const STUDY: Study = {
       number: 2,
       params: { 두께: 12 },
       status: 'done',
+      published: false,
       recipe: 'modal',
       solver: 'ansys',
       first_elastic_hz: 1651,
@@ -66,6 +69,7 @@ const STUDY: Study = {
       number: 3,
       params: { 두께: 20 },
       status: 'done',
+      published: false,
       recipe: 'modal',
       solver: 'ansys',
       first_elastic_hz: 1713,

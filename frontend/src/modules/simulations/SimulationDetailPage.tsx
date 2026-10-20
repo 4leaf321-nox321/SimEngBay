@@ -20,6 +20,7 @@ import type { Artifact, Convergence, Measurement, Simulation, Stage } from '@/mo
 import { ConditionList } from '@/modules/simulations/ConditionList'
 import { ConvergencePanel } from '@/modules/simulations/ConvergencePanel'
 import { MeasurementsPanel } from '@/modules/simulations/MeasurementsPanel'
+import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { ResultGlance } from '@/modules/simulations/ResultGlance'
 import type { DetailTab } from '@/modules/simulations/ResultGlance'
 import { ResultPanel, useSimulationResult } from '@/modules/simulations/ResultPanel'
@@ -34,6 +35,8 @@ import {
   solverOf,
 } from '@/modules/simulations/labels'
 import { ApiError } from '@/shared/api/client'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { ownsWork } from '@/shared/auth/roles'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -215,6 +218,7 @@ function SimulationDetail({ id }: { id: string }) {
   const [live, setLive] = useState<Simulation | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [busy, setBusy] = useState(false)
+  const { user } = useAuth()
 
   const simulation = live ?? initial.data
   const finished = simulation ? FINAL_STATUSES.has(simulation.status) : true
@@ -297,6 +301,11 @@ function SimulationDetail({ id }: { id: string }) {
     }
   }
 
+  async function setPublished(next: boolean) {
+    setError(null)
+    setLive(await (next ? simulationApi.publish(id) : simulationApi.unpublish(id)))
+  }
+
   async function retry() {
     setBusy(true)
     setError(null)
@@ -318,6 +327,22 @@ function SimulationDetail({ id }: { id: string }) {
     }
   }
 
+  const [bundling, setBundling] = useState(false)
+
+  /** **산출물 전부를 ZIP 하나로** — 서버가 묶는다(솔버 결과는 수백 MB 라 시간이 걸린다). */
+  async function downloadAll() {
+    if (!simulation) return
+    setBundling(true)
+    setError(null)
+    try {
+      await simulationApi.downloadAll(id, `${simulation.name}_파일.zip`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBundling(false)
+    }
+  }
+
   if (initial.error && !simulation) {
     return (
       <div className="space-y-6">
@@ -329,6 +354,9 @@ function SimulationDetail({ id }: { id: string }) {
   if (!simulation) return null
 
   const summary = Object.entries(simulation.summary ?? {})
+  const totalBytes = simulation.artifacts.reduce((sum, one) => sum + (one.size_bytes ?? 0), 0)
+  // **남의 게시 결과는 읽기만 한다** — 바꾸는 단추는 건 사람과 시스템 관리자에게만.
+  const mine = ownsWork(user, simulation.requested_by_id)
 
   return (
     <div className="space-y-6">
@@ -337,6 +365,7 @@ function SimulationDetail({ id }: { id: string }) {
           <span className="flex items-center gap-2">
             {simulation.name}
             <StatusBadge kind="simulation" value={simulation.status} />
+            {simulation.published_at && <PublishedBadge />}
           </span>
         }
         description={
@@ -350,26 +379,44 @@ function SimulationDetail({ id }: { id: string }) {
             {simulation.attempts > 1 && ` · ${simulation.attempts}번째 시도`}
             {/* **어느 워커가 집었나** — 서버 화면의 워커 표와 잇는 끈이다(같은 `호스트:pid`). */}
             {simulation.worker_id && ` · 워커 ${simulation.worker_id}`}
+            {simulation.published_at &&
+              ` · ${simulation.published_by_name ?? '—'} 님이 ${shownDateTime(simulation.published_at)}에 게시`}
+            {!mine && ' · 다른 사람의 결과라 읽기만 합니다'}
           </>
         }
-        back={{ to: '/simulations', label: '해석 작업' }}
+        // 남의 게시 결과면 공용 작업공간으로 돌아간다 — 개인 작업 목록에는 없다.
+        back={
+          mine
+            ? { to: '/simulations', label: '개인 작업' }
+            : { to: '/simulations?scope=published', label: '공용 작업공간' }
+        }
         actions={
           <>
+            {/* **끝난 작업만 게시한다** — 실패 · 도는 중인 결과는 남이 믿고 쓸 수 없다. */}
+            {mine && simulation.status === 'done' && (
+              <PublishControl
+                published={Boolean(simulation.published_at)}
+                subject="이 작업"
+                onPublish={() => setPublished(true)}
+                onUnpublish={() => setPublished(false)}
+                disabled={busy}
+              />
+            )}
             {/* **끝나지 않은 작업만 멈출 수 있다** — 끝난 것은 되돌릴 것이 없다. */}
-            {!finished && (
+            {mine && !finished && (
               <Button variant="outline" size="sm" onClick={cancel} disabled={busy}>
                 <Square className="size-4" />
                 취소
               </Button>
             )}
             {/* 다시 가져와 대신한 작업이 있으면 그쪽에서 다시 건다 — 서버도 막는다(SIMULATIONS-0031). */}
-            {(simulation.status === 'failed' || simulation.status === 'canceled') && !replacedBy(simulation) && (
+            {mine && (simulation.status === 'failed' || simulation.status === 'canceled') && !replacedBy(simulation) && (
               <Button size="sm" onClick={retry} disabled={busy}>
                 <RotateCcw className="size-4" />
                 다시 실행
               </Button>
             )}
-            {finished && (
+            {mine && finished && (
               <Button variant="outline" size="sm" onClick={tidy} disabled={busy}>
                 <Eraser className="size-4" />
                 중간 파일 정리
@@ -493,18 +540,32 @@ function SimulationDetail({ id }: { id: string }) {
 
         <TabsContent value="checks" className="space-y-8 pt-4">
           {/* **이 숫자를 믿어도 되나** — 실측과 견주고, 메시에 얼마나 기대는지 본다. */}
-          <MeasurementsPanel simulationId={id} status={simulation.status} onData={reportMeasurements} />
+          <MeasurementsPanel
+            simulationId={id}
+            status={simulation.status}
+            readOnly={!mine}
+            onData={reportMeasurements}
+          />
           <ConvergencePanel
             simulationId={id}
             status={simulation.status}
             solver={solverOf(simulation.spec)}
+            readOnly={!mine}
             onData={reportConvergence}
           />
         </TabsContent>
 
         <TabsContent value="files" className="space-y-6 pt-4">
           <section className="space-y-2">
-            <h2 className="text-sm font-medium">산출물</h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-medium">산출물</h2>
+              {simulation.artifacts.length > 0 && (
+                <Button variant="outline" size="sm" onClick={downloadAll} disabled={bundling}>
+                  <Download className="size-4" />
+                  {bundling ? '묶는 중…' : `전체 다운로드 (${shownSize(totalBytes)})`}
+                </Button>
+              )}
+            </div>
             {simulation.artifacts.length === 0 ? (
               <EmptyState title="산출물이 없습니다" hint="단계가 진행되면 여기에 표시됩니다." />
             ) : (

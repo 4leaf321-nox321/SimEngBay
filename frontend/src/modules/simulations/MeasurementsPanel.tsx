@@ -27,6 +27,8 @@ import { ApiError } from '@/shared/api/client'
 import { Spectrum, colorAt } from '@/shared/charts'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { ownsWork } from '@/shared/auth/roles'
 import { Button } from '@/shared/components/ui/button'
 import {
   Table,
@@ -237,10 +239,13 @@ export function ComparisonView({ comparison }: { comparison: Comparison }) {
 export function MeasurementsPanel({
   simulationId,
   status,
+  readOnly = false,
   onData,
 }: {
   simulationId: string
   status: string
+  /** 남의 게시 결과 — 실측을 붙이지 않는다(건 사람이나 시스템 관리자만). */
+  readOnly?: boolean
   /** 새로 읽었다(올리거나 지운 뒤 포함) — 한눈에 보기 줄이 따라 바꾼다. 같은 함수를 줘야 한다. */
   onData?: (rows: Measurement[]) => void
 }) {
@@ -249,6 +254,7 @@ export function MeasurementsPanel({
   const [removing, setRemoving] = useState<Measurement | null>(null)
   const [tick, setTick] = useState(0)
   const done = status === 'done'
+  const { user } = useAuth()
 
   useEffect(() => {
     if (!done) return
@@ -278,17 +284,20 @@ export function MeasurementsPanel({
   return (
     <section className="space-y-3">
       <h2 className="text-sm font-medium">실측과 맞추기</h2>
-      <MeasurementEntry
-        onSubmit={async (file, label) => {
-          await simulationApi.addMeasurement(simulationId, file, label)
-          setTick((value) => value + 1)
-        }}
-      />
+      {!readOnly && (
+        <MeasurementEntry
+          onSubmit={async (file, label) => {
+            await simulationApi.addMeasurement(simulationId, file, label)
+            setTick((value) => value + 1)
+          }}
+        />
+      )}
       <ErrorNotice error={error} />
       {rows && rows.length === 0 && (
         <p className="text-muted-foreground text-sm">
-          아직 붙인 실측이 없습니다 — 센서 자리의 공진 · FRF · 변위 · 변형률을 위 표에 넣고 검토하면 이 결과와 같은 자리에서
-          견줍니다.
+          {readOnly
+            ? '붙인 실측이 없습니다.'
+            : '아직 붙인 실측이 없습니다 — 센서 자리의 공진 · FRF · 변위 · 변형률을 위 표에 넣고 검토하면 이 결과와 같은 자리에서 견줍니다.'}
         </p>
       )}
       {(rows ?? []).map((one) => (
@@ -302,10 +311,13 @@ export function MeasurementsPanel({
                 {shownDateTime(one.created_at)}
               </p>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => setRemoving(one)}>
-              <Trash2 className="size-4" />
-              삭제
-            </Button>
+            {/* 올린 사람이나 시스템 관리자만 내린다(서버가 판정한다). */}
+            {ownsWork(user, one.created_by_id) && (
+              <Button variant="ghost" size="sm" onClick={() => setRemoving(one)}>
+                <Trash2 className="size-4" />
+                삭제
+              </Button>
+            )}
           </header>
           {one.comparison ? (
             <ComparisonView comparison={one.comparison} />

@@ -29,3 +29,14 @@ export function isManagerOf(
   if (!slug) return false
   return (user?.memberships ?? []).some((one) => one.slug === slug && one.role === 'manager')
 }
+
+/**
+ * 해석 작업을 바꿀 수 있나 — **건 사람이나 시스템 관리자.** 남의 게시 결과는 읽기만 한다
+ * (재시도 · 취소 · 정리 · 게시 · 실측 · 수렴 점검). 부서 관리자라도 남의 작업은 못 바꾼다.
+ */
+export function ownsWork(
+  user: CurrentUser | null | undefined,
+  requestedById: string | null | undefined,
+): boolean {
+  return isSystemAdmin(user) || (Boolean(user) && Boolean(requestedById) && user?.id === requestedById)
+}

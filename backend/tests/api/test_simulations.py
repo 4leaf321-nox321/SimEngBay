@@ -166,8 +166,8 @@ def test_전역_작업은_시스템_관리자만(
 def test_남의_닫힌_부서_작업은_보이지_않는다(
     client: TestClient, db: Session, member: Signed, admin: Signed
 ) -> None:
-    """보이는 것은 `open_owner_clause` — 전역 + 열린 부서 + 내 부서. 닫힌 남의 부서 것은 없는
-    것과 같게 답한다(403 으로 가르면 id 가 존재한다는 사실이 샌다)."""
+    """남의 작업은 게시 전에는 안 보인다(ADR 0008) — 닫힌 부서든 아니든. 없는 것과 같게
+    답한다(403 으로 가르면 id 가 존재한다는 사실이 샌다)."""
     from app.modules.workspaces.models import Workspace
 
     other = Workspace(slug="closed-lab", name="닫힌 연구소", restricted=True)
@@ -1306,12 +1306,26 @@ def test_정적_DOE_비교에_반력과_측정점이_실린다(client: TestClien
     assert float(line[column]) == pytest.approx(first["max_displacement_mm"], rel=1e-5)
 
 
-def test_조화_DOE_비교에_측정점의_봉우리가_실린다(client: TestClient, member: Signed) -> None:
+def _fresh_study(source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """폴더를 **새 스터디 id 로** 베낀다. 작업은 건 사람의 것이라(2026-10-20), 앞 시험의 다른
+    사람이 같은 폴더를 가져왔으면 「이미 가져온 점」 으로 막히고 그 작업은 보이지도 않는다."""
+    folder = tmp_path / source.name
+    shutil.copytree(source, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["id"] = uuid.uuid4().hex
+    (folder / "study.json").write_text(json.dumps(study, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
+    return folder
+
+
+def test_조화_DOE_비교에_측정점의_봉우리가_실린다(
+    client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """조화 DOE 는 **봉우리**를 견준다 — 전체 봉우리와 센서 자리의 봉우리를 따로."""
     created = client.post(
         "/api/simulations/doe/import",
         json={
-            "path": str(SIDE_SHAKE_FOLDER),
+            "path": str(_fresh_study(SIDE_SHAKE_FOLDER, tmp_path, monkeypatch)),
             "spec": {"recipe": "harmonic", "material": MODAL["material"]},
             "workspace_slug": member.workspace,
         },
@@ -1370,21 +1384,25 @@ def test_이름으로_묶인_옛_스터디도_상세가_열린다(
     assert len(detail.json()["points"]) == len(ids)
 
 
-def test_가져온_DOE_가_비교_목록에_뜬다(client: TestClient, member: Signed) -> None:
+def test_가져온_DOE_가_비교_목록에_뜬다(
+    client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """**스터디를 따로 저장하지 않는다** — 작업 표에서 모은다.
 
     따로 두면 작업을 지웠을 때 둘이 어긋나고, 그때 어느 쪽이 맞는지 알 수 없다.
     """
-    client.post(
-        "/api/simulations/doe/import",
-        json={"path": str(DOE_FOLDER), "spec": MODAL, "workspace_slug": member.workspace},
-        headers=member.headers,
-    )
+    folder = _fresh_study(DOE_FOLDER, tmp_path, monkeypatch)
+    for _ in range(2):
+        client.post(
+            "/api/simulations/doe/import",
+            json={"path": str(folder), "spec": MODAL, "workspace_slug": member.workspace},
+            headers=member.headers,
+        )
     listed = client.get("/api/simulations/studies", headers=member.headers)
     assert listed.status_code == 200, listed.text
     study = next(one for one in listed.json() if one["name"] == "브래킷_두께훑기")
     assert study["factors"] == ["두께"]
-    # 앞 시험들이 같은 폴더를 여러 번 가져왔지만 **점은 세 개뿐이다**(중복을 막는다).
+    # 같은 폴더를 두 번 가져왔지만 **점은 세 개뿐이다**(중복을 막는다).
     assert study["points"] == 3
     assert study["done"] == 3  # 인라인 실행기가 끝까지 돌렸다
 
@@ -1496,3 +1514,51 @@ def test_도는_중에는_정리하지_않는다(
         f"/api/simulations/{created.json()['id']}/tidy", headers=member.headers
     )
     assert response.status_code == 409
+
+
+def test_레시피_목록에_걸_수_있는_해석이_다_나온다(client: TestClient, member: Signed) -> None:
+    """화면 · API 를 부르는 쪽(MCP 포함)은 이 목록과 스키마로 무엇을 걸 수 있는지 읽는다.
+    손으로 적던 때는 조화 응답이 빠져 있었다(2026-10-20)."""
+    response = client.get("/api/simulations/recipes", headers=member.headers)
+    assert response.status_code == 200, response.text
+    found = {one["name"]: one for one in response.json()}
+    assert list(found) == ["modal", "static", "harmonic"]
+    assert all(one["runnable"] for one in found.values())
+    harmonic = found["harmonic"]["schema"]
+    assert harmonic["properties"]["recipe"]["const"] == "harmonic"
+
+
+def test_산출물_전부를_ZIP_하나로_받는다(
+    client: TestClient, db: Session, member: Signed
+) -> None:
+    """「파일」 탭의 「전체 다운로드」. 정리했거나 복구되지 않아 없는 파일은 조용히 빼지 않고
+    묶음 안의 `빠진_파일.txt` 가 말한다. 보낸 묶음은 작업 폴더에 남기지 않는다."""
+    import zipfile
+
+    from app.modules.simulations.services import ARCHIVE_MISSING_NOTE, work_root
+
+    created = _create(client, member, workspace=member.workspace)
+    assert created.status_code == 201, created.text
+    body = created.json()
+    path = f"/api/simulations/{body['id']}/artifacts.zip"
+
+    got = client.get(path, headers=member.headers)
+    assert got.status_code == 200, got.text
+    assert got.headers["content-type"] == "application/zip"
+    assert "filename*=UTF-8''" in got.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(got.content)) as bundle:
+        names = set(bundle.namelist())
+        assert names == {one["filename"] for one in body["artifacts"]}
+        assert json.loads(bundle.read("result.json"))["boundary"] == "free-free"
+    assert not any((work_root() / ".archives").glob("*.zip"))
+
+    # 파일 하나가 사라지면 — 나머지는 넣고, 빠진 것을 적는다.
+    rst = next(one for one in body["artifacts"] if one["kind"] == "rst")
+    row = db.get(Simulation, uuid.UUID(body["id"]))
+    assert row is not None and row.work_dir is not None
+    (work_root() / row.work_dir / rst["filename"]).unlink()
+    partial = client.get(path, headers=member.headers)
+    assert partial.status_code == 200, partial.text
+    with zipfile.ZipFile(io.BytesIO(partial.content)) as bundle:
+        assert rst["filename"] not in bundle.namelist()
+        assert rst["filename"] in bundle.read(ARCHIVE_MISSING_NOTE).decode("utf-8")

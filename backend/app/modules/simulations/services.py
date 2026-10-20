@@ -6,11 +6,13 @@
 
 ## 권한
 
-- **보는 것**은 `open_owner_clause` — 전역 + 열린 부서 + 내 부서. 「우리 조직에 이 형상의 모달
-  해석이 있나」 에 답할 수 있어야 같은 해석을 두 번 안 돌린다.
-- **거는 것**은 그 부서의 멤버면 된다. 해석은 부서의 일상 업무라 관리자만 걸게 하면 관리자가
-  대신 눌러 주는 일이 생기고, 그때 「누가 걸었나」 가 거짓이 된다.
-- **재시도**는 건 사람 자신이거나 소유 부서의 관리자(`require_owner_edit`).
+- **작업은 건 사람의 것이다**(2026-10-20 — CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는
+  것은 건 사람 · 시스템 관리자, 그리고 **게시한 것은 누구나**(`published_at`). 해석은
+  시행착오가 많다 — 실패 · 메시만 바꿔 본 작업까지 모두에게 보이면 남이 어느 것을 믿을지
+  모른다. 「우리 조직에 이 형상의 모달 해석이 있나」 는 게시된 결과로 답한다.
+- **거는 것**은 그 부서의 멤버면 된다(부서는 목록 · 통계의 꼬리표다).
+- **바꾸는 것**(재시도 · 취소 · 정리 · 게시 · 실측 · 수렴 점검)은 건 사람이나 시스템 관리자
+  (`_require_owner`). 남의 게시 결과는 읽기만 한다.
 """
 
 from __future__ import annotations
@@ -20,7 +22,10 @@ import hashlib
 import io
 import json
 import logging
+import os
+import tempfile
 import uuid
+import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -29,7 +34,18 @@ from pathlib import Path
 from typing import Any, BinaryIO, Literal, cast
 
 from pydantic import ValidationError
-from sqlalchemy import Select, and_, delete, func, or_, select, text, update
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    and_,
+    delete,
+    func,
+    or_,
+    select,
+    text,
+    true,
+    update,
+)
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -44,6 +60,7 @@ from app.core.doe.folder import FolderProblem
 from app.core.modes import track_modes
 from app.core.spec import (
     RUNNABLE_RECIPES,
+    SPEC_MODELS,
     HarmonicSpec,
     ModalSpec,
     StaticSpec,
@@ -104,14 +121,9 @@ from app.modules.simulations.schemas import (
     WorkerState,
 )
 from app.modules.workspaces.models import Workspace
-from app.shared import extensions
+from app.shared import audit, extensions
 from app.shared.errors import AppError, Forbidden, NotFound, code, describe_validation
-from app.shared.permissions import (
-    open_owner_clause,
-    require_member,
-    require_owner_edit,
-    workspace_by_slug,
-)
+from app.shared.permissions import require_member, workspace_by_slug
 from app.shared.tabular import TabularError, parse_rows
 from app.shared.text import clean
 
@@ -209,6 +221,11 @@ def _names(db: Session, simulation: Simulation) -> tuple[str | None, str | None]
     )
 
 
+def _user_name(db: Session, user_id: uuid.UUID | None) -> str | None:
+    found = db.get(User, user_id) if user_id else None
+    return found.display_name if found else None
+
+
 def to_summary(db: Session, simulation: Simulation) -> SimulationSummaryOut:
     workspace_name, requester_name = _names(db, simulation)
     return SimulationSummaryOut(
@@ -224,6 +241,10 @@ def to_summary(db: Session, simulation: Simulation) -> SimulationSummaryOut:
         owner_workspace_name=workspace_name,
         requested_by_id=simulation.requested_by_id,
         requested_by_name=requester_name,
+        published_at=simulation.published_at,
+        published_by_name=(
+            _user_name(db, simulation.published_by_id) if simulation.published_at else None
+        ),
         error_code=simulation.error_code,
         summary=simulation.summary,
         created_at=simulation.created_at,
@@ -364,18 +385,15 @@ _ORDER_WORDS = {"linear": "1차", "quadratic": "2차"}
 
 
 def recipes() -> list[RecipeOut]:
-    """화면이 새 작업 폼을 그리는 근거. 스키마는 스펙 모델에서 나온다 — 손으로 적지 않는다."""
+    """레시피와 그 스펙의 JSON 스키마 — 화면 · API 를 부르는 쪽이 무엇을 걸 수 있는지 읽는다.
+    목록도 스키마도 스펙 모델에서 나온다(`SPEC_MODELS`) — 손으로 적지 않는다."""
     return [
         RecipeOut(
-            name="modal",
-            runnable="modal" in RUNNABLE_RECIPES,
-            schema=ModalSpec.model_json_schema(),
-        ),
-        RecipeOut(
-            name="static",
-            runnable="static" in RUNNABLE_RECIPES,
-            schema=StaticSpec.model_json_schema(),
-        ),
+            name=name,
+            runnable=name in RUNNABLE_RECIPES,
+            schema=model.model_json_schema(),
+        )
+        for name, model in SPEC_MODELS.items()
     ]
 
 
@@ -383,9 +401,25 @@ def recipes() -> list[RecipeOut]:
 
 
 def _visible(user: User) -> Select[tuple[Simulation]]:
-    return select(Simulation).where(
-        Simulation.deleted_at.is_(None),
-        open_owner_clause(user, Simulation.owner_workspace_id),
+    query = select(Simulation).where(Simulation.deleted_at.is_(None))
+    if user.is_system_admin:
+        return query
+    return query.where(_seen_by(user))
+
+
+def _seen_by(user: User) -> ColumnElement[bool]:
+    """**내 것이거나 게시된 것.** 시스템 관리자는 이 조건 없이 다 본다(`_visible`)."""
+    return or_(Simulation.requested_by_id == user.id, Simulation.published_at.is_not(None))
+
+
+def _require_owner(user: User, simulation: Simulation) -> None:
+    """작업을 바꾸는 일은 **건 사람이나 시스템 관리자만** — 남의 작업은 게시돼도 읽기만
+    한다."""
+    if user.is_system_admin or simulation.requested_by_id == user.id:
+        return
+    raise Forbidden(
+        code("SIMULATIONS", 8),
+        "건 사람이나 시스템 관리자만 할 수 있습니다 — 게시된 결과는 읽기만 합니다.",
     )
 
 
@@ -406,8 +440,14 @@ def list_visible(
     workspace_slug: str | None,
     limit: int,
     offset: int,
+    scope: str | None = None,
 ) -> tuple[list[Simulation], int]:
+    """`scope` — `mine`(내가 건 것) · `published`(게시된 것). 비우면 볼 수 있는 것 전부."""
     query = _visible(user)
+    if scope == "mine":
+        query = query.where(Simulation.requested_by_id == user.id)
+    elif scope == "published":
+        query = query.where(Simulation.published_at.is_not(None))
     if status:
         query = query.where(Simulation.status == status)
     if workspace_slug:
@@ -452,6 +492,68 @@ def result_json(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[st
         )
     loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     return loaded
+
+
+#: 전체 다운로드에 함께 넣는 메모 — 묶음에 못 넣은 산출물과 그 까닭.
+ARCHIVE_MISSING_NOTE = "빠진_파일.txt"
+
+
+def artifacts_archive(
+    db: Session, *, user: User, simulation_id: uuid.UUID
+) -> tuple[Path, str]:
+    """그 작업의 **산출물 전부를 ZIP 하나로** — (임시 파일, 내려받을 이름). 부른 쪽이 보낸 뒤
+    지운다.
+
+    낱개 다운로드와 같은 사람이 받는다(`get_visible` — 남의 게시 결과도). 솔버 결과(`.rst`)는
+    수백 MB 라 메모리에 담지 않고 **작업 폴더 디스크에** 쓴다(`/tmp` 는 작을 수 있다). 압축은
+    가볍게 한다 — 그림 · 결과 파일은 이미 압축돼 있어 세게 눌러도 시간만 든다.
+
+    정리했거나 복구되지 않아 파일이 없는 산출물은 **조용히 빼지 않는다** — 묶음 안의
+    `빠진_파일.txt` 에 무엇이 왜 없는지 적는다. 하나도 없으면 낱개 다운로드처럼 멈춘다.
+    """
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    present: list[tuple[SimulationArtifact, Path]] = []
+    missing: list[SimulationArtifact] = []
+    for artifact in _artifacts_of(db, simulation.id):
+        path = resolve_work_path(artifact.relative_path)
+        if path is None or not path.is_file():
+            missing.append(artifact)
+        else:
+            present.append((artifact, path))
+    if not present:
+        raise Forbidden(
+            code("SIMULATIONS", 7),
+            "내려받을 산출물 파일이 작업 폴더에 없습니다. 정리했거나, 작업 폴더(WORK_DIR)가 "
+            "함께 복구되지 않았습니다.",
+        )
+    folder = work_root() / ".archives"
+    folder.mkdir(parents=True, exist_ok=True)
+    handle, raw = tempfile.mkstemp(suffix=".zip", dir=folder)
+    os.close(handle)
+    target = Path(raw)
+    used: set[str] = set()
+    try:
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as bundle:
+            for artifact, path in present:
+                # 같은 이름이 두 단계에서 나오면 단계 폴더로 가른다 — 덮어쓰면 하나가 사라진다.
+                name = artifact.filename
+                if name in used:
+                    name = f"{artifact.stage}/{artifact.filename}"
+                used.add(name)
+                bundle.write(path, arcname=name)
+            if missing:
+                bundle.writestr(
+                    ARCHIVE_MISSING_NOTE,
+                    "작업 폴더에 없어 넣지 못한 산출물입니다 — 중간 파일을 정리했거나, "
+                    "작업 폴더가 함께 복구되지 않았습니다. 다시 필요하면 작업을 다시 "
+                    "실행하세요.\n\n"
+                    + "".join(f"{one.filename}\t{one.stage}\t{one.kind}\n" for one in missing),
+                )
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    stem = clean(simulation.name).replace("/", "_").strip() or "해석작업"
+    return target, f"{stem}_파일.zip"
 
 
 def artifact_for_download(
@@ -1167,7 +1269,7 @@ def import_doe(
     # 지문을 면으로)를 쓸 길이 이것뿐이다. 옛 작업은 지우지 않고 기록으로 남기고, 새 작업이
     # 그것을 가리킨다(`source_meta.previous`). 스터디는 점마다 마지막 작업으로 견준다
     # (`_latest_per_point`).
-    already: set[int] = set()
+    already: dict[int, Simulation] = {}
     earlier: dict[int, list[Simulation]] = {}
     for one in db.scalars(
         select(Simulation)
@@ -1182,7 +1284,7 @@ def import_doe(
         if one.status in RETRYABLE_BY_IMPORT:
             earlier.setdefault(number, []).append(one)
         else:
-            already.add(number)
+            already[number] = one
 
     created: list[uuid.UUID] = []
     skipped: list[DoePointPreview] = []
@@ -1196,9 +1298,7 @@ def import_doe(
                     number=point.number,
                     params=point.params,
                     usable=False,
-                    skip_reason=(
-                        "이미 가져온 점입니다. 다시 돌리려면 그 작업에서 재시도하세요."
-                    ),
+                    skip_reason=_already_imported(db, user, already[point.number]),
                 )
             )
             continue
@@ -1342,8 +1442,13 @@ def _most(values: list[str], default: str) -> str:
     return Counter(values).most_common(1)[0][0] if values else default
 
 
-def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
+def list_studies(
+    db: Session, *, user: User, scope: str | None = None
+) -> list[StudySummaryOut]:
     """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다.
+
+    `scope` — `mine`(내가 건 점이 있는 것) · `published`(게시된 점이 있는 것). 비우면 볼 수
+    있는 것 전부(작업 목록과 같은 말이다).
 
     스터디 표를 따로 두면 작업을 지웠을 때 둘이 어긋나고, 그때 어느 쪽이 맞는지 알 수 없다.
     """
@@ -1363,6 +1468,10 @@ def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
     out: list[StudySummaryOut] = []
     for study_id, every in grouped.items():
         points = _latest_per_point(every)
+        if scope == "mine" and not any(one.requested_by_id == user.id for one in points):
+            continue
+        if scope == "published" and not any(one.published_at for one in points):
+            continue
         first = points[0]
         factors: list[str] = []
         for point in points:
@@ -1385,6 +1494,9 @@ def list_studies(db: Session, *, user: User) -> list[StudySummaryOut]:
                 failed=sum(1 for one in points if one.status == "failed"),
                 running=sum(1 for one in points if one.status in RUNNING_STATUSES),
                 workspace_name=workspace.name if workspace else None,
+                owner_id=_study_owner(points),
+                owner_name=_user_name(db, _study_owner(points)),
+                published=sum(1 for one in points if one.published_at is not None),
                 created_at=first.created_at,
                 finished_at=max(finished) if len(finished) == len(points) else None,
             )
@@ -1472,11 +1584,21 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
         solvers=list(dict.fromkeys(solver_of(one) for one in points)),
         reference_point=reference,
         tracks=tracks,
+        owner_id=_study_owner(points),
+        owner_name=_user_name(db, _study_owner(points)),
+        published=sum(1 for one in points if one.published_at is not None),
         points=[
             _study_point(one, results[int(one.source_meta.get("point") or 0)])
             for one in points
         ],
     )
+
+
+def _study_owner(points: list[Simulation]) -> uuid.UUID | None:
+    """스터디의 주인 — 점들을 가장 많이 건 사람. 실패한 점을 다른 사람이 다시 가져오면
+    섞인다."""
+    found = Counter(one.requested_by_id for one in points if one.requested_by_id)
+    return found.most_common(1)[0][0] if found else None
 
 
 def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOut:
@@ -1491,6 +1613,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         params=dict(simulation.source_meta.get("params") or {}),
         status=simulation.status,
         error_code=simulation.error_code,
+        published=simulation.published_at is not None,
         recipe=simulation.recipe,
         solver=solver_of(simulation),
         first_elastic_hz=summary.get("first_elastic_hz"),
@@ -1641,14 +1764,7 @@ def study_csv(db: Session, *, user: User, study_id: str) -> tuple[str, str]:
 def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
     """실패한 작업을 처음부터 다시 건다. 단계별 재시도(솔버만 다시)는 5단계."""
     simulation = get_visible(db, user=user, simulation_id=simulation_id)
-    if simulation.requested_by_id != user.id:
-        require_owner_edit(
-            db,
-            user,
-            simulation.owner_workspace_id,
-            what="해석 작업",
-            code_value=code("SIMULATIONS", 8),
-        )
+    _require_owner(user, simulation)
     if simulation.status not in ("failed", "canceled"):
         raise AppError(
             code("SIMULATIONS", 9),
@@ -1716,14 +1832,7 @@ def cancel(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
     자식 프로세스를 내린다. 끝난 작업은 되돌릴 것이 없다.
     """
     simulation = get_visible(db, user=user, simulation_id=simulation_id)
-    if simulation.requested_by_id != user.id:
-        require_owner_edit(
-            db,
-            user,
-            simulation.owner_workspace_id,
-            what="해석 작업",
-            code_value=code("SIMULATIONS", 8),
-        )
+    _require_owner(user, simulation)
     if is_final(simulation.status):
         raise AppError(
             code("SIMULATIONS", 17),
@@ -1872,9 +1981,13 @@ def _original_of(db: Session, user: User, simulation: Simulation) -> Simulation:
 
 
 def _levels_of(db: Session, user: User, original: Simulation) -> list[Simulation]:
+    """원래 작업과 그 수준 작업들. **원래 작업을 볼 수 있으면 수준도 본다** — 수렴 판정은 원래
+    작업의 것이고, 수준을 거는 것은 그 주인뿐이다(`request_convergence`). 게시 뒤에 건 수준이
+    아직 게시 전이어도 판정은 함께 보인다."""
     rows = list(
         db.scalars(
-            _visible(user).where(
+            select(Simulation).where(
+                Simulation.deleted_at.is_(None),
                 Simulation.source_kind == "mesh_check",
                 Simulation.source_meta["convergence_of"].astext == str(original.id),
             )
@@ -1913,6 +2026,7 @@ def request_convergence(
     새로 뚫어야 하고 한 워커가 직렬로 푼다.
     """
     original = _original_of(db, user, get_visible(db, user=user, simulation_id=simulation_id))
+    _require_owner(user, original)
     if original.status != "done":
         raise AppError(
             code("SIMULATIONS", 22),
@@ -2405,6 +2519,7 @@ def _measurement_out(
         probes=list(dict.fromkeys(str(one["probe"]) for one in row.rows if one.get("probe"))),
         rows=len(row.rows),
         created_at=row.created_at,
+        created_by_id=row.created_by_id,
         created_by_name=author.display_name if author else None,
         comparison=comparison,
     )
@@ -2448,17 +2563,8 @@ def _save_measurement(
     simulation_id: uuid.UUID | None = None,
     study_id: str | None = None,
 ) -> SimulationMeasurement:
-    """**거는 사람과 같은 규칙** — 그 부서의 멤버(전역은 시스템 관리자)."""
-    if workspace_id is None:
-        if not user.is_system_admin:
-            raise Forbidden(
-                code("SIMULATIONS", 26), "전역 작업의 실측은 시스템 관리자만 올릴 수 있습니다."
-            )
-    else:
-        workspace = db.get(Workspace, workspace_id)
-        if workspace is None:
-            raise NotFound(code("SIMULATIONS", 26), "작업의 부서를 찾을 수 없습니다.")
-        require_member(db, workspace=workspace, user=user)
+    """실측 한 벌을 남긴다. **누가 올릴 수 있나는 부른 쪽이 본다** — 그 작업 · 스터디의
+    주인이나 시스템 관리자(`_require_owner`)."""
     row = SimulationMeasurement(
         simulation_id=simulation_id,
         study_id=study_id,
@@ -2485,6 +2591,7 @@ def add_measurement(
 ) -> MeasurementOut:
     """작업 하나에 실측을 붙인다 — 올린 즉시 그 결과와 견준 것을 돌려준다."""
     simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    _require_owner(user, simulation)
     rows = _read_measurement(name, raw)
     row = _save_measurement(
         db,
@@ -2569,6 +2676,7 @@ def add_study_measurement(
     points = _study_points(db, user, study_id)
     if not points:
         raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
     rows = _read_measurement(name, raw)
     row = _save_measurement(
         db,
@@ -2599,14 +2707,13 @@ def study_measurements(db: Session, *, user: User, study_id: str) -> list[StudyM
 
 
 def remove_measurement(db: Session, *, user: User, measurement_id: uuid.UUID) -> None:
-    """실측을 내린다 — **지우지 않고 `deleted_at` 만 채운다.** 올린 사람이거나 그 부서의
-    관리자."""
+    """실측을 내린다 — **지우지 않고 `deleted_at` 만 채운다.** 올린 사람이나 시스템 관리자."""
     row = db.get(SimulationMeasurement, measurement_id)
     if row is None or row.deleted_at is not None:
         raise NotFound(code("SIMULATIONS", 27), "그 실측을 찾을 수 없습니다.")
-    if row.created_by_id != user.id:
-        require_owner_edit(
-            db, user, row.owner_workspace_id, what="실측", code_value=code("SIMULATIONS", 27)
+    if row.created_by_id != user.id and not user.is_system_admin:
+        raise Forbidden(
+            code("SIMULATIONS", 27), "올린 사람이나 시스템 관리자만 실측을 내릴 수 있습니다."
         )
     row.deleted_at = _now()
     db.commit()
@@ -2961,9 +3068,26 @@ def execute(
     simulation.status = "failed" if failed_at else "done"
     simulation.finished_at = _now()
     simulation.heartbeat_at = _now()
+    if simulation.status == "done":
+        _follow_published_original(db, simulation)
     db.commit()
     db.refresh(simulation)
     return simulation
+
+
+def _follow_published_original(db: Session, simulation: Simulation) -> None:
+    """게시된 작업의 **메시 수렴 수준**이 끝나면 함께 게시한다 — 판정은 원래 작업의 것이고,
+    수준 하나를 눌러 열었을 때 남에게 404 가 나면 안 된다."""
+    parent = (simulation.source_meta or {}).get("convergence_of")
+    if simulation.source_kind != "mesh_check" or not parent:
+        return
+    try:
+        original = db.get(Simulation, uuid.UUID(str(parent)))
+    except ValueError:
+        return
+    if original is not None and original.published_at is not None:
+        simulation.published_at = _now()
+        simulation.published_by_id = original.published_by_id
 
 
 # --- 정리 -----------------------------------------------------------------------
@@ -2982,14 +3106,7 @@ def tidy(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, Any]
     **끝난 작업만.** 도는 중에 지우면 그 단계가 읽으려던 파일이 사라진다.
     """
     simulation = get_visible(db, user=user, simulation_id=simulation_id)
-    if simulation.requested_by_id != user.id:
-        require_owner_edit(
-            db,
-            user,
-            simulation.owner_workspace_id,
-            what="해석 작업",
-            code_value=code("SIMULATIONS", 8),
-        )
+    _require_owner(user, simulation)
     if not is_final(simulation.status):
         raise AppError(
             code("SIMULATIONS", 18),
@@ -3021,9 +3138,12 @@ def tidy(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, Any]
 def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
     """스터디 하나를 통째로 정리한다. **설계점 200개면 이것이 유일하게 할 만한 길이다.**"""
     points = _study_points(db, user, study_id, every=True)
+    if points:
+        _require_study_owner(user, points)
     freed = 0
     files = 0
-    for point in points:
+    # 남의 점(게시돼 보이는 것)은 건드리지 않는다 — 내가 건 점만 정리한다.
+    for point in _my_points(user, points):
         if not is_final(point.status):
             continue
         done = tidy(db, user=user, simulation_id=point.id)
@@ -3032,6 +3152,182 @@ def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
     # 정리는 다시 가져오기 전의 시도까지 하지만, 세는 것은 설계점이다 — 한 점의 두 시도를
     # 두 점으로 말하면 화면의 「설계점 N개」 가 스터디 표와 어긋난다.
     return {"bytes_freed": freed, "files": files, "points": len(_latest_per_point(points))}
+
+
+# --- 게시 -----------------------------------------------------------------------
+
+#: 감사 기록의 일 — 과거형으로 적는다(공통 틀의 규칙). 게시는 남이 보는 범위를 바꾸는 일이다.
+SIMULATION_PUBLISHED = "simulation.published"
+SIMULATION_UNPUBLISHED = "simulation.unpublished"
+STUDY_PUBLISHED = "study.published"
+STUDY_UNPUBLISHED = "study.unpublished"
+
+
+def _require_study_owner(user: User, points: list[Simulation]) -> None:
+    """스터디를 바꾸는 일은 **그 점들을 건 사람이나 시스템 관리자만.** 실패한 점을 다른 사람이
+    다시 가져오면 주인이 섞인다 — 한 점이라도 내 것이면 된다(바꾸는 것은 내 점뿐이다)."""
+    if user.is_system_admin or any(one.requested_by_id == user.id for one in points):
+        return
+    raise Forbidden(
+        code("SIMULATIONS", 8),
+        "건 사람이나 시스템 관리자만 할 수 있습니다 — 게시된 결과는 읽기만 합니다.",
+    )
+
+
+def _already_imported(db: Session, user: User, existing: Simulation) -> str:
+    """「이미 가져온 점」 — **남의 게시 전 작업이면 누구 것인지 말한다.** 안 그러면 보이지도
+    않는 작업 때문에 막히고, 사람은 그것을 찾을 길이 없다."""
+    if (
+        user.is_system_admin
+        or existing.requested_by_id == user.id
+        or existing.published_at is not None
+    ):
+        return "이미 가져온 점입니다. 다시 돌리려면 그 작업에서 재시도하세요."
+    owner = _user_name(db, existing.requested_by_id) or "다른 사람"
+    return (
+        f"{owner} 님이 이미 가져온 점입니다 — 게시하면 보입니다. 같은 해석을 두 번 돌리지 "
+        "않습니다."
+    )
+
+
+def _publish_group(db: Session, user: User, original: Simulation) -> list[Simulation]:
+    """작업과 그 메시 수렴 수준들 — 함께 게시 · 해제한다(판정이 원래 작업의 것이다)."""
+    return _levels_of(db, user, original)
+
+
+def publish(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
+    """끝난 작업을 **게시한다** — 누구나 본다(읽기만). 메시 수렴 수준도 함께. 이미 게시돼
+    있으면 그대로 둔다."""
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    original = _original_of(db, user, simulation)
+    _require_owner(user, original)
+    if original.status != "done":
+        raise AppError(
+            code("SIMULATIONS", 34),
+            "끝난 작업만 게시할 수 있습니다 — 실패하거나 도는 중인 결과는 남이 믿고 쓸 수 "
+            "없습니다.",
+            status=409,
+            details={"status": original.status},
+        )
+    now = _now()
+    changed = [
+        one
+        for one in _publish_group(db, user, original)
+        if one.status == "done" and one.published_at is None
+    ]
+    for one in changed:
+        one.published_at = now
+        one.published_by_id = user.id
+    if changed:
+        audit.record(
+            db,
+            action=SIMULATION_PUBLISHED,
+            actor=user,
+            target_table="simulations",
+            target_id=original.id,
+            target_label=original.name,
+            workspace_id=original.owner_workspace_id,
+            changes={"jobs": len(changed)},
+        )
+    db.commit()
+    db.refresh(simulation)
+    return simulation
+
+
+def unpublish(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
+    """게시를 **해제한다** — 다시 건 사람과 시스템 관리자만 본다. 메시 수렴 수준도 함께."""
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    original = _original_of(db, user, simulation)
+    _require_owner(user, original)
+    changed = [one for one in _publish_group(db, user, original) if one.published_at]
+    for one in changed:
+        one.published_at = None
+        one.published_by_id = None
+    if changed:
+        audit.record(
+            db,
+            action=SIMULATION_UNPUBLISHED,
+            actor=user,
+            target_table="simulations",
+            target_id=original.id,
+            target_label=original.name,
+            workspace_id=original.owner_workspace_id,
+            changes={"jobs": len(changed)},
+        )
+    db.commit()
+    db.refresh(simulation)
+    return simulation
+
+
+def _my_points(user: User, points: list[Simulation]) -> list[Simulation]:
+    return [one for one in points if user.is_system_admin or one.requested_by_id == user.id]
+
+
+def publish_study(db: Session, *, user: User, study_id: str) -> dict[str, int]:
+    """스터디의 **끝난 설계점을 모두 게시한다**(내가 건 점만 — 시스템 관리자는 전부). 메시
+    수렴 수준도 함께. 아직 도는 점은 끝난 뒤 다시 게시한다."""
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
+    done = [one for one in _my_points(user, points) if one.status == "done"]
+    if not done:
+        raise AppError(
+            code("SIMULATIONS", 34),
+            "끝난 설계점이 없어 게시할 것이 없습니다.",
+            status=409,
+        )
+    now = _now()
+    changed = [
+        one
+        for point in done
+        for one in _publish_group(db, user, point)
+        if one.status == "done" and one.published_at is None
+    ]
+    for one in changed:
+        one.published_at = now
+        one.published_by_id = user.id
+    if changed:
+        audit.record(
+            db,
+            action=STUDY_PUBLISHED,
+            actor=user,
+            target_table="simulations",
+            target_id=None,
+            target_label=str(points[0].source_meta.get("study_name") or study_id),
+            workspace_id=points[0].owner_workspace_id,
+            changes={"study_id": study_id, "jobs": len(changed)},
+        )
+    db.commit()
+    return {"points": len(done), "jobs": len(changed)}
+
+
+def unpublish_study(db: Session, *, user: User, study_id: str) -> dict[str, int]:
+    """스터디의 게시를 **해제한다**(내가 건 점만 — 시스템 관리자는 전부)."""
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
+    mine = _my_points(user, points)
+    changed = [
+        one for point in mine for one in _publish_group(db, user, point) if one.published_at
+    ]
+    for one in changed:
+        one.published_at = None
+        one.published_by_id = None
+    if changed:
+        audit.record(
+            db,
+            action=STUDY_UNPUBLISHED,
+            actor=user,
+            target_table="simulations",
+            target_id=None,
+            target_label=str(points[0].source_meta.get("study_name") or study_id),
+            workspace_id=points[0].owner_workspace_id,
+            changes={"study_id": study_id, "jobs": len(changed)},
+        )
+    db.commit()
+    return {"points": len(mine), "jobs": len(changed)}
 
 
 # --- 공통 화면에 등록하는 것 ----------------------------------------------------
@@ -3061,7 +3357,8 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
             Simulation.status == "failed",
             # 다시 가져와 대신한 작업이 있는 옛 시도는 「남은 일」 이 아니다.
             Simulation.source_meta["superseded_by"].astext.is_(None),
-            open_owner_clause(viewer, Simulation.owner_workspace_id),
+            # 남의 실패는 내 「남은 일」 이 아니다 — 시스템 관리자는 전부.
+            true() if viewer.is_system_admin else Simulation.requested_by_id == viewer.id,
         )
     )
     count = int(failed or 0)
@@ -3072,7 +3369,10 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
             key="simulations_failed",
             label="실패한 해석 작업",
             count=count,
-            link="/simulations?status=failed",
+            # 목록은 「내 작업」 이 기본이다 — 시스템 관리자의 수는 모두의 실패라 「전체」 로
+            # 연다.
+            link="/simulations?status=failed"
+            + ("&scope=all" if viewer.is_system_admin else ""),
             severity="warning",
         )
     ]

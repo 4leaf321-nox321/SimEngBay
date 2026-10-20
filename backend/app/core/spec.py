@@ -15,7 +15,7 @@ Mechanical 은 단위계를 여러 개 받지만 **이 스펙은 하나로 못 �
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Protocol, Self
+from typing import Annotated, Literal, Protocol, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -188,6 +188,12 @@ JobSpec = Annotated[ModalSpec | StaticSpec | HarmonicSpec, Field(discriminator="
 
 #: 실행기가 있는 레시피. 여기 없는 것은 API 가 만들기 전에 거절한다.
 RUNNABLE_RECIPES: tuple[str, ...] = ("modal", "static", "harmonic")
+
+#: 레시피 이름 → 스펙 모델. **`JobSpec` 의 갈래에서 뽑는다** — 손으로 적으면 하나가 빠진다
+#: (`GET /simulations/recipes` 가 조화 응답을 빼고 냈다, 2026-10-20).
+SPEC_MODELS: dict[str, type[ModalSpec | StaticSpec | HarmonicSpec]] = {
+    model.model_fields["recipe"].default: model for model in get_args(get_args(JobSpec)[0])
+}
 
 
 class _SpecEnvelope(BaseModel):

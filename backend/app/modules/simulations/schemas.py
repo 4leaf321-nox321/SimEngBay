@@ -52,6 +52,10 @@ class SimulationSummaryOut(BaseModel):
     owner_workspace_name: str | None
     requested_by_id: uuid.UUID | None
     requested_by_name: str | None
+    """건 사람 — **이 작업의 주인.** 게시 전에는 이 사람과 시스템 관리자만 본다."""
+    published_at: datetime | None = None
+    """게시한 시각. 차 있으면 누구나 본다(읽기만)."""
+    published_by_name: str | None = None
     error_code: str | None
     summary: dict[str, Any] | None
     created_at: datetime
@@ -273,6 +277,11 @@ class StudySummaryOut(BaseModel):
     failed: int
     running: int
     workspace_name: str | None = None
+    owner_id: uuid.UUID | None = None
+    """점들을 건 사람(가장 많이 건 사람) — 스터디를 게시 · 해제하는 주인."""
+    owner_name: str | None = None
+    published: int = 0
+    """게시된 설계점 수. 남에게는 이것만 보인다."""
     created_at: datetime
     finished_at: datetime | None = None
 
@@ -286,6 +295,7 @@ class StudyPointOut(BaseModel):
     """바꾼 값. **숫자만이 아니다** — 재료처럼 고르는 인자가 온다."""
     status: str
     error_code: str | None = None
+    published: bool = False
     recipe: str = "modal"
     solver: str = "ansys"
     first_elastic_hz: float | None = None
@@ -336,9 +346,21 @@ class StudyOut(BaseModel):
     solvers: list[str] = Field(default_factory=list)
     """점들이 쓴 솔버. 둘이면 섞인 것이다."""
     points: list[StudyPointOut]
+    owner_id: uuid.UUID | None = None
+    owner_name: str | None = None
+    published: int = 0
     reference_point: int | None = None
     """모드를 잇는 기준이 된 설계점. 지문이 있는 첫 점이다."""
     tracks: list[ModeTrackOut] = Field(default_factory=list)
+
+
+class PublishOut(BaseModel):
+    """스터디 게시 · 해제의 결과."""
+
+    points: int
+    """바꾼 대상이 된 설계점(내가 건 점) 수."""
+    jobs: int
+    """실제로 바뀐 작업 수 — 메시 수렴 수준까지 센다."""
 
 
 class RecipeOut(BaseModel):
@@ -616,6 +638,8 @@ class MeasurementOut(BaseModel):
     probes: list[str]
     rows: int
     created_at: datetime
+    created_by_id: uuid.UUID | None = None
+    """올린 사람 — 그 사람과 시스템 관리자만 내린다."""
     created_by_name: str | None = None
     comparison: ComparisonOut | None = None
     """작업에서 물었을 때 그 작업의 결과와 견준 것. 결과가 아직 없으면 비운다."""

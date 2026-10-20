@@ -48,6 +48,9 @@ const SimulationDetailPage = lazy(
   () => import("@/modules/simulations/SimulationDetailPage"),
 );
 const StudiesPage = lazy(() => import("@/modules/simulations/StudiesPage"));
+const SimulationsLayout = lazy(
+  () => import("@/modules/simulations/SimulationsLayout"),
+);
 const StudyDetailPage = lazy(
   () => import("@/modules/simulations/StudyDetailPage"),
 );
@@ -113,11 +116,19 @@ export const router = createBrowserRouter(
             //
             // 사이드바에 `pending: true` 로 적어 두면 아래 stubs 가 자리를 만든다.
             // 실제 화면이 생기면 그 표시를 지우고 여기에 한 줄을 적는다.
-            { path: "simulations", element: <SimulationsPage /> },
-            // **`:id` 보다 먼저 온다.** 뒤에 두면 「studies」 가 작업 id 로 잡힌다.
-            { path: "simulations/studies", element: <StudiesPage /> },
-            { path: "simulations/studies/:id", element: <StudyDetailPage /> },
-            { path: "simulations/:id", element: <SimulationDetailPage /> },
+            // **해석 화면은 두 번째 사이드바 안에 선다** — 개인 작업과 공용 작업공간을
+            // 가른다(`SimulationsLayout`, ADR 0008).
+            {
+              path: "simulations",
+              element: <SimulationsLayout />,
+              children: [
+                { index: true, element: <SimulationsPage /> },
+                // **`:id` 보다 먼저 온다.** 뒤에 두면 「studies」 가 작업 id 로 잡힌다.
+                { path: "studies", element: <StudiesPage /> },
+                { path: "studies/:id", element: <StudyDetailPage /> },
+                { path: ":id", element: <SimulationDetailPage /> },
+              ],
+            },
             ...stubs,
 
             // **이 설치가 켠 확장의 화면.** 서버가 `<meta name="app-extensions">` 로 준 이름만

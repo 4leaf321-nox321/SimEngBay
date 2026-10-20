@@ -29,6 +29,7 @@ function point(number: number, friction: number, force: number, slip: number): S
     number,
     params: { 마찰계수: friction },
     status: 'done',
+    published: false,
     recipe: 'static',
     solver: 'calculix',
     frequencies: [],
@@ -45,6 +46,7 @@ function point(number: number, friction: number, force: number, slip: number): S
 
 const SHEAR: Study = {
   study_id: 'bdb89e7',
+  published: 0,
   name: '전단이음',
   factors: ['마찰계수'],
   recipe: 'static',

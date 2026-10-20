@@ -18,6 +18,11 @@ vi.mock('recharts', async () => {
   }
 })
 
+// 화면이 「건 사람인가」 를 본다(`ownsWork`) — 여기서는 시스템 관리자로 연다.
+vi.mock('@/shared/auth/AuthContext', () => ({
+  useAuth: () => ({ user: { id: 'me', is_system_admin: true, memberships: [] } }),
+}))
+
 vi.mock('@/modules/simulations/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/modules/simulations/api')>()
   return {

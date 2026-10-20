@@ -18,6 +18,8 @@ import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { StatusBadge } from '@/shared/components/StatusBadge'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { ownsWork } from '@/shared/auth/roles'
 import { Button } from '@/shared/components/ui/button'
 import {
   Table,
@@ -29,7 +31,17 @@ import {
 } from '@/shared/components/ui/table'
 import { cn } from '@/shared/lib/utils'
 
-export function StudyMeasurements({ studyId, factors }: { studyId: string; factors: string[] }) {
+export function StudyMeasurements({
+  studyId,
+  factors,
+  readOnly = false,
+}: {
+  studyId: string
+  factors: string[]
+  /** 남의 게시 DOE — 실측을 붙이지 않는다(그 점들을 건 사람이나 시스템 관리자만). */
+  readOnly?: boolean
+}) {
+  const { user } = useAuth()
   const [rows, setRows] = useState<StudyMeasurement[] | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [removing, setRemoving] = useState<StudyMeasurement | null>(null)
@@ -53,16 +65,20 @@ export function StudyMeasurements({ studyId, factors }: { studyId: string; facto
   return (
     <section className="space-y-3">
       <h2 className="text-sm font-medium">실측과 맞추기</h2>
-      <MeasurementEntry
-        onSubmit={async (file, label) => {
-          await simulationApi.addStudyMeasurement(studyId, file, label)
-          setTick((value) => value + 1)
-        }}
-      />
+      {!readOnly && (
+        <MeasurementEntry
+          onSubmit={async (file, label) => {
+            await simulationApi.addStudyMeasurement(studyId, file, label)
+            setTick((value) => value + 1)
+          }}
+        />
+      )}
       <ErrorNotice error={error} />
       {rows && rows.length === 0 && (
         <p className="text-muted-foreground text-sm">
-          아직 붙인 실측이 없습니다 — 올리면 설계점마다 견주어 실측에 가장 가까운 점을 고릅니다.
+          {readOnly
+            ? '붙인 실측이 없습니다.'
+            : '아직 붙인 실측이 없습니다 — 올리면 설계점마다 견주어 실측에 가장 가까운 점을 고릅니다.'}
         </p>
       )}
       {(rows ?? []).map((one) => (
@@ -74,10 +90,12 @@ export function StudyMeasurements({ studyId, factors }: { studyId: string; facto
                 {one.kinds.map((kind) => KIND_LABELS[kind] ?? kind).join(' · ')} · {one.rows}줄
               </p>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => setRemoving(one)}>
-              <Trash2 className="size-4" />
-              삭제
-            </Button>
+            {ownsWork(user, one.created_by_id) && (
+              <Button variant="ghost" size="sm" onClick={() => setRemoving(one)}>
+                <Trash2 className="size-4" />
+                삭제
+              </Button>
+            )}
           </header>
           <p className="text-sm">{one.explanation}</p>
           <Table>

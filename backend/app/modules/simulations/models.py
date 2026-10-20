@@ -84,13 +84,25 @@ class Simulation(Base):
         nullable=True,
         index=True,
     )
-    """어느 부서의 것인가. NULL 은 전역. 보이는 것은 `open_owner_clause` — 「우리 조직에 이
-    모달 해석이 있나」 에 답해야 같은 해석을 두 번 안 돌린다(AGENTS.md)."""
+    """어느 부서의 일인가(목록 · 통계의 꼬리표). NULL 은 전역. **보이는 것을 정하지 않는다** —
+    작업은 건 사람의 것이고, 남에게는 게시해야 보인다(`published_at`)."""
     requested_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    """건 사람 — **이 작업의 주인이다.** 게시 전에는 이 사람과 시스템 관리자만 본다."""
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    """게시한 시각 — 차 있으면 **누구나 본다**(읽기만). 끝난 작업만 게시한다. 시행착오(실패 ·
+    메시만 바꿔 본 것)와 남이 믿고 쓸 결과를 가르는 표시다(2026-10-20 — CompCore 의 「내 작업 ·
+    등록」 과 같은 꼴)."""
+    published_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     work_dir: Mapped[str | None] = mapped_column(String(300), nullable=True)

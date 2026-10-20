@@ -87,11 +87,13 @@ interface Props {
   simulationId: string
   status: string
   solver: string
+  /** 남의 게시 결과 — 점검을 걸지 않는다(건 사람이나 시스템 관리자만). 판정은 보인다. */
+  readOnly?: boolean
   /** 새로 읽었다 — 한눈에 보기 줄이 판정을 따라 바꾼다. 같은 함수를 줘야 한다(바뀌면 다시 알린다). */
   onData?: (data: Convergence) => void
 }
 
-export function ConvergencePanel({ simulationId, status, solver, onData }: Props) {
+export function ConvergencePanel({ simulationId, status, solver, readOnly = false, onData }: Props) {
   const [data, setData] = useState<Convergence | null>(null)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [open, setOpen] = useState(false)
@@ -136,16 +138,19 @@ export function ConvergencePanel({ simulationId, status, solver, onData }: Props
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-medium">메시 수렴</h2>
-        <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-          <Grid3x3 className="size-4" />
-          메시 수렴 점검
-        </Button>
+        {!readOnly && (
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            <Grid3x3 className="size-4" />
+            메시 수렴 점검
+          </Button>
+        )}
       </div>
       <ErrorNotice error={error} />
       {!checked ? (
         <p className="text-muted-foreground text-sm">
-          아직 점검하지 않았습니다 — 요소 크기를 줄여 두세 번 더 풀어 보면 이 결과의 값이 메시에 얼마나
-          기대는지 압니다.
+          {readOnly
+            ? '메시 수렴을 점검하지 않은 결과입니다.'
+            : '아직 점검하지 않았습니다 — 요소 크기를 줄여 두세 번 더 풀어 보면 이 결과의 값이 메시에 얼마나 기대는지 압니다.'}
         </p>
       ) : (
         data && <ConvergenceTable data={data} />

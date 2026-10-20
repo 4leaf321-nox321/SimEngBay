@@ -171,14 +171,27 @@ export interface NewSimulation {
   name?: string
 }
 
+/**
+ * 목록의 보기 — **작업은 건 사람의 것**이고, 게시해야 남이 본다.
+ * `mine` 내가 건 것 · `published` 게시된 것 · `all` 볼 수 있는 것 전부(시스템 관리자는 모두).
+ */
+export type ListScope = 'mine' | 'published' | 'all'
+
 export const simulationApi = {
-  list: (query: { status?: string; workspaceSlug?: string; limit: number; offset: number }) => {
+  list: (query: {
+    status?: string
+    workspaceSlug?: string
+    scope?: ListScope
+    limit: number
+    offset: number
+  }) => {
     const params = new URLSearchParams({
       limit: String(query.limit),
       offset: String(query.offset),
     })
     if (query.status) params.set('status', query.status)
     if (query.workspaceSlug) params.set('workspace_slug', query.workspaceSlug)
+    if (query.scope && query.scope !== 'all') params.set('scope', query.scope)
     return api.get<Page<SimulationSummary>>(`/simulations?${params}`)
   },
   get: (id: string) => api.get<Simulation>(`/simulations/${id}`),
@@ -196,6 +209,19 @@ export const simulationApi = {
     return api.postForm<Simulation>('/simulations', form)
   },
   retry: (id: string) => api.post<Simulation>(`/simulations/${id}/retry`),
+  /** 끝난 작업을 게시한다 — 누구나 본다(읽기만). 메시 수렴 수준도 함께. */
+  publish: (id: string) => api.post<Simulation>(`/simulations/${id}/publish`),
+  /** 게시를 해제한다 — 다시 건 사람과 시스템 관리자만 본다. */
+  unpublish: (id: string) => api.post<Simulation>(`/simulations/${id}/unpublish`),
+  /** DOE 한 벌의 끝난 설계점을 게시 · 해제한다(내가 건 점만). */
+  publishStudy: (studyId: string) =>
+    api.post<{ points: number; jobs: number }>(
+      `/simulations/studies/${encodeURIComponent(studyId)}/publish`,
+    ),
+  unpublishStudy: (studyId: string) =>
+    api.post<{ points: number; jobs: number }>(
+      `/simulations/studies/${encodeURIComponent(studyId)}/unpublish`,
+    ),
   /** 멈춘다 — 대기 중이면 곧바로, 돌고 있으면 워커가 몇 초 안에 본다. */
   cancel: (id: string) => api.post<Simulation>(`/simulations/${id}/cancel`),
   /** 중간 파일(.mechdb · .rst · 솔버 scratch)을 지운다. **결과는 남는다.** */
@@ -212,7 +238,10 @@ export const simulationApi = {
    * 200개면 STEP 만 수십 MB 다.
    */
   /** 가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. */
-  studies: () => api.get<StudySummary[]>('/simulations/studies'),
+  studies: (scope?: ListScope) =>
+    api.get<StudySummary[]>(
+      `/simulations/studies${scope && scope !== 'all' ? `?scope=${scope}` : ''}`,
+    ),
   study: (studyId: string) => api.get<Study>(`/simulations/studies/${studyId}`),
   /**
    * 공용 폴더 훑기 — **설정된 뿌리 아래만.** 경로를 안 주면 첫 뿌리부터.
@@ -293,6 +322,9 @@ export const simulationApi = {
   /** 스터디를 CSV 로 — 화면과 같은 값 · 같은 단위(mm · MPa · N · Hz). */
   exportStudy: (studyId: string, filename: string) =>
     downloadFile(`/simulations/studies/${encodeURIComponent(studyId)}/export.csv`, filename),
+  /** 산출물 전부를 ZIP 하나로 — 없는 파일은 묶음 안의 `빠진_파일.txt` 가 말한다. */
+  downloadAll: (simulationId: string, filename: string) =>
+    downloadFile(`/simulations/${simulationId}/artifacts.zip`, filename),
   download: (simulationId: string, artifact: Artifact) =>
     downloadFile(`/simulations/${simulationId}/artifacts/${artifact.id}/content`, artifact.filename),
 }

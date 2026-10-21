@@ -45,6 +45,8 @@ function devIdentity(): Plugin {
         ['app-slug', env.APP_SLUG],
         ['app-tagline', env.APP_TAGLINE],
         ['app-extensions', env.EXTENSIONS],
+        // HWAX 포털로 로그인 — 서버와 같은 규칙: 받는 쪽(PORTAL_JWKS_URL)이 있을 때만.
+        ['app-portal-launch', env.PORTAL_JWKS_URL ? env.PORTAL_LAUNCH_URL : ''],
       ]
       const tags = pairs
         .filter(([, v]) => v)

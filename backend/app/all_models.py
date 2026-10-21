@@ -15,7 +15,7 @@ from __future__ import annotations
 from app.database import Base
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
-from app.modules.auth.models import PersonalAccessToken, RefreshToken
+from app.modules.auth.models import PersonalAccessToken, PortalLaunchJti, RefreshToken
 from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
@@ -46,6 +46,7 @@ __all__ = [
     "OntologySyncRun",
     "OntologyType",
     "PersonalAccessToken",
+    "PortalLaunchJti",
     "RefreshToken",
     "Simulation",
     "SimulationArtifact",

@@ -393,6 +393,54 @@ sync_env_identity() {
     done
 }
 
+# ───────────────────────── HWAX 포털에 붙이기 (ADR 0009) ─────────────────────────
+# `sudo PORTAL_JWKS_URL=… PORTAL_LAUNCH_URL=… ./deploy.sh update` — **env 로 준 것만 `.env` 에 적는다.**
+# 안 주면 `.env` 그대로다(손으로 고친 값을 다음 update 가 지우지 않는다). 빈 값을 주면(`PORTAL_JWKS_URL=`)
+# 비운다 — 끄는 길이다. 설치 기록(/etc/platform-instances)에 두지 않는 까닭: `.env` 는 update 가 덮지 않고
+# 이중화의 두 서버가 함께 쓰는 한 벌(DATA_DIR)인데 기록은 서버마다라, 기록에서 옮겨 적으면 한쪽 서버의
+# update 가 그 서버의 기록으로 다른 쪽이 적은 값을 덮는다.
+# 게이트웨이 위임의 허용 주소(`HEAX_SSO_ALLOWED_IPS`)도 같은 길이다. **비밀(`HEAX_SSO_SECRET`)은 env 로 받지
+# 않는다** — 아래 info 가 값을 찍고 셸 기록에 남는다. 비밀은 `.env` 를 손으로 고쳐 적는다(README 9절).
+PORTAL_ENV_KEYS=(PORTAL_JWKS_URL PORTAL_LAUNCH_URL PORTAL_AUDIENCE PORTAL_ISSUER HEAX_SSO_ALLOWED_IPS)
+
+# $1=키 $2=값 — 활성 줄이 있으면 바꾸고, 주석 선언(`# KEY=`, 예시 파일의 것)이 있으면 그 줄을 살리고, 없으면
+# 덧붙인다(끝에 개행이 없는 파일이면 먼저 개행 — 안 그러면 앞 줄과 한 줄이 된다).
+env_file_set() {
+    local key="$1" value
+    value="$(sed_escape "$2")"
+    if grep -q "^$key=" "$ENV_FILE"; then
+        sed -i "s|^$key=.*|$key=$value|" "$ENV_FILE"
+    elif grep -qE "^#[[:space:]]*$key=" "$ENV_FILE"; then
+        sed -i -E "0,/^#[[:space:]]*$key=.*/s||$key=$value|" "$ENV_FILE"
+    else
+        if [[ -s "$ENV_FILE" && -n "$(tail -c1 "$ENV_FILE")" ]]; then printf '\n' >> "$ENV_FILE"; fi
+        printf '%s=%s\n' "$key" "$2" >> "$ENV_FILE"
+    fi
+}
+
+sync_env_portal() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    local key given=0
+    for key in "${PORTAL_ENV_KEYS[@]}"; do
+        [[ -v "$key" ]] || continue
+        env_file_set "$key" "${!key}"
+        given=1
+        info ".env: $key=${!key:-(비움)}"
+    done
+    [[ $given -eq 1 ]] || return 0
+    [[ -n "$(sed -n 's|^PORTAL_JWKS_URL=||p' "$ENV_FILE" | tail -n1)" ]] || return 0
+    # 포털 nginx 는 /<id>/ 를 벗겨 넘긴다 — 접두어가 없으면 로그인 뒤 돌아갈 곳이 포털의 첫 화면이 되고
+    # 쿠키 path 도 어긋난다. 이미 적힌 값은 건드리지 않는다(포털 id 를 slug 와 다르게 지은 설치).
+    if ! grep -q '^PUBLIC_PATH=' "$ENV_FILE"; then
+        env_file_set PUBLIC_PATH "/$APP_SLUG"
+        info ".env: PUBLIC_PATH=/$APP_SLUG — 포털의 id 가 slug 와 다르면 .env 에서 /<id> 로 고친다"
+    fi
+    if ! grep -q '^TRUST_PROXY=' "$ENV_FILE"; then
+        env_file_set TRUST_PROXY true
+        info ".env: TRUST_PROXY=true — 포털 nginx 뒤라 https 판정(쿠키 Secure) · 접속 주소를 그쪽에서 받는다"
+    fi
+}
+
 place_sif() {
     [[ -f "$HERE/app.sif" ]] || err "app.sif 가 $HERE 에 없습니다 (릴리스 번들에서 실행하세요)"
     info "app.sif 배치 → $INSTALL_DIR/app.sif"
@@ -707,6 +755,7 @@ cmd_install() {
     ensure_dirs
     generate_env_if_missing
     sync_env_identity
+    sync_env_portal
     sync_env_paths
     place_sif
     run_migrations
@@ -749,6 +798,7 @@ cmd_update() {
     info "$APP_NAME ($APP_SLUG) $VERSION — 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
     ensure_dirs
     sync_env_identity
+    sync_env_portal
     sync_env_paths
 
     info "$SERVICE_NAME 중지"
@@ -1133,6 +1183,9 @@ $APP_NAME 배포 스크립트 ($VERSION)
   APP_PORT    = $APP_PORT
   MCP_ENABLED = $MCP_ENABLED   (MCP_HOST=$MCP_HOST MCP_PORT=$MCP_PORT MCP_API_BASE=$MCP_API_BASE)
   HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST LB_MODE=$LB_MODE${WEB_VIP:+ WEB_VIP=$WEB_VIP}
+
+  HWAX 포털에 붙이기 — sudo PORTAL_JWKS_URL=<포털 JWKS> PORTAL_LAUNCH_URL=<포털>/launch/<id> ./deploy.sh update
+    (준 것만 .env 에 적는다 · 빈 값이면 비운다 · PUBLIC_PATH/TRUST_PROXY 가 없으면 /<slug> · true 를 더한다)
 MSG
 }
 

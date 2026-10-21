@@ -332,6 +332,10 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
   억지로 짝짓지 않는다(센서 자리에서 안 움직이는 모드는 후보에서 뺀다).
 - **메시 수렴은 작업 묶음이다**([ADR 0006](docs/adr/0006-메시-수렴은-작업-묶음으로.md)) — 크기마다
   작업 하나(`source_kind = "mesh_check"`). 판정(GCI)은 읽을 때 한다.
+- **HWAX 포털의 네 창구는 세 플랫폼이 같은 계약이다**([ADR 0009](docs/adr/0009-HWAX-포털에-붙이기.md)) —
+  `portal-callback` · `sso` · `sso/verify` · `sso/revoke`. `auth/portal.py` · `auth/delegation.py` 와 그 시험은
+  Standard Platform 에서 옮긴 것이라 **이름까지 그쪽과 맞춰 둔다** — 그쪽이 고치면 diff 하나로 따라간다.
+  다른 것은 ADR 0009 의 「우리 쪽에서 다른 것」 에 적는다.
 - **워커는 15초마다 신호를 적는다**(`simulation_workers`). 집는 솔버 · 깔린 도구는 **워커가 적은
   값이 정본**이다 — 워커마다 `worker-<N>.env` · 이미지가 다르므로 API 프로세스의 설정이나 `PATH`
   는 그 워커의 사실이 아니다. 신호가 2분 끊기면 서버가 「응답 없음」 으로 판정하고 그 워커의 작업을

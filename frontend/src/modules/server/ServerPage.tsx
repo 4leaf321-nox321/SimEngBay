@@ -7,6 +7,7 @@
  * "지금 서버 버전이 뭐냐" 와 "어느 DB 를 보고 있냐" 다.
  */
 
+import { PortalLogin } from '@/modules/server/PortalLogin'
 import { WorkersCard } from '@/modules/simulations/WorkersCard'
 import { api } from '@/shared/api/client'
 import type { ServerStatus } from '@/shared/api/types'
@@ -141,6 +142,9 @@ export default function ServerPage() {
           </div>
         )}
       </dl>
+
+      {/* 이 화면은 이미 시스템 관리자만 본다(`/server/status`) — 따로 가리지 않는다. */}
+      <PortalLogin />
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold">쌓인 것</h2>

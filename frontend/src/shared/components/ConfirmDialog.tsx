@@ -27,6 +27,8 @@ interface ConfirmDialogProps {
   description: ReactNode
   confirmLabel?: string
   destructive?: boolean
+  /** 창 안에서 더 골라야 누를 수 있을 때(가입 승인의 부서 선택). */
+  confirmDisabled?: boolean
   onConfirm: () => Promise<void>
   onClose: () => void
 }
@@ -37,6 +39,7 @@ export function ConfirmDialog({
   description,
   confirmLabel = '확인',
   destructive = false,
+  confirmDisabled = false,
   onConfirm,
   onClose,
 }: ConfirmDialogProps) {
@@ -74,7 +77,7 @@ export function ConfirmDialog({
           <Button
             variant={destructive ? 'destructive' : 'default'}
             onClick={run}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
           >
             {busy ? '처리 중…' : confirmLabel}
           </Button>

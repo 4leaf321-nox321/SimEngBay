@@ -142,6 +142,13 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
             ("app-slug", settings.app_slug),
             ("app-tagline", settings.app_tagline),
             ("app-extensions", ",".join(settings.extension_names)),
+            # **HWAX 포털로 로그인**(ADR 0009) — 로그인 화면이 이 주소가 있을 때만 단추를 낸다.
+            # 받는 쪽(`PORTAL_JWKS_URL`)이 꺼져 있으면 비운다: 단추를 누른 사람이 포털을 돌아
+            # 콜백의 404 JSON 을 보게 된다.
+            (
+                "app-portal-launch",
+                settings.portal_launch_url.strip() if settings.portal_jwks_url.strip() else "",
+            ),
         )
     )
     html = index.read_text(encoding="utf-8").replace(

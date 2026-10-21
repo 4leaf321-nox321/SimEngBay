@@ -54,6 +54,15 @@ def ensure_can_sign_in(user: User) -> None:
 _sleep = time.sleep
 
 
+def normalize_login_id(email: str) -> str:
+    """로그인 아이디를 저장 · 조회하는 모양 — 앞뒤 공백을 떼고 소문자로.
+
+    HWAX 포털 로그인 · 게이트웨이 위임(ADR 0009)이 포털이 준 이메일을 이 모양으로 찾는다
+    (Standard Platform 과 같은 규칙 — 붙여 넣다 딸려 온 공백 하나로 사람을 못 찾지 않게).
+    """
+    return email.strip().lower()
+
+
 def login_delay_seconds(failures: int) -> float:
     """이번 실패가 몇 번째인가 -> 몇 초 늦출까. 문턱 전은 0.
 

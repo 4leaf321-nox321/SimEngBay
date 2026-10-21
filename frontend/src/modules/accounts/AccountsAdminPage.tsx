@@ -9,6 +9,7 @@ import { useState } from 'react'
 import { Plus } from 'lucide-react'
 
 import { accountApi } from '@/modules/accounts/api'
+import type { Account } from '@/modules/accounts/api'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -40,6 +41,10 @@ export default function AccountsAdminPage() {
   const [issued, setIssued] = useState<{ email: string; password: string } | null>(null)
   const [rejecting, setRejecting] = useState<{ id: string; email: string } | null>(null)
   const [note, setNote] = useState('')
+  // **희망 부서가 없는 신청**(HWAX 포털로 들어온 신청 · 신청한 부서가 없어진 것) — 그대로
+  // 승인하면 서버가 「부서를 골라 주세요」 로 거절하는데 고를 자리가 없었다. 승인할 때 묻는다.
+  const [approving, setApproving] = useState<Account | null>(null)
+  const [approveTo, setApproveTo] = useState('')
 
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
@@ -179,7 +184,9 @@ export default function AccountsAdminPage() {
                   <StatusBadge kind="account" value={one.status} />
                 </TableCell>
                 <TableCell className="text-sm">
-                  {one.memberships.join(', ') || one.requested_workspace_slug || '—'}
+                  {one.memberships.join(', ') ||
+                    one.requested_workspace_slug ||
+                    (one.status === 'pending' ? '희망 부서 없음 — 승인할 때 선택' : '—')}
                 </TableCell>
                 <TableCell className="text-sm">
                   {shownDate(one.decided_at ?? one.created_at)}
@@ -187,7 +194,17 @@ export default function AccountsAdminPage() {
                 <TableCell className="space-x-1 text-right">
                   {one.status === 'pending' ? (
                     <>
-                      <Button size="sm" onClick={() => act(() => accountApi.approve(one.id, {}))}>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (one.requested_workspace_slug) {
+                            void act(() => accountApi.approve(one.id, {}))
+                            return
+                          }
+                          setApproveTo('')
+                          setApproving(one)
+                        }}
+                      >
                         승인
                       </Button>
                       <Button
@@ -250,6 +267,44 @@ export default function AccountsAdminPage() {
           신청한 사람은 이유를 영영 모른다. window.prompt 를 쓰지 않는 이유는
           그것이 오류를 보여 줄 자리가 없기 때문이다 — 서버가 거절하면 그 말이
           어디에도 안 뜬다. */}
+      <ConfirmDialog
+        open={approving !== null}
+        title="가입 승인 — 부서 선택"
+        description={
+          <div className="space-y-2">
+            <p>
+              {approving?.display_name}({approving?.email}) 의 신청에는 희망 부서가 없습니다 — HWAX
+              포털로 들어온 신청이거나, 신청한 부서가 없어졌습니다. 소속할 부서를 선택하세요. 이
+              부서가 그 사람의 대표 소속이 됩니다.
+            </p>
+            <SearchablePicker
+              id="approve-workspace"
+              className="w-full"
+              value={approveTo || null}
+              onChange={setApproveTo}
+              placeholder="부서를 선택하세요"
+              searchPlaceholder="부서 이름이나 주소로 검색"
+              emptyText="그런 부서가 없습니다"
+              options={(workspaces.data ?? []).map((one) => ({
+                value: one.slug,
+                label: one.name,
+                hint: one.path,
+                keywords: one.slug,
+              }))}
+            />
+          </div>
+        }
+        confirmLabel="승인"
+        confirmDisabled={!approveTo}
+        onConfirm={async () => {
+          if (!approving) return
+          await accountApi.approve(approving.id, { workspace_slug: approveTo })
+          list.reload()
+          summary.reload()
+        }}
+        onClose={() => setApproving(null)}
+      />
+
       <ConfirmDialog
         open={rejecting !== null}
         title="가입 거절"

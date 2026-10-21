@@ -63,6 +63,15 @@ def known_scopes() -> tuple[str, ...]:
     return tuple(_known)
 
 
+def write_scopes() -> tuple[str, ...]:
+    """쓰기를 여는 범위 전부 — 등록된 순서로, 한 번씩.
+
+    HWAX 게이트웨이의 위임 토큰(ADR 0009)이 「그 사람이 화면에서 받을 수 있는 최대」 로 `read`
+    와 이것을 받는다 — 도메인이 범위를 더하면 다음 발급부터 따라온다. 범위는 경로를 여는 것일
+    뿐이고 고칠 수 있나는 그 사람의 권한이 정한다(사람 세션과 같다)."""
+    return tuple(dict.fromkeys(scope for _prefix, scope in _write))
+
+
 def is_reading(method: str, path: str) -> bool:
     return method in SAFE_METHODS or any(
         path.startswith(prefix) for prefix in _read_only_posts

@@ -575,3 +575,96 @@ sudo ./deploy.sh status
 ### 8.9 메인 서버 없이 — A · B 가 직접 받을 때 (`LB_MODE=local`)
 
 `LB_MODE=local WEB_VIP=<VIP>` 를 더해 8.1 을 그대로 하면 A · B 에 nginx(TLS 종단 · 접두어 벗기기 · 두 앱 분배)와 keepalived 웹 VIP(vrid 51, master 역할 서버가 쥔다)가 선다. 인증서는 A 가 자체 서명으로 만들어 `/data/…/tls/` 에 두고 B 가 가져간다. 정식 인증서를 받으면 두 서버의 `/etc/nginx/tls/server.{crt,key}` 를 바꾸고 `sudo systemctl reload nginx`.
+
+---
+
+## 9. HWAX 포털에 붙이기 — `https://hwax.sec.samsung.net/<id>/` · 포털 로그인 · 게이트웨이 위임
+
+HWAX 포털(사내 앱 모음)이 `/<id>/` 경로로 이 앱을 넘겨 주고, 타일을 누르면 포털에 로그인한 그 사람으로 들어오게 한다
+(jwt-handoff). 포털의 Claude 게이트웨이가 사람마다 그 사람 명의의 토큰을 받아 가는 창구(사람별 위임)도 있다 —
+Standard Platform · ComponentCore 와 **같은 네 창구, 같은 계약**이다. 결정과 까닭은 저장소의
+`docs/adr/0009-HWAX-포털에-붙이기.md`. **이중화 조각(`main-server-nginx.conf`)은 쓰지 않는다** — 포털 nginx 는 경로
+목록으로 location 을 만든다. 포털의 앱 id `<id>` 는 **`APP_SLUG` 와 같게** 둔다(타일 id · audience · 위임 키가 전부
+그 하나다).
+
+| 창구 | 하는 일 | 꺼졌을 때 |
+| --- | --- | --- |
+| `POST /api/auth/portal-callback` | 포털의 launch 토큰을 확인하고 세션을 연다 → 303 | `PORTAL_JWKS_URL` 없음 → 404 JSON |
+| `POST /api/auth/sso` | 그 사람의 하루짜리 개인 토큰 「HWAX 게이트웨이(<client>)」 | `HEAX_SSO_SECRET` 없음 → 404 JSON |
+| `POST /api/auth/sso/verify` | 연결 점검 — 주소 · 비밀만 보고 204(토큰 · 계정을 안 건드린다) | 〃 |
+| `POST /api/auth/sso/revoke` | 그 사람의 위임 토큰 회수 | 〃 |
+
+**SimEngBay 에는 아직 MCP 서버가 없다** — 위임 창구는 서 있지만 게이트웨이가 부를 도구가 없다. 포털 담당에게 게이트웨이
+백엔드(MCP 주소) 등록은 아직 요청하지 않는다. 해석용 MCP 를 만들면 그때 이 절에 더한다(위임 쪽은 바뀌지 않는다).
+
+### 9.1 순서
+
+```bash
+# ① 게이트웨이 위임 비밀 — .env 에 손으로 적는다(env 로 주지 않는다: 화면과 셸 기록에 남는다)
+openssl rand -hex 32                                      # → .env 의 HEAX_SSO_SECRET=<그 값>
+sudo APP_SLUG=<slug> ./deploy.sh restart                  # 앱이 읽게(이중화면 다른 서버에서도)
+# ② 포털 담당에게 — 화면 라우트 <id>=http://<A>:<앱 포트>/ · jwt-handoff 타일 · 위임 주소
+#    http://<A>:<앱 포트>/api/auth/sso, 그리고 A · B 의 내부 주소와 위임 비밀은 **따로**(안전한 길로)
+# ③ 포털 담당에게서 JWKS 주소를 받으면 — 준 것만 .env 에 적는다
+sudo APP_SLUG=<slug> PORTAL_JWKS_URL=http://<포털>:8088/.well-known/jwks.json \
+     PORTAL_LAUNCH_URL=https://hwax.sec.samsung.net/launch/<slug> ./deploy.sh update
+# ④ (선택) 위임 발급을 포털 박스 주소에서만 받게
+sudo APP_SLUG=<slug> HEAX_SSO_ALLOWED_IPS=<포털 박스 주소> ./deploy.sh update
+```
+
+`deploy.sh` 는 `PORTAL_*` · `HEAX_SSO_ALLOWED_IPS` 를 **준 것만** `.env` 에 적고(빈 값을 주면 비운다 — 끄는 길),
+`PORTAL_JWKS_URL` 이 있는데 `PUBLIC_PATH` · `TRUST_PROXY` 가 없으면 `/<slug>` · `true` 를 더한다. 나머지는 `.env` 를
+손으로 고치고 `sudo ./deploy.sh restart`:
+
+| `.env` | 값 | 왜 |
+| --- | --- | --- |
+| `PUBLIC_PATH` | `/<id>` | 포털이 `/<id>/` 를 벗겨 넘긴다 — 화면 주소 · 쿠키 path · 로그인 뒤 돌아갈 곳이 그 아래여야 한다 |
+| `TRUST_PROXY` | `true` | 포털 nginx 가 주는 https 판정(쿠키 Secure) · 접속 주소를 믿는다 |
+| `PORTAL_JWKS_URL` | 포털 담당이 준 주소 | **비우면 포털 로그인이 꺼진다** — 콜백이 404 JSON |
+| `PORTAL_LAUNCH_URL` | `https://hwax.sec.samsung.net/launch/<id>` | 로그인 화면의 「HWAX 포털로 로그인」. 비우면 단추가 없다 |
+| `PORTAL_AUDIENCE` · `PORTAL_ISSUER` | (보통 안 적는다) | 기본이 `APP_SLUG` · `https://hwax.sec.samsung.net` — 포털 id · 포털 `JWT_ISSUER` 가 다를 때만 |
+| `HEAX_SSO_SECRET` | 64자 난수 | **비우면 게이트웨이 위임이 꺼진다** — 위임 창구 셋이 404 JSON |
+| `HEAX_SSO_ALLOWED_IPS` | 포털 박스 주소(쉼표 · CIDR) | 주소를 보지 않는다(비밀만). 못 읽는 값이 있으면 **모두 거절** |
+
+방화벽: 포털 박스(nginx · 게이트웨이) → 이 서버 `:<앱 포트>`(화면 · 위임). 이 서버 → 포털 `:8088`(JWKS).
+
+### 9.2 확인
+
+```bash
+# 이 서버에서 — 포털 JWKS 가 닿나 · 위임이 켜졌나(점검은 토큰을 만들지 않는다)
+curl -s -o /dev/null -w '%{http_code}\n' http://<포털>:8088/.well-known/jwks.json             # 200
+S=$(sudo sed -n 's/^HEAX_SSO_SECRET=//p' <.env 경로>)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:<앱 포트>/api/auth/sso/verify -H "X-Heax-Gateway-Secret: $S"   # 204
+# 포털 경유 — 콜백에 가짜 토큰(포털 update-all 의 진단과 같은 것)
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -X POST \
+  https://hwax.sec.samsung.net/<id>/api/auth/portal-callback -d token=probe-not-a-token       # 303 …/<id>/login?sso=invalid
+```
+
+| 콜백 숫자 | 뜻 | 할 일 |
+| --- | --- | --- |
+| **303** | 다 섰다 | — |
+| 404 + JSON | 포털 로그인이 꺼져 있다 | `.env` 의 `PORTAL_JWKS_URL` → `sudo ./deploy.sh restart` |
+| 405 | 콜백이 없는 옛 판 | 새 번들로 `sudo ./deploy.sh update` |
+| 200 + HTML · 404 + HTML | 포털 nginx 에 라우트가 없다 · 경로가 어긋났다 | 포털 담당(`routes.local.env`) |
+| 502 · 504 · 000 | 포털이 이 서버 `:<앱 포트>` 에 못 닿는다 | 방화벽 · `systemctl status <slug>` |
+
+| 위임 숫자 | 뜻 | 할 일 |
+| --- | --- | --- |
+| **204**(`/sso/verify`) · **400**(`/sso`, 이메일 없이) · **200**(`/sso`, 승인된 사람으로) | 켜짐 · 비밀 맞음 | — |
+| 401 + 한 줄 | 비밀이 다르다 | 포털 담당과 같은 값인지(따로 전한 것) |
+| 403 + 한 줄 | 처음 보는 사람 · 승인 대기 · 정지 · 허용 주소 밖 — 본문이 무엇인지 말한다 | 사람이면 포털에서 타일을 한 번 열고(가입 신청) 승인 · 주소면 `HEAX_SSO_ALLOWED_IPS` |
+| 404 + JSON | 위임이 꺼져 있다 | `HEAX_SSO_SECRET` → `sudo ./deploy.sh restart` |
+| 405 | 그 창구가 없는 옛 판 | 새 번들로 `sudo ./deploy.sh update` |
+
+화면에서는 **관리 › 서버 › 「HWAX 포털 로그인」**(시스템 관리자) — 켜졌나 · 포털 공개 키를 지금 받아 보고 닿나 · kid · 마지막
+오류 · 설정끼리 안 맞는 것(접두어 없음 · `TRUST_PROXY` 꺼짐 …), 그리고 「게이트웨이 위임」 — 켜졌나 · 허용 주소 · 범위 ·
+지금 사용 중인 위임 토큰 수 · 마지막 발급 · 마지막 거절(때 · 숫자 · 까닭).
+
+| 증상 | 원인 |
+| --- | --- |
+| 로그인 화면에 「포털의 공개 키를 받지 못해…」 | 이 서버에서 `PORTAL_JWKS_URL` 이 안 닿는다 — 위 curl · 방화벽 :8088. 서버 화면의 「마지막 오류」 |
+| 「로그인 정보를 확인하지 못했습니다」 가 계속 | 포털 타일의 `audience` 와 `PORTAL_AUDIENCE`(기본 slug)가 다르거나 포털 `JWT_ISSUER` 를 바꿔 쓰는 박스 — 앱 로그 `journalctl -u <slug> \| grep '포털 로그인 거절'` 에 사유가 있다 |
+| 「유효 시간을 벗어났습니다」 | 이 서버와 포털의 시계가 10초 넘게 어긋났다 — `timedatectl` |
+| 로그인 뒤 포털 첫 화면으로 간다 | `PUBLIC_PATH` 가 없다(9.1) |
+| 처음 들어온 사람이 「가입 승인을 기다립니다」 | 정상 — 관리 › 계정의 승인 대기(홈 「남은 일」). 희망 부서가 없어 「승인」 이 부서를 묻는다 |
+| 위임 토큰이 「내 정보」 에 「HWAX 게이트웨이(gateway)」 로 보인다 | 정상 — 게이트웨이가 다시 받으면 지난 것은 회수된다. 폐기해도 게이트웨이가 다시 받는다 — 사람을 끊는 것은 계정 정지 |

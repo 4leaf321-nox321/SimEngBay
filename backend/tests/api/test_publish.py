@@ -128,7 +128,10 @@ def test_게시하면_누구나_보고_읽기만_한다(
     done = [
         one.action
         for one in db.scalars(
-            select(AuditEntry).where(AuditEntry.target_id == uuid.UUID(job["id"]))
+            select(AuditEntry)
+            .where(AuditEntry.target_id == uuid.UUID(job["id"]))
+            # 순서를 안 주면 DB 마음이다 — 전체 시험에서만 가끔 뒤집혔다. 넣은 차례(`seq`)로.
+            .order_by(AuditEntry.seq)
         )
     ]
     assert done == ["simulation.published", "simulation.unpublished"]

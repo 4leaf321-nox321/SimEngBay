@@ -376,6 +376,31 @@ def test_아직_안_끝난_작업은_결과가_없다고_말한다(
     got = client.get(f"/api/simulations/{created.json()['id']}/result", headers=member.headers)
     assert got.status_code == 404
     assert got.json()["error"]["details"]["status"] == "queued"
+    # 견줄 값도 같은 말로 거절한다 — 0 이나 빈 값으로 답하면 「결과가 0 이었다」 로 읽힌다.
+    values = client.get(
+        f"/api/simulations/{created.json()['id']}/values", headers=member.headers
+    )
+    assert values.status_code == 404
+    assert values.json()["error"]["details"]["status"] == "queued"
+
+
+def test_견줄_값은_결과_파일에서_단위를_맞춰_꺼낸다(
+    client: TestClient, member: Signed
+) -> None:
+    """MCP · 연계 스크립트가 결과를 읽는 자리 — 스터디 비교와 같은 값(`core_values.read`)이고,
+    강체 모드는 빠지며 레시피에 없는 칸은 비어 있다."""
+    created = _create(client, member, workspace=member.workspace)
+    ident = created.json()["id"]
+    result = client.get(f"/api/simulations/{ident}/result", headers=member.headers).json()
+
+    got = client.get(f"/api/simulations/{ident}/values", headers=member.headers)
+    assert got.status_code == 200, got.text
+    values = got.json()
+    elastic = [one["frequency_hz"] for one in result["modes"] if not one["rigid_body"]]
+    assert values["recipe"] == "modal" and values["solver"] == "calculix"
+    assert values["frequencies"] == elastic
+    assert values["first_elastic_hz"] == elastic[0]
+    assert values["max_von_mises_mpa"] is None and values["reactions_n"] == {}
 
 
 def _topology_bytes() -> bytes:
@@ -859,6 +884,25 @@ def test_공용_폴더를_탐색기처럼_훑는다(client: TestClient, member: 
     assert "브래킷_두께훑기-3f9a2177" in names
     # **가져올 수 있는 폴더인지 표시한다**(manifest.csv 가 있나) — 눌러 보고 알게 하지 않는다.
     assert names["브래킷_두께훑기-3f9a2177"]["is_study"] is True
+
+
+def test_스터디를_CompCore_id_나_이름으로_찾는다(client: TestClient, member: Signed) -> None:
+    """공유 폴더 경로를 몰라도 — CompCore 의 스터디 id(앞 8자리)나 이름으로 찾고, 찾은 경로를
+    미리 보기에 그대로 쓴다."""
+    got = client.get("/api/simulations/doe/find?q=3f9a2177", headers=member.headers)
+    assert got.status_code == 200, got.text
+    found = got.json()["found"]
+    assert [one["name"] for one in found] == ["브래킷_두께훑기-3f9a2177"]
+    assert found[0]["matched_by"] == "id" and found[0]["study_id"].startswith("3f9a2177")
+    preview = client.get(
+        "/api/simulations/doe/preview",
+        params={"path": found[0]["path"]},
+        headers=member.headers,
+    )
+    assert preview.status_code == 200 and preview.json()["study_id"] == found[0]["study_id"]
+
+    blank = client.get("/api/simulations/doe/find?q=%20", headers=member.headers)
+    assert blank.status_code == 400
 
 
 def test_뿌리_위로는_못_올라간다(client: TestClient, member: Signed) -> None:

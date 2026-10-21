@@ -27,6 +27,7 @@ from app.modules.simulations.schemas import (
     ConditionsPreviewOut,
     ConvergenceOut,
     ConvergenceRequest,
+    DoeFindOut,
     DoeImportOut,
     DoeImportRequest,
     DoeListingOut,
@@ -40,6 +41,7 @@ from app.modules.simulations.schemas import (
     StudyMeasurementOut,
     StudyOut,
     StudySummaryOut,
+    ValuesOut,
     WorkersOut,
 )
 from app.shared.auth import current_user, require_system_admin
@@ -210,6 +212,17 @@ def export_study(
     )
 
 
+@router.get("/doe/find", response_model=DoeFindOut)
+def find_doe(
+    q: str,
+    user: User = Depends(current_user),
+) -> DoeFindOut:
+    """공용 폴더 전체에서 스터디 폴더를 **CompCore 스터디 id(전체 · 앞 6자리 이상)나 이름**으로
+    찾는다 — 공유 폴더 경로를 모르는 사람 · AI 용. 찾은 `path` 를 미리 보기 · 가져오기에
+    쓴다."""
+    return services.find_doe(q)
+
+
 @router.get("/doe/browse", response_model=DoeListingOut)
 def browse_doe(
     path: str | None = None,
@@ -344,6 +357,18 @@ def get_result(
     정본이다. 화면은 필요한 칸만 읽는다.
     """
     return services.result_json(db, user=user, simulation_id=simulation_id)
+
+
+@router.get("/{simulation_id}/values", response_model=ValuesOut)
+def get_values(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ValuesOut:
+    """**견줄 값** — 늘 mm · MPa · N · Hz. 스터디 비교 · 메시 수렴 · 실측 맞추기가 보는 값과
+    같다. 결과 파일의 단위는 솔버마다 달라서, 읽는 쪽(MCP · 연계 스크립트)이 맞추지 않게
+    서버가 맞춰 준다. 원본은 `/result`."""
+    return services.values_of(db, user=user, simulation_id=simulation_id)
 
 
 @router.get("/{simulation_id}/measurements", response_model=list[MeasurementOut])

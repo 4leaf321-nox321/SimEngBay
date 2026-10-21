@@ -336,6 +336,14 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
   `portal-callback` · `sso` · `sso/verify` · `sso/revoke`. `auth/portal.py` · `auth/delegation.py` 와 그 시험은
   Standard Platform 에서 옮긴 것이라 **이름까지 그쪽과 맞춰 둔다** — 그쪽이 고치면 diff 하나로 따라간다.
   다른 것은 ADR 0009 의 「우리 쪽에서 다른 것」 에 적는다.
+- **해석 큐는 사람마다 번갈아 집는다**([ADR 0011](docs/adr/0011-해석-작업은-사람마다-번갈아-집는다.md)) —
+  `claim_next` 의 순서(같은 솔버 안에서 도는 작업이 적은 사람 → 오래 못 받은 사람 → 먼저 건 것)를
+  `created_at` 하나로 되돌리지 않는다. 대기 중인 작업의 줄(`SimulationOut.queue`)도 같은 규칙으로 센다.
+- **MCP 에 규칙을 두지 않는다**([ADR 0010](docs/adr/0010-해석용-MCP.md)) — 권한 · 범위 · 검증은 백엔드가
+  하고 MCP 는 사용자의 토큰을 넘길 뿐이다. 해석 종류 · 칸은 `recipes` 스키마, 결과는
+  `/simulations/{id}/values`(서버가 단위를 맞춘다) — 레시피를 더해도 `mcp_server/` 는 그대로여야 한다.
+  도구를 더하거나 이름을 바꾸면 안내문 · `guide/GUIDE.md` · 위험 도구 목록(요청서 7절)이 같이 — 시험이
+  견준다. `mcp` 는 백엔드 venv 에 깔지 않는다(`mcp_server/venv`).
 - **워커는 15초마다 신호를 적는다**(`simulation_workers`). 집는 솔버 · 깔린 도구는 **워커가 적은
   값이 정본**이다 — 워커마다 `worker-<N>.env` · 이미지가 다르므로 API 프로세스의 설정이나 `PATH`
   는 그 워커의 사실이 아니다. 신호가 2분 끊기면 서버가 「응답 없음」 으로 판정하고 그 워커의 작업을

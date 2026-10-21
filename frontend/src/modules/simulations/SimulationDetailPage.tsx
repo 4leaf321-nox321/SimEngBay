@@ -21,6 +21,7 @@ import { ConditionList } from '@/modules/simulations/ConditionList'
 import { ConvergencePanel } from '@/modules/simulations/ConvergencePanel'
 import { MeasurementsPanel } from '@/modules/simulations/MeasurementsPanel'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
+import { QueueNotice } from '@/modules/simulations/QueueNotice'
 import { ResultGlance } from '@/modules/simulations/ResultGlance'
 import type { DetailTab } from '@/modules/simulations/ResultGlance'
 import { ResultPanel, useSimulationResult } from '@/modules/simulations/ResultPanel'
@@ -438,6 +439,10 @@ function SimulationDetail({ id }: { id: string }) {
             작업을 다시 실행해야 합니다.
           </AlertDescription>
         </Alert>
+      )}
+
+      {simulation.status === 'queued' && simulation.queue && (
+        <QueueNotice queue={simulation.queue} />
       )}
 
       {simulation.status === 'failed' && (

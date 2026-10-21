@@ -150,6 +150,27 @@ class ConditionsPreviewOut(BaseModel):
     """그 해석 종류에서 조건이 어떻게 다뤄지나 — 반영 · 넘김 · 막음."""
 
 
+class QueueOut(BaseModel):
+    """대기 중인 작업이 **어디쯤 서 있나**(ADR 0011) — 같은 솔버의 줄. 「대기」 만 보이면
+    사람도 AI 도 얼마나 기다릴지 모른다.
+
+    워커는 **사람마다 번갈아** 집는다 — 그래서 내 차례는 「내 앞의 내 작업」 과 「줄을 나눠
+    쓰는 사람 수」 로 가늠한다(앞에 선 남의 작업 수로는 안 된다)."""
+
+    solver: str
+    queued: int
+    """그 솔버에 대기 중인 작업 전부(누구 것이든)."""
+    mine_ahead: int
+    """같은 사람이 이것보다 먼저 건 대기 작업 — 한 사람의 작업끼리는 먼저 건 순서다."""
+    people: int
+    """대기 작업이 있는 사람 수(나 포함) — 워커가 이 사람들 사이를 번갈아 돈다."""
+    running: int
+    """그 솔버에서 지금 도는 작업."""
+    workers_alive: int
+    """그 솔버를 집는 살아 있는 워커. -1 은 모른다(신호를 적는 워커가 없는 설치), 0 이면 워커가
+    뜰 때까지 움직이지 않는다."""
+
+
 class SimulationOut(SimulationSummaryOut):
     spec: dict[str, Any]
     stages: list[StageOut]
@@ -159,6 +180,46 @@ class SimulationOut(SimulationSummaryOut):
     worker_id: str | None
     conditions: ConditionsOut = ConditionsOut()
     """CAD 가 보낸 조건과 **우리가 그것을 어떻게 다뤘나**. 조용히 무시하지 않으려고 싣는다."""
+    queue: QueueOut | None = None
+    """대기 중일 때만 — 줄의 어디쯤인가."""
+
+
+class ValuesOut(BaseModel):
+    """작업 하나의 **견줄 값** — 늘 mm · MPa · N · Hz(`app/core/values.py` 가 맞춘다).
+
+    스터디 비교 · 메시 수렴 · 실측 맞추기가 보는 값과 같다. `result.json` 은 레시피 · 솔버마다
+    칸과 단위가 달라서(Ansys 를 SI 로 돌리면 m · Pa), 읽는 쪽(MCP · 연계 스크립트)마다 맞추면
+    언젠가 하나가 1000배 틀린다 — 그래서 서버가 한 번 맞춰 준다. 레시피에 없는 칸은 비어 있다
+    (0 으로 적지 않는다)."""
+
+    simulation_id: uuid.UUID
+    recipe: str
+    solver: str
+    mass_kg: float | None = None
+    nodes: int | None = None
+    # --- 모달
+    first_elastic_hz: float | None = None
+    frequencies: list[float] = Field(default_factory=list)
+    """탄성 모드 주파수(앞에서부터, Hz). 강체 모드는 뺐다."""
+    # --- 정적
+    max_displacement_mm: float | None = None
+    max_von_mises_mpa: float | None = None
+    reactions_n: dict[str, list[float]] = Field(default_factory=dict)
+    """변위를 준 영역 → 반력 합 `[Fx, Fy, Fz]`(N)."""
+    probe_vectors_mm: dict[str, list[float]] = Field(default_factory=dict)
+    """측정점 → 변위 성분 `[ux, uy, uz]`(mm)."""
+    probe_strains: dict[str, list[float]] = Field(default_factory=dict)
+    """측정점 → 수직 변형률 `[εxx, εyy, εzz]`(무차원)."""
+    relative_mm: dict[str, list[float]] = Field(default_factory=dict)
+    """같은 자리 · 다른 바디의 두 측정점 「A - B」 → 변위 차(mm). 전단 이음의 미끄럼."""
+    # --- 조화
+    peak_hz: float | None = None
+    peak_displacement_mm: float | None = None
+    probe_peaks_hz: dict[str, float] = Field(default_factory=dict)
+    """측정점 → 그 자리 곡선의 봉우리 주파수(Hz)."""
+    # --- 정적 · 조화
+    probes_mm: dict[str, float] = Field(default_factory=dict)
+    """측정점 → 값(mm). 정적은 변위 크기, 조화는 **그 자리 곡선의 봉우리** 진폭."""
 
 
 class SimulationCreateForm(BaseModel):
@@ -237,6 +298,30 @@ class DoeListingOut(BaseModel):
     is_study: bool = False
     roots: list[str] = Field(default_factory=list)
     """설정된 공용 폴더들. 화면이 뿌리를 고르는 데 쓴다."""
+
+
+class DoeFoundOut(BaseModel):
+    """찾은 스터디 폴더 하나 — `path` 를 미리 보기 · 가져오기에 그대로 쓴다."""
+
+    name: str
+    """폴더 이름 — CompCore 가 내보낸 것은 `<이름>-<스터디 id 앞 8자리>`."""
+    path: str
+    study_id: str
+    """`study.json` 의 id — CompCore 의 스터디 id 이고 우리 `study_id` 와 같다."""
+    study_name: str
+    matched_by: Literal["id", "name"]
+    modified_at: datetime | None = None
+    """폴더가 마지막으로 바뀐 때 — 대개 CompCore 가 내보낸 때."""
+
+
+class DoeFindOut(BaseModel):
+    """공용 폴더에서 스터디를 **id 나 이름으로** 찾은 것(ADR 0010) — 경로를 모르는 사람과 AI
+    용."""
+
+    query: str
+    found: list[DoeFoundOut]
+    truncated: bool = False
+    roots: list[str] = Field(default_factory=list)
 
 
 class DoeImportRequest(BaseModel):

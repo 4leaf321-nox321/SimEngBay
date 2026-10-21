@@ -25,6 +25,7 @@ import {
 } from '@/shared/components/ui/table'
 import { useResource } from '@/shared/hooks/useResource'
 import { ApiUsageGuide } from './ApiUsageGuide'
+import { McpSetupGuide } from './McpSetupGuide'
 import { shownDate } from '@/shared/lib/datetime'
 
 export default function ProfilePage() {
@@ -122,6 +123,7 @@ export default function ProfilePage() {
 
         {/* 받아 든 토큰을 어디에 넣는지 — 발급한 자리에서 바로. */}
         <ApiUsageGuide token={issued} />
+        <McpSetupGuide token={issued} />
 
         <form onSubmit={createToken} className="space-y-3 rounded-md border p-4">
           <div className="flex gap-2">

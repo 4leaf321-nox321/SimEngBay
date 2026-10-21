@@ -5,6 +5,10 @@
  * **CalculiX 작업이 있는데 CalculiX 를 집는 워커가 없는 것**이다 — 그 작업은 영원히 대기하고,
  * 아무도 그 사실을 말해 주지 않는다. 그래서 그 경우를 맨 위에 빨갛게 적는다.
  *
+ * **CalculiX 워커가 하나뿐이면** 그것도 말한다(ADR 0011) — 라이선스가 없어 코어 수만큼 띄울 수
+ * 있는데 하나면 여러 사람의 해석이 한 줄로 선다. 줄은 사람마다 번갈아 서지만, 줄 자체가 하나다.
+ * Ansys 는 노드락 라이선스라 하나가 정상이므로 말하지 않는다.
+ *
  * **집는 솔버와 깔린 도구는 워커가 적은 값이다** — 워커마다 환경 파일 · 이미지가 다르다. 서버
  * 상태(`/server/status`)와 **따로 묻는다**: 그쪽이 오류여도(뒤처진 DB) 이 카드는 떠야 한다.
  */
@@ -73,6 +77,9 @@ export function WorkersCard() {
 
   const data = overview.data
   const stranded = (data?.queues ?? []).filter((one) => one.queued > 0 && one.workers_alive === 0)
+  const lonely = (data?.queues ?? []).find(
+    (one) => one.solver === 'calculix' && one.workers_alive === 1,
+  )
 
   return (
     <section className="space-y-3">
@@ -90,6 +97,17 @@ export function WorkersCard() {
           솔버를 바꾸세요.
         </div>
       ))}
+
+      {lonely && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          CalculiX 를 집는 워커가 1개입니다 — 여러 사람이 동시에 걸면 한 줄로 섭니다
+          {lonely.queued > 0 ? `(지금 ${lonely.queued}건 대기)` : ''}. CalculiX 는 라이선스가 없어
+          코어 수만큼 띄울 수 있습니다 —{' '}
+          <span className="font-mono">WORKER_COUNT</span> 와 워커마다{' '}
+          <span className="font-mono">SIMULATION_SOLVERS=calculix</span>(운영 안내서 「솔버를 갈라
+          띄우기」).
+        </div>
+      )}
 
       {data && data.workers.length === 0 ? (
         <EmptyState

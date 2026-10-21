@@ -3197,6 +3197,49 @@
         }
       }
     },
+    "/api/simulations/doe/find": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Find Doe",
+        "description": "공용 폴더 전체에서 스터디 폴더를 **CompCore 스터디 id(전체 · 앞 6자리 이상)나 이름**으로\n찾는다 — 공유 폴더 경로를 모르는 사람 · AI 용. 찾은 `path` 를 미리 보기 · 가져오기에\n쓴다.",
+        "operationId": "find_doe_api_simulations_doe_find_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoeFindOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/doe/browse": {
       "get": {
         "tags": [
@@ -3574,6 +3617,50 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Result Api Simulations  Simulation Id  Result Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/{simulation_id}/values": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Get Values",
+        "description": "**견줄 값** — 늘 mm · MPa · N · Hz. 스터디 비교 · 메시 수렴 · 실측 맞추기가 보는 값과\n같다. 결과 파일의 단위는 솔버마다 달라서, 읽는 쪽(MCP · 연계 스크립트)이 맞추지 않게\n서버가 맞춰 준다. 원본은 `/result`.",
+        "operationId": "get_values_api_simulations__simulation_id__values_get",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValuesOut"
                 }
               }
             }
@@ -5656,6 +5743,90 @@
         ],
         "title": "DoeEntryOut",
         "description": "탐색기의 한 줄."
+      },
+      "DoeFindOut": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "found": {
+            "items": {
+              "$ref": "#/components/schemas/DoeFoundOut"
+            },
+            "type": "array",
+            "title": "Found"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "roots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roots"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "found"
+        ],
+        "title": "DoeFindOut",
+        "description": "공용 폴더에서 스터디를 **id 나 이름으로** 찾은 것(ADR 0010) — 경로를 모르는 사람과 AI\n용."
+      },
+      "DoeFoundOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "study_name": {
+            "type": "string",
+            "title": "Study Name"
+          },
+          "matched_by": {
+            "type": "string",
+            "enum": [
+              "id",
+              "name"
+            ],
+            "title": "Matched By"
+          },
+          "modified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modified At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "study_id",
+          "study_name",
+          "matched_by"
+        ],
+        "title": "DoeFoundOut",
+        "description": "찾은 스터디 폴더 하나 — `path` 를 미리 보기 · 가져오기에 그대로 쓴다."
       },
       "DoeImportOut": {
         "properties": {
@@ -7849,6 +8020,45 @@
         "title": "PublishOut",
         "description": "스터디 게시 · 해제의 결과."
       },
+      "QueueOut": {
+        "properties": {
+          "solver": {
+            "type": "string",
+            "title": "Solver"
+          },
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          },
+          "mine_ahead": {
+            "type": "integer",
+            "title": "Mine Ahead"
+          },
+          "people": {
+            "type": "integer",
+            "title": "People"
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running"
+          },
+          "workers_alive": {
+            "type": "integer",
+            "title": "Workers Alive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "solver",
+          "queued",
+          "mine_ahead",
+          "people",
+          "running",
+          "workers_alive"
+        ],
+        "title": "QueueOut",
+        "description": "대기 중인 작업이 **어디쯤 서 있나**(ADR 0011) — 같은 솔버의 줄. 「대기」 만 보이면\n사람도 AI 도 얼마나 기다릴지 모른다.\n\n워커는 **사람마다 번갈아** 집는다 — 그래서 내 차례는 「내 앞의 내 작업」 과 「줄을 나눠\n쓰는 사람 수」 로 가늠한다(앞에 선 남의 작업 수로는 안 된다)."
+      },
       "RecipeOut": {
         "properties": {
           "name": {
@@ -8349,6 +8559,16 @@
               "prestressed": false,
               "drives": false
             }
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -9562,6 +9782,169 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ValuesOut": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver"
+          },
+          "mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mass Kg"
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodes"
+          },
+          "first_elastic_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Elastic Hz"
+          },
+          "frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Frequencies"
+          },
+          "max_displacement_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Displacement Mm"
+          },
+          "max_von_mises_mpa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Von Mises Mpa"
+          },
+          "reactions_n": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Reactions N"
+          },
+          "probe_vectors_mm": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Probe Vectors Mm"
+          },
+          "probe_strains": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Probe Strains"
+          },
+          "relative_mm": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Relative Mm"
+          },
+          "peak_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Hz"
+          },
+          "peak_displacement_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Displacement Mm"
+          },
+          "probe_peaks_hz": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probe Peaks Hz"
+          },
+          "probes_mm": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probes Mm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_id",
+          "recipe",
+          "solver"
+        ],
+        "title": "ValuesOut",
+        "description": "작업 하나의 **견줄 값** — 늘 mm · MPa · N · Hz(`app/core/values.py` 가 맞춘다).\n\n스터디 비교 · 메시 수렴 · 실측 맞추기가 보는 값과 같다. `result.json` 은 레시피 · 솔버마다\n칸과 단위가 달라서(Ansys 를 SI 로 돌리면 m · Pa), 읽는 쪽(MCP · 연계 스크립트)마다 맞추면\n언젠가 하나가 1000배 틀린다 — 그래서 서버가 한 번 맞춰 준다. 레시피에 없는 칸은 비어 있다\n(0 으로 적지 않는다)."
       },
       "WorkerJobOut": {
         "properties": {

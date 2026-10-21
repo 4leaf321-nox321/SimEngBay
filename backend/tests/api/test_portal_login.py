@@ -595,9 +595,9 @@ def test_진단은_시스템_관리자만_보고_공개_키가_닿는지_말한�
     assert body["callback_path"] == CALLBACK
     # 접두어 없이 포털에 붙이면 로그인 뒤 포털 첫 화면으로 간다 — 그렇다고 말한다.
     assert any("PUBLIC_PATH" in one for one in body["problems"])
-    # SimEngBay 에는 아직 MCP 서버가 없다 — MCP 주소 점검은 그때 옮긴다
-    # (`portal._mcp_problems`).
-    assert not any("MCP_PUBLIC_URL" in one for one in body["problems"])
+    # 포털 뒤에서는 화면이 짐작하는 MCP 주소(`<포털>/<id>/mcp`)가 없는 길이다 — 그렇다고 말한다
+    # (개발 .env 에 무엇이 있든 위 fixture 가 MCP_PUBLIC_URL 을 비운다).
+    assert any("MCP_PUBLIC_URL" in one for one in body["problems"])
 
 
 def test_진단은_꺼진_것도_말한다(client: TestClient, admin: Signed, portal_off: None) -> None:

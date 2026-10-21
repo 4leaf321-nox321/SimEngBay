@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
@@ -478,10 +479,25 @@ def status(db: Session, settings: Settings) -> PortalStatusOut:
 
 
 def _mcp_problems(settings: Settings) -> list[str]:
-    """화면이 안내할 MCP 주소가 포털 뒤에서 닿나 — **SimEngBay 에는 아직 MCP 서버가 없다**.
+    """화면(「내 정보」)이 안내할 MCP 주소가 포털 뒤에서 닿나(ADR 0010).
 
-    Standard Platform 은 여기서 `MCP_PUBLIC_URL` 이 포털 주소 아래인지 본다(포털은 MCP 경로를
-    열지 않는다 — 사람들의 Claude 는 포털의 게이트웨이 `/mcp-gw/mcp` 로 붙는다). 해석용 MCP
-    서버를 만들면 그 점검을 함께 옮긴다. 그때까지 볼 것이 없다.
+    **포털은 MCP 경로를 열지 않는다**(Report Archive 와 같다). 사람들의 Claude 는 포털의
+    게이트웨이(`/mcp-gw/mcp`)로 붙고, 게이트웨이가 우리 MCP 포트를 직접 부른다. 그런데 화면은
+    `MCP_PUBLIC_URL` 이 비면 들어온 주소에 `/mcp` 를 붙여 짐작한다 — 포털 뒤에서는
+    `https://<포털>/<id>/mcp` 가 되고 그 길은 없다(앱으로 떨어져 404). 직접 붙는 사람을 위해
+    MCP 포트 주소를 적게 한다.
     """
-    return []
+    public = settings.mcp_public_url.strip()
+    portal_host = urlsplit(settings.portal_launch_url.strip()).netloc
+    under_portal = (
+        bool(public) and bool(portal_host) and urlsplit(public).netloc == portal_host
+    )
+    if public and not under_portal:
+        return []
+    return [
+        "MCP_PUBLIC_URL 이 "
+        + ("포털 주소 아래입니다" if under_portal else "비어 있습니다")
+        + " — 포털은 MCP 경로(/<id>/mcp)를 열지 않습니다(Claude 는 포털의 /mcp-gw/mcp 로 "
+        "붙고, 게이트웨이가 MCP 포트를 직접 부릅니다). 화면의 Claude 연결 안내가 닿는 주소를 "
+        "보이도록 MCP_PUBLIC_URL=http://<이 서버>:<MCP 포트>/mcp 를 적으세요."
+    ]

@@ -6,7 +6,7 @@
 #
 # 산출물: release/<slug>-<버전>.tar.gz
 #   app.sif · deploy.sh · ha.sh · pg-ha.sh · backup.sh · restore.sh · *.template · .env.example
-#   · BUILD_INFO · README.md · apptainer_debs/ (폐쇄망용)
+#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ (폐쇄망용)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
 # 그다음 배포가 돌아야 한다 — 빠뜨리면 첫 배포에 저장소를 클론하는 수밖에 없고,
@@ -120,6 +120,8 @@ cp deploy/restore.sh                 "$STAGE/"
 cp deploy/app.service.template       "$STAGE/"
 # 해석 작업 워커 유닛 — 없으면 deploy.sh 가 건너뛰고, 그러면 작업이 queued 에 쌓이기만 한다.
 cp deploy/worker.service.template    "$STAGE/"
+# MCP 서버 유닛 — 없으면 deploy.sh 가 MCP 를 건너뛴다(백엔드 배포는 그대로).
+cp deploy/mcp.service.template       "$STAGE/"
 cp deploy/backup.service.template    "$STAGE/"
 cp deploy/backup.timer.template      "$STAGE/"
 cp deploy/sync.service.template      "$STAGE/"
@@ -131,6 +133,9 @@ cp deploy/pg-ha.sh                   "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 cp deploy/쉬운-설치.md               "$STAGE/쉬운-설치.md"
+# HWAX 포털 연동 요청서의 틀 — `deploy.sh hwax-request` 가 이 설치의 값으로 채운다(ADR 0009 · 0010).
+# 정본은 docs/ 에 있고 번들에는 이름만 바꿔 담는다 — 없으면 서버에서 요청서를 못 만든다.
+cp "docs/[참고] HWAX포탈_연동_요청서.md" "$STAGE/HWAX-연동요청서.template.md"
 chmod +x "$STAGE"/*.sh
 
 # ── 3a. apptainer .deb 동봉 (폐쇄망 대비) ────────────────────────────────────
@@ -147,6 +152,26 @@ else
     rm -rf "$STAGE/apptainer_debs"
     echo "    ⚠ apt-get download 실패(빌드 머신에 apptainer PPA 가 없나?) — .deb 미동봉."
     echo "      폐쇄망 서버에서는 ensure_apptainer 가 안내하는 수동 반입이 필요합니다."
+fi
+
+# ── 3b. MCP 서버 (별도 venv 로 운영 서버에서 돌아감) ──────────────────────────
+# 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다(ADR 0010). 소스 + 오프라인 설치용 휠을
+# 동봉 → deploy.sh 가 운영 호스트에서 venv 를 만들고 `pip install --no-index` 로 설치한다.
+echo "==> [3b/4] MCP 서버 + 오프라인 휠 동봉"
+mkdir -p "$STAGE/mcp_server"
+cp mcp_server/server.py        "$STAGE/mcp_server/"
+cp mcp_server/requirements.txt "$STAGE/mcp_server/"
+[[ -f mcp_server/README.md ]] && cp mcp_server/README.md "$STAGE/mcp_server/" || true
+# 안내서(get_guide 가 읽는 본문) — **서버가 쥔다.** 빠지면 get_guide 가 「읽을 수 없습니다」 를
+# 주고 AI 는 도구 설명만으로 헤맨다.
+cp -r mcp_server/guide "$STAGE/mcp_server/guide"
+# 빌드 머신(인터넷 O)에서 휠을 받아 둔다 — 운영 호스트가 폐쇄망이어도 설치되게. 빌드 · 운영의
+# 아키텍처 · 파이썬이 같다고 본다(둘 다 linux x86_64 · 3.12 — Standard Platform 과 같은 가정).
+if python3 -m pip download --only-binary=:all: \
+        -r mcp_server/requirements.txt -d "$STAGE/mcp_server/wheels" >/dev/null 2>&1; then
+    echo "    휠 $(ls "$STAGE/mcp_server/wheels" | wc -l)개 동봉"
+else
+    echo "    ⚠ pip download 실패 — 휠 미동봉. 운영 호스트에 인터넷/사내 PyPI 가 있어야 MCP 가 설치됨."
 fi
 
 # **번들의 기본값.** deploy.sh 는 APP_SLUG 를 안 줬을 때만 여기 이름을 쓴다 — 배포

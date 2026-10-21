@@ -189,6 +189,45 @@ def test_뿌리_밖은_거절한다(tmp_path: Path) -> None:
         resolve_inside([FIXTURES_ROOT], str(FIXTURES_ROOT / ".." / ".." / ".."))
 
 
+def test_스터디를_id_나_이름으로_찾는다() -> None:
+    """경로를 모르는 사람(과 AI)이 CompCore 가 준 스터디 id · 이름으로 폴더를 찾는다 —
+    CompCore 가 주는 경로는 Windows 모양이라 이 서버의 경로와 글자로 맞지 않는다."""
+    from app.core.doe.browse import find
+
+    by_prefix, _ = find([FIXTURES_ROOT], "3F9A2177")  # 폴더 이름의 꼬리 = id 앞 8자리
+    assert [(one.name, one.matched_by) for one in by_prefix] == [(FOLDER.name, "id")]
+    study_id = json.loads((FOLDER / "study.json").read_text(encoding="utf-8"))["id"]
+    assert by_prefix[0].study_id == study_id
+    # 하이픈이 든 전체 id 도 · 공백과 밑줄을 섞은 이름도 같은 폴더다.
+    assert find([FIXTURES_ROOT], "db734ea2-7b18-4b23")[0][0].name == "설계하나_측면가진"
+    assert find([FIXTURES_ROOT], " 브래킷 두께훑기 ")[0][0].matched_by == "name"
+    # 묶음 폴더 한 단 아래까지 본다(시험 규격) — 스터디 폴더 안(`points/`)으로는 안 들어간다.
+    nested, _ = find([FIXTURES_ROOT], "V노치전단")
+    assert [one.path for one in nested] == [
+        str(FIXTURES_ROOT / "시험규격" / "시험_V노치전단_D5379")
+    ]
+    assert find([FIXTURES_ROOT], "없는스터디") == ([], False)
+
+
+def test_찾기는_id_로_맞은_것이_먼저고_넘치면_자른다(tmp_path: Path) -> None:
+    from app.core.doe.browse import find
+
+    for index in range(4):
+        made = tmp_path / f"브래킷-{index}"
+        made.mkdir()
+        (made / "manifest.csv").write_text("number\n", encoding="utf-8")
+        study = {"id": f"abcdef{index:02d}-0000", "name": f"브래킷 {index}"}
+        (made / "study.json").write_text(
+            json.dumps(study, ensure_ascii=False), encoding="utf-8"
+        )
+    # 이름에도 id 에도 맞는 말 — id 로 맞은 것이 앞이다.
+    (tmp_path / "브래킷-1" / "study.json").write_text('{"id": "bbbbbb", "name": "abcdef"}')
+    hits, cut = find([tmp_path], "abcdef", limit=2)
+    assert [one.matched_by for one in hits] == ["id", "id"] and cut is True
+    with pytest.raises(ValueError):
+        find([tmp_path], "  ")
+
+
 SWEEP_FOLDER = FIXTURES_ROOT / "조건_재료훑기"
 
 

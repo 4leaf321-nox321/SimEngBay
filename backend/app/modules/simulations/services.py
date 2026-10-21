@@ -56,6 +56,7 @@ from app.core import measured as core_measured
 from app.core import values as core_values
 from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_inside
 from app.core.doe.browse import OutsideRoots
+from app.core.doe.browse import find as find_studies
 from app.core.doe.folder import FolderProblem
 from app.core.modes import track_modes
 from app.core.spec import (
@@ -96,6 +97,8 @@ from app.modules.simulations.schemas import (
     ConvergenceMetricOut,
     ConvergenceOut,
     DoeEntryOut,
+    DoeFindOut,
+    DoeFoundOut,
     DoeImportOut,
     DoeListingOut,
     DoePointPreview,
@@ -103,6 +106,7 @@ from app.modules.simulations.schemas import (
     LicenseHolderOut,
     MeasurementOut,
     ModeTrackOut,
+    QueueOut,
     RecipeOut,
     RegionOut,
     SimulationOut,
@@ -115,6 +119,7 @@ from app.modules.simulations.schemas import (
     StudyOut,
     StudyPointOut,
     StudySummaryOut,
+    ValuesOut,
     WorkerJobOut,
     WorkerOut,
     WorkersOut,
@@ -266,7 +271,45 @@ def to_out(db: Session, simulation: Simulation) -> SimulationOut:
         attempts=simulation.attempts,
         worker_id=simulation.worker_id,
         conditions=_conditions_of(simulation),
+        queue=_queue_of(db, simulation),
     )
+
+
+def _queue_of(db: Session, simulation: Simulation) -> QueueOut | None:
+    """대기 중인 작업의 줄(ADR 0011) — 같은 솔버의 대기 · 내 앞 · 사람 수 · 도는 것 · 워커."""
+    if simulation.status != "queued":
+        return None
+    solver = solver_of(simulation)
+    solver_of_row = func.coalesce(Simulation.spec["solver"].astext, "ansys")
+    same = (Simulation.deleted_at.is_(None), solver_of_row == solver)
+    mine = Simulation.requested_by_id.is_not_distinct_from(simulation.requested_by_id)
+    queued, ahead, people = db.execute(
+        select(
+            func.count(),
+            func.count().filter(mine, Simulation.created_at < simulation.created_at),
+            func.count(func.distinct(Simulation.requested_by_id)),
+        ).where(*same, Simulation.status == "queued")
+    ).one()
+    running = db.scalar(
+        select(func.count()).where(*same, Simulation.status.in_(RUNNING_STATUSES))
+    )
+    return QueueOut(
+        solver=solver,
+        queued=int(queued),
+        mine_ahead=int(ahead),
+        people=max(1, int(people)),
+        running=int(running or 0),
+        workers_alive=_workers_for(db, solver),
+    )
+
+
+def _workers_for(db: Session, solver: str) -> int:
+    """그 솔버를 집는 살아 있는 워커 수 — 모르면 -1(`solver_availability` 와 같은 규칙)."""
+    rows = list(db.scalars(select(SimulationWorker)))
+    if not rows or get_settings().jobs_inline:
+        return -1
+    now = _now()
+    return sum(1 for row in rows if _alive(row, now) and _takes(row, solver))
 
 
 def _conditions_of(simulation: Simulation) -> ConditionsOut:
@@ -468,7 +511,10 @@ def result_json(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[st
     복사하면 두 벌이 갈린다 — 그리고 갈린 쪽을 화면이 그린다. 파일이 없으면(아직 안 끝났거나
     옛 작업) 404 가 아니라 **왜 없는지** 를 말한다.
     """
-    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    return _result_of(db, get_visible(db, user=user, simulation_id=simulation_id))
+
+
+def _result_of(db: Session, simulation: Simulation) -> dict[str, Any]:
     artifact = db.scalar(
         select(SimulationArtifact).where(
             SimulationArtifact.simulation_id == simulation.id,
@@ -492,6 +538,33 @@ def result_json(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[st
         )
     loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     return loaded
+
+
+def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut:
+    """견줄 값(mm · MPa · N · Hz) — 스터디 비교와 같은 `core_values.read` 로 꺼낸다. 결과가
+    아직 없으면 `result_json` 과 같은 말(왜 없는지)로 거절한다."""
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    found = core_values.read(_result_of(db, simulation))
+    summary = simulation.summary or {}
+    return ValuesOut(
+        simulation_id=simulation.id,
+        recipe=simulation.recipe,
+        solver=solver_of(simulation),
+        mass_kg=summary.get("mass_kg"),
+        nodes=found.nodes,
+        first_elastic_hz=found.first_elastic_hz,
+        frequencies=found.frequencies,
+        max_displacement_mm=found.max_displacement_mm,
+        max_von_mises_mpa=found.max_von_mises_mpa,
+        reactions_n=found.reactions_n,
+        probe_vectors_mm=found.probe_vectors_mm,
+        probe_strains=found.probe_strains,
+        relative_mm=found.relative_mm,
+        peak_hz=found.peak_hz,
+        peak_displacement_mm=found.peak_displacement_mm,
+        probe_peaks_hz=found.probe_peaks_hz,
+        probes_mm=found.probes_mm,
+    )
 
 
 #: 전체 다운로드에 함께 넣는 메모 — 묶음에 못 넣은 산출물과 그 까닭.
@@ -869,6 +942,34 @@ def browse_doe(path_text: str | None) -> DoeListingOut:
         truncated=found.truncated,
         is_study=found.is_study,
         roots=[str(one) for one in doe_roots()],
+    )
+
+
+def find_doe(query: str) -> DoeFindOut:
+    """공용 폴더 전체에서 스터디를 **CompCore 스터디 id(전체 · 앞 6자리 이상)나 이름으로**
+    찾는다 — 경로를 외우게 하지 않는다. CompCore 가 주는 경로는 Windows 모양이라 이 서버의
+    경로와 글자로 맞지 않고, 두 플랫폼을 잇는 열쇠는 스터디 id 다."""
+    _inside_roots(None)  # 설정이 비었으면 그 말로 거절한다
+    roots = doe_roots()
+    try:
+        found, truncated = find_studies(roots, query)
+    except ValueError as failure:
+        raise AppError(code("SIMULATIONS", 1), str(failure), status=400) from failure
+    return DoeFindOut(
+        query=query.strip(),
+        found=[
+            DoeFoundOut(
+                name=one.name,
+                path=one.path,
+                study_id=one.study_id,
+                study_name=one.study_name,
+                matched_by=one.matched_by,
+                modified_at=one.modified_at,
+            )
+            for one in found
+        ],
+        truncated=truncated,
+        roots=[str(one) for one in roots],
     )
 
 
@@ -1868,16 +1969,33 @@ def claim_next(
 
     솔버 칸이 없는 옛 작업은 `ansys` 로 본다 — 칸이 생기기 전에는 Ansys 로 풀었다(기본값이
     CalculiX 로 바뀐 뒤에도 같다 — `spec.parse_stored_spec`).
+
+    **사람마다 번갈아 집는다**(ADR 0011). 먼저 건 순서로만 집으면 DOE 200점을 먼저 건 사람
+    뒤에서 한 건을 건 사람이 200건을 기다린다(MCP 로 AI 가 DOE 를 통째로 걸기 쉬워졌다).
+    그래서 같은 솔버 안에서 ① 지금 도는 작업이 적은 사람 ② 그중 마지막으로 집힌 때가 오래된
+    사람(한 번도 안 집힌 사람이 먼저) ③ 먼저 건 것 — 순서로 집는다. 워커가 하나여도 ②가
+    번갈아 준다(①만이면 워커가 비는 순간 모두 0 이라 먼저 건 사람만 계속 집힌다). 한 사람의
+    작업끼리는 지금처럼 먼저 건 순서다.
     """
-    where = "status = 'queued' AND deleted_at IS NULL"
+    where = "s.status = 'queued' AND s.deleted_at IS NULL"
     params: dict[str, Any] = {}
     if solvers is not None:
-        where += " AND COALESCE(spec->>'solver', 'ansys') = ANY(:solvers)"
+        where += " AND COALESCE(s.spec->>'solver', 'ansys') = ANY(:solvers)"
         params["solvers"] = list(solvers)
+    running = ", ".join(f"'{one}'" for one in RUNNING_STATUSES)
+    same_owner = (
+        "r.requested_by_id IS NOT DISTINCT FROM s.requested_by_id AND r.deleted_at IS NULL "
+        "AND COALESCE(r.spec->>'solver', 'ansys') = COALESCE(s.spec->>'solver', 'ansys')"
+    )
     picked = db.execute(
         text(
-            f"SELECT id FROM simulations WHERE {where} "
-            "ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED"
+            f"SELECT s.id FROM simulations s WHERE {where} "
+            "ORDER BY "
+            f"(SELECT count(*) FROM simulations r WHERE {same_owner} "
+            f"AND r.status IN ({running})), "
+            f"(SELECT max(r.started_at) FROM simulations r WHERE {same_owner}) NULLS FIRST, "
+            "s.created_at "
+            "LIMIT 1 FOR UPDATE OF s SKIP LOCKED"
         ),
         params,
     ).scalar()

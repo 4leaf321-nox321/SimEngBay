@@ -95,6 +95,18 @@ describe('워커 · 솔버', () => {
     )
   })
 
+  it('CalculiX 워커가 하나뿐이면 한 줄로 선다고 말한다(Ansys 하나는 정상)', async () => {
+    const lonely = OVERVIEW.queues.map((one) =>
+      one.solver === 'calculix' ? { ...one, workers_alive: 1 } : one,
+    )
+    vi.mocked(simulationApi.workers).mockResolvedValue({ ...OVERVIEW, queues: lonely })
+    show()
+    await waitFor(() =>
+      expect(screen.getByText(/CalculiX 를 집는 워커가 1개입니다/)).toBeDefined(),
+    )
+    expect(screen.getByText(/지금 3건 대기/)).toBeDefined()
+  })
+
   it('신호가 끊긴 워커를 응답 없음으로 보여 준다', async () => {
     show()
     await waitFor(() => expect(screen.getByText('응답 없음')).toBeDefined())

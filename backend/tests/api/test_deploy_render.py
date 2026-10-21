@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import getpass
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,6 +16,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 DEPLOY = REPO / "deploy"
+REQUEST_TEMPLATE = REPO / "docs" / "[참고] HWAX포탈_연동_요청서.md"
 
 # 기본 — 메인 서버(포탈 + nginx)가 로드밸런서. A · B 에는 앱 · DB 만.
 HA_ENV = {
@@ -38,6 +41,9 @@ def bundle(tmp_path: Path) -> Path:
         shutil.copy(DEPLOY / name, stage / name)
     for tpl in DEPLOY.glob("*.template"):
         shutil.copy(tpl, stage / tpl.name)
+    # HWAX 연동 요청서의 틀 — build_bundle.sh 가 이 이름으로 담는다(이름이 어긋나면
+    # hwax-request 가 못 찾는다).
+    shutil.copy(REQUEST_TEMPLATE, stage / "HWAX-연동요청서.template.md")
     (stage / "BUILD_INFO").write_text(
         "app_name=Test Platform\napp_slug=testplatform\nport=8040\nmcp_port=8042\nversion=t\n",
         encoding="utf-8",
@@ -299,3 +305,197 @@ def test_setup_yes_는_묻지_않고_env_로_간다(bundle: Path, tmp_path: Path
     assert "CAD /mnt/exchange/cad" in done.stdout
     no_role = setup({key: value for key, value in env.items() if key != "SETUP_ROLE"})
     assert no_role.returncode != 0 and "SETUP_ROLE" in no_role.stderr
+
+
+# --- HWAX 포털에 붙이기(`sync_env_portal`, ADR 0009) ----------------------------------
+
+
+def _sync_portal(env_file: Path, **env: str) -> str:
+    """`sync_env_portal` 만 떼어 돌린다 — install · update 는 root 와 SIF 가 있어야 해서.
+    떼어 내는 것은 그 함수와 그것이 부르는 둘(`sed_escape` · `env_file_set`)."""
+    script = (DEPLOY / "deploy.sh").read_text(encoding="utf-8").splitlines()
+    pieces: list[str] = [next(line for line in script if line.startswith("PORTAL_ENV_KEYS="))]
+    for name in ("sed_escape", "env_file_set", "sync_env_portal"):
+        start = next(i for i, line in enumerate(script) if line.startswith(f"{name}() {{"))
+        end = start if script[start].rstrip().endswith("}") else script.index("}", start)
+        pieces.extend(script[start : end + 1])
+    program = "\n".join(
+        ["set -euo pipefail", 'info() { echo "==> $*"; }', *pieces, "sync_env_portal"]
+    )
+    got = subprocess.run(
+        ["bash", "-c", program],
+        env={
+            "PATH": os.environ["PATH"],
+            "ENV_FILE": str(env_file),
+            "APP_SLUG": "testplatform",
+            **env,
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return got.stdout
+
+
+def _values(env_file: Path) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            found.setdefault(key, []).append(value)
+    return found
+
+
+def test_포털_설정은_준_것만_env_에_적고_접두어를_더한다(tmp_path: Path) -> None:
+    """`sudo PORTAL_JWKS_URL=… PORTAL_LAUNCH_URL=… ./deploy.sh update` — 예시의 주석 선언을
+    살려 그 자리에 적고, 포털 nginx 가 /<id>/ 를 벗겨 넘기므로 접두어 · 프록시 믿기를
+    더한다."""
+    env_file = tmp_path / ".env"
+    shutil.copy(DEPLOY / ".env.production.example", env_file)
+    jwks = "http://portal.example:8088/.well-known/jwks.json"
+    launch = "https://portal.example/launch/testplatform"
+    _sync_portal(env_file, PORTAL_JWKS_URL=jwks, PORTAL_LAUNCH_URL=launch)
+    values = _values(env_file)
+    assert values["PORTAL_JWKS_URL"] == [jwks]
+    assert values["PORTAL_LAUNCH_URL"] == [launch]
+    assert values["PUBLIC_PATH"] == ["/testplatform"]
+    assert values["TRUST_PROXY"] == ["true"]
+    assert "PORTAL_AUDIENCE" not in values  # 안 준 것은 안 적는다(비우면 slug)
+
+    # 두 번 돌려도 한 줄씩이다.
+    _sync_portal(env_file, PORTAL_JWKS_URL=jwks)
+    assert _values(env_file)["PORTAL_JWKS_URL"] == [jwks]
+
+
+def test_포털_설정을_안_주면_env_를_건드리지_않는다(tmp_path: Path) -> None:
+    """손으로 고친 `.env` 를 다음 update 가 지우지 않는다 — 접두어도 포털 id 에 맞춰 고친
+    그대로."""
+    env_file = tmp_path / ".env"
+    before = (
+        "APP_SLUG=testplatform\nPORTAL_JWKS_URL=http://hand/.well-known/jwks.json\n"
+        "PUBLIC_PATH=/hwaxapp"
+    )
+    env_file.write_text(before, encoding="utf-8")
+    _sync_portal(env_file)
+    assert env_file.read_text(encoding="utf-8") == before
+
+    # 하나만 바꿔도 손으로 적은 접두어는 그대로다(끝 개행이 없던 파일에 이어 붙이지 않는다).
+    _sync_portal(env_file, PORTAL_LAUNCH_URL="https://portal.example/launch/hwaxapp")
+    values = _values(env_file)
+    assert values["PUBLIC_PATH"] == ["/hwaxapp"]
+    assert values["PORTAL_LAUNCH_URL"] == ["https://portal.example/launch/hwaxapp"]
+    assert values["TRUST_PROXY"] == ["true"]
+
+
+def test_빈_값을_주면_포털_로그인을_끈다(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("PORTAL_JWKS_URL=http://old/.well-known/jwks.json\n", encoding="utf-8")
+    _sync_portal(env_file, PORTAL_JWKS_URL="")
+    values = _values(env_file)
+    assert values["PORTAL_JWKS_URL"] == [""]
+    assert "PUBLIC_PATH" not in values  # 끄는 길에 접두어를 더하지 않는다
+
+
+# --- HWAX 포털 연동 요청서(`deploy.sh hwax-request`, ADR 0010) --------------------------
+
+
+def _hwax_request(
+    bundle: Path, tmp_path: Path, slug: str, *, port: int, **env: str
+) -> tuple[str, Path, Path]:
+    """그 인스턴스의 요청서를 만든다 — (화면에 찍힌 것, 요청서, .env). 운영 계정으로 root
+    없이."""
+    install = tmp_path / slug
+    install.mkdir(exist_ok=True)
+    env_file = Path(env.get("DATA_DIR", str(install))) / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    if not env_file.exists():
+        # 설치가 만든 .env 의 모양 — 예시의 주석 선언(`# HEAX_SSO_SECRET=`)이 그 자리에 있다.
+        shutil.copy(DEPLOY / ".env.production.example", env_file)
+    got = subprocess.run(
+        ["bash", str(bundle / "deploy.sh"), "hwax-request"],
+        cwd=bundle,
+        env={
+            **os.environ,
+            "OPERATOR": getpass.getuser(),
+            "INSTALL_DIR": str(install),
+            "ETC": str(tmp_path / "etc"),
+            "APP_SLUG": slug,
+            "APP_PORT": str(port),
+            **env,
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return got.stdout + got.stderr, install / "HWAX-연동요청서.md", env_file
+
+
+def _secret(env_file: Path) -> str:
+    return _values(env_file)["HEAX_SSO_SECRET"][-1]
+
+
+def test_요청서는_인스턴스의_값으로_채우고_자리를_안_남긴다(
+    bundle: Path, tmp_path: Path
+) -> None:
+    """같은 코드의 인스턴스 둘 — slug · 이름 · 포트 · 접두가 각자의 것으로 들어가고, 틀의 자리
+    (`{{…}}`)와 틀 설명 상자는 남지 않는다."""
+    shown, first, _ = _hwax_request(
+        bundle, tmp_path, "vibrobay", port=8070, APP_NAME="Vibro Bay"
+    )
+    _, second, _ = _hwax_request(
+        bundle,
+        tmp_path,
+        "thermalbay",
+        port=8090,
+        APP_NAME="Thermal Bay",
+        APP_TAGLINE="열 & 유동 | 해석",
+    )
+    for doc, slug, prefix, app, mcp, other in (
+        (first, "vibrobay", "VIBROBAY", 8070, 8072, "thermalbay"),
+        (second, "thermalbay", "THERMALBAY", 8090, 8092, "vibrobay"),
+    ):
+        text = doc.read_text(encoding="utf-8")
+        assert "{{" not in text and "}}" not in text, re.findall(r"\{\{\w*\}\}", text)
+        assert "<!-- 틀" not in text and "이 파일은 틀" not in text
+        assert f"{slug}=http://<A 주소>:{app}/" in text  # 화면 라우트(끝 / = STRIP)
+        assert f'"url": "http://<A 주소>:{mcp}/mcp"' in text  # 게이트웨이 백엔드
+        assert f"{slug}:{prefix}" in text and f"{prefix}_SSO_SECRET" in text
+        assert f"{prefix}_SSO_URL=http://<A 주소>:{app}/api/auth/sso" in text
+        assert f"audience: {slug}" in text and f"url: /{slug}/api/auth/portal-callback" in text
+        assert f"gateway: [{slug}]" in text
+        assert other not in text and str(app + 20) not in text
+    # 이름 · 소개에 sed 가 뜻으로 읽는 글자(& |)가 있어도 그대로 들어간다.
+    assert "tagline: 열 & 유동 | 해석" in second.read_text(encoding="utf-8")
+    assert str(first) in shown
+
+
+def test_위임_비밀은_env_에만_있고_요청서와_화면에_없다(bundle: Path, tmp_path: Path) -> None:
+    """비밀이 없으면 만들어 `.env` 에 적는다(한 번만 — 이미 포털에 전한 값을 바꾸면 위임이 전부
+    401 이다). 요청서는 메일 · 메신저로 돈다 — 비밀도 내부 주소도 거기 없다."""
+    ha = {**HA_ENV, "DATA_DIR": str(tmp_path / "data" / "vibrobay")}
+    shown, doc, env_file = _hwax_request(bundle, tmp_path, "vibrobay", port=8070, **ha)
+    secret = _secret(env_file)
+    assert re.fullmatch(r"[0-9a-f]{64}", secret)
+    # 예시의 주석 선언을 살려 그 자리에 적었다 — 한 줄뿐이다.
+    assert _values(env_file)["HEAX_SSO_SECRET"] == [secret]
+    assert "restart" in shown  # 새 비밀은 앱이 다시 떠야 읽는다
+    text = doc.read_text(encoding="utf-8")
+    assert secret not in text and secret not in shown
+    # 내부 주소는 파일에 없다(화면에는 따로 전할 것으로 찍힌다). 남는 것은 포털 박스 안의
+    # 루프백뿐.
+    assert "10.0.0.1" in shown and "10.0.0.2" in shown
+    assert set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", text)) <= {"127.0.0.1"}
+
+    # 다시 만들어도 비밀은 그대로다.
+    shown, _, _ = _hwax_request(bundle, tmp_path, "vibrobay", port=8070, **ha)
+    assert _secret(env_file) == secret and _values(env_file)["HEAX_SSO_SECRET"] == [secret]
+    assert "새로 만들어" not in shown
+
+
+def test_요청서의_위험_도구는_틀과_같다(bundle: Path, tmp_path: Path) -> None:
+    """포털 담당이 `_INVOKE_DENY_EXACT` 에 넣을 목록이 채운 요청서에도 그대로 실린다(틀과
+    서버의 목록이 같은지는 MCP 시험이 본다)."""
+    _, doc, _ = _hwax_request(bundle, tmp_path, "vibrobay", port=8070)
+    text = doc.read_text(encoding="utf-8")
+    block = text[text.index("<!-- 위험 도구: 시작 -->") : text.index("<!-- 위험 도구: 끝 -->")]
+    assert set(re.findall(r'"([a-z_]+)"', block)) == {"job_cancel"}

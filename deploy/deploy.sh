@@ -47,9 +47,13 @@ VERSION="$(bundle version)"
 # 'render' 는 아무것도 바꾸지 않는다 — root 없이 유닛 · nginx · keepalived 설정을 보여 준다.
 RENDER_ONLY=0; [[ "${1:-}" =~ ^(render|-h|--help|help)$ ]] && RENDER_ONLY=1
 [[ "${1:-}" == "setup" && " ${*:2} " == *" --plan "* ]] && RENDER_ONLY=1
-[[ $EUID -eq 0 || $RENDER_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
+# 'hwax-request' 는 그 설치의 .env 와 설치 폴더만 만진다 — 둘 다 운영 계정의 것이라 그 계정으로는
+# sudo 없이도 된다(시험도 그 길로 돈다).
+OWN_FILES_ONLY=0; [[ "${1:-}" == "hwax-request" ]] && OWN_FILES_ONLY=1
+[[ $EUID -eq 0 || $RENDER_ONLY -eq 1 || $OWN_FILES_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
 
 OPERATOR="${OPERATOR:-${SUDO_USER:-}}"
+[[ -z "$OPERATOR" && $OWN_FILES_ONLY -eq 1 && $EUID -ne 0 ]] && OPERATOR="$(id -un)"
 [[ -n "$OPERATOR" && "$OPERATOR" != "root" ]] \
     || err "운영 계정을 알 수 없습니다. 일반 사용자로 sudo 하거나 OPERATOR=<이름> 을 주세요."
 [[ $RENDER_ONLY -eq 1 ]] || id "$OPERATOR" >/dev/null 2>&1 || err "그런 계정이 없습니다: $OPERATOR"
@@ -400,7 +404,7 @@ sync_env_identity() {
 # 이중화의 두 서버가 함께 쓰는 한 벌(DATA_DIR)인데 기록은 서버마다라, 기록에서 옮겨 적으면 한쪽 서버의
 # update 가 그 서버의 기록으로 다른 쪽이 적은 값을 덮는다.
 # 게이트웨이 위임의 허용 주소(`HEAX_SSO_ALLOWED_IPS`)도 같은 길이다. **비밀(`HEAX_SSO_SECRET`)은 env 로 받지
-# 않는다** — 아래 info 가 값을 찍고 셸 기록에 남는다. 비밀은 `.env` 를 손으로 고쳐 적는다(README 9절).
+# 않는다** — 아래 info 가 값을 찍고 셸 기록에 남는다. 비밀은 `hwax-request` 가 만들어 `.env` 에만 적는다.
 PORTAL_ENV_KEYS=(PORTAL_JWKS_URL PORTAL_LAUNCH_URL PORTAL_AUDIENCE PORTAL_ISSUER HEAX_SSO_ALLOWED_IPS)
 
 # $1=키 $2=값 — 활성 줄이 있으면 바꾸고, 주석 선언(`# KEY=`, 예시 파일의 것)이 있으면 그 줄을 살리고, 없으면
@@ -438,6 +442,102 @@ sync_env_portal() {
     if ! grep -q '^TRUST_PROXY=' "$ENV_FILE"; then
         env_file_set TRUST_PROXY true
         info ".env: TRUST_PROXY=true — 포털 nginx 뒤라 https 판정(쿠키 Secure) · 접속 주소를 그쪽에서 받는다"
+    fi
+}
+
+# ───────────────────────── HWAX 포털 연동 요청서 (ADR 0009 · 0010) ─────────────────────────
+# `sudo APP_SLUG=<slug> ./deploy.sh hwax-request` — 요청서 틀(저장소 `docs/[참고] HWAX포탈_연동_요청서.md`,
+# 번들에서는 이 옆의 `HWAX-연동요청서.template.md`)을 **이 설치의 값**(slug · 이름 · 포트 · 접두)으로 채워
+# `$INSTALL_DIR/HWAX-연동요청서.md` 에 쓴다. 손으로 고쳐 쓰면 다른 인스턴스의 포트가 남는다 — 그 한 줄이
+# 포털의 라우트가 된다.
+#
+# 게이트웨이 위임 비밀(`HEAX_SSO_SECRET`)이 `.env` 에 없으면 여기서 만든다(있으면 그대로 — 이미 포털에 전한
+# 값을 바꾸면 그 순간 위임이 전부 401 이다). **비밀과 내부 주소는 요청서에 쓰지 않는다** — 그 파일은 메일 ·
+# 메신저로 돈다. 둘 다 담당에게 따로 전한다(화면에 읽는 길만 찍는다).
+HWAX_REQUEST_TEMPLATE="HWAX-연동요청서.template.md"
+
+hwax_request_template() {
+    local bundled="$HERE/$HWAX_REQUEST_TEMPLATE" repo="$HERE/../docs/[참고] HWAX포탈_연동_요청서.md"
+    if [[ -f "$bundled" ]]; then printf '%s' "$bundled"
+    elif [[ -f "$repo" ]]; then printf '%s' "$repo"
+    else err "요청서 틀이 없습니다 — $bundled (릴리스 번들에서 실행하세요)"; fi
+}
+
+env_file_get() { sed -n "s|^$1=||p" "$ENV_FILE" | tail -n1; }
+
+cmd_hwax_request() {
+    [[ -f "$ENV_FILE" ]] || err ".env 가 없습니다($ENV_FILE) — 이 인스턴스를 먼저 install 하세요"
+    [[ -d "$INSTALL_DIR" ]] || err "설치 폴더가 없습니다($INSTALL_DIR) — 이 인스턴스를 먼저 install 하세요"
+    local template out tmp prefix tagline made=0
+    template="$(hwax_request_template)"
+    out="$INSTALL_DIR/HWAX-연동요청서.md"
+    # 게이트웨이의 env 접두 — 환경변수 이름이라 대문자 · 밑줄(slug 에는 하이픈이 없지만 규칙대로).
+    prefix="$(printf '%s' "$APP_SLUG" | tr 'a-z-' 'A-Z_')"
+    tagline="${APP_TAGLINE:-(한 줄 소개 — 포털 담당과 정한다)}"
+
+    if [[ -z "$(env_file_get HEAX_SSO_SECRET)" ]]; then
+        local secret
+        secret="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+        [[ "$secret" =~ ^[0-9a-f]{64}$ ]] || err "위임 비밀을 만들지 못했습니다(openssl · python3)"
+        env_file_set HEAX_SSO_SECRET "$secret"
+        unset secret
+        made=1
+    fi
+
+    tmp="$out.tmp"
+    # 틀 설명 상자는 뺀다 · 연달아 빈 줄은 하나로(`cat -s`).
+    sed -e '/<!-- 틀: 시작 -->/,/<!-- 틀: 끝 -->/d' \
+        -e "s|{{ID}}|$APP_SLUG|g" \
+        -e "s|{{NAME}}|$(sed_escape "$APP_NAME")|g" \
+        -e "s|{{TAGLINE}}|$(sed_escape "$tagline")|g" \
+        -e "s|{{APP_PORT}}|$APP_PORT|g" \
+        -e "s|{{MCP_PORT}}|$MCP_PORT|g" \
+        -e "s|{{PREFIX}}|$prefix|g" \
+        -e "s|{{DATE}}|$(date +%F)|g" \
+        -e "s|{{VERSION}}|$(sed_escape "$VERSION")|g" \
+        "$template" | cat -s > "$tmp"
+    if grep -n '{{[A-Z_]*}}' "$tmp" >&2; then
+        rm -f "$tmp"
+        err "요청서 틀에 채우지 못한 자리가 있습니다(위) — 틀과 deploy.sh 의 자리 목록이 어긋났습니다"
+    fi
+    mv "$tmp" "$out"
+    chmod 644 "$out"
+    [[ $EUID -eq 0 ]] && { chown "$OPERATOR:$OPERATOR" "$out" 2>/dev/null || true; }
+
+    info "요청서: $out"
+    echo "    $APP_NAME ($APP_SLUG) · 앱 :$APP_PORT · MCP :$MCP_PORT · 게이트웨이 접두 $prefix — 포털 담당에게 이 파일을 보냅니다."
+    echo
+    echo "  따로 전할 것(파일에 없다):"
+    case "$HA_ROLE" in
+        master) echo "    · 서버 주소 — A(주, 이 서버) ${SELF_IP:-?} · B(대기) ${PEER_IP:-?}" ;;
+        backup) echo "    · 서버 주소 — A(주) ${PEER_IP:-?} · B(대기, 이 서버) ${SELF_IP:-?}" ;;
+        *)      echo "    · 서버 주소 — 이 서버 ${SELF_IP:-?} (단독)" ;;
+    esac
+    echo "    · 위임 비밀 — sudo grep '^HEAX_SSO_SECRET=' $ENV_FILE   (안전한 길로 — 메신저 평문 말고)"
+    if [[ $made -eq 1 ]]; then
+        echo
+        warn "위임 비밀을 새로 만들어 $ENV_FILE 에 적었습니다 — 앱이 읽게 다시 띄우세요:"
+        echo "    sudo APP_SLUG=$APP_SLUG ./deploy.sh restart${HA_ROLE:+   (이중화면 다른 서버에서도)}"
+    fi
+    # 게이트웨이가 우리 MCP 를 부르려면 — 바인딩 · Host 검사.
+    if [[ "$MCP_ENABLED" != "1" ]]; then
+        warn "MCP 가 꺼져 있습니다(MCP_ENABLED=$MCP_ENABLED) — 게이트웨이가 붙을 MCP 가 없습니다."
+    elif [[ "$MCP_HOST" == "127.0.0.1" || "$MCP_HOST" == "localhost" || "$MCP_HOST" == "::1" ]]; then
+        warn "MCP 가 이 서버 안에만 열려 있습니다(MCP_HOST=$MCP_HOST) — 게이트웨이가 못 닿습니다:"
+        echo "    sudo APP_SLUG=$APP_SLUG MCP_HOST=0.0.0.0 ./deploy.sh update"
+    fi
+    if [[ -n "$MCP_ALLOWED_HOSTS" ]]; then
+        warn "MCP_ALLOWED_HOSTS 가 있습니다 — 게이트웨이가 부르는 주소(포트까지, 예: <A 주소>:$MCP_PORT)가 그 안에 있어야 합니다(없으면 421)."
+        echo "    지금: $MCP_ALLOWED_HOSTS"
+    fi
+    if [[ -z "$(env_file_get PORTAL_JWKS_URL)" ]]; then
+        echo
+        info "포털 담당에게 JWKS 주소(요청서 4-2)를 받으면:"
+        echo "    sudo APP_SLUG=$APP_SLUG PORTAL_JWKS_URL=<받은 주소> PORTAL_LAUNCH_URL=https://hwax.sec.samsung.net/launch/$APP_SLUG ./deploy.sh update"
+    fi
+    local path; path="$(env_file_get PUBLIC_PATH)"
+    if [[ -n "$path" && "$path" != "/$APP_SLUG" ]]; then
+        warn "PUBLIC_PATH=$path 가 slug 와 다릅니다 — 요청서는 포털 id 를 slug($APP_SLUG)로 적습니다(이름은 하나로 — 요청서 2절)."
     fi
 }
 
@@ -1186,6 +1286,8 @@ $APP_NAME 배포 스크립트 ($VERSION)
 
   HWAX 포털에 붙이기 — sudo PORTAL_JWKS_URL=<포털 JWKS> PORTAL_LAUNCH_URL=<포털>/launch/<id> ./deploy.sh update
     (준 것만 .env 에 적는다 · 빈 값이면 비운다 · PUBLIC_PATH/TRUST_PROXY 가 없으면 /<slug> · true 를 더한다)
+  hwax-request  포털 담당에게 보낼 연동 요청서를 이 설치의 값으로 채워 $INSTALL_DIR/HWAX-연동요청서.md 에
+                (게이트웨이 위임 비밀이 .env 에 없으면 만든다 — 비밀 · 내부 주소는 파일에 안 쓴다)
 MSG
 }
 
@@ -1204,6 +1306,7 @@ case "${1:-}" in
     db-status)      cmd_db status ;;
     lb)             ensure_dirs; setup_lb ;;
     render)         cmd_render ;;
+    hwax-request)   cmd_hwax_request ;;
     ""|auto)        cmd_auto    ;;
     -h|--help|help) usage       ;;
     *)              usage; exit 1 ;;

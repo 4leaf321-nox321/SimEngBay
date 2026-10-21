@@ -32,10 +32,11 @@ tar xzf <slug>-<태그>.tar.gz
 cd <slug>-<태그>
 ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
-#  app.service.template  worker.service.template
+#  app.service.template  worker.service.template  mcp.service.template
 #  backup.service.template  backup.timer.template
 #  sync.service.template  sync.timer.template   (온톨로지 수신 타이머)
-#  .env.example  BUILD_INFO  README.md  쉬운-설치.md
+#  .env.example  BUILD_INFO  README.md  쉬운-설치.md  HWAX-연동요청서.template.md(9절 — hwax-request 가 채운다)
+#  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠 — 5b)
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
 ```
 
@@ -151,6 +152,7 @@ sudo ./deploy.sh install
 4. 마이그레이션 → 설치 시드
 5. systemd 유닛 렌더 → `enable` → `start`
 6. `/api/health` 확인
+7. MCP 서버 설치(별도 venv + `<slug>-mcp` 유닛) — 아래 「5b. MCP 서버」. 실패해도 백엔드 배포는 그대로다
 
 > 관리자 **임시 비밀번호가 화면에 한 번만** 찍힌다. 받아 적어 전달한다.
 > 첫 로그인에서 변경이 강제된다.
@@ -191,6 +193,23 @@ journalctl -u '<slug>-worker@2' -n 5    # 「솔버 calculix」 가 찍힌다
 
 파일이 없는 워커는 **전부** 집는다(설정을 안 건드린 설치는 그대로 돈다). 워커 수 자체는
 `WORKER_COUNT` 로 정한다(한 번 주면 기억한다).
+
+**여러 사람이 함께 쓰면 워커 수가 곧 동시에 도는 해석 수다.** 기본 `WORKER_COUNT=1` 이면 모든
+해석이 한 줄로 선다. 줄은 **사람마다 번갈아** 선다(ADR 0011 — 같은 솔버 안에서 도는 작업이 적은
+사람 · 오래 못 받은 사람부터 집는다. DOE 수백 점을 건 사람 뒤에서 한 건을 건 사람이 다 기다리지
+않는다). 그래도 줄 자체는 워커 수만큼만 움직이므로 **CalculiX 워커는 코어 수에 맞춘다** — 워커 수 ×
+한 해석이 쓰는 코어(Ansys 는 `SOLVER_PROCESSES`)가 기계의 코어를 넘지 않게. 서버 화면의 「워커 ·
+솔버」 는 CalculiX 워커가 하나면 그렇다고 말하고, 작업 상세(와 MCP `job_get`)는 대기 중인 작업이
+줄의 어디쯤인지 보여 준다.
+
+```bash
+# 예: 16코어 서버 — Ansys 하나 + CalculiX 일곱(한 해석 2코어 남짓)
+sudo APP_SLUG=<slug> WORKER_COUNT=8 ./deploy.sh update
+cd ~/apps/<slug>
+echo SIMULATION_SOLVERS=ansys > worker-1.env
+for i in 2 3 4 5 6 7 8; do echo SIMULATION_SOLVERS=calculix > worker-$i.env; done
+sudo systemctl restart '<slug>-worker@*'
+```
 
 **CalculiX 가 이미지에 있는지**는 서버 화면의 「워커 · 솔버」 카드(깔린 도구 — 워커가 기동 때
 찾은 것)에서 보고, 셸에서는 이렇게 본다:
@@ -350,6 +369,34 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 
 되묻는 자리가 있으므로 **원격에서는 `ssh -t`** 로 붙는다. 아니면 그 물음에서
 읽기가 실패하고, 아무것도 안 지운 채 오류로 끝난다.
+
+---
+
+## 5b. MCP 서버 (Claude 연동)
+
+`deploy.sh install`/`update` 가 **MCP 서버까지 설치**한다 — 별도 venv + (번들에 동봉된 휠로) **오프라인 pip
+설치** + `<slug>-mcp` systemd 서비스. 사용자는 Claude 에서 해석을 걸고, 결과를 읽고, 설계점 · 실측과 견준다
+(도구 20개 — 저장소의 `mcp_server/README.md`, 결정은 `docs/adr/0010-해석용-MCP.md`).
+
+- **상태**: `sudo systemctl status <slug>-mcp` / 로그 `journalctl -u <slug>-mcp -f`
+- **끄기**: `sudo MCP_ENABLED=0 ./deploy.sh update` (유닛은 별도 `systemctl disable --now <slug>-mcp`)
+- **주소**: `http://<서버>:<앱포트+2>/mcp` — **`<slug>` 접두어가 붙지 않는다.** 접두어가 붙는 형태
+  (`https://<도메인>/<slug>/mcp`)는 **메인 서버 nginx 뒤에서만** 성립한다(조각이 그 길을 MCP 로 넘긴다).
+  화면(「내 정보 › AI 도구 연결」)이 보여 주는 주소는 **들어온 주소로 판단한다**: 표준 포트(80 · 443)면 접두어
+  형태, 앱 포트로 직접이면 `+2` 형태. 그 둘로 안 되는 구성(표준이 아닌 포트의 프록시, **HWAX 포털 뒤**)은
+  `.env` 에 `MCP_PUBLIC_URL=http://<서버>:<MCP 포트>/mcp` 를 적어 정본을 준다.
+- **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2**(8072). 바꾸려면 `sudo MCP_PORT=<포트> ./deploy.sh update`.
+- **살아 있나 보기**: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<mcp포트>/mcp` → **406 · 400 이면
+  정상**(스트리밍 규약이라 평범한 GET 에는 그렇게 답한다), `404` 면 앱에 물은 것, 연결 실패면 서비스가 안 떴다.
+- **외부 노출**: 기본 `127.0.0.1`(로컬만). 사내망 · HWAX 게이트웨이에 열려면 **한 번만**
+  `sudo MCP_HOST=0.0.0.0 ./deploy.sh update` — 이후 `update` 는 설치된 유닛에서 값을 읽어 유지한다.
+- **Host 보호**: 비-localhost 로 열면 DNS rebinding 보호를 끈다(사내망 가정 — 인증은 백엔드가 토큰으로 한다).
+  더 단단히 하려면 `MCP_ALLOWED_HOSTS="<서버호스트>:<mcp포트>,<서버IP>:<mcp포트>"` — 지정한 Host 만 받고 나머지는
+  421 이다(이 값도 유닛에 남는다).
+- **사용자 등록(각자)** — 토큰은 화면의 「내 정보」 에서 발급(해석을 걸게 하려면 `simulations:write` 범위도).
+  「AI 도구 연결」 이 Claude Code · Desktop · Gemini · Codex 용 명령을 그 토큰으로 채워 준다.
+- **오프라인 휠이 없던 빌드**라면 MCP 만 설치가 건너뛰어진다(백엔드는 정상). 그땐 호스트에서
+  `cd <INSTALL_DIR>/mcp_server && ./venv/bin/pip install -r requirements.txt` 후 서비스 재기동.
 
 ---
 
@@ -581,9 +628,10 @@ sudo ./deploy.sh status
 ## 9. HWAX 포털에 붙이기 — `https://hwax.sec.samsung.net/<id>/` · 포털 로그인 · 게이트웨이 위임
 
 HWAX 포털(사내 앱 모음)이 `/<id>/` 경로로 이 앱을 넘겨 주고, 타일을 누르면 포털에 로그인한 그 사람으로 들어오게 한다
-(jwt-handoff). 포털의 Claude 게이트웨이가 사람마다 그 사람 명의의 토큰을 받아 가는 창구(사람별 위임)도 있다 —
+(jwt-handoff), 사람들의 Claude 는 **포털의 MCP 게이트웨이**가 사람마다 그 사람 명의의 토큰을 받아(사람별 위임) 이
+설치의 MCP 를 부른다 —
 Standard Platform · ComponentCore 와 **같은 네 창구, 같은 계약**이다. 결정과 까닭은 저장소의
-`docs/adr/0009-HWAX-포털에-붙이기.md`. **이중화 조각(`main-server-nginx.conf`)은 쓰지 않는다** — 포털 nginx 는 경로
+`docs/adr/0009-HWAX-포털에-붙이기.md` · `0010-해석용-MCP.md`. **이중화 조각(`main-server-nginx.conf`)은 쓰지 않는다** — 포털 nginx 는 경로
 목록으로 location 을 만든다. 포털의 앱 id `<id>` 는 **`APP_SLUG` 와 같게** 둔다(타일 id · audience · 위임 키가 전부
 그 하나다).
 
@@ -594,23 +642,30 @@ Standard Platform · ComponentCore 와 **같은 네 창구, 같은 계약**이�
 | `POST /api/auth/sso/verify` | 연결 점검 — 주소 · 비밀만 보고 204(토큰 · 계정을 안 건드린다) | 〃 |
 | `POST /api/auth/sso/revoke` | 그 사람의 위임 토큰 회수 | 〃 |
 
-**SimEngBay 에는 아직 MCP 서버가 없다** — 위임 창구는 서 있지만 게이트웨이가 부를 도구가 없다. 포털 담당에게 게이트웨이
-백엔드(MCP 주소) 등록은 아직 요청하지 않는다. 해석용 MCP 를 만들면 그때 이 절에 더한다(위임 쪽은 바뀌지 않는다).
+포털 쪽에 할 일은 **요청서 한 장**에 다 있다 — `deploy.sh hwax-request` 가 이 설치의 slug · 이름 · 포트로 채운다
+(화면 라우트 · 큰 요청 갈래 · 타일 · 게이트웨이 MCP 백엔드 · 사람별 위임 쌍 · 권한 표 · 위험 도구). **MCP 를 포털
+nginx 경로(`/<id>/mcp`)로 열어 달라고 하지 않는다** — 게이트웨이가 MCP 포트를 직접 부른다.
 
 ### 9.1 순서
 
 ```bash
-# ① 게이트웨이 위임 비밀 — .env 에 손으로 적는다(env 로 주지 않는다: 화면과 셸 기록에 남는다)
-openssl rand -hex 32                                      # → .env 의 HEAX_SSO_SECRET=<그 값>
-sudo APP_SLUG=<slug> ./deploy.sh restart                  # 앱이 읽게(이중화면 다른 서버에서도)
-# ② 포털 담당에게 — 화면 라우트 <id>=http://<A>:<앱 포트>/ · jwt-handoff 타일 · 위임 주소
-#    http://<A>:<앱 포트>/api/auth/sso, 그리고 A · B 의 내부 주소와 위임 비밀은 **따로**(안전한 길로)
-# ③ 포털 담당에게서 JWKS 주소를 받으면 — 준 것만 .env 에 적는다
+# ① 요청서 + 게이트웨이 위임 비밀 — 비밀이 .env 에 없으면 만들어 적는다(있으면 그대로)
+sudo APP_SLUG=<slug> ./deploy.sh hwax-request          # → ~/apps/<slug>/HWAX-연동요청서.md
+sudo APP_SLUG=<slug> ./deploy.sh restart               # 비밀을 새로 만들었으면 — 앱이 읽게(이중화면 다른 서버에서도)
+# ② 게이트웨이가 MCP 에 닿게(한 번 — 유닛에 남는다). 이중화면 이미 0.0.0.0 이다
+sudo APP_SLUG=<slug> MCP_HOST=0.0.0.0 ./deploy.sh update
+# ③ 요청서를 포털 담당에게 — A · B 주소와 위임 비밀은 **따로**(①이 화면에 「따로 전할 것」 으로 찍는다)
+sudo grep '^HEAX_SSO_SECRET=' ~<운영 계정>/apps/<slug>/.env   # (이중화면 /data/<공통폴더>/<slug>/.env)
+# ④ 포털 담당에게서 JWKS 주소를 받으면 — 준 것만 .env 에 적는다
 sudo APP_SLUG=<slug> PORTAL_JWKS_URL=http://<포털>:8088/.well-known/jwks.json \
      PORTAL_LAUNCH_URL=https://hwax.sec.samsung.net/launch/<slug> ./deploy.sh update
-# ④ (선택) 위임 발급을 포털 박스 주소에서만 받게
+# ⑤ (선택) 위임 발급을 포털 박스 주소에서만 받게
 sudo APP_SLUG=<slug> HEAX_SSO_ALLOWED_IPS=<포털 박스 주소> ./deploy.sh update
 ```
+
+`hwax-request` 는 그 설치의 `.env` 와 설치 폴더만 만진다 — 운영 계정으로 sudo 없이도 된다(`./deploy.sh hwax-request`).
+요청서에는 위임 비밀도 내부 주소도 **안 쓴다**(메일 · 메신저로 도는 파일이다). 이미 포털에 전한 비밀은 바꾸지 않는다 —
+바꾸면 그 순간 게이트웨이의 위임이 전부 401 이다(바꿀 때는 포털 담당과 같이: `.env` 에서 지우고 ① 다시 → 새 값을 전한다).
 
 `deploy.sh` 는 `PORTAL_*` · `HEAX_SSO_ALLOWED_IPS` 를 **준 것만** `.env` 에 적고(빈 값을 주면 비운다 — 끄는 길),
 `PORTAL_JWKS_URL` 이 있는데 `PUBLIC_PATH` · `TRUST_PROXY` 가 없으면 `/<slug>` · `true` 를 더한다. 나머지는 `.env` 를
@@ -623,10 +678,13 @@ sudo APP_SLUG=<slug> HEAX_SSO_ALLOWED_IPS=<포털 박스 주소> ./deploy.sh upd
 | `PORTAL_JWKS_URL` | 포털 담당이 준 주소 | **비우면 포털 로그인이 꺼진다** — 콜백이 404 JSON |
 | `PORTAL_LAUNCH_URL` | `https://hwax.sec.samsung.net/launch/<id>` | 로그인 화면의 「HWAX 포털로 로그인」. 비우면 단추가 없다 |
 | `PORTAL_AUDIENCE` · `PORTAL_ISSUER` | (보통 안 적는다) | 기본이 `APP_SLUG` · `https://hwax.sec.samsung.net` — 포털 id · 포털 `JWT_ISSUER` 가 다를 때만 |
-| `HEAX_SSO_SECRET` | 64자 난수 | **비우면 게이트웨이 위임이 꺼진다** — 위임 창구 셋이 404 JSON |
+| `HEAX_SSO_SECRET` | `hwax-request` 가 만든다(64자) | **비우면 게이트웨이 위임이 꺼진다** — 위임 창구 셋이 404 JSON, 포털의 Claude 가 이 설치를 못 부른다 |
 | `HEAX_SSO_ALLOWED_IPS` | 포털 박스 주소(쉼표 · CIDR) | 주소를 보지 않는다(비밀만). 못 읽는 값이 있으면 **모두 거절** |
+| `MCP_PUBLIC_URL` | `http://<이 서버>:<MCP 포트>/mcp` | 자기 토큰으로 직접 붙는 사람의 안내 주소(5b). 비우면 화면이 없는 길(`https://<포털>/<id>/mcp`)을 짐작한다 |
 
-방화벽: 포털 박스(nginx · 게이트웨이) → 이 서버 `:<앱 포트>`(화면 · 위임). 이 서버 → 포털 `:8088`(JWKS).
+방화벽: 포털 박스(nginx · 게이트웨이) → 이 서버 `:<앱 포트>`(화면 · 위임 발급) · `:<MCP 포트>`(게이트웨이 → MCP). 이 서버 →
+포털 `:8088`(JWKS). `MCP_ALLOWED_HOSTS` 를 적어 둔 설치면 게이트웨이가 부르는 주소를 **포트까지**(`<이 서버 주소>:<MCP 포트>`,
+B 도) 넣는다 — 아니면 MCP 가 421 로 거절한다.
 
 ### 9.2 확인
 
@@ -658,7 +716,8 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -X POST \
 
 화면에서는 **관리 › 서버 › 「HWAX 포털 로그인」**(시스템 관리자) — 켜졌나 · 포털 공개 키를 지금 받아 보고 닿나 · kid · 마지막
 오류 · 설정끼리 안 맞는 것(접두어 없음 · `TRUST_PROXY` 꺼짐 …), 그리고 「게이트웨이 위임」 — 켜졌나 · 허용 주소 · 범위 ·
-지금 사용 중인 위임 토큰 수 · 마지막 발급 · 마지막 거절(때 · 숫자 · 까닭).
+지금 사용 중인 위임 토큰 수 · 마지막 발급 · 마지막 거절(때 · 숫자 · 까닭). 그다음 포털 타일을 눌러 첫 화면이 뜨는지,
+포털의 Claude 에서 `<id>_whoami` 가 그 사람인지 본다.
 
 | 증상 | 원인 |
 | --- | --- |
@@ -667,4 +726,7 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -X POST \
 | 「유효 시간을 벗어났습니다」 | 이 서버와 포털의 시계가 10초 넘게 어긋났다 — `timedatectl` |
 | 로그인 뒤 포털 첫 화면으로 간다 | `PUBLIC_PATH` 가 없다(9.1) |
 | 처음 들어온 사람이 「가입 승인을 기다립니다」 | 정상 — 관리 › 계정의 승인 대기(홈 「남은 일」). 희망 부서가 없어 「승인」 이 부서를 묻는다 |
+| 포털의 Claude 가 「… 자격증명으로 호출하지 못했습니다 (SSO 403: …)」 | 위임 거절 — 괄호 안이 까닭(승인된 계정 없음 · 대기 · 정지 · 주소). 서버 화면의 「마지막 거절」 · `journalctl -u <slug> \| grep '게이트웨이 위임 거절'` |
+| 포털의 Claude 가 「… (SSO 401: …)」 | 게이트웨이의 비밀과 `HEAX_SSO_SECRET` 이 다르다 — 포털 담당과 맞춘다 |
+| 포털의 Claude 에 이 설치의 도구가 없다 | 게이트웨이가 MCP 에 못 닿는다 — `MCP_HOST` 가 127.0.0.1 · 방화벽 `:<MCP 포트>` · `MCP_ALLOWED_HOSTS` 에 게이트웨이가 부르는 주소(포트까지)가 없다(421) |
 | 위임 토큰이 「내 정보」 에 「HWAX 게이트웨이(gateway)」 로 보인다 | 정상 — 게이트웨이가 다시 받으면 지난 것은 회수된다. 폐기해도 게이트웨이가 다시 받는다 — 사람을 끊는 것은 계정 정지 |

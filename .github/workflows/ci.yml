@@ -81,11 +81,13 @@ jobs:
           gmsh -info | head -3
           ccx -v | head -2
 
+      # **`mcp_server` 도 함께 본다.** 저장소 루트에 있어서 backend 안의 검사에 안 걸리는데,
+      # 그러면 그 파일만 규칙 밖에 남고 조용히 갈라진다.
       - name: 린트 (ruff)
         working-directory: backend
         run: |
-          python -m ruff check . --config pyproject.toml
-          python -m ruff format --check . --config pyproject.toml
+          python -m ruff check . ../mcp_server --config pyproject.toml
+          python -m ruff format --check . ../mcp_server --config pyproject.toml
 
       - name: 타입 (mypy strict)
         working-directory: backend
@@ -101,6 +103,18 @@ jobs:
         run: |
           createdb -h localhost -U postgres '${{ steps.platform.outputs.slug }}_test'
           python -m pytest
+
+      # **MCP 서버는 환경을 갈라 본다**(ADR 0010).
+      #
+      # `mcp` 를 백엔드 개발 환경에 깔면 `starlette.testclient` 가 쓰는 HTTP 스택이 바뀌어 그쪽
+      # 시험이 흔들린다(Standard Platform 실측). 그렇다고 안 보면 **`mcp` 가 API 를 바꾸는 날
+      # 붙여 보기 전까지 아무도 모른다**(2.x 에서 FastMCP → MCPServer — 그래서 1.x 로 고정).
+      # 진짜 앱에 붙여 보는 쪽은 위의 백엔드 pytest 가 가짜 mcp 로 이미 했다(`test_mcp_tools.py`).
+      - name: MCP 서버 (갈라진 환경)
+        run: |
+          python -m venv /tmp/mcpvenv
+          /tmp/mcpvenv/bin/pip install --quiet -r mcp_server/requirements.txt pytest
+          /tmp/mcpvenv/bin/python -m pytest mcp_server/tests -q
 
       # **마이그레이션이 모델과 어긋났는지 본다.** 시험은 모델로 표를 만들기 때문에
       # 그 어긋남을 못 잡는다 — 그리고 그것은 배포하고 나서야 500 으로 드러난다.

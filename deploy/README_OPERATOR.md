@@ -166,6 +166,8 @@ sudo ./deploy.sh install
 ```bash
 curl http://127.0.0.1:<포트>/api/health
 sudo journalctl -u <slug> -f
+# 화면: http://<서버>:<포트>/<slug>/ — 단독이든 이중화든 slug 아래다(Standard Platform · CompCore 와 같은 모양,
+# HWAX 포털의 /<id>/ 와도 같다). 접두어 없이(http://<서버>:<포트>/) 들어와도 앱이 받는다.
 # 해석 작업 워커 — 이것이 안 돌면 작업이 「대기」 에서 움직이지 않는다.
 systemctl status '<slug>-worker@1'
 ```
@@ -388,8 +390,11 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 - **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2**(8072). 바꾸려면 `sudo MCP_PORT=<포트> ./deploy.sh update`.
 - **살아 있나 보기**: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<mcp포트>/mcp` → **406 · 400 이면
   정상**(스트리밍 규약이라 평범한 GET 에는 그렇게 답한다), `404` 면 앱에 물은 것, 연결 실패면 서비스가 안 떴다.
-- **외부 노출**: 기본 `127.0.0.1`(로컬만). 사내망 · HWAX 게이트웨이에 열려면 **한 번만**
-  `sudo MCP_HOST=0.0.0.0 ./deploy.sh update` — 이후 `update` 는 설치된 유닛에서 값을 읽어 유지한다.
+- **외부 노출**: 기본 `0.0.0.0` — 사람들의 Claude · HWAX 게이트웨이가 밖에서 부르라고 있다(단독 · 이중화 모두,
+  Standard Platform · CompCore 운영과 같은 모양). 인증은 백엔드가 토큰으로 하고 앱 포트와 드러나는 면이 같다.
+  이 서버 안에서만 쓰려면 `sudo MCP_HOST=127.0.0.1 ./deploy.sh update` — 고른 값은 설치 기록
+  (`/etc/platform-instances/<slug>.conf` 의 `MCP_HOST`)에 남아 다음 `update` 가 지킨다. v0.14.0 까지는 단독 서버의
+  기본이 `127.0.0.1` 이었다 — 그렇게 깔린 서버는 다음 `update` 가 연다(사람이 고른 값이 아니라서).
 - **Host 보호**: 비-localhost 로 열면 DNS rebinding 보호를 끈다(사내망 가정 — 인증은 백엔드가 토큰으로 한다).
   더 단단히 하려면 `MCP_ALLOWED_HOSTS="<서버호스트>:<mcp포트>,<서버IP>:<mcp포트>"` — 지정한 Host 만 받고 나머지는
   421 이다(이 값도 유닛에 남는다).
@@ -652,7 +657,7 @@ nginx 경로(`/<id>/mcp`)로 열어 달라고 하지 않는다** — 게이트�
 # ① 요청서 + 게이트웨이 위임 비밀 — 비밀이 .env 에 없으면 만들어 적는다(있으면 그대로)
 sudo APP_SLUG=<slug> ./deploy.sh hwax-request          # → ~/apps/<slug>/HWAX-연동요청서.md
 sudo APP_SLUG=<slug> ./deploy.sh restart               # 비밀을 새로 만들었으면 — 앱이 읽게(이중화면 다른 서버에서도)
-# ② 게이트웨이가 MCP 에 닿게(한 번 — 유닛에 남는다). 이중화면 이미 0.0.0.0 이다
+# ② 게이트웨이가 MCP 에 닿는지 — 기본이 0.0.0.0 이다(5b). 일부러 127.0.0.1 로 좁혔다면 그때만
 sudo APP_SLUG=<slug> MCP_HOST=0.0.0.0 ./deploy.sh update
 # ③ 요청서를 포털 담당에게 — A · B 주소와 위임 비밀은 **따로**(①이 화면에 「따로 전할 것」 으로 찍는다)
 sudo grep '^HEAX_SSO_SECRET=' ~<운영 계정>/apps/<slug>/.env   # (이중화면 /data/<공통폴더>/<slug>/.env)

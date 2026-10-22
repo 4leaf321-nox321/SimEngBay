@@ -57,7 +57,8 @@ cd backend && .venv/bin/pytest tests/api/test_mcp_tools.py    # 가짜 mcp + 진
 ## 운영
 
 `deploy.sh` 가 번들의 `mcp_server/`(동봉 휠로 오프라인 설치)를 `<설치 폴더>/mcp_server` 에 놓고 유닛
-`<slug>-mcp` 를 띄운다(기본 `127.0.0.1:<앱 포트+2>`). HWAX 게이트웨이가 부르려면 `MCP_HOST=0.0.0.0` —
+`<slug>-mcp` 를 띄운다(기본 `0.0.0.0:<앱 포트+2>` — 밖의 Claude · HWAX 게이트웨이가 부른다). 서버 안에서만
+쓰려면 `MCP_HOST=127.0.0.1` —
 운영 안내서 9절.
 
 | env | 뜻 |

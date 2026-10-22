@@ -110,6 +110,7 @@ DOE_ROOT_HOST_DIR=${DOE_ROOT_HOST_DIR:-}
 ANSYS_HOST_DIR=${ANSYS_HOST_DIR:-}
 ANSYS_VERSION=${ANSYS_VERSION:-}
 WORKER_COUNT=${WORKER_COUNT:-}
+MCP_HOST=${MCP_HOST:-}
 EOF
     chmod 644 "$INSTANCES_DIR/$APP_SLUG.conf"
 }
@@ -174,7 +175,7 @@ ANSYS_VERSION="${ANSYS_VERSION:-252}"
 DOE_ROOT_HOST_DIR="${DOE_ROOT_HOST_DIR:-$(instance_conf_get "$APP_SLUG" DOE_ROOT_HOST_DIR)}"
 #: 컨테이너 안에서 그 폴더가 보이는 이름. 앱의 DOE_ROOTS 가 이 값이다.
 DOE_ROOT_IN_CONTAINER="/data/doe"
-MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+MCP_SERVICE_UNIT="$ETC/etc/systemd/system/${MCP_SERVICE_NAME}.service"
 # 설치된 systemd 유닛에서 Environment=KEY=VALUE 값을 읽는다(없으면 빈 문자열).
 # → 한 번 배포한 MCP 설정을 다음 배포가 자동으로 기억하게 하는 장치.
 unit_env() {  # $1=key
@@ -184,14 +185,23 @@ unit_env() {  # $1=key
 
 MCP_ENABLED="${MCP_ENABLED:-1}"                        # 0 으로 두면 MCP 전체 건너뜀
 # 우선순위: 명시한 env > 설치된 유닛에 저장된 값 > 기본값(번들의 BUILD_INFO).
-# → 최초 한 번 'MCP_HOST=0.0.0.0 ./deploy.sh' 하면, 이후 './deploy.sh update' 가
+# → 최초 한 번 'MCP_HOST=… ./deploy.sh' 하면, 이후 './deploy.sh update' 가
 #   매번 다시 지정하지 않아도 같은 값을 유지한다(되돌리려면 그때만 env 로 덮어쓰기).
 # **앱 포트 +2** — 인스턴스마다 앱 포트가 다르므로 번들의 mcp_port 는 기본 포트일 때만 맞는다.
 MCP_PORT_DEFAULT="$(bundle mcp_port)"
 [[ "$APP_PORT" == "$APP_PORT_DEFAULT" && -n "$MCP_PORT_DEFAULT" ]] || MCP_PORT_DEFAULT=$((APP_PORT + 2))
-MCP_HOST="${MCP_HOST:-$(unit_env MCP_HOST)}"
-# 이중화면 상대 서버의 nginx 도 이 MCP 에 붙어야 한다 — 로컬에만 열면 절반의 요청이 502 다.
-[[ -n "$HA_ROLE" ]] && MCP_HOST="${MCP_HOST:-0.0.0.0}"; MCP_HOST="${MCP_HOST:-127.0.0.1}"
+# **MCP 는 밖에서 부르라고 있다**(사람들의 Claude · HWAX 게이트웨이 — ADR 0010). 그래서 단독 서버도
+# 기본이 0.0.0.0 이다 — Standard Platform · CompCore 운영(이중화)이 받는 모양과 같다. 인증은 백엔드가
+# 토큰으로 하고, 앱 포트(0.0.0.0)와 드러나는 면이 같다. 사람이 고른 값은 설치 기록(`MCP_HOST=`)에
+# 남는다. v0.14.0 까지 단독 서버의 기본은 127.0.0.1 이었고 그 값이 유닛에만 남아 있다 — 사람이 고른
+# 값이 아니므로 열어 준다(서버 안에서만 쓰려면 `sudo MCP_HOST=127.0.0.1 ./deploy.sh update`).
+MCP_HOST_OPENED=0
+MCP_HOST="${MCP_HOST:-$(instance_conf_get "$APP_SLUG" MCP_HOST)}"
+if [[ -z "$MCP_HOST" ]]; then
+    MCP_HOST="$(unit_env MCP_HOST)"
+    [[ "$MCP_HOST" == "127.0.0.1" ]] && { MCP_HOST=""; MCP_HOST_OPENED=1; }
+fi
+MCP_HOST="${MCP_HOST:-0.0.0.0}"
 MCP_PORT="${MCP_PORT:-$(unit_env MCP_PORT)}";  MCP_PORT="${MCP_PORT:-$MCP_PORT_DEFAULT}"
 MCP_API_BASE="${MCP_API_BASE:-$(unit_env PLATFORM_API_BASE)}"
 MCP_API_BASE="${MCP_API_BASE:-http://127.0.0.1:$APP_PORT}"
@@ -541,6 +551,18 @@ cmd_hwax_request() {
     fi
 }
 
+# ───────────────────────── 화면 주소의 접두어 ─────────────────────────
+# **이중화든 단독이든 `/<slug>`** — `http://<서버>:<포트>/<slug>/`. Standard Platform · CompCore 운영(이중화)이
+# 받는 모양과 같고, HWAX 포털이 넘기는 `/<id>/` 와도 같다(포털 id = slug). 단독 설치는 v0.14.0 까지 접두어
+# 없이(`/`) 섰다. **접두어 없이 온 요청도 앱이 그대로 받는다**(`PrefixMiddleware`) — 옛 주소 · 게이트웨이의
+# `/api/auth/sso` · MCP 의 `/api/…` 가 그대로 된다. 이미 적힌 값(빈 값 = 일부러 루트)은 건드리지 않는다.
+sync_env_public_path() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    grep -q '^PUBLIC_PATH=' "$ENV_FILE" && return 0
+    env_file_set PUBLIC_PATH "/$APP_SLUG"
+    info ".env: PUBLIC_PATH=/$APP_SLUG — 화면 주소가 http://<서버>:$APP_PORT/$APP_SLUG/ 입니다(접두어 없는 옛 주소도 그대로 됩니다 · 한 번 다시 로그인)"
+}
+
 place_sif() {
     [[ -f "$HERE/app.sif" ]] || err "app.sif 가 $HERE 에 없습니다 (릴리스 번들에서 실행하세요)"
     info "app.sif 배치 → $INSTALL_DIR/app.sif"
@@ -668,10 +690,7 @@ check_workers() {
 }
 
 # ── MCP 서버 (선택) — 별도 venv + systemd. 실패는 전부 비치명적(백엔드 배포 무관). ──
-render_mcp_service_unit() {
-    [[ -f "$HERE/mcp.service.template" ]] \
-        || { warn "mcp.service.template 없음 — MCP 유닛 건너뜀"; return 1; }
-    info "MCP systemd 유닛 렌더 → $MCP_SERVICE_UNIT"
+mcp_unit_text() {
     sed -e "s|@@USER@@|$OPERATOR|g" \
         -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
         -e "s|@@APP_NAME@@|$APP_NAME|g" \
@@ -681,7 +700,14 @@ render_mcp_service_unit() {
         -e "s|@@MCP_PORT@@|$MCP_PORT|g" \
         -e "s|@@MCP_ALLOWED_HOSTS@@|$MCP_ALLOWED_HOSTS|g" \
         -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
-        "$HERE/mcp.service.template" > "$MCP_SERVICE_UNIT"
+        "$HERE/mcp.service.template"
+}
+
+render_mcp_service_unit() {
+    [[ -f "$HERE/mcp.service.template" ]] \
+        || { warn "mcp.service.template 없음 — MCP 유닛 건너뜀"; return 1; }
+    info "MCP systemd 유닛 렌더 → $MCP_SERVICE_UNIT"
+    mcp_unit_text > "$MCP_SERVICE_UNIT"
     chmod 644 "$MCP_SERVICE_UNIT"
     systemctl daemon-reload
 }
@@ -732,6 +758,10 @@ setup_mcp() {
     fi
 
     # 4) 유닛 렌더 + 기동
+    if [[ $MCP_HOST_OPENED -eq 1 ]]; then
+        info "MCP 를 밖에서도 받게 엽니다(0.0.0.0:$MCP_PORT) — 전에는 기본이 127.0.0.1(이 서버 안만)이었습니다."
+        echo "    이 서버 안에서만 쓰려면: sudo APP_SLUG=$APP_SLUG MCP_HOST=127.0.0.1 ./deploy.sh update"
+    fi
     render_mcp_service_unit || return 0
     systemctl enable "$MCP_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl restart "$MCP_SERVICE_NAME" \
@@ -855,6 +885,7 @@ cmd_install() {
     ensure_dirs
     generate_env_if_missing
     sync_env_identity
+    sync_env_public_path
     sync_env_portal
     sync_env_paths
     place_sif
@@ -898,6 +929,7 @@ cmd_update() {
     info "$APP_NAME ($APP_SLUG) $VERSION — 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
     ensure_dirs
     sync_env_identity
+    sync_env_public_path
     sync_env_portal
     sync_env_paths
 
@@ -1073,7 +1105,7 @@ cmd_setup() {
     SERVICE_NAME="$APP_SLUG"; SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
     SYNC_SERVICE_NAME="${APP_SLUG}-sync"; SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
     SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
-    MCP_SERVICE_NAME="${APP_SLUG}-mcp"; MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+    MCP_SERVICE_NAME="${APP_SLUG}-mcp"; MCP_SERVICE_UNIT="$ETC/etc/systemd/system/${MCP_SERVICE_NAME}.service"
     WORKER_SERVICE_NAME="${APP_SLUG}-worker"; WORKER_SERVICE_UNIT="/etc/systemd/system/${WORKER_SERVICE_NAME}@.service"
     BACKUP_SERVICE_NAME="${APP_SLUG}-backup"; BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
     BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
@@ -1233,6 +1265,9 @@ cmd_render() {
         esac
         render_unit_paths "$HERE/$tpl.template" > "$ETC/etc/systemd/system/$unit"
     done
+    # 경로를 여기서 짓는다 — `$MCP_SERVICE_UNIT` 은 ETC 를 정하기 전에 지어져 진짜 /etc 를 가리킬 수 있다.
+    [[ -f "$HERE/mcp.service.template" ]] \
+        && mcp_unit_text > "$ETC/etc/systemd/system/${MCP_SERVICE_NAME}.service"
     render_lb
     if [[ $show -eq 1 ]]; then
         find "$ETC" -type f | sort | while read -r f; do echo "### ${f#"$ETC"}"; cat "$f"; echo; done

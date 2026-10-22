@@ -89,6 +89,100 @@ def test_단독_서버는_설치_폴더_하나에_전부(bundle: Path, tmp_path:
     assert not (etc / "etc/keepalived").exists()
 
 
+def _mcp_host(etc: Path) -> str:
+    unit = read(etc, "systemd/system/testplatform-mcp.service")
+    return next(
+        line.split("=", 2)[2]
+        for line in unit.splitlines()
+        if line.startswith("Environment=MCP_HOST=")
+    )
+
+
+def _remembered(etc: Path, key: str) -> str | None:
+    conf = read(etc, "platform-instances/testplatform.conf")
+    found = [line.split("=", 1)[1] for line in conf.splitlines() if line.startswith(f"{key}=")]
+    return found[-1] if found else None
+
+
+def test_MCP_는_단독_서버에서도_밖에서_받는다(bundle: Path, tmp_path: Path) -> None:
+    """MCP 는 사람들의 Claude · HWAX 게이트웨이가 밖에서 부르라고 있다 — 단독 서버가 127.0.0.1
+    로만 열면 아무도 못 붙는다(v0.14.0 운영 서버에서 겪었다). Standard Platform · CompCore 운영
+    (이중화)이 받는 모양과 같게 0.0.0.0 이 기본이고, 고른 값은 설치 기록에 남는다."""
+    etc = tmp_path / "etc"
+    render(bundle, etc)
+    assert _mcp_host(etc) == "0.0.0.0"
+    assert _remembered(etc, "MCP_HOST") == "0.0.0.0"
+
+
+def test_옛_기본값_127_은_열고_고른_값은_지킨다(bundle: Path, tmp_path: Path) -> None:
+    """v0.14.0 까지의 단독 기본(127.0.0.1)은 유닛에만 남아 있다 — 사람이 고른 값이 아니므로
+    연다. 사람이 env 로 고른 값은 설치 기록에 남아 다음 배포가 지킨다."""
+    etc = tmp_path / "etc"
+    units = etc / "etc/systemd/system"
+    units.mkdir(parents=True)
+    (units / "testplatform-mcp.service").write_text(
+        "[Service]\nEnvironment=MCP_HOST=127.0.0.1\nEnvironment=MCP_PORT=8042\n",
+        encoding="utf-8",
+    )
+    render(bundle, etc)
+    assert _mcp_host(etc) == "0.0.0.0"
+    # 포트는 유닛이 기억한 그대로다(이것은 사람이 고른 값일 수 있다).
+    assert "Environment=MCP_PORT=8042" in read(etc, "systemd/system/testplatform-mcp.service")
+
+    render(bundle, etc, MCP_HOST="127.0.0.1")
+    assert _mcp_host(etc) == "127.0.0.1" and _remembered(etc, "MCP_HOST") == "127.0.0.1"
+    render(bundle, etc)  # 다시 안 붙여도 지킨다
+    assert _mcp_host(etc) == "127.0.0.1"
+
+
+def _sync_public_path(env_file: Path) -> str:
+    """`sync_env_public_path` 만 떼어 돌린다 — 그것과 그것이 부르는 둘(`sed_escape` ·
+    `env_file_set`)."""
+    script = (DEPLOY / "deploy.sh").read_text(encoding="utf-8").splitlines()
+    pieces: list[str] = []
+    for name in ("sed_escape", "env_file_set", "sync_env_public_path"):
+        start = next(i for i, line in enumerate(script) if line.startswith(f"{name}() {{"))
+        end = start if script[start].rstrip().endswith("}") else script.index("}", start)
+        pieces.extend(script[start : end + 1])
+    program = "\n".join(
+        ["set -euo pipefail", 'info() { echo "==> $*"; }', *pieces, "sync_env_public_path"]
+    )
+    got = subprocess.run(
+        ["bash", "-c", program],
+        env={
+            "PATH": os.environ["PATH"],
+            "ENV_FILE": str(env_file),
+            "APP_SLUG": "testplatform",
+            "APP_PORT": "8040",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return got.stdout
+
+
+def test_단독_서버도_화면_주소를_slug_아래로(tmp_path: Path) -> None:
+    """`http://<서버>:<포트>/<slug>/` — Standard Platform · CompCore 운영 · HWAX 포털
+    (`/<id>/`)과 같은 모양. 단독 설치는 v0.14.0 까지 접두어 없이(`/`) 섰다. 이미 적힌 값은
+    건드리지 않는다 — 빈 값은 일부러 루트에 둔 것이다."""
+    env_file = tmp_path / ".env"
+    shutil.copy(DEPLOY / ".env.production.example", env_file)
+    shown = _sync_public_path(env_file)
+    assert "PUBLIC_PATH=/testplatform" in shown
+    lines = env_file.read_text(encoding="utf-8").splitlines()
+    assert [line for line in lines if line.startswith("PUBLIC_PATH=")] == [
+        "PUBLIC_PATH=/testplatform"
+    ]
+    # 두 번째는 아무것도 안 한다.
+    assert _sync_public_path(env_file) == ""
+
+    for kept in ("PUBLIC_PATH=", "PUBLIC_PATH=/hwaxapp"):
+        env_file.write_text(f"APP_SLUG=testplatform\n{kept}\n", encoding="utf-8")
+        _sync_public_path(env_file)
+        assert env_file.read_text(encoding="utf-8") == f"APP_SLUG=testplatform\n{kept}\n"
+
+
 def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_path: Path) -> None:
     etc = tmp_path / "etc"
     render(bundle, etc, **HA_ENV)

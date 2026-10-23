@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from app.core import executors
 from app.core.executors import subprocess_executor as bridge
 from app.core.run import read_result, result_path
 from app.core.spec import parse_spec
-from app.core.stages import StageContext, StageFailure
+from app.core.stages import StageCanceled, StageContext, StageFailure
 
 MATERIAL = {
     "name": "SS400",
@@ -193,3 +194,67 @@ def test_설치_경로를_자식_환경에_심어_준다(tmp_path: Path) -> None
         ansys_root=Path("/mnt/c/Program Files/ANSYS Inc/v252"),
     )
     assert "AWP_ROOT252" not in bridge.child_env()  # type: ignore[attr-defined]
+
+
+# --- 멈출 때 솔버를 고아로 남기지 않는다 · 메모리 부족을 그렇다고 말한다(2026-10-23) ---------
+
+GRANDCHILD = """
+import subprocess, sys, time
+sleeper = subprocess.Popen(["sleep", "60"])
+open(sys.argv[1], "w").write(str(sleeper.pid))
+time.sleep(60)
+"""
+
+
+def _alive(pid: int) -> bool:
+    """살아 있나 — 좀비(끝났지만 아직 안 거둔 것)는 죽은 것으로 본다."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+    except FileNotFoundError:
+        return False
+    return state != "Z"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="프로세스 그룹 · /proc 은 리눅스")
+def test_취소하면_자식이_띄운_솔버까지_그룹째_멈춘다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """단계 실행기(자식)만 멈추면 그것이 띄운 솔버(손자)가 고아로 남아 계속 돈다 — 운영에서
+    취소한 DOE 의 CalculiX 6개가 돌며 메모리를 다 썼다. 그룹째 멈춰야 한다."""
+    monkeypatch.setattr(bridge, "CANCEL_POLL_SECONDS", 0.1)
+    monkeypatch.setattr(bridge, "STOP_GRACE_SECONDS", 2.0)
+    marker = tmp_path / "grandchild.pid"
+    runner = executors.resolve("local")
+    monkeypatch.setattr(
+        runner, "command", lambda _ctx: [sys.executable, "-c", GRANDCHILD, str(marker)]
+    )
+    with pytest.raises(StageCanceled):
+        runner.run(_ctx("solving", tmp_path), should_cancel=marker.exists)
+    grandchild = int(marker.read_text())
+    deadline = time.monotonic() + 3
+    while _alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(grandchild), "자식이 띄운 솔버가 고아로 남았다"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="시그널은 리눅스")
+def test_운영체제가_끊은_단계는_메모리_부족으로_적는다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OOM 은 KILL 로 끊는다 — 「도중에 죽었다」 가 아니라 할 일(요소 크기 · 워커 수)을
+    말한다."""
+    runner = executors.resolve("local")
+    killed = "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+    monkeypatch.setattr(runner, "command", lambda _ctx: [sys.executable, "-c", killed])
+    with pytest.raises(StageFailure) as caught:
+        runner.run(_ctx("solving", tmp_path))
+    assert caught.value.code == "out_of_memory" and "워커 수" in caught.value.message
+
+    # 솔버(gmsh · ccx)를 부르는 자리도 같다.
+    from app.core.calculix import tools
+
+    with pytest.raises(StageFailure) as solver:
+        tools.run(
+            Path("/bin/sh"), ["-c", "kill -9 $$"], cwd=tmp_path, timeout_seconds=10, what="ccx"
+        )
+    assert solver.value.code == "out_of_memory" and solver.value.message.startswith("ccx")

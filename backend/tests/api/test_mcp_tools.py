@@ -168,7 +168,7 @@ def test_폴더를_훑고_걸고_결과를_읽고_견준다(
     schema = bot.call(server.recipe_schema)
     assert {one["name"] for one in schema["recipes"]} == {"modal", "static", "harmonic"}
 
-    made = bot.call(server.jobs_create, str(folder), MODAL, numbers=[1, 2])
+    made = bot.call(server.jobs_create, MODAL, path=str(folder), numbers=[1, 2])
     assert len(made["created"]) == 2
     job_id = made["created"][0]
 
@@ -181,12 +181,28 @@ def test_폴더를_훑고_걸고_결과를_읽고_견준다(
     assert [one["elastic_number"] for one in result["modes"]] == [1, 2, 3, 4, 5]
     assert result["modes"][0]["frequency_hz"] == result["first_elastic_hz"]
 
+    # CompCore 의 doe_export 가 준 study_id 를 그대로 — 남은 점 하나를 그 길로 건다.
+    by_id = bot.call(server.jobs_create, MODAL, study_id=study_id[:8], numbers=[3])
+    assert by_id["folder"] == str(folder) and len(by_id["created"]) == 1
+
     mine = bot.call(server.jobs_list, scope="mine", status="done")
     assert {one["id"] for one in mine["items"]} >= set(made["created"])
 
     study = bot.call(server.study_get, made["study_id"])
-    assert sorted(one["number"] for one in study["points"]) == [1, 2]
+    assert sorted(one["number"] for one in study["points"]) == [1, 2, 3]
     assert all(one["frequencies"] for one in study["points"])
+
+    # **견주는 셈은 서버가 한다** — 민감도 · 조건을 건 최적점(화면 「다변수」 탭과 같은 표).
+    analyzed = bot.call(
+        server.study_analyze, made["study_id"], objective="mass_kg", where=["factor:두께>=0"]
+    )
+    assert analyzed["done"] == 3 and "effects" not in analyzed
+    assert analyzed["choice"]["feasible"] == 3
+    said = bot.refused(server.study_analyze, made["study_id"], result="무게")
+    assert "쓸 수 있는 열" in said
+    # 서버 상태 — 멤버는 솔버 요약만(워커 상세는 시스템 관리자).
+    status = bot.call(server.server_status)
+    assert "solvers" in status and "workers" not in status
 
 
 def test_게시해야_남의_Claude_가_보고_고치지는_못한다(
@@ -196,7 +212,7 @@ def test_게시해야_남의_Claude_가_보고_고치지는_못한다(
     그대로."""
     mine = _bot(client, member, ["read", "simulations:write"])
     theirs = _bot(client, other, ["read", "simulations:write"])
-    made = mine.call(server.jobs_create, str(folder), MODAL, numbers=[1])
+    made = mine.call(server.jobs_create, MODAL, path=str(folder), numbers=[1])
     job_id = made["created"][0]
 
     assert "SIMULATIONS" in theirs.refused(server.job_get, job_id)
@@ -225,7 +241,7 @@ def test_쓰기_범위가_없는_토큰은_읽기만_한다(
     """범위는 백엔드가 본다 — MCP 는 그 말을 그대로 전한다."""
     reader = _bot(client, member, ["read"])
     assert reader.call(server.folder_preview, str(folder))["usable"] == 3
-    said = reader.refused(server.jobs_create, str(folder), MODAL, numbers=[1])
+    said = reader.refused(server.jobs_create, MODAL, path=str(folder), numbers=[1])
     assert "simulations:write" in said
 
 
@@ -233,7 +249,7 @@ def test_수렴_점검과_실측을_도구로_건다(
     client: TestClient, member: Signed, folder: Path
 ) -> None:
     bot = _bot(client, member, ["read", "simulations:write"])
-    made = bot.call(server.jobs_create, str(folder), MODAL, numbers=[1, 2, 3])
+    made = bot.call(server.jobs_create, MODAL, path=str(folder), numbers=[1, 2, 3])
     job_id = made["created"][0]
 
     started = bot.call(server.convergence_start, job_id)

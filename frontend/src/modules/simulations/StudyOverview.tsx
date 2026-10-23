@@ -23,6 +23,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { ModeTrack, Study, StudyPoint } from '@/modules/simulations/api'
+import { massScale, shownMass } from '@/modules/simulations/format'
 import { Chart, Spectrum } from '@/shared/charts'
 import type { SpectrumLine, SpectrumPoint } from '@/shared/charts'
 import { colorAt } from '@/shared/charts'
@@ -150,10 +151,12 @@ export function StudyOverview({ study }: { study: Study }) {
   /** 트레이드오프 — 질량 대 그 모드. 파레토 점은 색이 다르다. */
   const [tradeMode, setTradeMode] = useState('1')
   const track = tracks.find((one) => String(one.reference) === tradeMode) ?? tracks[0]
+  // **질량은 그 DOE 에 맞는 한 단위로** — 작은 부품을 kg 으로 그리면 축 눈금이 모두 0 근처다.
+  const mass = massScale(points.map((one) => one.mass_kg))
   const rows = points.map((one) => ({
     number: one.number,
     hz: track ? frequency(one, track) : (one.first_elastic_hz ?? null),
-    mass: one.mass_kg ?? null,
+    mass: one.mass_kg != null && one.mass_kg > 0 ? one.mass_kg * mass.factor : null,
   }))
   const pareto = useMemo(() => paretoNumbers(rows), [rows])
   const tradePoints = useMemo<SpectrumPoint[]>(
@@ -222,7 +225,7 @@ export function StudyOverview({ study }: { study: Study }) {
         <div>
           <dt className="text-muted-foreground text-xs">질량</dt>
           <dd className="font-medium">
-            {first?.mass_kg?.toFixed(2) ?? '—'} → {last?.mass_kg?.toFixed(2) ?? '—'} kg{' '}
+            {shownMass(first?.mass_kg)} → {shownMass(last?.mass_kg)}{' '}
             <span className="text-muted-foreground">
               {change(first?.mass_kg ?? null, last?.mass_kg ?? null)}
             </span>
@@ -286,7 +289,7 @@ export function StudyOverview({ study }: { study: Study }) {
           <Spectrum
             points={tradePoints}
             stems={false}
-            xLabel="질량 (kg)"
+            xLabel={`질량 (${mass.unit})`}
             yLabel="주파수 (Hz)"
             height={320}
             title="질량 대 주파수"
@@ -311,7 +314,7 @@ export function StudyOverview({ study }: { study: Study }) {
               {tracks.map((one) => (
                 <TableHead key={one.reference}>{one.reference}차</TableHead>
               ))}
-              <TableHead>질량 (kg)</TableHead>
+              <TableHead>질량 ({mass.unit})</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -351,7 +354,9 @@ export function StudyOverview({ study }: { study: Study }) {
                     </TableCell>
                   )
                 })}
-                <TableCell className="font-mono">{point.mass_kg?.toFixed(3) ?? '—'}</TableCell>
+                <TableCell className="font-mono">
+                  {shownMass(point.mass_kg, mass).replace(` ${mass.unit}`, '')}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

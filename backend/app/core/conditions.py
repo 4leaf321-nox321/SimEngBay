@@ -280,6 +280,12 @@ class Conditions:
     loads: list[Load] = field(default_factory=list)
     """**선응력 모달에서만 쓴다.** 그냥 모달이면 `skipped` 에 적고 여기는 비운다."""
     mesh_hints: list[MeshHint] = field(default_factory=list)
+    suggested_size_mm: float | None = None
+    """CompCore 가 형상으로 셈한 전역 요소 크기 **제안값**(mm, `mesh_suggestion`) — 조건
+    밖이다. 사람이 「전체」 크기를 적었으면 그것이 먼저다(`global_size`)."""
+    suggested_basis: str = ""
+    """그 제안의 까닭(「최소 벽 두께(5 mm, 「받침판」)의 절반」 같은 것) — 화면에 그대로
+    보인다."""
     body_settings: list[BodySetting] = field(default_factory=list)
     """파트별 설정 — 적힌 파트만. 쉘 파트는 여기 오지 않고 `refused` 에 있다."""
     analysis: Analysis = field(default_factory=Analysis)
@@ -322,6 +328,21 @@ class Conditions:
         """「전체」 메시 힌트 — 전역 크기 · 요소 형상 · 차수."""
         return next((one for one in self.mesh_hints if one.whole), None)
 
+    def global_size(self, length_mm: float) -> tuple[float, Literal["cad", "compcore"]] | None:
+        """전역 요소 크기(mm)와 **어디서 왔나** — 「전체」 메시 힌트, 없으면 CompCore 의
+        제안값.
+
+        차례는 CompCore 와 맞춘 것이다(2026-10-23): 파트 · 면 · 엣지 크기는 이것과 따로 그대로
+        쓰고, 전역만 「전체」 → 제안 순서로. 힌트는 **선언된 계의 길이**라(SI 면 m) `length_mm`
+        을 곱하고, 제안은 늘 mm 다. 스펙의 크기는 이보다 먼저다 — 그것은 부르는 쪽이 본다.
+        """
+        for one in self.mesh_hints:
+            if one.whole and one.element_size is not None:
+                return one.element_size * length_mm, "cad"
+        if self.suggested_size_mm is not None:
+            return self.suggested_size_mm, "compcore"
+        return None
+
     @property
     def drives(self) -> bool:
         """**강제로 움직이는 구속이 있나** — 0 이 아닌 변위 · 원격 변위(회전 포함).
@@ -355,6 +376,8 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     """
     block = _dict(_dict(payload).get("conditions"))
     made = Conditions()
+    # **제안은 조건 밖에 온다** — 조건이 비어도(형상만 보낸 폴더) 전역 크기는 쓸 수 있다.
+    made.suggested_size_mm, made.suggested_basis = _suggestion(payload)
     if not block:
         return made
 
@@ -1022,6 +1045,20 @@ def _analysis(block: dict[str, Any]) -> Analysis:
 
 
 # --- 잔손 ---------------------------------------------------------------------
+
+
+def _suggestion(payload: Any) -> tuple[float | None, str]:
+    """CompCore 의 `mesh_suggestion` — 전역 요소 크기 제안(2026-10-23). 단위는
+    `length_units.mesh_suggestion` 이고 늘 mm 다(SI 로 내보내도 옮기지 않는다). **다른 단위면
+    쓰지 않는다** — 모르는 단위의 크기를 mm 로 읽으면 메시가 1000배 틀린다."""
+    found = _dict(_dict(payload).get("mesh_suggestion"))
+    size = found.get("element_size")
+    unit = _dict(_dict(payload).get("length_units")).get("mesh_suggestion", "mm")
+    if isinstance(size, bool) or not isinstance(size, int | float) or unit != "mm":
+        return None, ""
+    if size <= 0:
+        return None, ""
+    return float(size), str(found.get("basis") or "")
 
 
 def _dict(value: Any) -> dict[str, Any]:

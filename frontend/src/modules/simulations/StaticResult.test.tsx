@@ -8,10 +8,28 @@
  */
 
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import type { StaticResult as StaticResultData } from '@/modules/simulations/api'
+// **vtk.js 는 시험에서 못 돈다** — 뷰어가 받은 값만 본다. 그림이 빈 상자이던 까닭이 이 값(주기 0
+// 인데 재생 중)이었다(2026-10-23).
+const viewed: Record<string, unknown>[] = []
+vi.mock('@/shared/viewer/MeshViewer', () => ({
+  default: (props: Record<string, unknown>) => {
+    viewed.push(props)
+    return <div data-testid="viewer" />
+  },
+}))
+
+vi.mock('@/modules/simulations/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/modules/simulations/api')>()
+  return { ...actual, simulationApi: { ...actual.simulationApi, mesh: vi.fn() } }
+})
+
+import { simulationApi } from '@/modules/simulations/api'
+import type { Artifact, StaticResult as StaticResultData } from '@/modules/simulations/api'
 import { StaticResult } from '@/modules/simulations/StaticResult'
+
+const VTP = { id: 'a1', kind: 'mode_vtp', filename: 'static.vtp' } as Artifact
 
 const SHEAR: StaticResultData = {
   recipe: 'static',
@@ -84,6 +102,24 @@ describe('정적 결과', () => {
     }
     render(<StaticResult simulationId="sim" result={far} artifacts={[]} />)
     expect(screen.getByText(/1\.37 mm 떨어져 있습니다/)).toBeDefined()
+  })
+
+  it('변형 그림은 흔들지 않고(주기 0) 실제 변형이라고 적는다', async () => {
+    viewed.length = 0
+    vi.mocked(simulationApi.mesh).mockReset().mockResolvedValue(new ArrayBuffer(8))
+    render(<StaticResult simulationId="sim" result={SHEAR} artifacts={[VTP]} />)
+    expect(await screen.findByTestId('viewer')).toBeDefined()
+    expect(simulationApi.mesh).toHaveBeenCalledWith('sim', 'a1')
+    expect(viewed.at(-1)).toMatchObject({ periodMs: 0, displacement: 'actual' })
+  })
+
+  it('그림을 못 받으면 말없이 사라지지 않고 까닭을 적는다 · 그림이 없으면 없다고 적는다', async () => {
+    vi.mocked(simulationApi.mesh).mockReset().mockRejectedValue(new Error('산출물 파일이 작업 폴더에 없습니다.'))
+    const { unmount } = render(<StaticResult simulationId="sim" result={SHEAR} artifacts={[VTP]} />)
+    expect(await screen.findByText('산출물 파일이 작업 폴더에 없습니다.')).toBeDefined()
+    unmount()
+    render(<StaticResult simulationId="sim" result={SHEAR} artifacts={[]} />)
+    expect(screen.getByText(/변형 그림을 만들지 않았습니다/)).toBeDefined()
   })
 
   it('측정점 · 반력이 없는 결과는 그 표를 그리지 않는다', () => {

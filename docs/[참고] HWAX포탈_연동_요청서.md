@@ -185,6 +185,8 @@ platforms:
 ```python
 # {{NAME}}(SimEngBay) — 원래 이름(접두어 없이)
 "job_cancel",
+"study_cancel",
+"files_tidy",
 ```
 <!-- 위험 도구: 끝 -->
 

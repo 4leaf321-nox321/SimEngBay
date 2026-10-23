@@ -669,4 +669,18 @@ describe('새 해석 작업', () => {
     await userEvent.type(screen.getByLabelText('요소 크기 (mm)'), '4')
     expect(screen.getByRole('button', { name: '실행' })).toBeEnabled()
   })
+
+  it('「전체」 크기가 없으면 CompCore 의 제안값을 쓰고, 무엇으로 셈했나를 보인다', async () => {
+    vi.mocked(simulationApi.previewConditions).mockResolvedValue({
+      ...SHEAR,
+      suggested_element_size_mm: 0.6,
+      suggested_element_size_from: 'compcore',
+      suggested_element_size_basis: '시편 벽(1 mm)의 절반',
+    })
+    await openWithPoint()
+    await userEvent.selectOptions(screen.getByLabelText('솔버'), 'calculix')
+    expect(screen.getByPlaceholderText('CompCore 제안 0.6')).toBeDefined()
+    expect(screen.getByText(/CompCore 가 형상으로 셈한 크기를 사용합니다 — 시편 벽\(1 mm\)의 절반/)).toBeDefined()
+    expect(screen.getByRole('button', { name: '실행' })).toBeEnabled()
+  })
 })

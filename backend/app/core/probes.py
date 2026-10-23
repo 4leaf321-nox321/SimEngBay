@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.numbers import significant
+
 #: 이보다 멀면 「그 자리 값이 아니다」 를 적는다(mm). 요소 크기보다 작게 잡을 이유가 없다.
 FAR_MM = 1.0
 
@@ -85,19 +87,19 @@ def row(
         "point": list(point),
         "node": node,
         "distance_mm": round(distance_mm, 4),
-        "value": round(value, 10),
+        "value": significant(value),
         "unit": unit,
     }
     if vector is not None:
         # **성분도 싣는다** — 크기만으로는 미끄럼(두 점의 X 차)을 못 잰다.
-        made["vector"] = [round(one, 12) for one in vector[:3]]
+        made["vector"] = [significant(one) for one in vector[:3]]
     if body is not None:
         made["body"] = body
     if strain is not None:
         # **수직 변형률 `[εxx, εyy, εzz]`**(무차원) — 축 방향 스트레인 게이지와 견주는 값이다.
         # 전단 성분은 싣지 않는다: 솔버마다 공학 · 텐서 전단의 약속이 달라 같은 칸에 다른 뜻이
         # 들어간다.
-        made["strain"] = [round(one, 12) for one in strain[:3]]
+        made["strain"] = [significant(one) for one in strain[:3]]
     if distance_mm > FAR_MM:
         made["warning"] = (
             f"가장 가까운 절점이 {distance_mm:.2f} mm 떨어져 있습니다 — 메시를 그 자리에서 "

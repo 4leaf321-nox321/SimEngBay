@@ -199,18 +199,43 @@ journalctl -u '<slug>-worker@2' -n 5    # 「솔버 calculix」 가 찍힌다
 **여러 사람이 함께 쓰면 워커 수가 곧 동시에 도는 해석 수다.** 기본 `WORKER_COUNT=1` 이면 모든
 해석이 한 줄로 선다. 줄은 **사람마다 번갈아** 선다(ADR 0011 — 같은 솔버 안에서 도는 작업이 적은
 사람 · 오래 못 받은 사람부터 집는다. DOE 수백 점을 건 사람 뒤에서 한 건을 건 사람이 다 기다리지
-않는다). 그래도 줄 자체는 워커 수만큼만 움직이므로 **CalculiX 워커는 코어 수에 맞춘다** — 워커 수 ×
-한 해석이 쓰는 코어(Ansys 는 `SOLVER_PROCESSES`)가 기계의 코어를 넘지 않게. 서버 화면의 「워커 ·
-솔버」 는 CalculiX 워커가 하나면 그렇다고 말하고, 작업 상세(와 MCP `job_get`)는 대기 중인 작업이
-줄의 어디쯤인지 보여 준다.
+않는다). 그래도 줄 자체는 워커 수만큼만 움직이므로 워커 수를 서버에 맞춘다 — **`deploy.sh` 가 그
+서버를 재서 권장 수를 말한다**(아래 「워커 묶음」). 한 해석이 코어 2개 남짓(CalculiX `OMP_NUM_THREADS`
+· Ansys `SOLVER_PROCESSES`) · 큰 해석이면 메모리 몇 GB 를 쓰므로, 코어로도 메모리로도 넘지 않게 —
+**앱 · DB 몫을 남긴다.** 서버 화면의 「워커 · 솔버」 는 CalculiX 워커가 하나면 그렇다고 말하고, 작업
+상세(와 MCP `job_get`)는 대기 중인 작업이 줄의 어디쯤인지 보여 준다.
 
 ```bash
-# 예: 16코어 서버 — Ansys 하나 + CalculiX 일곱(한 해석 2코어 남짓)
-sudo APP_SLUG=<slug> WORKER_COUNT=8 ./deploy.sh update
+# 예: 16코어 · 64 GB 서버 — 묶음 상한이 코어 14 · 메모리 51 GB 라 권장은 7 개(코어 2개씩)
+sudo APP_SLUG=<slug> WORKER_COUNT=6 ./deploy.sh update     # 끝에 「권장 워커 수 N 개 이하」 가 찍힌다
 cd ~/apps/<slug>
 echo SIMULATION_SOLVERS=ansys > worker-1.env
-for i in 2 3 4 5 6 7 8; do echo SIMULATION_SOLVERS=calculix > worker-$i.env; done
+for i in 2 3 4 5 6; do echo SIMULATION_SOLVERS=calculix > worker-$i.env; done
 sudo systemctl restart '<slug>-worker@*'
+```
+
+### 워커 묶음 — 해석이 서버를 다 먹지 않게(ADR 0012)
+
+**워커 전부가 한 칸의 CPU · 메모리를 나눠 쓴다**(systemd slice `<slug>-workers.slice`). `deploy.sh` 가
+설치 · 업데이트 때 **그 서버를 재서**(코어 수 · 메모리) 앱 · DB · 운영체제 몫 — 코어 max(2, 1/8) · 메모리
+max(4 GB, 1/5) — 을 남기고 나머지를 묶음 상한으로 쓴다. 상한이 없던 때 운영 서버의 메모리가 바닥나 서버째
+멈췄다(2026-10-23).
+
+- **메모리를 넘으면** 운영체제가 **묶음 안의** 가장 큰 솔버 하나를 끊는다 — 그 작업은 「메모리 부족」 으로
+  실패하고(화면 · MCP 가 「요소 크기를 키우거나 워커 수를 줄이라」 고 말한다) 서버와 다른 작업은 산다.
+  스왑은 못 쓴다 — 스왑으로 버티는 동안 서버 전체가 느려져 멈춘 것과 같다.
+- **CPU** 는 묶음이 다 써도 앱 · DB 가 먼저다(우선순위가 낮다 — `CPUWeight` · `Nice`).
+- 지금 상한 · 쓰는 양: `sudo ./deploy.sh status` 의 「워커 묶음」 줄, `systemctl status <slug>-workers.slice`.
+- 사람이 정하려면(기억한다): `sudo WORKER_CPU_PERCENT=1200 WORKER_MEMORY_MAX=40G ./deploy.sh update`.
+  비우려면 `/etc/platform-instances/<slug>.conf` 의 그 줄을 비우고 update.
+
+**취소한 작업의 솔버가 남아 돌던 것**(v0.15.0 까지) — 작업을 멈추면 단계 실행기만 멈추고 그것이 띄운
+CalculiX · gmsh 가 고아로 남아 계속 돌았다(메모리를 먹는다). 이제 그룹째 멈춘다. 옛 판에서 남은 것은
+워커를 다시 띄우면 함께 정리된다(워커가 띄운 것은 워커의 묶음 안에 있다):
+
+```bash
+pgrep -a ccx                                  # 도는 CalculiX — 도는 작업 수보다 많으면 고아가 있다
+sudo systemctl restart '<slug>-worker@*'      # 워커와 그 묶음의 고아가 함께 끝난다(도던 작업은 다시 줄에 선다)
 ```
 
 **CalculiX 가 이미지에 있는지**는 서버 화면의 「워커 · 솔버」 카드(깔린 도구 — 워커가 기동 때

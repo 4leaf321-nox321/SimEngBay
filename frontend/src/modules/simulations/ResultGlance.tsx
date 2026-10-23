@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { Convergence, Measurement, Simulation, Stage } from '@/modules/simulations/api'
-import { shownForce, shownValue } from '@/modules/simulations/format'
+import { shownForce, shownMass, shownValue } from '@/modules/simulations/format'
 import { STAGE_LABELS, shownDuration } from '@/modules/simulations/labels'
 import { isHarmonic, isStatic } from '@/modules/simulations/ResultPanel'
 import type { AnyResult } from '@/modules/simulations/ResultPanel'
@@ -58,7 +58,7 @@ export function headline(simulation: Simulation, result: AnyResult | null): Stat
   const nodes = result?.mesh?.nodes ?? summaryNumber(simulation, 'nodes')
   const mass = summaryNumber(simulation, 'mass_kg')
   const common: Stat[] = [
-    ...(mass !== null ? [{ label: '질량', value: `${shownValue(mass)} kg` }] : []),
+    ...(mass !== null && mass > 0 ? [{ label: '질량', value: shownMass(mass) }] : []),
     ...(nodes !== null ? [{ label: '절점', value: nodes.toLocaleString() }] : []),
   ]
   if (result && isStatic(result)) {

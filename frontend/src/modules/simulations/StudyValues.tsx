@@ -19,7 +19,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { Study, StudyPoint } from '@/modules/simulations/api'
-import { magnitudeOf, shownForce, shownValue } from '@/modules/simulations/format'
+import { magnitudeOf, shownForce, shownMass, shownValue } from '@/modules/simulations/format'
 import { Chart, Spectrum } from '@/shared/charts'
 import type { SpectrumPoint } from '@/shared/charts'
 import { colorAt } from '@/shared/charts'
@@ -243,7 +243,7 @@ export function StudyValues({ study }: { study: Study }) {
         <div>
           <dt className="text-muted-foreground text-xs">질량</dt>
           <dd className="font-medium">
-            {first?.mass_kg?.toFixed(2) ?? '—'} → {last?.mass_kg?.toFixed(2) ?? '—'} kg{' '}
+            {shownMass(first?.mass_kg)} → {shownMass(last?.mass_kg)}{' '}
             <span className="text-muted-foreground">
               {change(first?.mass_kg ?? null, last?.mass_kg ?? null)}
             </span>

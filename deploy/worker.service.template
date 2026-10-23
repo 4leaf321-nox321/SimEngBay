@@ -54,6 +54,12 @@ ExecStart=/usr/bin/apptainer exec \
 
 # **작업 중간에 죽어도 그 작업은 되살아난다**(heartbeat 가 멈추면 다른 워커가 다시 건다).
 # 그래서 여기서는 그냥 다시 띄우면 된다.
+# **워커 묶음**(deploy.sh 가 그 서버를 재서 쓰는 <slug>-workers.slice, ADR 0012) — 워커 전부가 한 칸의
+# CPU · 메모리를 나눠 쓴다. 해석이 몰려도 앱 · DB · MCP 몫이 남고, 메모리를 넘으면 이 묶음의 가장 큰
+# 솔버가 끊긴다(서버째 멈추지 않는다). 우선순위도 앱보다 낮게.
+Slice=@@APP_SLUG@@-workers.slice
+Nice=10
+OOMScoreAdjust=500
 Restart=on-failure
 RestartSec=10
 # 돌던 작업을 마치고 나가게 둔다 — SIGTERM 을 받으면 루프가 그 작업까지만 하고 멈춘다.

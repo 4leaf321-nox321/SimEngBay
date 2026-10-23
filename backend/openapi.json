@@ -3195,6 +3195,181 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Remove Study",
+        "description": "DOE 한 벌을 지운다(내가 건 점만) — 작업 폴더까지. 도는 점이 있으면 먼저 멈춘다.",
+        "operationId": "remove_study_api_simulations_studies__study_id__delete",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemovedOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/{study_id}/analysis": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Analyze Study",
+        "description": "DOE 분석 — 민감도(어느 변수가 결과를 가장 많이 움직이나) · 주효과 · 결과마다 최소 ·\n최대 점. `objective`(+ `goal`) · `where`(`mode:1>=300` 꼴, 여럿)를 주면 조건을 만족하는\n점과 그중 가장 좋은 점, `x` · `y` · `result` 를 주면 두 변수의 격자. 화면의 「다변수」 탭과\n같은 표다.",
+        "operationId": "analyze_study_api_simulations_studies__study_id__analysis_get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Result"
+            }
+          },
+          {
+            "name": "objective",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Objective"
+            }
+          },
+          {
+            "name": "goal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "min",
+                "max"
+              ],
+              "type": "string",
+              "default": "min",
+              "title": "Goal"
+            }
+          },
+          {
+            "name": "where",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "title": "Where"
+            }
+          },
+          {
+            "name": "x",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X"
+            }
+          },
+          {
+            "name": "y",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Y"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyAnalysisOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/simulations/doe/find": {
@@ -3527,6 +3702,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SimulationOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Remove",
+        "description": "작업을 지운다 — 작업 폴더 · 메시 수렴 수준 · 붙은 실측까지. 도는 작업은 먼저 멈춘다.",
+        "operationId": "remove_api_simulations__simulation_id__delete",
+        "parameters": [
+          {
+            "name": "simulation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Simulation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemovedOut"
                 }
               }
             }
@@ -3945,6 +4162,53 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Tidy Study Api Simulations Studies  Study Id  Tidy Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/{study_id}/cancel": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Cancel Study",
+        "description": "DOE 한 벌의 끝나지 않은 설계점을 모두 멈춘다(내가 건 점만).",
+        "operationId": "cancel_study_api_simulations_studies__study_id__cancel_post",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Cancel Study Api Simulations Studies  Study Id  Cancel Post"
                 }
               }
             }
@@ -4425,6 +4689,44 @@
         ],
         "title": "AccountSummaryOut",
         "description": "활성 시스템 관리자 수.\n\n**1명이면 그 사람이 잠기는 순간 복구 경로가 서버 콘솔뿐이다.** 목록은 쪽\n단위라 화면이 세면 틀린다 — 서버가 센다."
+      },
+      "AnalysisColumnOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "factor",
+              "result"
+            ],
+            "title": "Kind"
+          },
+          "numeric": {
+            "type": "boolean",
+            "title": "Numeric"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "unit",
+          "kind",
+          "numeric"
+        ],
+        "title": "AnalysisColumnOut",
+        "description": "분석이 쓰는 열 하나 — 조건 · 목표 · 격자에 이 `key` 를 쓴다."
       },
       "ApproveRequest": {
         "properties": {
@@ -5051,6 +5353,116 @@
         ],
         "title": "ChangePasswordRequest"
       },
+      "ChoiceOut": {
+        "properties": {
+          "objective": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective"
+          },
+          "goal": {
+            "type": "string",
+            "enum": [
+              "min",
+              "max"
+            ],
+            "title": "Goal",
+            "default": "min"
+          },
+          "where": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Where"
+          },
+          "feasible": {
+            "type": "integer",
+            "title": "Feasible"
+          },
+          "best": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChosenPointOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ranked": {
+            "items": {
+              "$ref": "#/components/schemas/ChosenPointOut"
+            },
+            "type": "array",
+            "title": "Ranked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feasible"
+        ],
+        "title": "ChoiceOut",
+        "description": "조건을 만족하는 점과 그중 목표가 가장 좋은 점."
+      },
+      "ChosenPointOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "simulation_id",
+          "params",
+          "values"
+        ],
+        "title": "ChosenPointOut"
+      },
       "ComparisonOut": {
         "properties": {
           "recipe": {
@@ -5250,6 +5662,32 @@
               }
             ],
             "title": "Suggested Element Size Mm"
+          },
+          "suggested_element_size_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "cad",
+                  "compcore"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Element Size From"
+          },
+          "suggested_element_size_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Element Size Basis"
           },
           "suggested_order": {
             "anyOf": [
@@ -6106,6 +6544,32 @@
             ],
             "title": "Suggested Element Size Mm"
           },
+          "suggested_element_size_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "cad",
+                  "compcore"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Element Size From"
+          },
+          "suggested_element_size_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Element Size Basis"
+          },
           "suggested_order": {
             "anyOf": [
               {
@@ -6151,6 +6615,141 @@
         ],
         "title": "DoePreviewOut",
         "description": "폴더를 훑어 본 결과.\n\n**먼저 보여 주고 나서 건다** — 200개를 잘못 걸면 되돌리기 어렵다."
+      },
+      "EffectLevelOut": {
+        "properties": {
+          "level": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Level"
+          },
+          "mean": {
+            "type": "number",
+            "title": "Mean"
+          },
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "mean",
+          "min",
+          "max",
+          "count"
+        ],
+        "title": "EffectLevelOut"
+      },
+      "EffectOut": {
+        "properties": {
+          "factor": {
+            "type": "string",
+            "title": "Factor"
+          },
+          "result": {
+            "type": "string",
+            "title": "Result"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/EffectLevelOut"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "spread": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread"
+          },
+          "spread_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Pct"
+          },
+          "correlation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "factor",
+          "result",
+          "levels"
+        ],
+        "title": "EffectOut",
+        "description": "주효과 — 변수의 수준마다 결과의 평균 · 최소 · 최대(다른 변수는 섞인 채로)."
+      },
+      "FactorRankOut": {
+        "properties": {
+          "factor": {
+            "type": "string",
+            "title": "Factor"
+          },
+          "spread_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Pct"
+          },
+          "correlation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "factor"
+        ],
+        "title": "FactorRankOut"
       },
       "FrequencyComparisonOut": {
         "properties": {
@@ -7733,6 +8332,83 @@
         ],
         "title": "Page[SimulationSummaryOut]"
       },
+      "PairGridOut": {
+        "properties": {
+          "x": {
+            "type": "string",
+            "title": "X"
+          },
+          "y": {
+            "type": "string",
+            "title": "Y"
+          },
+          "result": {
+            "type": "string",
+            "title": "Result"
+          },
+          "xs": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Xs"
+          },
+          "ys": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Ys"
+          },
+          "z": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Z"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "result",
+          "xs",
+          "ys",
+          "z",
+          "complete"
+        ],
+        "title": "PairGridOut",
+        "description": "두 변수의 수준마다 결과 평균 — `z[j][i]` 는 `ys[j]` 행 · `xs[i]` 열. 빈 칸은 `None`."
+      },
       "PatCreateRequest": {
         "properties": {
           "name": {
@@ -8059,6 +8735,39 @@
         "title": "QueueOut",
         "description": "대기 중인 작업이 **어디쯤 서 있나**(ADR 0011) — 같은 솔버의 줄. 「대기」 만 보이면\n사람도 AI 도 얼마나 기다릴지 모른다.\n\n워커는 **사람마다 번갈아** 집는다 — 그래서 내 차례는 「내 앞의 내 작업」 과 「줄을 나눠\n쓰는 사람 수」 로 가늠한다(앞에 선 남의 작업 수로는 안 된다)."
       },
+      "RangeOut": {
+        "properties": {
+          "result": {
+            "type": "string",
+            "title": "Result"
+          },
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          },
+          "min_point": {
+            "type": "integer",
+            "title": "Min Point"
+          },
+          "max_point": {
+            "type": "integer",
+            "title": "Max Point"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result",
+          "min",
+          "max",
+          "min_point",
+          "max_point"
+        ],
+        "title": "RangeOut"
+      },
       "RecipeOut": {
         "properties": {
           "name": {
@@ -8127,6 +8836,36 @@
           "note"
         ],
         "title": "RejectRequest"
+      },
+      "RemovedOut": {
+        "properties": {
+          "jobs": {
+            "type": "integer",
+            "title": "Jobs"
+          },
+          "bytes_freed": {
+            "type": "integer",
+            "title": "Bytes Freed"
+          },
+          "points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs",
+          "bytes_freed"
+        ],
+        "title": "RemovedOut",
+        "description": "작업 · 스터디 지우기의 결과."
       },
       "ResonanceMatchOut": {
         "properties": {
@@ -8212,6 +8951,28 @@
         ],
         "title": "ResonanceMatchOut",
         "description": "실측 공진 하나와 그 짝 — **센서 자리에서 움직이는 모드 중** 가장 가까운 것."
+      },
+      "SensitivityOut": {
+        "properties": {
+          "result": {
+            "type": "string",
+            "title": "Result"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/FactorRankOut"
+            },
+            "type": "array",
+            "title": "Factors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result",
+          "factors"
+        ],
+        "title": "SensitivityOut",
+        "description": "결과 하나에 대해 **어느 변수가 가장 많이 움직이나** — 폭(%)이 큰 차례."
       },
       "ServerStatusOut": {
         "properties": {
@@ -9020,6 +9781,99 @@
           "unit"
         ],
         "title": "StaticMatchOut"
+      },
+      "StudyAnalysisOut": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisColumnOut"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "sensitivity": {
+            "items": {
+              "$ref": "#/components/schemas/SensitivityOut"
+            },
+            "type": "array",
+            "title": "Sensitivity"
+          },
+          "effects": {
+            "items": {
+              "$ref": "#/components/schemas/EffectOut"
+            },
+            "type": "array",
+            "title": "Effects"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/RangeOut"
+            },
+            "type": "array",
+            "title": "Ranges"
+          },
+          "choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChoiceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pair": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PairGridOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id",
+          "name",
+          "recipe",
+          "done",
+          "total",
+          "columns",
+          "sensitivity",
+          "effects",
+          "ranges"
+        ],
+        "title": "StudyAnalysisOut",
+        "description": "DOE 분석 — 민감도 · 주효과 · 결과마다 최소 · 최대 점, (주면) 조건을 건 최적점 · 격자."
       },
       "StudyMatchOut": {
         "properties": {

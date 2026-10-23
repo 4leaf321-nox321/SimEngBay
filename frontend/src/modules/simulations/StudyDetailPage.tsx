@@ -16,14 +16,15 @@
  */
 
 import { useState } from 'react'
-import { Download, Eraser, RefreshCw, RotateCcw } from 'lucide-react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Download, Eraser, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { StudyPoint } from '@/modules/simulations/api'
 import { RECIPE_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { StudyMeasurements } from '@/modules/simulations/StudyMeasurements'
+import { StudyExplorer } from '@/modules/simulations/StudyExplorer'
 import { StudyOverview } from '@/modules/simulations/StudyOverview'
 import { StudyValues } from '@/modules/simulations/StudyValues'
 import { ApiError } from '@/shared/api/client'
@@ -47,8 +48,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui
 import { useResource } from '@/shared/hooks/useResource'
 
 /** DOE 화면의 탭 — 주소의 `?tab=` 이 정본이다. */
-type StudyTab = 'compare' | 'points' | 'checks'
-const STUDY_TABS: StudyTab[] = ['compare', 'points', 'checks']
+type StudyTab = 'compare' | 'explore' | 'points' | 'checks'
+const STUDY_TABS: StudyTab[] = ['compare', 'explore', 'points', 'checks']
 
 export default function StudyDetailPage() {
   const { id = '' } = useParams()
@@ -57,6 +58,9 @@ export default function StudyDetailPage() {
   const [params, setParams] = useSearchParams()
   const [failed, setFailed] = useState<ApiError | Error | null>(null)
   const [tidying, setTidying] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const navigate = useNavigate()
   const [notice, setNotice] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
 
@@ -132,6 +136,8 @@ export default function StudyDetailPage() {
     setParams(after, { replace: true })
   }
   const running = points.filter((one) => !['done', 'failed', 'canceled'].includes(one.status)).length
+  // **도는 점이 있으면 지우지 않는다**(SIMULATIONS-0035) — 대기 중인 점은 서버가 취소로 닫고 지운다.
+  const solving = points.filter((one) => !['done', 'failed', 'canceled', 'queued'].includes(one.status)).length
   const failedPoints = points.filter((one) => one.status === 'failed').length
   const published = study.data.published ?? 0
 
@@ -205,6 +211,13 @@ export default function StudyDetailPage() {
                 {retrying ? '다시 실행 중…' : `실패한 점 다시 실행 (${retryable})`}
               </Button>
             )}
+            {/* **설계점 200개를 하나씩 멈출 수는 없다** — 대기는 곧바로, 도는 점은 몇 초 안에. */}
+            {mine && running > 0 && (
+              <Button variant="outline" size="sm" onClick={() => setStopping(true)}>
+                <Square className="size-4" />
+                모두 멈추기 ({running})
+              </Button>
+            )}
             {mine && (
               <Button variant="outline" size="sm" onClick={() => setTidying(true)}>
                 <Eraser className="size-4" />
@@ -215,6 +228,12 @@ export default function StudyDetailPage() {
               <Download className="size-4" />
               CSV 내보내기
             </Button>
+            {mine && (
+              <Button variant="outline" size="sm" onClick={() => setRemoving(true)}>
+                <Trash2 className="size-4" />
+                삭제
+              </Button>
+            )}
           </>
         }
       />
@@ -249,6 +268,56 @@ export default function StudyDetailPage() {
         onClose={() => setTidying(false)}
       />
 
+      <ConfirmDialog
+        open={stopping}
+        title="DOE 모두 멈추기"
+        description={
+          <>
+            끝나지 않은 설계점 {running}개를 멈춥니다(내가 건 점만). 대기 중인 점은 곧바로, 도는 점은
+            워커가 몇 초 안에 멈춥니다. 멈춘 점은 「실패한 점 다시 실행」 으로 다시 걸 수 있습니다.
+          </>
+        }
+        confirmLabel="모두 멈추기"
+        destructive
+        onConfirm={async () => {
+          const done = await simulationApi.cancelStudy(id)
+          setNotice(`설계점 ${done.points}개를 멈추게 했습니다 — 도는 점은 몇 초 안에 멈춥니다.`)
+          study.reload()
+        }}
+        onClose={() => setStopping(false)}
+      />
+
+      <ConfirmDialog
+        open={removing}
+        title="DOE 삭제"
+        description={
+          solving > 0 ? (
+            <>
+              도는 설계점 {solving}개가 있어 지울 수 없습니다 — 먼저 「모두 멈추기」 를 누르고, 멈춘
+              뒤에 다시 지우세요.
+            </>
+          ) : (
+            <div className="space-y-2">
+              <p>
+                「{study.data.name}」 의 설계점 {points.length}개(내가 건 점)와 그 작업 폴더(결과 · 그림 ·
+                중간 파일)를 모두 지웁니다. 메시 수렴 점검 수준과 올린 실측도 함께 사라집니다. 대기
+                중인 점은 취소하고 지웁니다. 되돌릴 수 없습니다.
+              </p>
+              {published > 0 && <p>게시된 설계점 {published}개는 다른 사람의 화면에서도 사라집니다.</p>}
+              <p>같은 DOE 폴더는 지운 뒤 다시 가져올 수 있습니다.</p>
+            </div>
+          )
+        }
+        confirmLabel="삭제"
+        destructive
+        confirmDisabled={solving > 0}
+        onConfirm={async () => {
+          await simulationApi.removeStudy(id)
+          navigate('/simulations/studies', { replace: true })
+        }}
+        onClose={() => setRemoving(false)}
+      />
+
       {solvers.length > 1 && (
         // **솔버가 섞이면 그 차이(몇 %)가 변수의 효과로 읽힌다** — 견주기 전에 말해 둔다.
         <p className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
@@ -266,6 +335,13 @@ export default function StudyDetailPage() {
           >
             비교
           </TabsTrigger>
+          <TabsTrigger
+            value="explore"
+            disabled={!comparable}
+            title={comparable ? undefined : '끝난 설계점이 생기면 나옵니다'}
+          >
+            다변수
+          </TabsTrigger>
           <TabsTrigger value="points">
             설계점 ({finishedPoints}/{points.length})
           </TabsTrigger>
@@ -280,6 +356,12 @@ export default function StudyDetailPage() {
               // 정적 · 조화는 **모드가 아니라 값**을 견준다 — 모드 지도 · 질량 대 주파수는 뜻이 없다.
               <StudyValues study={study.data} />
             ))}
+        </TabsContent>
+
+        <TabsContent value="explore" className="space-y-6 pt-4">
+          {/* 변수 하나 대 결과 하나를 넘어서 — 3D 산점도 · 2변수 영향 · 주효과 · 산점도 행렬 · 평행
+              좌표 · 상관. 같은 표(끝난 점 · 추적한 모드)를 본다. */}
+          {comparable && <StudyExplorer study={study.data} />}
         </TabsContent>
 
         <TabsContent value="points" className="space-y-3 pt-4">

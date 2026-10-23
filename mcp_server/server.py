@@ -49,8 +49,9 @@ INSTRUCTIONS = (
     "**형상은 CompCore(CAD)에서 온다.** CompCore 에서 DOE · 설계를 만들고 내보내면"
     "(CompCore MCP 의 `doe_export`, 화면의 「해석으로 보내기」) 공유 폴더에 스터디 폴더가 "
     "생기고, 여기서 그것을 읽어 푼다. 두 플랫폼을 잇는 열쇠는 **CompCore 스터디 id** 다(여기 "
-    "`study_id` 와 같다). **사용자에게 공유 폴더 경로를 묻지 않는다** — 스터디 id 나 이름으로 "
-    "`folder_find` 를 부른다. 못 찾으면 CompCore 에서 아직 내보내지 않았거나(그쪽 "
+    "`study_id` 와 같다). **사용자에게 공유 폴더 경로를 묻지 않는다** — CompCore 가 준 "
+    "`study_id` 를 `folder_preview` · `jobs_create` 에 **그대로** 넘기면 서버가 폴더를 찾는다"
+    "(이름만 알면 `folder_find`). 못 찾으면 CompCore 에서 아직 내보내지 않았거나(그쪽 "
     "`doe_export`) 보관 기한(기본 30일)이 지나 치워진 것이다.\n"
     "\n"
     "하려는 일 → 부를 것:\n"
@@ -58,14 +59,17 @@ INSTRUCTIONS = (
     "  무엇을 걸 수 있나(칸 · 기본값)   recipe_schema\n"
     "  공유 폴더를 둘러본다              folder_browse  (무엇이 있는지 모를 때)\n"
     "  걸기 전에 조건이 어떻게 걸리나   folder_preview  (설계점 하나는 number 를 준다)\n"
-    "  해석을 건다                       jobs_create     (설계점 하나 · 여럿 · 폴더 통째로)\n"
+    "  해석을 건다                       jobs_create     (study_id 나 path · 점 하나 · 여럿)\n"
     "  내 작업 · 게시된 작업             jobs_list\n"
     "  진행 상황 · 실패 까닭             job_get         (wait_seconds 로 기다린다)\n"
     "  결과 숫자                         job_result      (늘 mm · MPa · N · Hz)\n"
     "  설계점끼리 견준다                 studies_list → study_get\n"
+    "  DOE 를 분석한다(민감도 · 최적점)  study_analyze   (서버가 셈한다 — 손으로 안 셈한다)\n"
     "  메시가 충분한가                   convergence_start → convergence_get\n"
     "  실측과 견준다                     measurement_add → measurements_get\n"
-    "  실패를 다시 · 멈춘다              job_retry · job_cancel\n"
+    "  실패를 다시 · 멈춘다              job_retry · job_cancel · study_cancel\n"
+    "  서버가 돌고 있나 · 줄이 긴가       server_status\n"
+    "  디스크를 비운다(중간 파일)         files_tidy      (사용자가 시킬 때만)\n"
     "  남에게 보이게 한다                job_publish · study_publish  (사용자가 시킬 때만)\n"
     "\n"
     "지켜야 할 셋:\n"
@@ -97,6 +101,8 @@ _TRANSPORT: httpx.AsyncBaseTransport | None = None
 DESTRUCTIVE_TOOLS = frozenset(
     {
         "job_cancel",  # 도는 해석을 멈춘다 — 그때까지 쓴 솔버 시간은 되살릴 수 없다
+        "study_cancel",  # DOE 한 벌을 통째로 멈춘다 — 한 번에 여러 줄
+        "files_tidy",  # 중간 파일을 지운다 — 되살리려면 다시 풀어야 한다
     }
 )
 
@@ -405,9 +411,12 @@ async def recipe_schema(ctx: Context) -> Any:
     설명)와, 솔버마다 지금 집을 워커가 있나.
 
     스펙은 이 스키마대로 채워 `jobs_create` 에 dict 로 넘긴다. 칸 이름에 단위가 있다
-    (`element_size_mm` · `youngs_modulus_gpa`). 대개 `recipe` · `solver` ·
-    `mesh.element_size_mm` 정도만 주고 나머지(조건 · 물성 · 해석 설정)는 CAD 가 보낸 값을
-    쓴다(`*_from: "cad"`).
+    (`element_size_mm` · `youngs_modulus_gpa`). 대개 `recipe` · `solver` 만 주고 나머지(조건 ·
+    물성 · 해석 설정 · **메시 크기**)는 CAD 가 보낸 값을 쓴다(`*_from: "cad"`). **요소 크기는
+    비워 둔다** — CompCore 가 「전체」 · 파트 · 면 메시 크기를 보내고, 「전체」 를 안 적었으면
+    형상으로 셈한 제안값을 보낸다(`folder_preview` 의 `suggested_element_size_mm` ·
+    `suggested_element_size_from`). 사람이 크기를 정해 달라고 할 때만 `mesh.element_size_mm`
+    을 준다 — 그 값이 CAD 의 전역 크기를 덮는다.
     집을 워커가 없는 솔버로 걸면 작업이 대기에서 움직이지 않는다."""
     recipes = await _get(ctx, "/api/simulations/recipes")
     if _failed(recipes):
@@ -419,6 +428,86 @@ async def recipe_schema(ctx: Context) -> Any:
 # --------------------------------------------------------------------------- #
 # CAD 폴더 — 걸기 전에
 # --------------------------------------------------------------------------- #
+
+
+#: 공유 폴더에서 스터디를 못 찾았을 때 — 0건을 「없다」 로만 전하지 않게.
+NOT_FOUND_HINT = (
+    "이 서버의 공유 폴더(roots)에 없다. CompCore 에서 아직 내보내지 않았거나(그쪽 MCP 의 "
+    "doe_export · 화면의 「해석으로 보내기」) 보관 기한(기본 30일)이 지나 치워졌다 — "
+    "CompCore 에서 다시 내보내면 같은 폴더가 다시 선다. 내보냈는데도 없으면 CompCore 의 "
+    "내보내기 폴더가 이 서버에 마운트되지 않은 것이다(관리자 일 — 운영 안내서 「DOE 공용 "
+    "폴더」). 이름이면 다른 말로도 찾아본다."
+)
+
+#: CompCore 가 내보낸 폴더 이름의 꼬리 — `<이름>-<스터디 id 앞 8자리>`.
+_COMPCORE_TAIL = re.compile(r"-([0-9a-fA-F]{8})$")
+#: 경로 탓인 거절 — 공용 폴더 밖(0020) · 폴더가 없거나 DOE 폴더가 아님(0014). 이때만 id 로
+#: 다시 찾는다.
+_PATH_REFUSED = re.compile(r"SIMULATIONS-00(?:14|20)\]")
+
+
+def _compcore_key(path: str) -> str | None:
+    """CompCore 가 준 경로(`F:\\…\\<이름>-<id8>` · `/data/doe-export/…`)의 꼬리에서 스터디
+    id 앞 8자리. 꼬리가 그 모양이 아니면 None."""
+    name = re.split(r"[\\/]", path.rstrip("\\/"))[-1]
+    found = _COMPCORE_TAIL.search(name)
+    return found.group(1).lower() if found else None
+
+
+async def _find_folder(ctx: Context, key: str) -> tuple[str | None, Any]:
+    """스터디 id(전체 · 앞 8자리)로 이 서버의 폴더 **하나** → (경로, None) 또는 (None, 돌려줄
+    오류). 이름 맞음은 쓰지 않는다 — id 가 아니면 엉뚱한 스터디를 걸 수 있다."""
+    got = await _get(ctx, "/api/simulations/doe/find", {"q": key})
+    if _failed(got) or not isinstance(got, dict):
+        return None, got
+    by_id = [one for one in got.get("found") or [] if one.get("matched_by") == "id"]
+    if len(by_id) == 1:
+        return str(by_id[0]["path"]), None
+    if not by_id:
+        return None, {
+            "error": f"스터디 {key} 의 폴더가 이 서버의 공유 폴더에 없습니다.",
+            "hint": NOT_FOUND_HINT,
+            "roots": got.get("roots"),
+        }
+    return None, {
+        "error": f"스터디 {key} 에 맞는 폴더가 여럿입니다 — 사람에게 고르게 하고 path 로 "
+        "다시 부른다.",
+        "found": by_id,
+    }
+
+
+async def _in_folder(ctx: Context, path: str | None, study_id: str | None, call: Any) -> Any:
+    """`call(path)` 를 부른다 — 폴더는 ① `path`(이 서버의 경로) ② `study_id`(CompCore 스터디
+    id) ③ `path` 가 CompCore 가 준 경로(`F:\\…\\<이름>-<id8>`)면 그 꼬리의 id 로 찾은 것.
+
+    CompCore 의 `doe_run` · `doe_export` 는 Windows 경로와 스터디 id 를 준다. 그 경로는 이
+    서버가 보는 경로와 글자로 맞지 않아(`/mnt/…` · 컨테이너의 `/data/doe`) 그대로 넘기면
+    「공용 폴더 밖」 이다 — AI 가 `folder_find` 를 끼워 부르는 것을 잊으면 거기서
+    멈췄다(2026-10-23). 경로 탓인 거절일 때만 다시 찾는다 — 스펙이 틀린 것 같은 다른 거절은
+    그대로 전한다."""
+    if path is None and study_id is None:
+        return {
+            "error": "path(이 서버의 폴더) 나 study_id(CompCore 스터디 id) 중 하나를 준다 — "
+            "CompCore 의 doe_run · doe_export 가 준 study_id 를 그대로 넘기면 된다."
+        }
+    if path is None:
+        found, problem = await _find_folder(ctx, str(study_id))
+        return problem if problem is not None else _resolved(await call(found), found)
+    got = await call(path)
+    key = study_id or _compcore_key(path)
+    if key is None or not _failed(got) or not _PATH_REFUSED.search(str(got.get("error"))):
+        return got
+    found, problem = await _find_folder(ctx, key)
+    if problem is not None:
+        return {**problem, "first_error": got.get("error")}
+    return _resolved(await call(found), found)
+
+
+def _resolved(got: Any, path: str | None) -> Any:
+    """찾아서 쓴 폴더를 답에 남긴다 — 사람에게 「어느 폴더로 걸었나」 를 말할 수 있게."""
+    if isinstance(got, dict) and not _failed(got) and path:
+        got["folder"] = path
+    return got
 
 
 @mcp.tool()
@@ -434,11 +523,7 @@ async def folder_find(ctx: Context, query: str) -> Any:
     한다(첫 줄을 집지 않는다)."""
     got = await _get(ctx, "/api/simulations/doe/find", {"q": query})
     if isinstance(got, dict) and got.get("found") == []:
-        got["hint"] = (
-            "공유 폴더에 없다. CompCore 에서 아직 내보내지 않았거나(그쪽 MCP 의 doe_export · "
-            "화면의 「해석으로 보내기」) 보관 기한(기본 30일)이 지나 치워졌다 — CompCore 에서 "
-            "다시 내보내면 같은 폴더가 다시 선다. 이름이면 다른 말로도 찾아본다."
-        )
+        got["hint"] = NOT_FOUND_HINT
     return got
 
 
@@ -453,9 +538,17 @@ async def folder_browse(ctx: Context, path: str | None = None) -> Any:
 
 @mcp.tool()
 async def folder_preview(
-    ctx: Context, path: str, number: int | None = None, recipe: str | None = None
+    ctx: Context,
+    path: str | None = None,
+    number: int | None = None,
+    recipe: str | None = None,
+    study_id: str | None = None,
 ) -> Any:
     """**걸기 전에** 폴더를 읽어 본다. 저장하지 않는다.
+
+    폴더는 `path`(이 서버의 경로) 또는 **`study_id`(CompCore 스터디 id — `doe_run` ·
+    `doe_export` 가 준 것 그대로)**. CompCore 가 준 Windows 경로를 `path` 로 넘겨도 그 꼬리의
+    id 로 찾는다.
 
     - `number` 없이: 스터디 전체 — 설계점 몇 개 · 바꾼 변수 · 걸 수 있는 것 · 건너뛸 것(까닭) ·
       CAD 가 권하는 해석 종류 · 모드 수 · 요소 크기 · 큰 변형.
@@ -465,13 +558,19 @@ async def folder_preview(
 
     `recipe` 를 주면 그 해석 종류로 읽는다(비우면 CAD 가 권한 것). `refused` 가 있으면 걸기
     전에 사람에게 까닭을 말한다."""
-    if number is None:
+
+    async def read(folder: str) -> Any:
+        if number is None:
+            return await _get(
+                ctx, "/api/simulations/doe/preview", {"path": folder, "recipe": recipe}
+            )
         return await _get(
-            ctx, "/api/simulations/doe/preview", {"path": path, "recipe": recipe}
+            ctx,
+            "/api/simulations/doe/point",
+            {"path": folder, "number": number, "recipe": recipe},
         )
-    return await _get(
-        ctx, "/api/simulations/doe/point", {"path": path, "number": number, "recipe": recipe}
-    )
+
+    return await _in_folder(ctx, path, study_id, read)
 
 
 # --------------------------------------------------------------------------- #
@@ -494,15 +593,18 @@ async def _home_workspace(ctx: Context) -> str | None:
 @mcp.tool()
 async def jobs_create(
     ctx: Context,
-    path: str,
     spec: dict[str, Any],
+    path: str | None = None,
+    study_id: str | None = None,
     numbers: list[int] | None = None,
     name: str | None = None,
     workspace_slug: str | None = None,
 ) -> Any:
     """CAD 폴더의 설계점에 해석을 건다 — **점마다 작업 하나.**
 
-    - `path`: `folder_find` · `folder_browse` 가 준 폴더(스터디 · 설계 하나).
+    - 폴더는 **`study_id`(CompCore 스터디 id — `doe_run` · `doe_export` 가 준 것 그대로)**
+      또는 `path`(`folder_find` · `folder_browse` 가 준 이 서버의 경로). CompCore 가 준 Windows
+      경로를 `path` 로 넘겨도 그 꼬리의 id 로 찾는다. 답의 `folder` 가 실제로 건 폴더다.
     - `spec`: `recipe_schema` 대로의 스펙(dict). 모든 점에 같은 스펙이다.
     - `numbers`: 고른 설계점 번호. 비우면 걸 수 있는 전부(설계 하나면 그 하나).
     - `name`: 작업 이름 — 비우면 폴더 이름 · 「폴더 pNNNN (변수 값)」.
@@ -513,17 +615,21 @@ async def jobs_create(
     가져온 점을 다시 걸면 거절된다(같은 해석을 두 번 돌리지 않는다)."""
     if not workspace_slug:
         workspace_slug = await _home_workspace(ctx)
-    return await _post(
-        ctx,
-        "/api/simulations/doe/import",
-        {
-            "path": path,
-            "spec": spec,
-            "numbers": numbers,
-            "name": name,
-            "workspace_slug": workspace_slug,
-        },
-    )
+
+    async def create(folder: str) -> Any:
+        return await _post(
+            ctx,
+            "/api/simulations/doe/import",
+            {
+                "path": folder,
+                "spec": spec,
+                "numbers": numbers,
+                "name": name,
+                "workspace_slug": workspace_slug,
+            },
+        )
+
+    return await _in_folder(ctx, path, study_id, create)
 
 
 @mcp.tool()
@@ -678,6 +784,106 @@ async def study_publish(ctx: Context, study_id: str, unpublish: bool = False) ->
     `unpublish=true` 면 해제한다. **사람이 판단할 일이다** — 사용자가 시킬 때만 부른다."""
     action = "unpublish" if unpublish else "publish"
     return await _post(ctx, f"/api/simulations/studies/{study_id}/{action}")
+
+
+@mcp.tool()
+async def study_analyze(
+    ctx: Context,
+    study_id: str,
+    result: str | None = None,
+    objective: str | None = None,
+    goal: str = "min",
+    where: list[str] | None = None,
+    x: str | None = None,
+    y: str | None = None,
+) -> Any:
+    """DOE 결과를 **서버가 셈해 준다** — `study_get` 의 점들을 받아 손으로 평균 · 상관을 내지
+    않는다(점 200개면 문맥을 다 먹고, 셈은 틀리기 쉽다). 화면의 「다변수」 탭과 같은 표다.
+
+    - 그냥 부르면: `columns`(아래 인자에 쓰는 열 key) · **민감도** `sensitivity`(결과마다
+      어느 변수가 가장 많이 움직이나 — 주효과 폭 % 와 상관계수) · 결과마다 최소 · 최대 점
+      `ranges`.
+    - `result`: 결과 열 하나로 좁힌다 — 그때 주효과 `effects`(변수의 수준마다 평균 · 최소 ·
+      최대)도 싣는다.
+    - `objective` + `goal`(`min` · `max`) + `where`(예: `["mode:1>=300", "max_mpa<=200"]` —
+      「열>=값」 · 「열<=값」 · 「열=값」): 조건을 만족하는 점과 그중 목표가 가장 좋은 점
+      `choice`.
+    - `x` · `y`(설계 변수 열) + `result`: 두 변수의 조합마다 결과 평균 `pair`(빈 칸은 null —
+      메우지 않는다).
+
+    열 key: `factor:<변수>` · 모달 `mode:<기준 차수>`(형상으로 이은 모드 — 순번이 아니다) ·
+    정적 `max_mm` · `max_mpa` · `reaction:<영역>` · `probe:<측정점>` · 조화 `peak_hz` ·
+    `peak_mm` · 공통 `mass_kg`. 모르는 key 면 쓸 수 있는 열을 알려 준다. 끝난 점만 센다."""
+    got = await _get(
+        ctx,
+        f"/api/simulations/studies/{study_id}/analysis",
+        {
+            "result": result,
+            "objective": objective,
+            "goal": goal,
+            "where": where or None,
+            "x": x,
+            "y": y,
+        },
+    )
+    # **결과를 안 고르면 주효과는 뺀다** — 변수 x 결과 x 수준이라 커지고, 요약은 민감도에 있다.
+    if result is None and isinstance(got, dict):
+        got.pop("effects", None)
+    return got
+
+
+@mcp.tool()
+async def study_cancel(ctx: Context, study_id: str) -> Any:
+    """DOE 한 벌의 **끝나지 않은 설계점을 모두 멈춘다**(내가 건 점만) — 대기는 곧바로, 도는
+    점은 워커가 몇 초 안에. DOE 를 잘못 걸었을 때 되돌리는 길이다. **사용자가 시킬 때만** —
+    그때까지 쓴 솔버 시간은 되살릴 수 없다. 멈춘 점은 `job_retry` 로 다시 건다."""
+    return await _post(ctx, f"/api/simulations/studies/{study_id}/cancel")
+
+
+@mcp.tool()
+async def server_status(ctx: Context) -> Any:
+    """해석 서버가 지금 돌릴 수 있나 — 솔버마다 **살아 있는 워커 수 · 기다리는 작업 수**.
+    「왜 안 도나」 · 「언제쯤 도나」 에 답하는 자리다(내 작업 하나의 줄 순번은 `job_get` 의
+    `queue`). 워커가 0 인 솔버로 건 작업은 대기에서 움직이지 않는다 — 그러면 서버 관리자에게
+    알리라고 말한다. 시스템 관리자면 워커마다 하는 일 · 솔버별 도는 수 · Ansys 라이선스를 쥔
+    작업까지 싣는다."""
+    solvers = await _get(ctx, "/api/simulations/solvers")
+    if _failed(solvers):
+        return solvers
+    out: dict[str, Any] = {"solvers": solvers}
+    # 워커 상세는 시스템 관리자만 — 아니면 403 이고, 그때는 솔버 요약만 준다.
+    detail = await _get(ctx, "/api/simulations/workers")
+    if isinstance(detail, dict) and not _failed(detail):
+        out["queues"] = detail.get("queues")
+        out["workers"] = [
+            {
+                "id": one.get("id"),
+                "state": one.get("state"),
+                "solvers": one.get("solvers"),
+                "silent_seconds": one.get("silent_seconds"),
+                "job": one.get("job"),
+            }
+            for one in detail.get("workers") or []
+        ]
+        out["license_holders"] = detail.get("license_holders")
+    return out
+
+
+@mcp.tool()
+async def files_tidy(
+    ctx: Context, job_id: str | None = None, study_id: str | None = None
+) -> Any:
+    """끝난 작업(또는 DOE 한 벌)의 **중간 파일**(.mechdb · .rst · 솔버 scratch)을 지워 디스크를
+    비운다 — 결과 요약 · 그림 · 입력은 남는다. 지운 중간 파일이 다시 필요하면 다시 풀어야 한다.
+    **사용자가 시킬 때만.** 둘 중 하나만 준다."""
+    if (job_id is None) == (study_id is None):
+        return {"error": "job_id 와 study_id 중 하나만 줍니다."}
+    path = (
+        f"/api/simulations/{job_id}/tidy"
+        if job_id is not None
+        else f"/api/simulations/studies/{study_id}/tidy"
+    )
+    return await _post(ctx, path)
 
 
 @mcp.tool()

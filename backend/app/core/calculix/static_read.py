@@ -19,6 +19,7 @@ from app.core import boundary
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, vtp
 from app.core.calculix.mesh import read_mesh
+from app.core.numbers import significant
 from app.core.spec import StaticSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -44,14 +45,14 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
             "solver_failed", f"{FRD_NAME} 에 변위 블록이 없습니다 — 솔버 로그를 보세요."
         )
     magnitude = frd_reader.magnitudes(moved)
-    max_displacement = round(max(magnitude.values(), default=0.0), 8)
+    max_displacement = significant(max(magnitude.values(), default=0.0))
 
     stressed = next((one for one in reversed(blocks) if one.kind == "STRESS"), None)
     # **못 읽으면 `None`** — 없는 값을 0 으로 적지 않는다(0 은 「응력이 없다」 로 읽힌다).
     max_von_mises: float | None = None
     if stressed is not None:
         values = frd_reader.von_mises(stressed)
-        max_von_mises = round(max(values.values(), default=0.0), 6) or None
+        max_von_mises = significant(max(values.values(), default=0.0)) or None
 
     result: dict[str, Any] = {
         "recipe": "static",
@@ -189,7 +190,7 @@ def _reactions(workdir: Path) -> dict[str, list[float]]:
             continue
         extra = offsets.get(region) or (0.0, 0.0, 0.0)
         out[region] = [
-            round((by_set[str(name).upper()][axis] if name else 0.0) + extra[axis], 6)
+            significant((by_set[str(name).upper()][axis] if name else 0.0) + extra[axis])
             for axis, name in enumerate(row)
         ]
     return out

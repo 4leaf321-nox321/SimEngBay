@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -30,6 +32,7 @@ from app.core.stages import (
     StageContext,
     StageFailure,
     StageResult,
+    out_of_memory_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -220,6 +223,9 @@ class SubprocessExecutor:
                 # 깨지는 것과 작업이 실패하는 것은 다른 값이다.
                 encoding="utf-8",
                 errors="replace",
+                # **자식을 새 세션(프로세스 그룹)으로** — 멈출 때 그 자식이 띄운 솔버(gmsh ·
+                # ccx · Mechanical)까지 그룹째 멈추려고(`_stop`).
+                start_new_session=_GROUPS,
             )
         except FileNotFoundError as failure:
             raise StageFailure(
@@ -253,19 +259,44 @@ class SubprocessExecutor:
                 child.returncode,
                 _tail(stderr or ""),
             )
+        if child.returncode == -signal.SIGKILL:
+            # 우리가 보낸 것이 아니다(취소 · 시간 초과는 위에서 이미 끝났다) — 운영체제가
+            # 메모리가 모자라 죽였다. 「도중에 죽었다」 로만 적으면 사람은 솔버 버그를 찾는다.
+            raise StageFailure("out_of_memory", out_of_memory_message(f"{ctx.stage} 단계"))
         # **종료 코드가 아니라 결과 파일을 믿는다.** 자식이 왜 죽었는지는 그 파일에만 있고,
         # 없으면 read_result 가 「도중에 죽었다」 고 말한다.
         return stage_run.read_result(ctx.workdir, ctx.stage, exit_code=child.returncode)
 
 
+#: 자식을 새 세션으로 띄우고 그룹째 멈춘다 — POSIX 에서만(Windows 의 워커는 없다).
+_GROUPS = os.name == "posix"
+
+
 def _stop(child: subprocess.Popen[str]) -> None:
-    """자식을 멈춘다. **먼저 곱게, 안 되면 세게.** Mechanical 은 곧바로 안 죽는다."""
-    child.terminate()
+    """자식과 **그 자식이 띄운 것 전부**를 멈춘다. 먼저 곱게, 안 되면 세게(Mechanical 은 곧바로
+    안 죽는다).
+
+    자식(단계 실행기 파이썬)만 멈추면 그것이 띄운 솔버가 고아로 남아 계속 돈다 — 운영에서
+    취소한 DOE 의 CalculiX 6개가 돌며 메모리를 다 썼다(2026-10-23). 그래서 자식을 새 세션으로
+    띄우고(`start_new_session`) 그 프로세스 그룹에 보낸다. 자식이 먼저 끝나도 솔버가 남을 수
+    있어 끝에 그룹에 한 번 더 보낸다."""
+    _signal(child, signal.SIGTERM)
     try:
         child.wait(timeout=STOP_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
-        child.kill()
+        _signal(child, signal.SIGKILL)
         child.wait(timeout=STOP_GRACE_SECONDS)
+    _signal(child, signal.SIGKILL)
+
+
+def _signal(child: subprocess.Popen[str], sig: int) -> None:
+    if not _GROUPS:
+        if child.poll() is None:
+            child.kill() if sig == signal.SIGKILL else child.terminate()
+        return
+    # 새 세션의 그룹 번호는 자식의 pid 다. 그룹이 이미 비었으면 할 일이 없다.
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(child.pid, sig)
 
 
 def _tail(text: str, lines: int = 40) -> str:

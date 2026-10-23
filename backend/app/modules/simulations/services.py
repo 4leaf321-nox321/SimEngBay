@@ -23,6 +23,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 import zipfile
@@ -76,6 +77,7 @@ from app.core.stages import (
     StageFailure,
 )
 from app.modules.accounts.models import User
+from app.modules.simulations import analysis as study_analysis
 from app.modules.simulations.models import (
     FINAL_STATUSES,
     RUNNING_STATUSES,
@@ -114,6 +116,7 @@ from app.modules.simulations.schemas import (
     SolverAvailabilityOut,
     SolverQueueOut,
     StageOut,
+    StudyAnalysisOut,
     StudyMatchOut,
     StudyMeasurementOut,
     StudyOut,
@@ -540,6 +543,14 @@ def _result_of(db: Session, simulation: Simulation) -> dict[str, Any]:
     return loaded
 
 
+def _mass_of(summary: dict[str, Any]) -> float | None:
+    """요약의 질량. **0 은 없는 값이다** — 질량이 0 인 형상은 없고, 2026-10-23 전의 작업은
+    kg 을 소수 넷째 자리로 잘라 작은 부품(0.029 g)이 0 으로 남았다. 0 으로 내면 비교 · AI 가
+    그것을 값으로 믿는다(다시 실행하면 유효숫자로 남는다 — `core/numbers.py`)."""
+    found = summary.get("mass_kg")
+    return float(found) if isinstance(found, int | float) and found > 0 else None
+
+
 def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut:
     """견줄 값(mm · MPa · N · Hz) — 스터디 비교와 같은 `core_values.read` 로 꺼낸다. 결과가
     아직 없으면 `result_json` 과 같은 말(왜 없는지)로 거절한다."""
@@ -550,7 +561,7 @@ def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut
         simulation_id=simulation.id,
         recipe=simulation.recipe,
         solver=solver_of(simulation),
-        mass_kg=summary.get("mass_kg"),
+        mass_kg=_mass_of(summary),
         nodes=found.nodes,
         first_elastic_hz=found.first_elastic_hz,
         frequencies=found.frequencies,
@@ -1024,6 +1035,8 @@ def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
         suggested_modes=analysis.modes,
         suggested_recipe=analysis.recipe,
         suggested_element_size_mm=analysis.element_size_mm,
+        suggested_element_size_from=analysis.element_size_from,
+        suggested_element_size_basis=analysis.element_size_basis,
         suggested_order=analysis.order,
         suggested_large_deflection=analysis.large_deflection,
     )
@@ -1036,6 +1049,10 @@ class _DoeAnalysis:
     recipe: str | None = None
     modes: int | None = None
     element_size_mm: float | None = None
+    element_size_from: Literal["cad", "compcore"] | None = None
+    """그 크기가 어디서 왔나 — 사람이 적은 「전체」 힌트인가, CompCore 가 형상으로 셈한
+    제안인가."""
+    element_size_basis: str | None = None
     order: str | None = None
     """「전체」 요소 차수(`linear` · `quadratic`) — 적혀 있을 때만."""
     large_deflection: bool | None = None
@@ -1049,8 +1066,8 @@ def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
     레시피(상자 · 구멍 노드)라 해석과 상관이 없다. 적혀 있지 않으면 비워 둔다: 조건 읽기는 없을
     때 모달로 채우는데, 그것을 「CAD 가 모달이라 했다」 로 보여 주면 거짓이다.
 
-    요소 크기는 「전체」 힌트를 **mm 로 옮겨** 낸다(SI 폴더면 m 로 온다) — CalculiX 모델링이
-    같은 셈을 한다(`calculix/build.py` 의 `_global_size`).
+    요소 크기는 「전체」 힌트를 **mm 로 옮겨** 내고, 없으면 CompCore 의 제안값이다 — 모델링이
+    같은 셈을 한다(`Conditions.global_size`).
     """
     try:
         system = units.declared_in(payload)
@@ -1061,11 +1078,17 @@ def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
     declared = block.get("analysis") if isinstance(block, dict) else None
     kind = declared.get("type") if isinstance(declared, dict) else None
     hint = given.whole_mesh
-    whole = hint.element_size if hint is not None else None
+    size = given.global_size(system.length_mm)
     return _DoeAnalysis(
         recipe=kind if kind in RUNNABLE_RECIPES else None,
         modes=given.analysis.modes,
-        element_size_mm=round(whole * system.length_mm, 6) if whole is not None else None,
+        element_size_mm=round(size[0], 6) if size is not None else None,
+        element_size_from=size[1] if size is not None else None,
+        element_size_basis=(
+            given.suggested_basis or None
+            if size is not None and size[1] == "compcore"
+            else None
+        ),
         order=hint.order if hint is not None and hint.order else None,
         large_deflection=given.analysis.large_deflection,
     )
@@ -1148,6 +1171,8 @@ def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOu
         suggested_recipe=analysis.recipe,
         suggested_modes=analysis.modes,
         suggested_element_size_mm=analysis.element_size_mm,
+        suggested_element_size_from=analysis.element_size_from,
+        suggested_element_size_basis=analysis.element_size_basis,
         suggested_order=analysis.order,
         suggested_large_deflection=analysis.large_deflection,
         conditions=conditions_out(payload, recipe=wanted),
@@ -1293,24 +1318,27 @@ def size_gap(
 ) -> str | None:
     """CalculiX 작업인데 **요소 크기를 어디서도 못 얻나** — 있으면 까닭, 없으면 `None`.
 
-    CalculiX 모델링은 크기를 스펙에서, 비면 CAD 의 「전체」 메시 힌트에서 얻고, 둘 다 없으면
-    멈춘다(`calculix/build._global_size` — gmsh 가 제 나름으로 잡으면 같은 형상이 실행마다 다른
-    메시로 풀린다). 화면은 미리 막지만 API 는 받았다 — 기본 솔버가 CalculiX 가 된 뒤로는 솔버도
-    크기도 안 적은 요청이 워커에서야 「요소 크기가 없습니다」 로 멈췄다. 규칙은 모델링과 같다:
-    「내 스펙으로」(`conditions_from="spec"`)면 CAD 힌트를 안 읽는다.
+    CalculiX 모델링은 크기를 스펙에서, 비면 CAD 의 「전체」 메시 힌트 · CompCore 의 제안값에서
+    얻고, 다 없으면 멈춘다(`calculix/build._global_size` — gmsh 가 제 나름으로 잡으면 같은
+    형상이 실행마다 다른 메시로 풀린다). 화면은 미리 막지만 API 는 받았다 — 기본 솔버가
+    CalculiX 가 된 뒤로는 솔버도 크기도 안 적은 요청이 워커에서야 「요소 크기가 없습니다」 로
+    멈췄다. 규칙은 모델링과 같다: 「내 스펙으로」(`conditions_from="spec"`)면 CAD 힌트를 안
+    읽는다.
     """
     if spec.solver != "calculix" or spec.mesh.element_size_mm is not None:
         return None
     if spec.conditions_from == "cad" and payload:
         try:
-            hint = condition_model.read(payload, recipe=spec.recipe).whole_mesh
+            # 있는가만 본다 — 단위(SI 면 m)는 여기서 상관없다.
+            found = condition_model.read(payload, recipe=spec.recipe).global_size(1.0)
         except ValueError:
-            hint = None
-        if hint is not None and hint.element_size is not None:
+            found = None
+        if found is not None:
             return None
     return (
         "CalculiX 는 요소 크기가 필요합니다 — 스펙의 mesh.element_size_mm 에 넣거나, CAD 가 "
-        "「전체」 메시 힌트로 크기를 보내야 합니다(CAD 조건을 끄면 그 힌트도 안 읽습니다)."
+        "「전체」 메시 힌트(또는 CompCore 의 제안값)로 크기를 보내야 합니다(CAD 조건을 끄면 "
+        "그것도 안 읽습니다)."
     )
 
 
@@ -1516,22 +1544,22 @@ def _study_points(
     점마다 마지막 작업만 준다(`_latest_per_point`). `every` 면 다시 가져오기 전의 시도까지 —
     정리(중간 파일 지우기)는 그것들도 대상이다."""
     rows = list(
-        db.scalars(
-            _visible(user)
-            .where(
-                Simulation.source_kind == "doe_point",
-                or_(
-                    Simulation.source_meta["study_id"].astext == study_id,
-                    and_(
-                        Simulation.source_meta["study_id"].astext.is_(None),
-                        Simulation.source_meta["study_name"].astext == study_id,
-                    ),
-                ),
-            )
-            .order_by(Simulation.created_at)
-        )
+        db.scalars(_visible(user).where(_in_study(study_id)).order_by(Simulation.created_at))
     )
     return rows if every else _latest_per_point(rows)
+
+
+def _in_study(study_id: str) -> ColumnElement[bool]:
+    return and_(
+        Simulation.source_kind == "doe_point",
+        or_(
+            Simulation.source_meta["study_id"].astext == study_id,
+            and_(
+                Simulation.source_meta["study_id"].astext.is_(None),
+                Simulation.source_meta["study_name"].astext == study_id,
+            ),
+        ),
+    )
 
 
 def solver_of(simulation: Simulation) -> str:
@@ -1695,6 +1723,29 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
     )
 
 
+def analyze_study(
+    db: Session,
+    *,
+    user: User,
+    study_id: str,
+    result: str | None = None,
+    objective: str | None = None,
+    goal: Literal["min", "max"] = "min",
+    where: list[str] | None = None,
+    x: str | None = None,
+    y: str | None = None,
+) -> StudyAnalysisOut:
+    """DOE 분석(`analysis.py`) — 비교 화면과 같은 표에서 셈한다. 모르는 열 · 못 읽는 조건은
+    400 으로, **쓸 수 있는 열을 함께** 말한다(AI 가 다시 고를 수 있게)."""
+    study = get_study(db, user=user, study_id=study_id)
+    try:
+        return study_analysis.analyze(
+            study, result=result, objective=objective, goal=goal, where=where, x=x, y=y
+        )
+    except ValueError as problem:
+        raise AppError(code("SIMULATIONS", 36), str(problem), status=400) from None
+
+
 def _study_owner(points: list[Simulation]) -> uuid.UUID | None:
     """스터디의 주인 — 점들을 가장 많이 건 사람. 실패한 점을 다른 사람이 다시 가져오면
     섞인다."""
@@ -1718,7 +1769,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         recipe=simulation.recipe,
         solver=solver_of(simulation),
         first_elastic_hz=summary.get("first_elastic_hz"),
-        mass_kg=summary.get("mass_kg"),
+        mass_kg=_mass_of(summary),
         nodes=summary.get("nodes"),
         frequencies=[
             float(mode["frequency_hz"])
@@ -1945,15 +1996,20 @@ def cancel(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
     simulation.cancel_requested_at = _now()
     if simulation.status == "queued":
         # 아직 아무도 안 집었다 — 여기서 끝낸다. 워커를 기다릴 이유가 없다.
-        simulation.status = "canceled"
-        simulation.finished_at = _now()
-        simulation.stages = [
-            {**one, "status": "canceled" if one["status"] == "pending" else one["status"]}
-            for one in simulation.stages
-        ]
+        _close_queued(simulation)
     db.commit()
     db.refresh(simulation)
     return simulation
+
+
+def _close_queued(simulation: Simulation) -> None:
+    simulation.status = "canceled"
+    simulation.cancel_requested_at = simulation.cancel_requested_at or _now()
+    simulation.finished_at = _now()
+    simulation.stages = [
+        {**one, "status": "canceled" if one["status"] == "pending" else one["status"]}
+        for one in simulation.stages
+    ]
 
 
 def claim_next(
@@ -3270,6 +3326,207 @@ def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
     # 정리는 다시 가져오기 전의 시도까지 하지만, 세는 것은 설계점이다 — 한 점의 두 시도를
     # 두 점으로 말하면 화면의 「설계점 N개」 가 스터디 표와 어긋난다.
     return {"bytes_freed": freed, "files": files, "points": len(_latest_per_point(points))}
+
+
+# --- 지우기 -----------------------------------------------------------------------
+
+#: 감사 기록의 일. 지우기는 게시된 결과까지 남에게서 거둔다 — 누가 언제 지웠는지 남긴다.
+SIMULATION_DELETED = "simulation.deleted"
+STUDY_DELETED = "study.deleted"
+STUDY_CANCELED = "study.canceled"
+
+
+def remove(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, int]:
+    """작업을 지운다 — 목록 · DOE 비교에서 사라지고 **작업 폴더(결과 파일)도 지운다.** 메시
+    수렴 수준 · 붙은 실측도 함께. 게시돼 있었으면 남에게서도 사라진다.
+
+    **행은 남긴다**(`deleted_at`) — 감사 기록과 밖의 보고서가 그 id 를 가리킨다. 파일은
+    남기지 않는다 — 지우는 까닭이 대개 디스크다.
+
+    **도는 작업은 지우지 않는다** — 먼저 멈춘다(SIMULATIONS-0035). 대기 중이면 그대로 지운다.
+    DOE 설계점이면 **그 점의 앞선 시도도 함께** — 실패해 다시 가져오기 전의 작업이 남으면, 지운
+    점 자리에 옛 실패가 다시 올라온다(`_latest_per_point`).
+    """
+    simulation = get_visible(db, user=user, simulation_id=simulation_id)
+    _require_owner(user, simulation)
+    jobs = _locked(db, _with_levels(db, user, _attempts_of(db, user, simulation)))
+    _refuse_running(jobs)
+    folders = _bury(db, jobs)
+    audit.record(
+        db,
+        action=SIMULATION_DELETED,
+        actor=user,
+        target_table="simulations",
+        target_id=simulation.id,
+        target_label=simulation.name,
+        workspace_id=simulation.owner_workspace_id,
+        changes={"jobs": len(jobs), "published": simulation.published_at is not None},
+    )
+    db.commit()
+    return {"jobs": len(jobs), "bytes_freed": _sweep(folders)}
+
+
+def remove_study(db: Session, *, user: User, study_id: str) -> dict[str, int]:
+    """DOE 한 벌을 지운다 — **내가 건 점 전부**(앞선 시도 · 메시 수렴 수준까지, 시스템 관리자는
+    모두). 남의 점이 남으면 스터디는 그 점들로 남는다.
+
+    점이 하나도 안 남으면 스터디에 붙은 실측도 내린다 — 같은 DOE 를 다시 가져올 때 옛 실측이
+    새 결과에 붙지 않게.
+    """
+    points = _study_points(db, user, study_id, every=True)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
+    mine = _my_points(user, points)
+    jobs = _locked(db, _with_levels(db, user, mine))
+    _refuse_running(jobs)
+    folders = _bury(db, jobs)
+    db.flush()
+    # **안 보이는 점까지 센다** — 남의 게시 전 점이 남았는데 실측을 내리면 그 사람의 비교가
+    # 빈다.
+    left = db.scalar(
+        select(func.count())
+        .select_from(Simulation)
+        .where(Simulation.deleted_at.is_(None), _in_study(study_id))
+    )
+    if not left:
+        db.execute(
+            update(SimulationMeasurement)
+            .where(
+                SimulationMeasurement.study_id == study_id,
+                SimulationMeasurement.deleted_at.is_(None),
+            )
+            .values(deleted_at=_now())
+        )
+    removed = len(_latest_per_point(mine))
+    audit.record(
+        db,
+        action=STUDY_DELETED,
+        actor=user,
+        target_table="simulations",
+        target_id=None,
+        target_label=str(points[0].source_meta.get("study_name") or study_id),
+        workspace_id=points[0].owner_workspace_id,
+        changes={"study_id": study_id, "points": removed, "jobs": len(jobs)},
+    )
+    db.commit()
+    return {"points": removed, "jobs": len(jobs), "bytes_freed": _sweep(folders)}
+
+
+def cancel_study(db: Session, *, user: User, study_id: str) -> dict[str, int]:
+    """DOE 한 벌을 **멈춘다** — 내가 건 점 중 끝나지 않은 것 전부(대기는 곧바로, 도는 것은
+    워커가 몇 초 안에). 설계점 200개를 하나씩 멈출 수는 없다 — 지우기 전에도 이것이 먼저다."""
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
+    open_points = [one for one in _my_points(user, points) if not is_final(one.status)]
+    for point in open_points:
+        cancel(db, user=user, simulation_id=point.id)
+    if open_points:
+        audit.record(
+            db,
+            action=STUDY_CANCELED,
+            actor=user,
+            target_table="simulations",
+            target_id=None,
+            target_label=str(points[0].source_meta.get("study_name") or study_id),
+            workspace_id=points[0].owner_workspace_id,
+            changes={"study_id": study_id, "points": len(open_points)},
+        )
+        db.commit()
+    return {"points": len(open_points)}
+
+
+def _attempts_of(db: Session, user: User, simulation: Simulation) -> list[Simulation]:
+    """그 작업과, DOE 설계점이면 **같은 점의 앞선 시도**(내가 건 것). 뒤의 시도는 두지 않는다 —
+    옛 실패를 지운다고 새 결과까지 사라지면 안 된다."""
+    key = _study_key(simulation)
+    if key is None:
+        return [simulation]
+    number = int(simulation.source_meta.get("point") or 0)
+    return [
+        one
+        for one in _my_points(user, _study_points(db, user, key, every=True))
+        if int(one.source_meta.get("point") or 0) == number
+        and one.created_at <= simulation.created_at
+    ] or [simulation]
+
+
+def _with_levels(db: Session, user: User, jobs: list[Simulation]) -> list[Simulation]:
+    """작업들과 그 메시 수렴 수준들 — 수준은 원래 작업의 판정이라 혼자 남으면 뜻이 없다."""
+    found: dict[uuid.UUID, Simulation] = {}
+    for job in jobs:
+        for one in _levels_of(db, user, job):
+            found[one.id] = one
+    return list(found.values())
+
+
+def _locked(db: Session, jobs: list[Simulation]) -> list[Simulation]:
+    """**잠그고 다시 읽는다.** 대기 중인 작업을 워커가 막 집었을 수 있다 — 묵은 사본으로 「대기
+    중」 이라 보고 지우면 도는 작업의 폴더를 지운다. `claim_next` 는 잠긴 행을 건너뛴다."""
+    return list(
+        db.scalars(
+            select(Simulation)
+            .where(Simulation.id.in_([one.id for one in jobs]))
+            .order_by(Simulation.created_at)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
+def _refuse_running(jobs: list[Simulation]) -> None:
+    running = [one for one in jobs if one.status in RUNNING_STATUSES]
+    if running:
+        raise AppError(
+            code("SIMULATIONS", 35),
+            f"도는 작업 {len(running)}개가 있어 지울 수 없습니다 — 먼저 멈추세요(몇 초 안에 "
+            "멈춥니다).",
+            status=409,
+            details={"running": [str(one.id) for one in running]},
+        )
+
+
+def _bury(db: Session, jobs: list[Simulation]) -> list[Path]:
+    """작업들을 내린다 — `deleted_at` 을 채우고 붙은 실측도 내린다. 대기 중이면 취소로 닫는다.
+
+    지울 작업 폴더를 돌려준다 — **커밋한 뒤에 지운다**(`_sweep`). 먼저 지우고 커밋이 실패하면
+    행은 살아 있는데 파일이 없다.
+    """
+    now = _now()
+    folders: list[Path] = []
+    for one in jobs:
+        if one.status == "queued":
+            _close_queued(one)
+        one.deleted_at = now
+        folder = _work_dir_of(one)
+        if folder is not None:
+            folders.append(folder)
+    db.execute(
+        update(SimulationMeasurement)
+        .where(
+            SimulationMeasurement.simulation_id.in_([one.id for one in jobs]),
+            SimulationMeasurement.deleted_at.is_(None),
+        )
+        .values(deleted_at=now)
+    )
+    return folders
+
+
+def _sweep(folders: list[Path]) -> int:
+    """작업 폴더를 지운다 — 비운 바이트. 못 지운 것은 로그에 남기고 넘어간다(행은 이미
+    내렸다 — 남은 폴더는 운영자가 치운다)."""
+    freed = 0
+    for folder in folders:
+        size = cleanup.folder_bytes(folder)
+        try:
+            shutil.rmtree(folder)
+        except OSError:
+            logger.warning("작업 폴더를 지우지 못했습니다: %s", folder, exc_info=True)
+            continue
+        freed += size
+    return freed
 
 
 # --- 게시 -----------------------------------------------------------------------

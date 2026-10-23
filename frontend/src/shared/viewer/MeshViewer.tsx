@@ -42,14 +42,20 @@ import { DisplayToggles, PartPicker } from '@/shared/viewer/ViewerControls'
 import type { ViewerPart } from '@/shared/viewer/ViewerControls'
 import { useViewerPrefs } from '@/shared/viewer/viewerPrefs'
 import type { ViewerPrefs } from '@/shared/viewer/viewerPrefs'
+import { animates, warpPhase } from '@/shared/viewer/warp'
 
 export interface MeshViewerProps {
   /** VTP 파일 내용. 서버가 추출 시점에 만들어 둔 것을 그대로 받는다. */
   data: ArrayBuffer
   /** 변위를 모델 크기의 몇 배까지 과장하나. 사람이 아래 슬라이더로 바꾼다. */
   warpRatio?: number
-  /** 한 번 흔드는 데 걸리는 시간(ms). */
+  /** 한 번 흔드는 데 걸리는 시간(ms). **0 이면 흔들지 않고 최대 변형으로 선다**(정적). */
   periodMs?: number
+  /**
+   * 변위가 무엇인가 — 모달은 질량 정규화된 **상대값**, 정적은 **실제 변형**이다. 아래 설명과
+   * 범례가 이것을 따른다(정적에 「상대 변위」 라 적으면 실제 변형을 믿지 않게 된다).
+   */
+  displacement?: 'relative' | 'actual'
   /** 그림 높이(Tailwind 클래스). 기본은 화면 높이에 맞춘다 — 모드 형상은 작으면 못 읽는다. */
   heightClass?: string
   className?: string
@@ -110,6 +116,7 @@ export default function MeshViewer({
   data,
   warpRatio = 0.15,
   periodMs = 1600,
+  displacement = 'relative',
   heightClass = 'h-[calc(100vh-14rem)] min-h-[24rem]',
   className,
   controls = true,
@@ -131,7 +138,8 @@ export default function MeshViewer({
   /** 색 범위의 위쪽 — 아래 범례가 이 값을 적는다. 0 이면 아직 안 그려졌다. */
   const [peak, setPeak] = useState(0)
   const playingRef = useRef(playing)
-  playingRef.current = controlledPlaying ?? playing
+  // **흔들지 않는 그림은 늘 멈춰 있다** — 재생 중으로 두면 위상이 NaN 이 된다(`warp.ts`).
+  playingRef.current = animates(periodMs) && (controlledPlaying ?? playing)
   // **색 지도는 모든 뷰어가 함께 쓴다**(`colormaps.ts`). 바꿔도 창을 다시 만들지 않고 색만 다시
   // 칠한다 — 시점 · 움직임이 그대로 남는다.
   const colormap = useColormap()
@@ -395,9 +403,7 @@ export default function MeshViewer({
           const stopped = wasPlaying && !playingRef.current
           wasPlaying = playingRef.current
           if ((playingRef.current || stopped || scale !== lastScale) && scale > 0) {
-            const phase = playingRef.current
-              ? Math.sin((2 * Math.PI * (performance.now() - started)) / periodMs)
-              : 1
+            const phase = warpPhase(performance.now() - started, periodMs, playingRef.current)
             const moved = points.getData() as Float64Array
             for (let index = 0; index < rest.length; index += 1) {
               moved[index] = rest[index] + (vectors as Float32Array)[index] * scale * phase
@@ -500,7 +506,9 @@ export default function MeshViewer({
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-muted-foreground text-xs">
-            끌어서 회전 · 휠로 확대. 변위는 질량 정규화된 상대값이라 크기를 과장해 표시합니다.
+            {displacement === 'relative'
+              ? '끌어서 회전 · 휠로 확대. 변위는 질량 정규화된 상대값이라 크기를 과장해 표시합니다.'
+              : '끌어서 회전 · 휠로 확대. 실제 변형은 작아서 크기를 과장해 표시합니다.'}
           </p>
           {peak > 0 && (
             <div className="mt-1 flex items-center gap-2">
@@ -508,7 +516,7 @@ export default function MeshViewer({
               {/* 3D 와 같은 마디로 그린다 — 색을 바꾸면 함께 바뀐다. */}
               <div className="h-2 w-32 rounded" style={{ background: gradientOf(colormap) }} />
               <span className="text-muted-foreground text-xs">
-                {peak.toPrecision(3)} (상대 변위)
+                {peak.toPrecision(3)} ({displacement === 'relative' ? '상대 변위' : '변위 크기'})
               </span>
             </div>
           )}
@@ -531,9 +539,11 @@ export default function MeshViewer({
             />
             <span className="w-10 font-mono">{Math.round(ratio * 100)}%</span>
           </label>
-          <Button variant="outline" size="sm" onClick={() => setPlaying((on) => !on)}>
-            {playing ? '정지' : '재생'}
-          </Button>
+          {animates(periodMs) && (
+            <Button variant="outline" size="sm" onClick={() => setPlaying((on) => !on)}>
+              {playing ? '정지' : '재생'}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={toggleFullscreen}>
             전체 화면
           </Button>

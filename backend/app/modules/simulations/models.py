@@ -8,7 +8,8 @@
 않는 이유: 작업이 시간당 몇십 건이고, 큐 서버는 설치 · 백업 · 장애 지점을 하나 더 만든다
 (AutoJigGenerator ADR 0003 과 같은 결정). 워커 수 = Mechanical 라이선스 수.
 
-**지우지 않는다.** 결과로 만든 보고서가 밖에 남아 있다 — `deleted_at` 만 채운다.
+**행은 지우지 않는다.** 결과로 만든 보고서 · 감사 기록이 그 id 를 가리킨다 — 사람이 지우면
+`deleted_at` 만 채우고 작업 폴더를 지운다(`services.remove`).
 """
 
 from __future__ import annotations

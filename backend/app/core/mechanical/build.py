@@ -30,6 +30,7 @@ from app.core import conditions as condition_model
 from app.core import materials, units
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
 from app.core.harmonic import HarmonicPlan, harmonic_plan
+from app.core.numbers import significant
 from app.core.regions import FaceRecord, match_regions
 from app.core.spec import (
     RIGID_BODY_MODES,
@@ -1309,7 +1310,7 @@ def _mass_kg(used: Applied, bodies: list[Any], system: units.UnitSystem) -> floa
     except Exception:  # pragma: no cover - 형상에 따라 못 읽을 수 있다
         logger.warning("부피를 읽지 못했습니다 — 질량을 내지 않습니다", exc_info=True)
         return None
-    return round(total, 4) if total > 0 else None
+    return significant(total) if total > 0 else None
 
 
 def _part_names(
@@ -2255,13 +2256,12 @@ _CONTACT_TYPES = {
 def _global_size_mm(
     spec: AnySpec, given: condition_model.Conditions, system: units.UnitSystem
 ) -> float | None:
-    """`_mesh` 가 준 전역 크기(mm) — 스펙 → CAD 「전체」 힌트 → 없으면 `None`(기본값)."""
+    """`_mesh` 가 준 전역 크기(mm) — 스펙 → CAD 「전체」 힌트 → CompCore 제안 → 없으면
+    `None`(기본값)."""
     if spec.mesh.element_size_mm is not None:
         return float(spec.mesh.element_size_mm)
-    for one in given.mesh_hints:
-        if one.region in ("전체", "all") and one.element_size is not None:
-            return round(one.element_size * system.length_mm, 6)
-    return None
+    found = given.global_size(system.length_mm)
+    return round(found[0], 6) if found is not None else None
 
 
 def _mesh(
@@ -2295,6 +2295,10 @@ def _mesh(
     elif whole is not None:
         mesh.ElementSize = quantity(f"{whole.element_size} [{system.length_label}]")
         logger.info("메시 전체 크기 ← CAD %s %s", whole.element_size, system.length_label)
+    elif given.suggested_size_mm is not None:
+        # **제안은 늘 mm 다** — 선언된 계와 상관없이(`conditions._suggestion`).
+        mesh.ElementSize = quantity(f"{given.suggested_size_mm} [mm]")
+        logger.info("메시 전체 크기 ← CompCore 제안 %s mm", given.suggested_size_mm)
     _mesh_sizings(app, given, system, places, topology, bodies)
     wanted = (
         enums.ElementOrder.Quadratic

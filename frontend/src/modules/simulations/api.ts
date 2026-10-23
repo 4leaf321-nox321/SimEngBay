@@ -36,6 +36,7 @@ export type StudyMeasurement = components['schemas']['StudyMeasurementOut']
 export type Comparison = components['schemas']['ComparisonOut']
 export type FrfComparison = components['schemas']['FrfComparisonOut']
 export type ConvergenceMetric = components['schemas']['ConvergenceMetricOut']
+export type Removed = components['schemas']['RemovedOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -231,6 +232,17 @@ export const simulationApi = {
     api.post<{ bytes_freed: number; files: number; points: number }>(
       `/simulations/studies/${encodeURIComponent(studyId)}/tidy`,
     ),
+  /**
+   * 지운다 — 목록에서 사라지고 **작업 폴더(결과 파일)도 지운다.** 메시 수렴 수준 · 붙은 실측 ·
+   * (DOE 설계점이면) 그 점의 앞선 시도까지. 도는 작업은 먼저 멈춰야 한다(SIMULATIONS-0035).
+   */
+  remove: (id: string) => api.delete<Removed>(`/simulations/${id}`),
+  /** DOE 한 벌을 지운다(내가 건 점만). */
+  removeStudy: (studyId: string) =>
+    api.delete<Removed>(`/simulations/studies/${encodeURIComponent(studyId)}`),
+  /** DOE 한 벌의 끝나지 않은 설계점을 모두 멈춘다(내가 건 점만). */
+  cancelStudy: (studyId: string) =>
+    api.post<{ points: number }>(`/simulations/studies/${encodeURIComponent(studyId)}/cancel`),
   /**
    * DOE 폴더 훑어 보기 — **걸기 전에** 점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개인지.
    *

@@ -26,6 +26,8 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       study: vi.fn(),
       retry: vi.fn(),
       tidyStudy: vi.fn(),
+      cancelStudy: vi.fn(),
+      removeStudy: vi.fn(),
       studyMeasurements: vi.fn(),
     },
   }
@@ -62,6 +64,7 @@ function show(path = '/simulations/studies/st') {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/simulations/studies/:id" element={<StudyDetailPage />} />
+        <Route path="/simulations/studies" element={<p>DOE 목록</p>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -96,6 +99,38 @@ describe('스터디 상세', () => {
     await userEvent.click(screen.getByRole('button', { name: '정리' }))
     await waitFor(() => expect(simulationApi.tidyStudy).toHaveBeenCalledWith('st'))
     await waitFor(() => expect(screen.getByText(/중간 파일 12개 · 3.0MB/)).toBeDefined())
+  })
+
+  it('DOE 를 지우기 전에 무엇이 사라지는지 말하고, 지우면 목록으로 간다', async () => {
+    vi.mocked(simulationApi.removeStudy).mockReset().mockResolvedValue({ jobs: 3, bytes_freed: 1, points: 3 })
+    show()
+    await userEvent.click(await screen.findByRole('button', { name: '삭제' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('설계점 3개')
+    expect(dialog.textContent).toContain('되돌릴 수 없습니다')
+    await userEvent.click(within(dialog).getByRole('button', { name: '삭제' }))
+    await waitFor(() => expect(simulationApi.removeStudy).toHaveBeenCalledWith('st'))
+    expect(await screen.findByText('DOE 목록')).toBeDefined()
+  })
+
+  it('도는 점이 있으면 지우지 않고 「모두 멈추기」 를 먼저 하게 한다', async () => {
+    vi.mocked(simulationApi.study).mockResolvedValue({
+      ...STUDY,
+      points: [point(1, 'solving'), point(2, 'queued'), point(3, 'done')],
+    })
+    vi.mocked(simulationApi.cancelStudy).mockReset().mockResolvedValue({ points: 2 })
+    show()
+    await userEvent.click(await screen.findByRole('button', { name: '삭제' }))
+    let dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('도는 설계점 1개')
+    expect(within(dialog).getByRole('button', { name: '삭제' }).hasAttribute('disabled')).toBe(true)
+    await userEvent.click(within(dialog).getByRole('button', { name: '취소' }))
+
+    await userEvent.click(screen.getByRole('button', { name: /모두 멈추기 \(2\)/ }))
+    dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: '모두 멈추기' }))
+    await waitFor(() => expect(simulationApi.cancelStudy).toHaveBeenCalledWith('st'))
+    expect(await screen.findByText(/설계점 2개를 멈추게 했습니다/)).toBeDefined()
   })
 
   it('끝난 점이 없으면 비교는 막고, 설계점 탭에서 점마다 상태와 오류를 보인다', async () => {

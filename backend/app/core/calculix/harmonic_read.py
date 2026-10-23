@@ -26,6 +26,7 @@ from app.core import probes as core_probes
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes
 from app.core.calculix.mesh import read_mesh
+from app.core.numbers import significant
 from app.core.spec import HarmonicSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -67,11 +68,12 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
             continue
         row: dict[str, Any] = {
             "frequency_hz": round(value, 4),
-            "max_displacement": round(_amplitude(real[value], other), 10),
+            "max_displacement": significant(_amplitude(real[value], other)),
         }
         if spots:
             row["probes"] = {
-                spot.name: round(_at_node(real[value], other, spot.node), 10) for spot in spots
+                spot.name: significant(_at_node(real[value], other, spot.node))
+                for spot in spots
             }
         points.append(row)
     if not points:

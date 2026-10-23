@@ -267,7 +267,31 @@
     "narrowest_face": 0.5,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": []
+    "notes": [],
+    "min_wall_by_body": {
+      "시편": 1.0,
+      "롤러_1": 6.0,
+      "롤러_2": 6.0,
+      "로딩_노즈_1": 6.0,
+      "로딩_노즈_2": 6.0
+    }
+  },
+  "mesh_suggestion": {
+    "element_size": 0.6,
+    "basis": "가장 긴 변(132 mm)의 1/200 — 벽(1 mm)의 절반은 더 작지만 요소 수가 터지지 않게(얇은 벽은 국부 메시로)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "in_conditions": false,
+    "inputs": {
+      "min_wall": 1.0,
+      "wall_body": "시편",
+      "longest": 132.0,
+      "skipped": [
+        "로딩_노즈_1",
+        "로딩_노즈_2",
+        "롤러_1",
+        "롤러_2"
+      ]
+    }
   },
   "point": {
     "number": 1,
@@ -723,6 +747,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm"
+    "coordinate_systems": "mm",
+    "mesh_suggestion": "mm"
   }
 }

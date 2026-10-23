@@ -142,6 +142,11 @@ class ConditionsPreviewOut(BaseModel):
     suggested_recipe: str | None = None
     suggested_modes: int | None = None
     suggested_element_size_mm: float | None = None
+    suggested_element_size_from: Literal["cad", "compcore"] | None = None
+    """그 크기가 어디서 왔나 — `cad` 사람이 적은 「전체」 메시 힌트 · `compcore` CompCore 가
+    형상으로 셈한 제안(`mesh_suggestion`, 2026-10-23). 비면 크기가 없다."""
+    suggested_element_size_basis: str | None = None
+    """제안의 까닭(CompCore 의 말 그대로) — 제안일 때만."""
     suggested_order: str | None = None
     """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
     suggested_large_deflection: bool | None = None
@@ -268,6 +273,11 @@ class DoePreviewOut(BaseModel):
     """CAD 가 적은 해석 종류(`modal` · `static` · `harmonic`). 화면이 레시피를 미리 고른다 —
     모달로 못 박아 두면 전단 이음 같은 정적 DOE 가 하중을 건너뛴 채 모달로 돈다."""
     suggested_element_size_mm: float | None = None
+    suggested_element_size_from: Literal["cad", "compcore"] | None = None
+    """그 크기가 어디서 왔나 — `cad` 사람이 적은 「전체」 메시 힌트 · `compcore` CompCore 가
+    형상으로 셈한 제안(`mesh_suggestion`, 2026-10-23). 비면 크기가 없다."""
+    suggested_element_size_basis: str | None = None
+    """제안의 까닭(CompCore 의 말 그대로) — 제안일 때만."""
     suggested_order: str | None = None
     """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
     """CAD 가 「전체」 로 적은 요소 크기(mm). **CalculiX 는 이것이나 사람이 준 값이 있어야
@@ -439,6 +449,117 @@ class StudyOut(BaseModel):
     tracks: list[ModeTrackOut] = Field(default_factory=list)
 
 
+# --- DOE 분석 — 화면의 「다변수」 탭과 같은 표 · 같은 셈(`analysis.py`) ----------------------
+
+
+class AnalysisColumnOut(BaseModel):
+    """분석이 쓰는 열 하나 — 조건 · 목표 · 격자에 이 `key` 를 쓴다."""
+
+    key: str
+    """`factor:<변수>` · `mode:<기준 차수>` · `max_mm` · `max_mpa` · `reaction:<영역>` ·
+    `probe:<이름>` · `mass_kg` …"""
+    label: str
+    unit: str
+    kind: Literal["factor", "result"]
+    numeric: bool
+    """글자 값(재료 이름 같은 것)이 섞인 변수는 범주다 — 상관을 셈하지 않는다."""
+
+
+class EffectLevelOut(BaseModel):
+    level: float | str
+    """수준 값. 수준이 많은 숫자 변수는 구간(「2~3.1」)이다."""
+    mean: float
+    min: float
+    max: float
+    count: int
+
+
+class EffectOut(BaseModel):
+    """주효과 — 변수의 수준마다 결과의 평균 · 최소 · 최대(다른 변수는 섞인 채로)."""
+
+    factor: str
+    result: str
+    levels: list[EffectLevelOut]
+    spread: float | None = None
+    """수준별 평균의 최대 - 최소(결과의 단위)."""
+    spread_pct: float | None = None
+    """그 폭을 결과 평균에 견준 % — 변수끼리 견주는 민감도다."""
+    correlation: float | None = None
+    """피어슨 상관(숫자 변수만, 셋 이상). 부호가 방향이다."""
+
+
+class FactorRankOut(BaseModel):
+    factor: str
+    spread_pct: float | None = None
+    correlation: float | None = None
+
+
+class SensitivityOut(BaseModel):
+    """결과 하나에 대해 **어느 변수가 가장 많이 움직이나** — 폭(%)이 큰 차례."""
+
+    result: str
+    factors: list[FactorRankOut]
+
+
+class RangeOut(BaseModel):
+    result: str
+    min: float
+    max: float
+    min_point: int
+    max_point: int
+
+
+class ChosenPointOut(BaseModel):
+    number: int
+    simulation_id: uuid.UUID
+    params: dict[str, float | str]
+    values: dict[str, float | str | None]
+    """목표 · 조건 열의 값."""
+
+
+class ChoiceOut(BaseModel):
+    """조건을 만족하는 점과 그중 목표가 가장 좋은 점."""
+
+    objective: str | None = None
+    goal: Literal["min", "max"] = "min"
+    where: list[str] = Field(default_factory=list)
+    feasible: int
+    """조건을 만족한 끝난 점 수."""
+    best: ChosenPointOut | None = None
+    ranked: list[ChosenPointOut] = Field(default_factory=list)
+    """목표 차례로 앞의 다섯(목표가 없으면 만족한 점 앞의 다섯)."""
+
+
+class PairGridOut(BaseModel):
+    """두 변수의 수준마다 결과 평균 — `z[j][i]` 는 `ys[j]` 행 · `xs[i]` 열. 빈 칸은 `None`."""
+
+    x: str
+    y: str
+    result: str
+    xs: list[float | str]
+    ys: list[float | str]
+    z: list[list[float | None]]
+    complete: bool
+    """모든 조합에 값이 있나(전 조합 설계)."""
+
+
+class StudyAnalysisOut(BaseModel):
+    """DOE 분석 — 민감도 · 주효과 · 결과마다 최소 · 최대 점, (주면) 조건을 건 최적점 · 격자."""
+
+    study_id: str
+    name: str
+    recipe: str
+    done: int
+    total: int
+    columns: list[AnalysisColumnOut]
+    sensitivity: list[SensitivityOut]
+    effects: list[EffectOut]
+    ranges: list[RangeOut]
+    choice: ChoiceOut | None = None
+    pair: PairGridOut | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class PublishOut(BaseModel):
     """스터디 게시 · 해제의 결과."""
 
@@ -446,6 +567,17 @@ class PublishOut(BaseModel):
     """바꾼 대상이 된 설계점(내가 건 점) 수."""
     jobs: int
     """실제로 바뀐 작업 수 — 메시 수렴 수준까지 센다."""
+
+
+class RemovedOut(BaseModel):
+    """작업 · 스터디 지우기의 결과."""
+
+    jobs: int
+    """내린 작업 수 — 메시 수렴 수준 · 설계점의 앞선 시도까지 센다."""
+    bytes_freed: int
+    """지운 작업 폴더의 크기."""
+    points: int | None = None
+    """지운 설계점 수(스터디를 지울 때만)."""
 
 
 class RecipeOut(BaseModel):

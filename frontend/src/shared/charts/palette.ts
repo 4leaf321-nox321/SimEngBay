@@ -91,8 +91,12 @@ export function legendHeightFor(seriesCount: number, baseHeight = 28, perRow = 6
 export const AXIS_COLOR = 'var(--muted-foreground)'
 export const GRID_COLOR = 'var(--border)'
 
-/** 눈금에 쓰는 숫자 — 자릿점을 찍고 소수는 둘째 자리까지. */
+/**
+ * 눈금에 쓰는 숫자 — 자릿점을 찍고 소수는 둘째 자리까지. **1 아래는 유효숫자 세 자리** — 소수
+ * 둘째 자리로 자르면 작은 값(0.029 g = 2.9e-5 kg)의 눈금이 모두 「0.00」 이 된다.
+ */
 export function shownNumber(value: number): string {
   if (!Number.isFinite(value)) return ''
-  return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2)
+  if (Number.isInteger(value)) return value.toLocaleString()
+  return Math.abs(value) < 1 ? String(Number(value.toPrecision(3))) : value.toFixed(2)
 }

@@ -66,6 +66,8 @@ export function MeshFields({
   order,
   onOrder,
   cadSize,
+  cadSizeFrom = 'cad',
+  cadSizeBasis,
   needsSize,
 }: {
   idPrefix: string
@@ -73,8 +75,12 @@ export function MeshFields({
   onSize: (next: string) => void
   order: MeshOrder
   onOrder: (next: MeshOrder) => void
-  /** CAD 가 「전체」 로 적은 크기(mm). 없으면 `null`. */
+  /** CAD 가 준 전역 크기(mm) — 「전체」 메시 힌트나 CompCore 의 제안값. 없으면 `null`. */
   cadSize: number | null
+  /** 그 크기가 어디서 왔나 — 사람이 적은 「전체」 힌트(`cad`)인가, 형상으로 셈한 제안(`compcore`)인가. */
+  cadSizeFrom?: 'cad' | 'compcore' | null
+  /** 제안의 까닭(CompCore 의 말 그대로). */
+  cadSizeBasis?: string | null
   /** 크기가 어디에도 없어 실행할 수 없는가(CalculiX). */
   needsSize: boolean
 }) {
@@ -89,14 +95,27 @@ export function MeshFields({
           min={0}
           value={size}
           onChange={(event) => onSize(event.target.value)}
-          placeholder={cadSize !== null ? `CAD 값 ${cadSize}` : needsSize ? '필수' : '비우면 자동'}
+          placeholder={
+            cadSize === null
+              ? needsSize
+                ? '필수'
+                : '비우면 자동'
+              : cadSizeFrom === 'compcore'
+                ? `CompCore 제안 ${cadSize}`
+                : `CAD 값 ${cadSize}`
+          }
         />
         {cadSize !== null && !size.trim() && (
-          <p className="text-muted-foreground text-xs">비우면 CAD 가 적은 크기를 사용합니다.</p>
+          // **제안은 사람이 정한 값이 아니다** — 무엇으로 셈했나를 함께 보인다(CompCore 의 말 그대로).
+          <p className="text-muted-foreground text-xs">
+            {cadSizeFrom === 'compcore'
+              ? `비우면 CompCore 가 형상으로 셈한 크기를 사용합니다${cadSizeBasis ? ` — ${cadSizeBasis}` : ''}.`
+              : '비우면 CAD 가 적은 크기를 사용합니다.'}
+          </p>
         )}
         {needsSize && (
           <p className="text-xs text-amber-700 dark:text-amber-400">
-            CalculiX 는 요소 크기가 필요합니다 — CAD 가 「전체」 크기를 보내지 않았습니다.
+            CalculiX 는 요소 크기가 필요합니다 — CAD 가 「전체」 크기도 제안값도 보내지 않았습니다.
           </p>
         )}
       </div>

@@ -26,10 +26,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
-from app.core.stages import StageFailure
+from app.core.stages import StageFailure, out_of_memory_message
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ def run(
     if extra:
         env["LD_LIBRARY_PATH"] = extra
     try:
-        return subprocess.run(
+        done = subprocess.run(
             [str(binary), *args],
             cwd=cwd,
             env=env,
@@ -129,3 +130,9 @@ def run(
         raise StageFailure(
             "internal", f"{what} 를 실행하지 못했습니다: {failure}"
         ) from failure
+    if done.returncode == -signal.SIGKILL:
+        # 우리는 이 자식에 KILL 을 보내지 않는다(취소는 부모가 그룹째 TERM 을 먼저 보낸다) —
+        # 메모리가 모자라 운영체제가 끊었다. 「n 으로 끝났습니다」 로만 적으면 사람은 입력
+        # 파일을 의심한다.
+        raise StageFailure("out_of_memory", out_of_memory_message(what))
+    return done

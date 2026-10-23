@@ -1,4 +1,4 @@
-"""해석 작업 라우터 — 걸기 · 목록 · 상세 · 상태 폴링 · 산출물 · 재시도.
+"""해석 작업 라우터 — 걸기 · 목록 · 상세 · 상태 폴링 · 산출물 · 재시도 · 지우기.
 
 `POST /simulations` 는 multipart 다 — 형상 파일과 스펙(JSON 문자열)이 한 요청에 온다. 오케스트
 (PAT, `simulations:write`)와 화면이 같은 경로를 쓴다.
@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -35,9 +35,11 @@ from app.modules.simulations.schemas import (
     MeasurementOut,
     PublishOut,
     RecipeOut,
+    RemovedOut,
     SimulationOut,
     SimulationSummaryOut,
     SolverAvailabilityOut,
+    StudyAnalysisOut,
     StudyMeasurementOut,
     StudyOut,
     StudySummaryOut,
@@ -189,6 +191,35 @@ def get_study(
 ) -> StudyOut:
     """설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다."""
     return services.get_study(db, user=user, study_id=study_id)
+
+
+@router.get("/studies/{study_id}/analysis", response_model=StudyAnalysisOut)
+def analyze_study(
+    study_id: str,
+    result: str | None = None,
+    objective: str | None = None,
+    goal: Literal["min", "max"] = "min",
+    where: list[str] = Query(default=[]),
+    x: str | None = None,
+    y: str | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StudyAnalysisOut:
+    """DOE 분석 — 민감도(어느 변수가 결과를 가장 많이 움직이나) · 주효과 · 결과마다 최소 ·
+    최대 점. `objective`(+ `goal`) · `where`(`mode:1>=300` 꼴, 여럿)를 주면 조건을 만족하는
+    점과 그중 가장 좋은 점, `x` · `y` · `result` 를 주면 두 변수의 격자. 화면의 「다변수」 탭과
+    같은 표다."""
+    return services.analyze_study(
+        db,
+        user=user,
+        study_id=study_id,
+        result=result,
+        objective=objective,
+        goal=goal,
+        where=where,
+        x=x,
+        y=y,
+    )
 
 
 @router.get("/studies/{study_id}/export.csv", include_in_schema=False)
@@ -448,6 +479,26 @@ def tidy_study(
     return services.tidy_study(db, user=user, study_id=study_id)
 
 
+@router.post("/studies/{study_id}/cancel")
+def cancel_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """DOE 한 벌의 끝나지 않은 설계점을 모두 멈춘다(내가 건 점만)."""
+    return services.cancel_study(db, user=user, study_id=study_id)
+
+
+@router.delete("/studies/{study_id}", response_model=RemovedOut)
+def remove_study(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RemovedOut:
+    """DOE 한 벌을 지운다(내가 건 점만) — 작업 폴더까지. 도는 점이 있으면 먼저 멈춘다."""
+    return RemovedOut(**services.remove_study(db, user=user, study_id=study_id))
+
+
 @router.post("/studies/{study_id}/publish", response_model=PublishOut)
 def publish_study(
     study_id: str,
@@ -496,6 +547,16 @@ def tidy(
 ) -> dict[str, Any]:
     """중간 파일(`.mechdb` · `.rst` · 솔버 scratch)을 지운다. **결과는 남는다.**"""
     return services.tidy(db, user=user, simulation_id=simulation_id)
+
+
+@router.delete("/{simulation_id}", response_model=RemovedOut)
+def remove(
+    simulation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RemovedOut:
+    """작업을 지운다 — 작업 폴더 · 메시 수렴 수준 · 붙은 실측까지. 도는 작업은 먼저 멈춘다."""
+    return RemovedOut(**services.remove(db, user=user, simulation_id=simulation_id))
 
 
 @router.post("/{simulation_id}/cancel", response_model=SimulationOut)

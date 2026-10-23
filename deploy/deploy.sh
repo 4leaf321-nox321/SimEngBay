@@ -110,6 +110,8 @@ DOE_ROOT_HOST_DIR=${DOE_ROOT_HOST_DIR:-}
 ANSYS_HOST_DIR=${ANSYS_HOST_DIR:-}
 ANSYS_VERSION=${ANSYS_VERSION:-}
 WORKER_COUNT=${WORKER_COUNT:-}
+WORKER_CPU_PERCENT=${WORKER_CPU_PERCENT:-}
+WORKER_MEMORY_MAX=${WORKER_MEMORY_MAX:-}
 MCP_HOST=${MCP_HOST:-}
 EOF
     chmod 644 "$INSTANCES_DIR/$APP_SLUG.conf"
@@ -163,6 +165,9 @@ WORKER_SERVICE_UNIT="/etc/systemd/system/${WORKER_SERVICE_NAME}@.service"
 #: 띄울 해석 작업 워커 수. **Mechanical 라이선스 수를 넘기지 않는다**(1.5단계부터).
 WORKER_COUNT="${WORKER_COUNT:-$(instance_conf_get "$APP_SLUG" WORKER_COUNT)}"
 WORKER_COUNT="${WORKER_COUNT:-1}"
+# 워커 묶음의 상한 — 사람이 정한 값만 기억한다(비우면 그 서버를 재서 정한다, `worker_limits`).
+WORKER_CPU_PERCENT="${WORKER_CPU_PERCENT:-$(instance_conf_get "$APP_SLUG" WORKER_CPU_PERCENT)}"
+WORKER_MEMORY_MAX="${WORKER_MEMORY_MAX:-$(instance_conf_get "$APP_SLUG" WORKER_MEMORY_MAX)}"
 #: 호스트(또는 공용 스토리지)의 Ansys 설치 폴더. 주면 워커 유닛이 /ansys_inc 에 건다.
 #: **이미지에 굽지 않는다** — 수십 GB 이고 버전을 올릴 때마다 다시 구워야 한다.
 ANSYS_HOST_DIR="${ANSYS_HOST_DIR:-$(instance_conf_get "$APP_SLUG" ANSYS_HOST_DIR)}"
@@ -644,6 +649,70 @@ render_service_unit() {
     systemctl daemon-reload
 }
 
+# ── 해석 워커 묶음(systemd slice, ADR 0012) ──────────────────────────────────────────
+# 워커 전부가 **한 칸의 CPU · 메모리를 나눠 쓴다** — 해석이 몰려도 앱 · DB · MCP 몫이 남는다. 상한이
+# 없던 때 운영 서버의 메모리가 바닥나 서버째 멈췄다(2026-10-23). 메모리를 넘으면 운영체제가 **그
+# 묶음 안의** 가장 큰 솔버 하나를 끊고(그 작업은 「메모리 부족」 으로 실패한다) 서버는 산다. 스왑은
+# 못 쓰게 한다 — 스왑으로 버티는 동안 서버 전체가 느려져 멈춘 것과 같다.
+#
+# 상한은 **그 서버를 재서** 정한다 — 앱 · DB · 운영체제 몫으로 코어 max(2, 1/8) · 메모리 max(4 GB, 1/5)
+# 를 남긴다. 사람이 정하려면 `sudo WORKER_CPU_PERCENT=1200 WORKER_MEMORY_MAX=40G ./deploy.sh update`
+# (기억한다). 시험은 HOST_CPUS · HOST_MEM_MB 로 서버 크기를 준다.
+WORKER_SLICE="${APP_SLUG}-workers.slice"
+#: 한 해석이 쓰는 코어(CalculiX OMP_NUM_THREADS · Ansys SOLVER_PROCESSES 기본)와 큰 해석 하나가 쓸
+#: 메모리(MB) — 권장 워커 수를 셀 때만 쓴다(상한은 묶음이 지킨다).
+WORKER_JOB_CPUS=2
+WORKER_JOB_MEM_MB=4096
+
+worker_limits() {  # → HOST_CPUS HOST_MEM_MB SLICE_CPU_PERCENT SLICE_MEM_MB SLICE_MEMORY_MAX
+    HOST_CPUS="${HOST_CPUS:-$(nproc 2>/dev/null || echo 2)}"
+    HOST_MEM_MB="${HOST_MEM_MB:-$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 4096)}"
+    local keep_cpu=$(( HOST_CPUS / 8 )); (( keep_cpu < 2 )) && keep_cpu=2
+    local cpus=$(( HOST_CPUS - keep_cpu )); (( cpus < 1 )) && cpus=1
+    SLICE_CPU_PERCENT="${WORKER_CPU_PERCENT:-$(( cpus * 100 ))}"
+    local keep_mem=$(( HOST_MEM_MB / 5 )); (( keep_mem < 4096 )) && keep_mem=4096
+    SLICE_MEM_MB=$(( HOST_MEM_MB - keep_mem )); (( SLICE_MEM_MB < 1024 )) && SLICE_MEM_MB=1024
+    SLICE_MEMORY_MAX="${WORKER_MEMORY_MAX:-${SLICE_MEM_MB}M}"
+    if [[ -n "$WORKER_MEMORY_MAX" ]]; then  # 사람이 준 값으로 권장 수도 센다(G · M)
+        case "${WORKER_MEMORY_MAX^^}" in
+            *G) SLICE_MEM_MB=$(( ${WORKER_MEMORY_MAX%[gG]} * 1024 )) ;;
+            *M) SLICE_MEM_MB=${WORKER_MEMORY_MAX%[mM]} ;;
+        esac
+    fi
+}
+
+worker_slice_text() {
+    worker_limits
+    cat <<EOF
+# $APP_NAME ($APP_SLUG) 해석 워커 묶음 — deploy.sh 가 이 서버(코어 $HOST_CPUS · 메모리 ${HOST_MEM_MB}M)를 재서 썼다.
+# 워커 전부가 이 칸을 나눠 쓴다. 넘으면 이 묶음 안의 가장 큰 솔버가 끊긴다(「메모리 부족」). ADR 0012.
+[Unit]
+Description=$APP_NAME 해석 워커 묶음 (CPU · 메모리 상한)
+Before=slices.target
+
+[Slice]
+CPUQuota=${SLICE_CPU_PERCENT}%
+CPUWeight=20
+IOWeight=20
+MemoryMax=$SLICE_MEMORY_MAX
+MemorySwapMax=0
+EOF
+}
+
+# 권장 워커 수 — 코어로도 메모리로도 넘지 않게. 넘게 띄워도 묶음이 지키지만, 그때는 해석끼리
+# 서로 느려지거나(코어) 큰 해석이 끊긴다(메모리). 말만 하고 막지 않는다.
+worker_advice() {
+    worker_limits
+    local by_cpu=$(( SLICE_CPU_PERCENT / 100 / WORKER_JOB_CPUS )); (( by_cpu < 1 )) && by_cpu=1
+    local by_mem=$(( SLICE_MEM_MB / WORKER_JOB_MEM_MB )); (( by_mem < 1 )) && by_mem=1
+    local advised=$(( by_cpu < by_mem ? by_cpu : by_mem ))
+    info "워커 묶음 상한: CPU ${SLICE_CPU_PERCENT}% · 메모리 $SLICE_MEMORY_MAX (이 서버 코어 $HOST_CPUS · 메모리 $(( HOST_MEM_MB / 1024 ))G) — 권장 워커 수 $advised 개 이하"
+    if (( WORKER_COUNT > advised )); then
+        warn "워커 $WORKER_COUNT 개는 이 서버에 많습니다 — 한 해석이 코어 ${WORKER_JOB_CPUS}개 · 메모리 $(( WORKER_JOB_MEM_MB / 1024 ))G 남짓을 쓰면 해석끼리 느려지거나 큰 해석이 「메모리 부족」 으로 끊깁니다."
+        echo "    sudo APP_SLUG=$APP_SLUG WORKER_COUNT=$advised ./deploy.sh update"
+    fi
+}
+
 # ── 해석 작업 워커 — 앱과 같은 이미지로 `python -m app.worker`. 없으면 작업이 queued 에 쌓인다. ──
 setup_worker() {
     [[ -f "$HERE/worker.service.template" ]] \
@@ -651,7 +720,10 @@ setup_worker() {
     info "해석 작업 워커 유닛 렌더 → $WORKER_SERVICE_UNIT (인스턴스 $WORKER_COUNT 개)"
     render_unit_paths "$HERE/worker.service.template" > "$WORKER_SERVICE_UNIT"
     chmod 644 "$WORKER_SERVICE_UNIT"
+    worker_slice_text > "/etc/systemd/system/$WORKER_SLICE"
+    chmod 644 "/etc/systemd/system/$WORKER_SLICE"
     systemctl daemon-reload
+    worker_advice
 
     # **줄인 수만큼 내린다.** 전에 4개를 띄운 서버에서 WORKER_COUNT=2 로 다시 깔면, 안 내린
     # 둘이 옛 이미지로 계속 돈다 — 그리고 그 사실은 아무 데도 안 적힌다.
@@ -1007,6 +1079,8 @@ cmd_status() {
     echo "  DB        : $DB_NAME @ $DB_HOST"
     echo "  포트      : $APP_PORT"
     echo "  워커      : $WORKER_COUNT 개 · Ansys $( [[ -n "$ANSYS_HOST_DIR" ]] && echo "$ANSYS_HOST_DIR (v$ANSYS_VERSION)" || echo "안 걸림" )"
+    worker_limits
+    echo "  워커 묶음 : CPU ${SLICE_CPU_PERCENT}% · 메모리 $SLICE_MEMORY_MAX 상한 · 지금 $(systemctl show "$WORKER_SLICE" -p MemoryCurrent --value 2>/dev/null | awk '{ if ($1 ~ /^[0-9]+$/) printf "%.1fG 사용", $1/1073741824; else print "—" }')"
     [[ -f "$INSTALL_DIR/app.sif" ]] && echo "  SIF       : $(stat -c '%y' "$INSTALL_DIR/app.sif")"
     echo
     systemctl --no-pager --lines=10 status "$SERVICE_NAME" || true
@@ -1268,6 +1342,8 @@ cmd_render() {
     # 경로를 여기서 짓는다 — `$MCP_SERVICE_UNIT` 은 ETC 를 정하기 전에 지어져 진짜 /etc 를 가리킬 수 있다.
     [[ -f "$HERE/mcp.service.template" ]] \
         && mcp_unit_text > "$ETC/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+    worker_slice_text > "$ETC/etc/systemd/system/$WORKER_SLICE"
+    worker_advice
     render_lb
     if [[ $show -eq 1 ]]; then
         find "$ETC" -type f | sort | while read -r f; do echo "### ${f#"$ETC"}"; cat "$f"; echo; done

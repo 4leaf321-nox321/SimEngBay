@@ -25,6 +25,7 @@ from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import deck as deck_writer
 from app.core.calculix.mesh import build_mesh, element_faces, probe_volumes, tributary_areas
 from app.core.harmonic import harmonic_plan
+from app.core.numbers import significant
 from app.core.regions import match_regions
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
 from app.core.stages import MIDSURFACE_NAME, ArtifactSpec, StageFailure, StageResult
@@ -333,7 +334,7 @@ def build(
     )
     mass = _mass_kg(materials, body_of, mesh)
     if shells:
-        mass = round((mass or 0.0) + _shell_mass(shells, mesh.nodes), 4)
+        mass = significant((mass or 0.0) + _shell_mass(shells, mesh.nodes))
     return StageResult(
         artifacts=[ArtifactSpec("dat", path)],
         summary={
@@ -550,31 +551,23 @@ def _held_nodes(
 def _global_size(
     spec: AnySpec, given: condition_model.Conditions, system: units.UnitSystem
 ) -> float:
-    """전역 요소 크기(mm). 스펙이 비면 **CAD 의 「전체」 힌트**를 쓴다.
+    """전역 요소 크기(mm). 스펙이 비면 **CAD 의 「전체」 힌트**, 그것도 없으면 **CompCore 의
+    제안값**(`Conditions.global_size`).
 
-    둘 다 없으면 멈춘다 — gmsh 는 크기를 안 주면 제 나름으로 잡고, 그러면 같은 형상이 실행마다
+    셋 다 없으면 멈춘다 — gmsh 는 크기를 안 주면 제 나름으로 잡고, 그러면 같은 형상이 실행마다
     다른 메시로 풀린다(설계점 비교가 무너진다).
     """
     if spec.mesh.element_size_mm is not None:
         return float(spec.mesh.element_size_mm)
-    whole = next(
-        (
-            one
-            for one in given.mesh_hints
-            if one.region in ("전체", "all") and one.element_size is not None
-        ),
-        None,
-    )
-    if whole is not None and whole.element_size is not None:
-        # 힌트는 **선언된 계의 길이**다(SI 면 m) — 형상은 늘 mm 이므로 옮긴다.
-        size = whole.element_size * system.length_mm
-        logger.info(
-            "메시 전체 크기 ← CAD %s %s (%s mm)", whole.element_size, system.length_label, size
-        )
+    found = given.global_size(system.length_mm)
+    if found is not None:
+        size, source = found
+        logger.info("메시 전체 크기 ← %s %s mm", source, size)
         return float(size)
     raise StageFailure(
         "mesh_failed",
-        "요소 크기가 없습니다 — 스펙에 넣거나 CAD 가 「전체」 메시 힌트를 보내야 합니다.",
+        "요소 크기가 없습니다 — 스펙에 넣거나 CAD 가 「전체」 메시 힌트(또는 CompCore 의 "
+        "제안값)를 보내야 합니다.",
     )
 
 
@@ -1251,4 +1244,4 @@ def _mass_kg(
                 return None
             # 부피는 mm³ — SI 밀도와 곱하려면 m³ 로 옮긴다(1e-9).
             total += by_entity[entity] * 1e-9 * material.density_kg_m3
-    return round(total, 4) if total else None
+    return significant(total) if total else None

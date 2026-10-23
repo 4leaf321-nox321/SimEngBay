@@ -590,6 +590,54 @@ def test_요청서의_위험_도구는_틀과_같다(bundle: Path, tmp_path: Pat
     """포털 담당이 `_INVOKE_DENY_EXACT` 에 넣을 목록이 채운 요청서에도 그대로 실린다(틀과
     서버의 목록이 같은지는 MCP 시험이 본다)."""
     _, doc, _ = _hwax_request(bundle, tmp_path, "vibrobay", port=8070)
-    text = doc.read_text(encoding="utf-8")
-    block = text[text.index("<!-- 위험 도구: 시작 -->") : text.index("<!-- 위험 도구: 끝 -->")]
-    assert set(re.findall(r'"([a-z_]+)"', block)) == {"job_cancel"}
+
+    def listed(text: str) -> set[str]:
+        start = text.index("<!-- 위험 도구: 시작 -->")
+        end = text.index("<!-- 위험 도구: 끝 -->")
+        return set(re.findall(r'"([a-z_]+)"', text[start:end]))
+
+    template = listed(REQUEST_TEMPLATE.read_text(encoding="utf-8"))
+    assert "job_cancel" in template
+    assert listed(doc.read_text(encoding="utf-8")) == template
+
+
+# --- 해석 워커 묶음(ADR 0012) — 그 서버를 재서 CPU · 메모리 상한 ------------------------
+
+
+def test_워커는_한_묶음으로_서버를_재서_상한을_건다(bundle: Path, tmp_path: Path) -> None:
+    """상한이 없던 때 운영 서버의 메모리가 바닥나 서버째 멈췄다(2026-10-23). 워커 전부가 한
+    칸을 나눠 쓰고, 앱 · DB · 운영체제 몫(코어 max(2, 1/8) · 메모리 max(4 GB, 1/5))을 남긴다.
+    스왑은 못 쓴다 — 스왑으로 버티는 동안 서버 전체가 멈춘 것과 같다."""
+    etc = tmp_path / "etc"
+    render(bundle, etc, HOST_CPUS="16", HOST_MEM_MB="65536")
+    sliced = read(etc, "systemd/system/testplatform-workers.slice")
+    assert "CPUQuota=1400%" in sliced
+    assert "MemoryMax=52429M" in sliced  # 65536 - 13107(1/5)
+    assert "MemorySwapMax=0" in sliced
+    worker = read(etc, "systemd/system/testplatform-worker@.service")
+    assert "Slice=testplatform-workers.slice" in worker and "Nice=10" in worker
+
+
+def test_작은_서버에_워커가_많으면_권장_수를_말한다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    done = render(bundle, etc, HOST_CPUS="4", HOST_MEM_MB="8192", WORKER_COUNT="4")
+    said = done.stdout + done.stderr
+    # 코어 4 - 2 = 2(한 해석 2코어 → 1개) · 메모리 8 - 4 GB(한 해석 4 GB → 1개).
+    assert "권장 워커 수 1 개 이하" in said
+    assert "WORKER_COUNT=1 ./deploy.sh update" in said
+
+
+def test_사람이_정한_상한은_기억한다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(
+        bundle,
+        etc,
+        HOST_CPUS="16",
+        HOST_MEM_MB="65536",
+        WORKER_MEMORY_MAX="40G",
+        WORKER_CPU_PERCENT="1200",
+    )
+    sliced = read(etc, "systemd/system/testplatform-workers.slice")
+    assert "MemoryMax=40G" in sliced and "CPUQuota=1200%" in sliced
+    render(bundle, etc, HOST_CPUS="16", HOST_MEM_MB="65536")  # 다시 안 붙여도
+    assert "MemoryMax=40G" in read(etc, "systemd/system/testplatform-workers.slice")

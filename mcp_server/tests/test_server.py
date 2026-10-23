@@ -43,6 +43,10 @@ TOOLS = {
     "studies_list",
     "study_get",
     "study_publish",
+    "study_analyze",
+    "study_cancel",
+    "server_status",
+    "files_tidy",
     "convergence_start",
     "convergence_get",
     "measurements_get",
@@ -104,7 +108,7 @@ def test_안내문과_안내서가_가리키는_도구는_다_있다() -> None:
         line for line in server.INSTRUCTIONS.splitlines() if line.startswith("  ")
     )
     in_table = set(re.findall(r"\b[a-z]+_[a-z_]+\b", rows))
-    assert in_table - {"wait_seconds"} <= TOOLS, in_table - TOOLS
+    assert in_table - {"wait_seconds", "study_id"} <= TOOLS, in_table - TOOLS
     _version, sections = server._guide_sections()
     called = set(re.findall(r"\b([a-z]+_[a-z_]+)\(", "\n".join(sections.values())))
     assert called and called <= TOOLS, called - TOOLS
@@ -136,7 +140,7 @@ def test_서버의_말을_그대로_전한다() -> None:
             },
         )
     )
-    got = _run(server.jobs_create, "/data/doe/a", {"recipe": "modal"})
+    got = _run(server.jobs_create, {"recipe": "modal"}, path="/data/doe/a")
     assert got == {
         "error": "[SEB-SIMULATIONS-0031] CalculiX 로는 못 거는 조건이 있습니다: "
         "구속 「바닥」(elastic_support)",
@@ -301,7 +305,7 @@ def test_걸기는_폴더_가져오기로_스펙을_dict_그대로_보낸다() -
         }
     )
     spec = {"recipe": "static", "solver": "ansys", "mesh": {"element_size_mm": 3}}
-    got = _run(server.jobs_create, "/data/doe/브래킷", spec, numbers=[2, 5])
+    got = _run(server.jobs_create, spec, path="/data/doe/브래킷", numbers=[2, 5])
     assert got["created"] == ["j1"]
     assert (seen[1].method, seen[1].url.path) == ("POST", "/api/simulations/doe/import")
     body = json.loads(seen[1].content)
@@ -310,7 +314,7 @@ def test_걸기는_폴더_가져오기로_스펙을_dict_그대로_보낸다() -
 
     # 부서를 주면 묻지 않는다.
     seen.clear()
-    _run(server.jobs_create, "/d", spec, workspace_slug="qa")
+    _run(server.jobs_create, spec, path="/d", workspace_slug="qa")
     assert [one.url.path for one in seen] == ["/api/simulations/doe/import"]
     assert json.loads(seen[0].content)["workspace_slug"] == "qa"
 
@@ -337,6 +341,95 @@ def test_찾기는_스터디_id_나_이름을_보내고_못_찾으면_무엇을_
     )
     missing = _run(server.folder_find, "없는 스터디")
     assert missing["found"] == [] and "doe_export" in missing["hint"]
+
+
+FOUND = "/data/doe/솔버_덱_함께-51d7a12a"
+COMPCORE_PATH = "F:\\data\\0_Program\\73_CompCore\\솔버_덱_함께-51d7a12a"
+
+
+def _compcore_backend(
+    *, import_error: dict[str, Any] | None = None, found: list[dict[str, Any]] | None = None
+) -> list[httpx.Request]:
+    """찾기 · 가져오기 · 미리 보기가 있는 가짜 백엔드 — 이 서버가 보는 경로만 받는다."""
+    hits = (
+        [{"path": FOUND, "matched_by": "id", "study_id": "51d7a12a-6804"}]
+        if found is None
+        else found
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        where = request.url.path
+        if where == "/api/auth/me":
+            return httpx.Response(200, json={"home_workspace_slug": "cae"})
+        if where == "/api/simulations/doe/find":
+            return httpx.Response(200, json={"found": hits, "roots": ["/data/doe"]})
+        sent = (
+            json.loads(request.content)["path"]
+            if request.method == "POST"
+            else request.url.params["path"]
+        )
+        if import_error is not None:
+            return httpx.Response(422, json={"error": import_error})
+        if sent != FOUND:
+            refused = {
+                "code": "SEB-SIMULATIONS-0020",
+                "message": f"공용 폴더 밖입니다: {sent}",
+            }
+            return httpx.Response(400, json={"error": refused})
+        if where == "/api/simulations/doe/import":
+            return httpx.Response(201, json={"study_id": "51d7a12a-6804", "created": ["j1"]})
+        return httpx.Response(200, json={"points": [], "path": sent})
+
+    return _serve(respond)
+
+
+def test_걸기는_CompCore_스터디_id_를_그대로_받는다() -> None:
+    """CompCore 의 doe_run · doe_export 가 준 study_id 를 넘기면 서버가 폴더를 찾아 건다 — AI
+    가 folder_find 를 끼워 부르는 것을 잊어도 된다(2026-10-23, 거기서 멈췄다)."""
+    seen = _compcore_backend()
+    got = _run(server.jobs_create, {"recipe": "modal"}, study_id="51d7a12a")
+    assert got["created"] == ["j1"] and got["folder"] == FOUND
+    asked = [(one.method, one.url.path) for one in seen]
+    assert ("GET", "/api/simulations/doe/find") in asked
+    assert json.loads(seen[-1].content)["path"] == FOUND
+
+    preview = _run(server.folder_preview, study_id="51d7a12a")
+    assert preview["path"] == FOUND and preview["folder"] == FOUND
+
+
+def test_CompCore_가_준_경로를_넘겨도_꼬리의_id_로_찾아_건다() -> None:
+    """`F:\\…\\<이름>-<id8>` 은 이 서버의 경로가 아니다 — 「공용 폴더 밖」 이면 꼬리의 id 로
+    찾아 다시 건다(경로 탓인 거절일 때만)."""
+    seen = _compcore_backend()
+    got = _run(server.jobs_create, {"recipe": "modal"}, path=COMPCORE_PATH)
+    assert got["created"] == ["j1"] and got["folder"] == FOUND
+    finds = [one for one in seen if one.url.path == "/api/simulations/doe/find"]
+    assert [one.url.params["q"] for one in finds] == ["51d7a12a"]
+
+
+def test_경로_탓이_아닌_거절은_다시_찾지_않고_그대로_전한다() -> None:
+    """스펙이 틀린 것을 다른 폴더로 다시 걸면 안 된다 — 서버의 말 그대로."""
+    seen = _compcore_backend(import_error={"code": "SEB-SIMULATIONS-0001", "message": "스펙"})
+    got = _run(server.jobs_create, {"recipe": "nope"}, path=COMPCORE_PATH)
+    assert got["error"] == "[SEB-SIMULATIONS-0001] 스펙"
+    assert all(one.url.path != "/api/simulations/doe/find" for one in seen)
+
+
+def test_스터디_id_로_못_찾거나_여럿이면_무엇을_할지_말한다() -> None:
+    _compcore_backend(found=[])
+    missing = _run(server.jobs_create, {"recipe": "modal"}, study_id="deadbeef")
+    assert "없습니다" in missing["error"] and "doe_export" in missing["hint"]
+    assert missing["roots"] == ["/data/doe"]
+
+    twin = [
+        {"path": "/data/doe/a-51d7a12a", "matched_by": "id"},
+        {"path": "/data/doe2/a-51d7a12a", "matched_by": "id"},
+    ]
+    _compcore_backend(found=twin)
+    many = _run(server.jobs_create, {"recipe": "modal"}, study_id="51d7a12a")
+    assert "여럿" in many["error"] and len(many["found"]) == 2
+
+    assert "study_id" in _run(server.jobs_create, {"recipe": "modal"})["error"]
 
 
 def test_미리_보기는_번호를_주면_설계점_하나로_간다() -> None:
@@ -533,6 +626,64 @@ def test_게시와_해제는_제_경로로() -> None:
         "/api/simulations/j1/unpublish",
         "/api/simulations/studies/s1/unpublish",
     ]
+
+
+def test_분석은_조건을_여럿_보내고_결과를_안_고르면_주효과를_뺀다() -> None:
+    """설계점 200개를 AI 가 손으로 셈하지 않게 서버가 셈한다 — 주효과(변수 x 결과 x 수준)는
+    결과를 고를 때만 싣는다."""
+    body = {"columns": [], "sensitivity": [], "effects": [{"factor": "factor:두께"}]}
+    seen = _serve(lambda _r: httpx.Response(200, json=body))
+    got = _run(
+        server.study_analyze,
+        "s1",
+        objective="mass_kg",
+        where=["mode:1>=300", "max_mpa<=200"],
+    )
+    assert seen[0].url.path == "/api/simulations/studies/s1/analysis"
+    assert seen[0].url.params.get_list("where") == ["mode:1>=300", "max_mpa<=200"]
+    assert seen[0].url.params["objective"] == "mass_kg"
+    assert "result" not in seen[0].url.params
+    assert "effects" not in got
+    assert "effects" in _run(server.study_analyze, "s1", result="max_mm")
+
+
+def test_서버_상태는_누구나_솔버_요약_관리자는_워커까지() -> None:
+    solvers = [{"solver": "calculix", "workers_alive": 0, "queued": 3}]
+    _route({("GET", "/api/simulations/solvers"): solvers})
+    # 관리자가 아니면 /workers 가 404·403 — 요약만 준다.
+    assert _run(server.server_status) == {"solvers": solvers}
+
+    detail = {
+        "queues": [{"solver": "calculix", "queued": 3, "running": 1}],
+        "workers": [{"id": "h:1", "state": "busy", "hostname": "h", "tools": {"ccx": "/x"}}],
+        "license_holders": [],
+        "alive": 1,
+    }
+    _route(
+        {
+            ("GET", "/api/simulations/solvers"): solvers,
+            ("GET", "/api/simulations/workers"): detail,
+        }
+    )
+    got = _run(server.server_status)
+    assert got["queues"] == detail["queues"]
+    # 설치 경로(도구) · 호스트는 싣지 않는다 — 판단에 필요한 것만.
+    assert got["workers"] == [
+        {"id": "h:1", "state": "busy", "solvers": None, "silent_seconds": None, "job": None}
+    ]
+
+
+def test_DOE_멈추기와_중간_파일_정리는_제_경로로() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json={"points": 3}))
+    _run(server.study_cancel, "s1")
+    _run(server.files_tidy, job_id="j1")
+    _run(server.files_tidy, study_id="s1")
+    assert [(one.method, one.url.path) for one in seen] == [
+        ("POST", "/api/simulations/studies/s1/cancel"),
+        ("POST", "/api/simulations/j1/tidy"),
+        ("POST", "/api/simulations/studies/s1/tidy"),
+    ]
+    assert "error" in _run(server.files_tidy)
 
 
 def test_수렴_점검은_비율을_안_주면_화면과_같은_제안으로() -> None:

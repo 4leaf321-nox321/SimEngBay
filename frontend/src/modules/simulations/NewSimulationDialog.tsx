@@ -169,11 +169,14 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
   // **CAD 크기는 CAD 조건을 쓸 때만이다** — 끄면 모델링이 점 파일을 아예 안 읽어 「전체」 크기도
   // 안 쓴다(그대로 비워 두면 CalculiX 는 메시에서 멈춘다). 폴더의 크기는 폴더 쪽에서만 —
   // 업로드 쪽으로 넘어와서 옆 탭의 폴더 값을 쓰면 안 된다(2026-10-05 리뷰).
-  const cadSize = useCadConditions
-    ? (preview?.suggested_element_size_mm ??
-      (source === 'folder' ? folder?.suggested_element_size_mm : null) ??
-      null)
-    : null
+  const sizeFrom = !useCadConditions
+    ? null
+    : preview?.suggested_element_size_mm != null
+      ? preview
+      : source === 'folder'
+        ? folder
+        : null
+  const cadSize = sizeFrom?.suggested_element_size_mm ?? null
   const suggested = preview ? (isRecipe(preview.suggested_recipe) ? preview.suggested_recipe : null) : undefined
   // **정적 · 조화는 하중이 CAD 조건에서 온다** — 스펙에는 하중 칸이 없다. 정적은 강제 변위로
   // 당겨도 답이 있다(시편 시험 — `drives`).
@@ -731,7 +734,13 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                         <span className="text-muted-foreground"> ({probes.map((one) => one.name).join(' · ')})</span>
                       </>
                     )}
-                    {preview.suggested_element_size_mm != null && <> · 요소 크기 {preview.suggested_element_size_mm} mm</>}
+                    {preview.suggested_element_size_mm != null && (
+                      <>
+                        {' '}
+                        · 요소 크기 {preview.suggested_element_size_mm} mm
+                        {preview.suggested_element_size_from === 'compcore' && ' (CompCore 제안)'}
+                      </>
+                    )}
                   </p>
                   {(preview.unresolved ?? []).length > 0 && (
                     // **CAD 가 못 푼 이름을 감추지 않는다.** 그 이름으로는 형상에 자리가 없다.
@@ -855,6 +864,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                   order={order}
                   onOrder={setOrder}
                   cadSize={cadSize}
+                  cadSizeFrom={sizeFrom?.suggested_element_size_from}
+                  cadSizeBasis={sizeFrom?.suggested_element_size_basis}
                   needsSize={needsSize}
                 />
 

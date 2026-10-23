@@ -199,7 +199,24 @@
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": []
+    "notes": [],
+    "min_wall_by_body": {
+      "base": 10.0
+    }
+  },
+  "mesh_suggestion": {
+    "element_size": 5.0,
+    "basis": "최소 벽 두께(10 mm, 「base」)의 절반 — 가장 얇은 벽에 요소 두 개",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "in_conditions": false,
+    "inputs": {
+      "min_wall": 10.0,
+      "wall_body": "base",
+      "longest": 100.0,
+      "skipped": [
+        "skin"
+      ]
+    }
   },
   "point": {
     "number": 1,
@@ -578,6 +595,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm"
+    "coordinate_systems": "mm",
+    "mesh_suggestion": "mm"
   }
 }

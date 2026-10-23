@@ -12,13 +12,14 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Eraser, RotateCcw, Square } from 'lucide-react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Download, Eraser, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
 import type { Artifact, Convergence, Measurement, Simulation, Stage } from '@/modules/simulations/api'
 import { ConditionList } from '@/modules/simulations/ConditionList'
 import { ConvergencePanel } from '@/modules/simulations/ConvergencePanel'
+import { shownMass } from '@/modules/simulations/format'
 import { MeasurementsPanel } from '@/modules/simulations/MeasurementsPanel'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { QueueNotice } from '@/modules/simulations/QueueNotice'
@@ -38,6 +39,7 @@ import {
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ownsWork } from '@/shared/auth/roles'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -186,7 +188,7 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'contact_pairs') return value ? '있음' : '없음'
   if (key === 'large_deflection') return value ? '켬 (기하 비선형)' : '끔'
   if (key === 'shape_reused') return value ? '다시 씀' : '새로 만듦'
-  if (key === 'mass_kg' && typeof value === 'number') return `${Number(value.toPrecision(4))} kg`
+  if (key === 'mass_kg' && typeof value === 'number') return shownMass(value)
   if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(' · ')
   if (key === 'density_kg_m3' && typeof value === 'number')
     return `${value.toLocaleString()} kg/m³`
@@ -307,6 +309,9 @@ function SimulationDetail({ id }: { id: string }) {
     setLive(await (next ? simulationApi.publish(id) : simulationApi.unpublish(id)))
   }
 
+  const navigate = useNavigate()
+  const [removing, setRemoving] = useState(false)
+
   async function retry() {
     setBusy(true)
     setError(null)
@@ -423,8 +428,28 @@ function SimulationDetail({ id }: { id: string }) {
                 중간 파일 정리
               </Button>
             )}
+            {/* **도는 작업은 지우지 않는다** — 워커가 쓰는 폴더를 지우게 된다. 먼저 멈춘다. */}
+            {mine && (finished || simulation.status === 'queued') && (
+              <Button variant="outline" size="sm" onClick={() => setRemoving(true)} disabled={busy}>
+                <Trash2 className="size-4" />
+                삭제
+              </Button>
+            )}
           </>
         }
+      />
+
+      <ConfirmDialog
+        open={removing}
+        title="작업 삭제"
+        description={<RemoveNotice simulation={simulation} totalBytes={totalBytes} />}
+        confirmLabel="삭제"
+        destructive
+        onConfirm={async () => {
+          await simulationApi.remove(id)
+          navigate(afterRemove(simulation), { replace: true })
+        }}
+        onClose={() => setRemoving(false)}
       />
 
       <ErrorNotice error={error} />
@@ -661,6 +686,32 @@ function PreviousAttempts({ meta }: { meta: Record<string, unknown> }) {
       ))}
     </>
   )
+}
+
+/** **무엇이 사라지는지 적는다** — 게시한 결과면 남의 화면에서도, DOE 점이면 앞선 시도까지. */
+function RemoveNotice({ simulation, totalBytes }: { simulation: Simulation; totalBytes: number }) {
+  return (
+    <div className="space-y-2">
+      <p>
+        「{simulation.name}」 과 그 작업 폴더(결과 · 그림 · 중간 파일
+        {totalBytes > 0 && ` ${shownSize(totalBytes)}`})를 지웁니다. 메시 수렴
+        점검 수준과 이 작업에 올린 실측도 함께 사라집니다. 되돌릴 수 없습니다.
+      </p>
+      {simulation.published_at && <p>게시된 결과라 다른 사람의 화면에서도 사라집니다.</p>}
+      {simulation.source_kind === 'doe_point' && (
+        <p>DOE 설계점이면 그 점의 앞선 시도(다시 가져오기 전의 작업)도 함께 지웁니다.</p>
+      )}
+    </div>
+  )
+}
+
+/** 지운 뒤 갈 곳 — DOE 설계점이면 그 DOE 로(남은 점을 보러 왔을 것이다), 아니면 목록으로. */
+function afterRemove(simulation: Simulation): string {
+  const meta = (simulation.source_meta ?? {}) as Record<string, unknown>
+  const study = String(meta.study_id ?? meta.study_name ?? '')
+  return simulation.source_kind === 'doe_point' && study
+    ? `/simulations/studies/${encodeURIComponent(study)}`
+    : '/simulations'
 }
 
 function SourceLine({ simulation }: { simulation: Simulation }) {

@@ -23,6 +23,7 @@ from app.core import conditions as condition_model
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, tables, vtp
 from app.core.calculix.mesh import read_mesh
+from app.core.numbers import significant
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -232,7 +233,7 @@ def _draw_modes(
         for one in modes:
             if one["number"] == number:
                 one["vtp"] = name
-                one["max_displacement"] = round(max(magnitude.values(), default=0.0), 8)
+                one["max_displacement"] = significant(max(magnitude.values(), default=0.0))
                 one["points"] = counts["points"]
     return made, (names if made else [])
 

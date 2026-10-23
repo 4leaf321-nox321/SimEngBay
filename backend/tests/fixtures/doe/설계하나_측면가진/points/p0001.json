@@ -143,7 +143,23 @@
     "narrowest_face": 5.0,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": []
+    "notes": [],
+    "min_wall_by_body": {
+      "받침판": 10.0,
+      "기둥": 10.0
+    }
+  },
+  "mesh_suggestion": {
+    "element_size": 5.0,
+    "basis": "최소 벽 두께(10 mm, 「받침판」)의 절반 — 가장 얇은 벽에 요소 두 개",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "in_conditions": true,
+    "inputs": {
+      "min_wall": 10.0,
+      "wall_body": "받침판",
+      "longest": 110.0,
+      "skipped": []
+    }
   },
   "point": {
     "number": 1,
@@ -773,6 +789,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm"
+    "coordinate_systems": "mm",
+    "mesh_suggestion": "mm"
   }
 }

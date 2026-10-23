@@ -37,6 +37,8 @@ FailureCode = Literal[
     "solver_failed",
     "license",  # Mechanical · 솔버 라이선스를 못 받았다
     "timeout",
+    # 메모리가 모자라 운영체제(OOM)가 솔버를 강제로 멈췄다 — 요소 크기 · 동시 실행 수를 본다.
+    "out_of_memory",
     "worker_lost",  # 워커가 죽어 되살리다 한도를 넘겼다
     "internal",  # 코어의 버그 — 트레이스백이 로그에 있다
 ]
@@ -100,6 +102,15 @@ class StageResult:
 
 class StageCanceled(Exception):
     """사람이 취소했다. **실패가 아니다** — 세지도, 「남은 일」 에 올리지도 않는다."""
+
+
+def out_of_memory_message(what: str) -> str:
+    """메모리가 모자라 운영체제가 끊은 것의 한 줄(`out_of_memory`) — 사람이 할 일까지."""
+    return (
+        f"{what} 가 메모리가 모자라 강제로 멈췄습니다(운영체제가 끊었습니다). 요소 크기를 "
+        "키우거나 동시에 도는 해석 수(워커 수)를 줄이세요 — 메시 수렴 점검의 촘촘한 수준이 "
+        "특히 큽니다."
+    )
 
 
 class StageFailure(Exception):

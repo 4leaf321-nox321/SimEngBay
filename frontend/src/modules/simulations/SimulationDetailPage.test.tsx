@@ -29,6 +29,7 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       publish: vi.fn(),
       unpublish: vi.fn(),
       downloadAll: vi.fn(),
+      remove: vi.fn(),
       solvers: vi.fn().mockResolvedValue([]),
     },
   }
@@ -90,6 +91,7 @@ function show(path = '/simulations/sim') {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/simulations/:id" element={<SimulationDetailPage />} />
+        <Route path="/simulations/studies/:id" element={<p>DOE 화면</p>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -223,9 +225,36 @@ describe('해석 작업 화면', () => {
     show()
     await screen.findByRole('region', { name: '한눈에 보기' })
     expect(screen.getByText(/다른 사람의 결과라 읽기만 합니다/)).toBeDefined()
-    for (const name of ['게시', '게시 해제', '중간 파일 정리', '다시 실행', '취소']) {
+    for (const name of ['게시', '게시 해제', '중간 파일 정리', '다시 실행', '취소', '삭제']) {
       expect(screen.queryByRole('button', { name })).toBeNull()
     }
+  })
+
+  it('지우기 전에 무엇이 사라지는지 말하고, DOE 설계점이면 지운 뒤 그 DOE 로 간다', async () => {
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('failed'),
+      source_kind: 'doe_point',
+      source_meta: { study_id: 'st', study_name: '브래킷', point: 1 },
+      published_at: '2026-10-20T01:00:00Z',
+    } as Simulation)
+    vi.mocked(simulationApi.remove).mockReset().mockResolvedValue({ jobs: 2, bytes_freed: 10 })
+    show()
+    await userEvent.click(await screen.findByRole('button', { name: '삭제' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('되돌릴 수 없습니다')
+    expect(dialog.textContent).toContain('다른 사람의 화면에서도 사라집니다')
+    expect(dialog.textContent).toContain('앞선 시도')
+    await userEvent.click(within(dialog).getByRole('button', { name: '삭제' }))
+    await waitFor(() => expect(simulationApi.remove).toHaveBeenCalledWith('sim'))
+    expect(await screen.findByText('DOE 화면')).toBeDefined()
+  })
+
+  it('도는 작업은 지우지 않는다 — 먼저 멈춘다', async () => {
+    vi.mocked(simulationApi.get).mockResolvedValue(job('solving'))
+    vi.mocked(simulationApi.status).mockResolvedValue(job('solving'))
+    show()
+    expect(await screen.findByRole('button', { name: '취소' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: '삭제' })).toBeNull()
   })
 
   it('파일 탭에서 산출물 전부를 한 번에 받는다', async () => {

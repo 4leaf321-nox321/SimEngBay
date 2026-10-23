@@ -52,6 +52,8 @@ export const FAILURE_LABELS: Record<string, string> = {
   solver_failed: '솔버가 실패했습니다 — 솔버 로그를 확인합니다',
   license: '라이선스를 받지 못했습니다 — 동시에 도는 작업 수와 라이선스 서버를 확인합니다',
   timeout: '제한 시간을 넘겼습니다',
+  out_of_memory:
+    '메모리가 모자라 멈췄습니다 — 요소 크기를 키우거나 동시에 도는 해석 수(워커 수)를 줄입니다',
   worker_lost: '워커가 응답하지 않았습니다 — 워커 프로세스를 확인합니다',
   internal: '내부 오류입니다 — 서버 로그를 확인합니다',
 }

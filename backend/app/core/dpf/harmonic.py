@@ -22,6 +22,7 @@ from typing import Any
 from app.core import boundary
 from app.core import probes as core_probes
 from app.core.dpf import probes
+from app.core.numbers import significant
 from app.core.spec import HarmonicSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -174,7 +175,7 @@ def _at_spots(
     data = np.asarray(field.data, dtype=float)
     size = np.linalg.norm(data, axis=1) if data.ndim == 2 else np.abs(data)
     by_node = dict(zip(ids.tolist(), size.tolist(), strict=False))
-    return {name: round(float(by_node.get(node, 0.0)), 10) for name, node in spots.items()}
+    return {name: significant(float(by_node.get(node, 0.0))) for name, node in spots.items()}
 
 
 def _amplitude(dpf: Any, np: Any, model: Any, index: int) -> tuple[float, str]:

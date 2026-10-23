@@ -403,3 +403,34 @@ def test_중간면으로_옮긴_판에서_읽어도_쉘_파트의_조건이_남�
     broken = json.loads(json.dumps(point))
     broken["regions"]["물림 띠"][0]["mid"] = []
     assert "못했습니다" in conditions.read(broken, recipe="static").refused[0].why
+
+
+def test_전역_크기는_전체_힌트가_먼저_없으면_CompCore_제안() -> None:
+    """CompCore 와 맞춘 차례(2026-10-23) — 사람이 「전체」 크기를 적었으면 그것, 없으면
+    형상으로 셈한 제안값. 파트 · 면 · 엣지 크기는 이것과 따로 그대로 쓴다."""
+    sized = conditions.read(_point("조건_측면가진"))
+    assert sized.suggested_size_mm == 4.0
+    assert sized.global_size(1.0) == (2.0, "cad")
+
+    bare = conditions.read(_point("시험규격/시험_보드굽힘_JESD22"))
+    assert bare.global_size(1.0) == (0.6, "compcore")
+    assert "절반" in bare.suggested_basis or "1/200" in bare.suggested_basis
+
+
+def test_제안은_늘_mm_다_SI_로_내보내도() -> None:
+    """힌트는 선언된 계의 길이(SI 면 m)라 옮기지만, 제안은 단위가 늘 mm 다 — 같이 곱하면
+    4 mm 가 4,000 mm 가 된다."""
+    si = conditions.read(_point("조건_원통_SI"))
+    assert si.global_size(1000.0) == (4.0, "compcore")
+
+
+def test_모르는_단위나_빈_제안은_쓰지_않는다() -> None:
+    payload = _point("시험규격/시험_보드굽힘_JESD22")
+    odd = {**payload, "length_units": {**payload["length_units"], "mesh_suggestion": "m"}}
+    assert conditions.read(odd).global_size(1.0) is None
+    for size in (0, -1, None, True, "2"):
+        empty = {**payload, "mesh_suggestion": {"element_size": size}}
+        assert conditions.read(empty).suggested_size_mm is None
+    # 조건이 비어도(형상만 보낸 폴더) 제안은 읽는다 — 조건 밖에 온다.
+    shapes_only = {**payload, "conditions": {}}
+    assert conditions.read(shapes_only).global_size(1.0) == (0.6, "compcore")

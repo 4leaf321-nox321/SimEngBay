@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions
+from app.core.numbers import significant
 from app.core.probes import FAR_MM, Spot, body_of, row, wanted
 
 logger = logging.getLogger(__name__)
@@ -260,7 +261,7 @@ def reaction(
     for node, force in zip(ids.tolist(), data, strict=False):
         if node in on_plane:
             total += force
-    return [round(float(one), 6) for one in total]
+    return [significant(float(one)) for one in total]
 
 
 def reaction_on(model: Any, node_ids: list[int] | dict[str, list[int]]) -> list[float] | None:
@@ -282,7 +283,7 @@ def reaction_on(model: Any, node_ids: list[int] | dict[str, list[int]]) -> list[
         else [node_ids, node_ids, node_ids]
     )
     return [
-        round(float(data[np.isin(ids, np.asarray(wanted, dtype=int)), axis].sum()), 6)
+        significant(float(data[np.isin(ids, np.asarray(wanted, dtype=int)), axis].sum()))
         for axis, wanted in enumerate(per_axis)
     ]
 
@@ -297,4 +298,4 @@ def total_reaction(model: Any) -> list[float] | None:
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("반력을 못 읽었습니다", exc_info=True)
         return None
-    return [round(float(one), 6) for one in data.sum(axis=0)]
+    return [significant(float(one)) for one in data.sum(axis=0)]

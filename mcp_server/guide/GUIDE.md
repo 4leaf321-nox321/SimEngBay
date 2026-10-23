@@ -27,23 +27,26 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 8자리>` 폴더가 생긴다. 여기서는 그 폴더를 읽어 해석을 건다.
 
 - **두 플랫폼을 잇는 열쇠는 CompCore 스터디 id** 다 — 여기 `study_id` 와 같다.
-- **사용자에게 공유 폴더 경로를 묻지 않는다.** 사용자는 CompCore 에서 붙인 이름이나 스터디 id 만
-  안다 — `folder_find` 로 찾는다. CompCore 가 주는 `folder`(`F:\…`)는 이 서버가 보는 경로와 달라
-  그대로 못 쓴다.
+- **사용자에게 공유 폴더 경로를 묻지 않는다.** CompCore 가 준 `study_id` 를 `folder_preview` ·
+  `jobs_create` 에 **그대로** 넘기면 서버가 폴더를 찾아 건다(답의 `folder` 가 실제로 건 폴더).
+  CompCore 가 주는 `folder`(`F:\…`)를 `path` 로 넘겨도 그 꼬리(`-<id 앞 8자리>`)로 찾는다. 이름만
+  알면 `folder_find`.
 - 못 찾으면: CompCore 에서 아직 내보내지 않았거나, 보관 기한(기본 30일)이 지나 치워졌다 — CompCore
   에서 다시 내보내면 같은 폴더가 다시 선다. 공유 폴더는 보관소가 아니라 **전달 큐**다.
-- 두 MCP 가 함께 붙어 있으면 한 번에: CompCore `doe_create` → `doe_run`(형상 만들기) →
-  `doe_export` → 여기 `folder_find(study_id)` → `folder_preview` → `jobs_create`.
+- 두 MCP 가 함께 붙어 있으면 한 번에: CompCore `doe_run`(만들고 · 기다리고 · 내보내기까지) → 그
+  답의 `study_id` 로 여기 `folder_preview(study_id=…)` → `jobs_create(spec, study_id=…)` →
+  `job_get` → `study_get`.
 
 ## 흐름
 
-1. `folder_find(스터디 id 나 이름)` — CompCore 가 내보낸 폴더를 찾는다. 무엇이 있는지 모르면
-   `folder_browse`(`is_study` 인 항목).
-2. `folder_preview(path)` — 설계점 몇 개 · 변수 · 권하는 해석. 설계점 하나는 `number` 를 주고
+1. 폴더 — CompCore 의 `study_id` 가 있으면 그것으로 2 · 4 를 바로 부른다. 이름만 알면
+   `folder_find(이름)`, 무엇이 있는지 모르면 `folder_browse`(`is_study` 인 항목).
+2. `folder_preview(study_id=… 또는 path=…)` — 설계점 몇 개 · 변수 · 권하는 해석. 설계점 하나는 `number` 를 주고
    **`conditions.lines` 의 `refused`** 를 본다.
-3. `recipe_schema` — 스펙 칸. 대개 `{"recipe": …, "solver": …, "mesh": {"element_size_mm": …}}`
-   만 주고 나머지는 CAD 값.
-4. `jobs_create(path, spec, numbers)` — 점마다 작업 하나. 작업 id 가 바로 온다.
+3. `recipe_schema` — 스펙 칸. 대개 `{"recipe": …, "solver": …}` 만 주고 나머지(조건 · 물성 ·
+   **메시 크기**)는 CAD 값. 요소 크기는 사람이 정해 달라고 할 때만 준다(CAD 의 「전체」 크기를 덮는다).
+4. `jobs_create(spec, study_id=… 또는 path=…, numbers=[…])` — 점마다 작업 하나. 작업 id 가 바로
+   온다.
 5. `job_get(job_id, wait_seconds=25)` — 끝날 때까지 되묻는다. `failed` 면 까닭을 사람에게.
 6. `job_result(job_id)` — 숫자(늘 mm · MPa · N · Hz). 여러 점이면 `study_get(study_id)`.
 7. 필요하면 `convergence_start` (메시가 충분한가) · `measurement_add` (실측과 견준다).
@@ -67,7 +70,9 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
   설계점 여럿, 또는 설계 하나 — 인자 0개).
 - `folder_preview(path)` — `points[]`(번호 · 바꾼 값 · `usable` · `skip_reason`), CAD 가 권하는
   `suggested_recipe` · `suggested_modes` · `suggested_element_size_mm` · `suggested_order` ·
-  `suggested_large_deflection`. **권하는 값을 그대로 쓰는 것이 기본이다.**
+  `suggested_large_deflection`. **권하는 값을 그대로 쓰는 것이 기본이다.** 요소 크기는
+  `suggested_element_size_from` 이 출처다 — `cad` 사람이 「전체」 에 적은 값, `compcore` 형상으로
+  셈한 제안(`suggested_element_size_basis` 가 까닭).
 - `folder_preview(path, number=N)` — 그 점의 영역 · 파트(강체 · 쉘 · 제외) · 물성 · 조건 줄.
 
 ### 스펙
@@ -78,7 +83,7 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 | --- | --- | --- |
 | `recipe` | (필수) | `modal` · `static` · `harmonic` |
 | `solver` | `calculix` | 조건이 CalculiX 에서 거절되면 `ansys` |
-| `mesh.element_size_mm` | CAD 값 | 사람이 요소 크기를 정할 때 |
+| `mesh.element_size_mm` | CAD 값(「전체」 메시 힌트, 없으면 CompCore 의 제안값) | **비워 둔다** — 사람이 크기를 정해 달라고 할 때만. 주면 CAD 의 전역 크기를 덮는다(파트 · 면 크기는 CAD 그대로) |
 | `mesh.order` | `quadratic` | 거의 안 바꾼다 |
 | `modes` | 10 | 모달 · 조화 — 볼 탄성 모드 수(강체 6개는 따로 찾는다) |
 | `large_deflection` | CAD 값 | 정적 — 변형이 커서 모양이 바뀔 때(느리다) |
@@ -89,7 +94,7 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 
 ### 걸고 기다리기
 
-- `jobs_create(path, spec, numbers=[…])` — `created`(작업 id) · `skipped`(못 건 점과 까닭).
+- `jobs_create(spec, study_id=…, numbers=[…])` — `created`(작업 id) · `skipped`(못 건 점과 까닭).
   `numbers` 를 비우면 걸 수 있는 전부. 이미 가져온 점은 다시 걸지 않는다(같은 해석을 두 번 안
   돌린다) — 거절 문구가 누구 작업인지 말한다.
 - `job_get(job_id, wait_seconds=25)` — 상태: `queued` → `fetching` → `modeling` → `solving` →
@@ -100,7 +105,12 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
   대기 중이면 `job_get` 의 `queue` 가 어디쯤인지 말한다(그 솔버의 대기 · 내 앞의 내 작업 · 줄을 나눠
   쓰는 사람 수 · 도는 것 · 워커 수) — 사람에게 그대로 전한다.
 - **집을 워커가 없는 솔버**(`recipe_schema` 의 `solvers`, `queue.workers_alive == 0`)로 걸면 대기에서
-  움직이지 않는다.
+  움직이지 않는다. 「왜 안 도나」 · 「줄이 얼마나 긴가」 는 `server_status()` — 솔버마다 살아 있는 워커 ·
+  대기 수(시스템 관리자면 워커마다 하는 일까지). 워커가 0 이면 서버 관리자에게 알리라고 말한다.
+- **DOE 를 잘못 걸었으면** `study_cancel(study_id)` — 끝나지 않은 점을 모두 멈춘다(사용자가 시킬 때만).
+  멈춘 점은 `job_retry` 로 다시 건다. 디스크를 비우려면 `files_tidy(job_id=… | study_id=…)` — 중간
+  파일만 지운다(결과는 남는다, 사용자가 시킬 때만). 지우기(작업 · DOE 통째로)는 MCP 에 없다 — 사람이
+  화면에서 한다.
 - 실패: `job_get` 의 `error_message` · `stages[].error_message` 를 사람에게 전한다. 조건 거절이면
   다시 걸어도 같다 — 솔버를 바꾸거나 CAD 쪽에서 고친다. 일시적인 것이면 `job_retry`.
 
@@ -180,6 +190,21 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
 - `tracks[]` — **모드 추적.** 치수가 바뀌면 모드 순서가 뒤바뀐다(mode crossing) — 「2차 대 두께」
   를 순번으로 이으면 서로 다른 모드를 잇는다. 같은 모드끼리 이은 것이 여기 있다.
 - `studies_list(scope="mine")` 로 스터디 id 를 찾는다.
+
+### 분석 — `study_analyze(study_id, …)`
+
+**점들을 받아 손으로 셈하지 않는다** — 서버가 셈한다(화면 「다변수」 탭과 같은 표). 차례:
+
+1. 인자 없이 — `columns`(열 key) · `sensitivity`(결과마다 어느 변수가 가장 많이 움직이나 — 주효과 폭 %
+   와 상관계수) · `ranges`(결과마다 최소 · 최대 점).
+2. 궁금한 결과 하나 — `result="mode:1"` 이면 `effects`(변수의 수준마다 평균 · 최소 · 최대).
+3. 조건을 건 최적 — `objective="mass_kg", goal="min", where=["mode:1>=300", "max_mpa<=200"]` →
+   `choice.best` 와 앞의 다섯.
+4. 두 변수의 함께 영향 — `x="factor:두께", y="factor:폭", result="max_mm"` → `pair`(빈 칸은 null).
+
+말할 때: 민감도는 **다른 변수가 섞인 평균**이다 — 전 조합 설계가 아니면 「두께가 원인」 이라 단정하지
+말고 상관계수와 함께 말한다. 수준이 많은 변수(LHS)는 다섯 구간으로 묶였다(`notes`). 실패한 점은 빠진다
+(`done` / `total`).
 
 ### 메시 수렴 — `convergence_start` → `convergence_get`
 

@@ -247,7 +247,24 @@
     "warnings": [
       "벽 두께 0.2 mm (기준 0.5), 위치 (-4.233, -8.467, 1.62) 부근"
     ],
-    "notes": []
+    "notes": [],
+    "min_wall_by_body": {
+      "피착재_1": 1.62,
+      "접착층": 0.2,
+      "피착재_2": 1.62
+    }
+  },
+  "mesh_suggestion": {
+    "element_size": 0.8,
+    "basis": "가장 긴 변(190.5 mm)의 1/200 — 벽(0.2 mm)의 절반은 더 작지만 요소 수가 터지지 않게(얇은 벽은 국부 메시로)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "in_conditions": false,
+    "inputs": {
+      "min_wall": 0.2,
+      "wall_body": "접착층",
+      "longest": 190.5,
+      "skipped": []
+    }
   },
   "point": {
     "number": 1,
@@ -650,6 +667,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm"
+    "coordinate_systems": "mm",
+    "mesh_suggestion": "mm"
   }
 }

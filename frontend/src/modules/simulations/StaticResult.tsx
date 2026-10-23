@@ -24,13 +24,23 @@ type Props = {
 export function StaticResult({ simulationId, result, artifacts }: Props) {
   const vtp = artifacts.find((one) => one.kind === 'mode_vtp')
   const [mesh, setMesh] = useState<ArrayBuffer | null>(null)
+  const [meshError, setMeshError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!vtp) return
     let disposed = false
-    void simulationApi.mesh(simulationId, vtp.id).then((bytes) => {
-      if (!disposed) setMesh(bytes)
-    })
+    setMeshError(null)
+    simulationApi
+      .mesh(simulationId, vtp.id)
+      .then((bytes) => {
+        if (!disposed) setMesh(bytes)
+      })
+      .catch((caught: unknown) => {
+        // **말없이 사라지지 않는다** — 숫자만 있고 그림이 없으면 사람은 까닭을 짐작할 길이 없다.
+        if (!disposed) {
+          setMeshError(caught instanceof Error ? caught.message : '변형 그림을 받지 못했습니다.')
+        }
+      })
     return () => {
       disposed = true
     }
@@ -72,12 +82,21 @@ export function StaticResult({ simulationId, result, artifacts }: Props) {
       <StaticProbeTable probes={result.probes ?? []} />
       <ReactionTable reactions={result.reactions ?? {}} unit={result.units.force} />
 
-      {/* 정적의 변형은 **실제 크기**라 과장을 작게 둔다 — 모달처럼 흔들 이유도 없다. */}
+      {/* 정적의 변형은 **실제 크기**라 과장을 작게 둔다 — 모달처럼 흔들 이유도 없다(주기 0). */}
+      {!vtp && <p className="text-muted-foreground text-sm">이 작업은 변형 그림을 만들지 않았습니다.</p>}
+      {meshError && <p className="text-destructive text-sm">{meshError}</p>}
       {mesh && (
         <Suspense
           fallback={<p className="text-muted-foreground py-8 text-center text-sm">변형 그림을 불러오는 중…</p>}
         >
-          <MeshViewer data={mesh} warpRatio={0.05} periodMs={0} heightClass="h-[28rem]" partNames={result.parts} />
+          <MeshViewer
+            data={mesh}
+            warpRatio={0.05}
+            periodMs={0}
+            displacement="actual"
+            heightClass="h-[28rem]"
+            partNames={result.parts}
+          />
         </Suspense>
       )}
       <p className="text-muted-foreground text-xs">

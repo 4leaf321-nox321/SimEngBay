@@ -479,6 +479,13 @@ def test_DOE_폴더를_걸기_전에_보여_준다(client: TestClient, member: S
 
 
 SHEAR_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_전단이음"
+BOARD_FOLDER = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "doe"
+    / "시험규격"
+    / "시험_보드굽힘_JESD22"
+)
 
 
 def test_미리보기가_CAD_가_적은_해석_종류와_요소_크기를_알려_준다(
@@ -493,6 +500,17 @@ def test_미리보기가_CAD_가_적은_해석_종류와_요소_크기를_알려
     assert got.status_code == 200, got.text
     assert got.json()["suggested_recipe"] == "static"
     assert got.json()["suggested_element_size_mm"] == 2.5
+    # 사람이 「전체」 에 적은 크기다 — CompCore 의 제안(같은 2.5)보다 먼저.
+    assert got.json()["suggested_element_size_from"] == "cad"
+    assert got.json()["suggested_element_size_basis"] is None
+
+    # **「전체」 크기를 안 적은 폴더는 CompCore 의 제안값** — 무엇으로 셈했나도 함께 낸다.
+    proposed = client.get(
+        f"/api/simulations/doe/preview?path={BOARD_FOLDER}", headers=member.headers
+    ).json()
+    assert proposed["suggested_element_size_mm"] == 0.6
+    assert proposed["suggested_element_size_from"] == "compcore"
+    assert proposed["suggested_element_size_basis"]
 
     # 아무것도 안 적은 옛 폴더는 **비워 둔다** — 「CAD 가 모달이라 했다」 로 채우면 거짓이다.
     bare = client.get(

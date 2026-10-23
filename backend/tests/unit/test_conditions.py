@@ -413,7 +413,8 @@ def test_전역_크기는_전체_힌트가_먼저_없으면_CompCore_제안() ->
     assert sized.global_size(1.0) == (2.0, "cad")
 
     bare = conditions.read(_point("시험규격/시험_보드굽힘_JESD22"))
-    assert bare.global_size(1.0) == (0.6, "compcore")
+    # 0.6 mm 제안은 추정 절점이 상한(10만)을 넘어 CompCore 가 2 mm 로 키웠다(v0.16.8).
+    assert bare.global_size(1.0) == (2.0, "compcore")
     assert "절반" in bare.suggested_basis or "1/200" in bare.suggested_basis
 
 
@@ -433,4 +434,4 @@ def test_모르는_단위나_빈_제안은_쓰지_않는다() -> None:
         assert conditions.read(empty).suggested_size_mm is None
     # 조건이 비어도(형상만 보낸 폴더) 제안은 읽는다 — 조건 밖에 온다.
     shapes_only = {**payload, "conditions": {}}
-    assert conditions.read(shapes_only).global_size(1.0) == (0.6, "compcore")
+    assert conditions.read(shapes_only).global_size(1.0) == (2.0, "compcore")

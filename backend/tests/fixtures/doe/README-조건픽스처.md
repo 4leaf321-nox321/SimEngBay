@@ -378,6 +378,16 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 
 ## 읽을 때 알아 둘 것
 
+- **2026-10-23 — 시험 지그(강체)에도 재료가 붙는다**(CompCore `fe23e0e`, SimEngBay 의 요청). 「시험_보드굽힘_JESD22」 ·
+  「시험_숏빔전단_D2344」 · 「시험_핀베어링_D5961」 을 CompCore 가 다시 뽑은 그대로 옮겼다 — 강체 지그(`롤러_*` ·
+  `로딩_노즈*` · `핀`)는 「일반 구조용 강(지그 기본)」(`ref.source = "compcore-default"`, E 200 GPa · ν 0.3 ·
+  ρ 7850), 시편은 M-000138. 전에는 M-000138 이 「전체」 에 붙어 지그까지 같은 재료였다. 해석에서 지그와
+  부품은 같은 바디라 지그도 재료가 있어야 한다(`tests/unit/test_materials.py`). 스터디 id 도 새로 났다.
+- **2026-10-23 — 전역 요소 크기 제안(`mesh_suggestion`).** 점 파일마다 CompCore 가 형상으로 셈한 제안값이
+  조건 밖에 실린다(단위는 늘 mm). 이 폴더들에는 더한 열쇠 셋(`mesh_suggestion` · `length_units.mesh_suggestion`
+  · `quality.min_wall_by_body`)만 옮겼다 — 값 · 스터디 id 는 그대로다. CompCore v0.16.8 부터 추정 절점이
+  상한(기본 10만)을 넘으면 제안을 키운다(보드굽힘 0.6 → 2 mm, `inputs.capped_from`).
+
 - **2026-10-20 — 모든 픽스처를 v0.16.0 으로 다시 뽑았다**(「셸모델_*」 셋은 이미 그 판이라 두었다).
   바뀐 것은 2026-10-15 에 더한 열쇠뿐이다 — `bodies[].kind` · `area`, `body_settings[].thickness`
   (`null`), `midsurface.bodies[].source`. 값 · 열 · 파일 목록은 같다. STEP 은 머리글의 시각과 조립

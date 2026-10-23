@@ -1,5 +1,5 @@
 {
-  "id": "ea81f3de-a256-4661-a4ed-65c20c346260",
+  "id": "550fc7c9-6c66-4fa9-ad5b-cb0ef5b122eb",
   "name": "시험_숏빔전단_D2344",
   "description": "",
   "method": "factorial",
@@ -137,6 +137,35 @@
     "materials": [
       {
         "ref": {
+          "code": "",
+          "name": "일반 구조용 강(지그 기본)",
+          "source": "compcore-default",
+          "material_id": ""
+        },
+        "payload": {
+          "name": "일반 구조용 강(지그 기본)",
+          "values": [
+            {
+              "unit": "GPa",
+              "value_num": 200.0,
+              "property_key": "mechanical.youngs_modulus",
+              "property_name": "탄성계수",
+              "representative": true
+            }
+          ],
+          "density": 7850.0,
+          "density_unit": "kg/m3",
+          "poisson_ratio": 0.3
+        },
+        "apply_to": [
+          "롤러_1",
+          "롤러_2",
+          "로딩_노즈"
+        ],
+        "deck_formats": []
+      },
+      {
+        "ref": {
           "code": "M-000138",
           "name": "SECC-EXAD87-DP_선언물성_0.8",
           "source": "matnexus",
@@ -263,7 +292,7 @@
           "owner_workspace_name": "기본 부서"
         },
         "apply_to": [
-          "전체"
+          "시편"
         ]
       }
     ],
@@ -375,7 +404,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-6618e44f@example.local"
+    "email": "member-375135f7@example.local"
   },
   "requested_by": null,
   "cloned_from": null

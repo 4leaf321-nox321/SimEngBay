@@ -27,6 +27,36 @@
   "materials": [
     {
       "ref": {
+        "code": "",
+        "name": "일반 구조용 강(지그 기본)",
+        "source": "compcore-default",
+        "material_id": ""
+      },
+      "payload": {
+        "name": "일반 구조용 강(지그 기본)",
+        "values": [
+          {
+            "unit": "GPa",
+            "value_num": 200.0,
+            "property_key": "mechanical.youngs_modulus",
+            "property_name": "탄성계수",
+            "representative": true
+          }
+        ],
+        "density": 7850.0,
+        "density_unit": "kg/m3",
+        "poisson_ratio": 0.3
+      },
+      "apply_to": [
+        "롤러_1",
+        "롤러_2",
+        "로딩_노즈_1",
+        "로딩_노즈_2"
+      ],
+      "deck_formats": []
+    },
+    {
+      "ref": {
         "code": "M-000138",
         "name": "SECC-EXAD87-DP_선언물성_0.8",
         "source": "matnexus",
@@ -153,7 +183,7 @@
         "owner_workspace_name": "기본 부서"
       },
       "apply_to": [
-        "전체"
+        "시편"
       ]
     }
   ],

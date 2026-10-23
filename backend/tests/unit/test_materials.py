@@ -370,3 +370,29 @@ def test_파트마다_붙을_물성을_모델링과_같은_규칙으로_짝짓�
     assert materials.uncovered(whole, ["지그판", "부품"]) == []
     assert materials.uncovered(plate + whole, ["지그판", "부품"]) == []
     assert materials.body_names({"bodies": [{"name": " 판 "}, {"name": ""}, "x"]}) == ["판"]
+
+
+@pytest.mark.parametrize(
+    ("folder", "jigs"),
+    [
+        ("시험_보드굽힘_JESD22", ("롤러_1", "롤러_2", "로딩_노즈_1", "로딩_노즈_2")),
+        ("시험_숏빔전단_D2344", ("롤러_1", "롤러_2", "로딩_노즈")),
+        ("시험_핀베어링_D5961", ("핀",)),
+    ],
+)
+def test_시험_지그는_CompCore_의_기본_강재로_온다(folder: str, jigs: tuple[str, ...]) -> None:
+    """**해석에서 지그와 부품은 같은 바디다**(2026-10-23) — 강체 지그도 메시 · 질량 · 관성을
+    가지므로 재료가 있어야 한다. CompCore 가 시험 지그에 「일반 구조용 강(지그 기본)」 을 붙여
+    보낸다(`ref.source = "compcore-default"`) — 전에는 비어 있어 MCP 데모가 걸리지 않았다.
+    시편은 사람이 고른 재료 그대로다."""
+    path = FIXTURES / "doe" / "시험규격" / folder / "points" / "p0001.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    found = materials.read(payload, units.declared_in(payload))
+    jig = next(one for one in found if one.name == "일반 구조용 강(지그 기본)")
+    assert jig.bodies == jigs
+    assert jig.youngs_modulus_pa == pytest.approx(200e9)
+    assert (jig.poisson_ratio, round(jig.density_kg_m3)) == (0.3, 7850)
+    specimen = next(one for one in found if one is not jig)
+    assert specimen.bodies == ("시편",)
+    # 빈 파트가 없다 — 「CAD 가 재료를 지정하지 않은 파트」 로 거르지 않는다.
+    assert materials.uncovered(found, materials.body_names(payload)) == []

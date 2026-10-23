@@ -508,7 +508,8 @@ def test_미리보기가_CAD_가_적은_해석_종류와_요소_크기를_알려
     proposed = client.get(
         f"/api/simulations/doe/preview?path={BOARD_FOLDER}", headers=member.headers
     ).json()
-    assert proposed["suggested_element_size_mm"] == 0.6
+    # 절점 상한(10만)으로 CompCore 가 0.6 → 2 mm 로 키운 제안(v0.16.8).
+    assert proposed["suggested_element_size_mm"] == 2.0
     assert proposed["suggested_element_size_from"] == "compcore"
     assert proposed["suggested_element_size_basis"]
 

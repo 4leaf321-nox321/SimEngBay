@@ -158,21 +158,21 @@
       -12.0,
       4.0
     ],
+    "min_wall_by_body": {
+      "시편": 4.0,
+      "핀": 6.0
+    },
     "shortest_edge": 4.0,
     "short_edges": 0,
     "narrowest_face": 3.0,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "시편": 4.0,
-      "핀": 6.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 2.0,
     "basis": "최소 벽 두께(4 mm, 「시편」)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 4.0,
@@ -180,13 +180,16 @@
       "longest": 135.0,
       "skipped": [
         "핀"
-      ]
+      ],
+      "nodes_estimate": 60397,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "aa041d19-ee27-4611-a6b9-becf79aa987f",
+      "id": "4f901d6a-1445-4e31-9a8a-34585df937f2",
       "name": "시험_핀베어링_D5961",
       "method": "factorial",
       "seed": 1
@@ -268,7 +271,57 @@
     "materials": [
       {
         "apply_to": [
-          "전체"
+          "핀"
+        ],
+        "ref": {
+          "source": "compcore-default",
+          "code": "",
+          "material_id": "",
+          "name": "일반 구조용 강(지그 기본)",
+          "fetched_at": ""
+        },
+        "payload": {
+          "name": "일반 구조용 강(지그 기본)",
+          "values": [
+            {
+              "unit": "GPa",
+              "value_num": 200.0,
+              "property_key": "mechanical.youngs_modulus",
+              "property_name": "탄성계수",
+              "representative": true
+            }
+          ],
+          "density": 7850.0,
+          "density_unit": "kg/m3",
+          "poisson_ratio": 0.3
+        },
+        "deck_formats": [],
+        "converted": {
+          "system": "mm_n_tonne",
+          "density": 7.85e-09,
+          "density_unit": "tonne/mm3",
+          "density_key": "physical.density",
+          "poisson_ratio": 0.3,
+          "poisson_key": "mechanical.poisson_ratio",
+          "properties": [
+            {
+              "item": "탄성계수",
+              "key": "mechanical.youngs_modulus",
+              "unit": "MPa",
+              "points": [
+                {
+                  "temperature_C": null,
+                  "value": 200000.0
+                }
+              ],
+              "representative": true
+            }
+          ]
+        }
+      },
+      {
+        "apply_to": [
+          "시편"
         ],
         "ref": {
           "source": "matnexus",
@@ -545,7 +598,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

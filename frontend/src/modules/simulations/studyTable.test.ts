@@ -81,6 +81,20 @@ describe('columnsOf', () => {
     expect(rowsOf(one).map((row) => mode?.value(row))).toEqual([100, 180])
   })
 
+  it('바디마다의 질량을 열로 — 지그와 부품은 같은 바디라 전체 질량에 지그까지 든다', () => {
+    const one = study([
+      point(1, { 두께: 3, 폭: 10 }, { mass_kg: 0.0398, mass_by_body: { 시편: 0.00288, 롤러: 0.0369 } }),
+      point(2, { 두께: 4, 폭: 10 }, { mass_kg: 0.0408, mass_by_body: { 시편: 0.00384, 롤러: 0.0369 } }),
+    ])
+    const body = columnsOf(one).find((column) => column.key === 'mass:시편')
+    expect(body?.label).toBe('질량 · 시편')
+    // 그 DOE 의 질량 단위(g)로 — 전체 질량과 같은 단위다.
+    expect(body?.unit).toBe('g')
+    const [thin, thick] = rowsOf(one).map((row) => Number(body?.value(row)))
+    expect(thin).toBeCloseTo(2.88)
+    expect(thick).toBeCloseTo(3.84)
+  })
+
   it('끝난 점만 — 실패 · 대기 점은 표에 없다', () => {
     const one = study([point(1, { 두께: 2, 폭: 1 }), point(2, { 두께: 3, 폭: 1 }, { status: 'failed' })])
     expect(rowsOf(one).map((row) => row.number)).toEqual([1])

@@ -106,6 +106,13 @@ class Simulation(Base):
         nullable=True,
     )
 
+    folder: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default="", index=True
+    )
+    """사람이 나눠 두는 폴더 — `고객A/2026` 같은 경로, 맨 위는 빈 것(`app/shared/folders.py`,
+    ADR 0013). **DOE 의 폴더는 그 설계점 작업들의 폴더다** — 해석 작업 · DOE 목록이 한 폴더
+    공간을 나눠 쓴다."""
+
     work_dir: Mapped[str | None] = mapped_column(String(300), nullable=True)
     """작업 폴더 — `settings.work_dir` 기준 **상대 경로.** 절대경로를 넣으면 서버를 옮기는 날
     전부 틀린 값이 된다."""

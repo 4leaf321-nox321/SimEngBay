@@ -10,7 +10,7 @@
  */
 
 import { lazy } from "react";
-import { Navigate, createBrowserRouter } from "react-router-dom";
+import { Navigate, createBrowserRouter, useLocation } from "react-router-dom";
 
 import { extensionRoutes } from "@/extensions";
 import { ROUTER_BASENAME } from "@/shared/base";
@@ -47,7 +47,6 @@ const SimulationsPage = lazy(
 const SimulationDetailPage = lazy(
   () => import("@/modules/simulations/SimulationDetailPage"),
 );
-const StudiesPage = lazy(() => import("@/modules/simulations/StudiesPage"));
 const SimulationsLayout = lazy(
   () => import("@/modules/simulations/SimulationsLayout"),
 );
@@ -95,6 +94,14 @@ function HomeRedirect() {
   return <Navigate to={`/w/${slug}`} replace />;
 }
 
+/** 옛 「DOE 비교」 목록 주소 — 이제 「해석」 목록의 DOE 거르개다(작업공간 `?scope=` 는 그대로). */
+function StudiesRedirect() {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  params.set("kind", "doe");
+  return <Navigate to={`/simulations?${params}`} replace />;
+}
+
 export const router = createBrowserRouter(
   [
     { path: "/login", element: <LoginPage /> },
@@ -116,15 +123,16 @@ export const router = createBrowserRouter(
             //
             // 사이드바에 `pending: true` 로 적어 두면 아래 stubs 가 자리를 만든다.
             // 실제 화면이 생기면 그 표시를 지우고 여기에 한 줄을 적는다.
-            // **해석 화면은 두 번째 사이드바 안에 선다** — 개인 작업과 공용 작업공간을
-            // 가른다(`SimulationsLayout`, ADR 0008).
+            // **해석은 목록 하나다** — 단일 해석과 DOE 한 벌이 한 줄씩(ADR 0014). 작업공간
+            // (개인 · 공용 · 전체)은 목록 위의 탭이다(`SimulationsLayout`, ADR 0008).
             {
               path: "simulations",
               element: <SimulationsLayout />,
               children: [
                 { index: true, element: <SimulationsPage /> },
-                // **`:id` 보다 먼저 온다.** 뒤에 두면 「studies」 가 작업 id 로 잡힌다.
-                { path: "studies", element: <StudiesPage /> },
+                // **`:id` 보다 먼저 온다.** 뒤에 두면 「studies」 가 작업 id 로 잡힌다. 옛
+                // 「DOE 비교」 목록 주소는 「해석」 목록의 DOE 거르개로 보낸다(북마크 · 홈 링크).
+                { path: "studies", element: <StudiesRedirect /> },
                 { path: "studies/:id", element: <StudyDetailPage /> },
                 { path: ":id", element: <SimulationDetailPage /> },
               ],

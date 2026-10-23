@@ -105,6 +105,7 @@ from app.modules.simulations.schemas import (
     DoeListingOut,
     DoePointPreview,
     DoePreviewOut,
+    ItemOut,
     LicenseHolderOut,
     MeasurementOut,
     ModeTrackOut,
@@ -129,7 +130,7 @@ from app.modules.simulations.schemas import (
     WorkerState,
 )
 from app.modules.workspaces.models import Workspace
-from app.shared import audit, extensions
+from app.shared import audit, extensions, folders
 from app.shared.errors import AppError, Forbidden, NotFound, code, describe_validation
 from app.shared.permissions import require_member, workspace_by_slug
 from app.shared.tabular import TabularError, parse_rows
@@ -253,6 +254,7 @@ def to_summary(db: Session, simulation: Simulation) -> SimulationSummaryOut:
         published_by_name=(
             _user_name(db, simulation.published_by_id) if simulation.published_at else None
         ),
+        folder=simulation.folder,
         error_code=simulation.error_code,
         summary=simulation.summary,
         created_at=simulation.created_at,
@@ -487,13 +489,13 @@ def list_visible(
     limit: int,
     offset: int,
     scope: str | None = None,
+    folder: str | None = None,
 ) -> tuple[list[Simulation], int]:
-    """`scope` — `mine`(내가 건 것) · `published`(게시된 것). 비우면 볼 수 있는 것 전부."""
-    query = _visible(user)
-    if scope == "mine":
-        query = query.where(Simulation.requested_by_id == user.id)
-    elif scope == "published":
-        query = query.where(Simulation.published_at.is_not(None))
+    """`scope` — `mine`(내가 건 것) · `published`(게시된 것). 비우면 볼 수 있는 것 전부.
+    `folder` — None 이면 전부, 빈 것이면 폴더에 넣지 않은 것만, 아니면 그 폴더와 그 아래."""
+    query = _scoped(user, scope)
+    if folder is not None:
+        query = folders.narrowed(query, Simulation.folder, folder, bool(folder), _BAD_FOLDER)
     if status:
         query = query.where(Simulation.status == status)
     if workspace_slug:
@@ -505,6 +507,243 @@ def list_visible(
         db.scalars(query.order_by(Simulation.created_at.desc()).limit(limit).offset(offset))
     )
     return rows, total
+
+
+def _scoped(user: User, scope: str | None) -> Select[tuple[Simulation]]:
+    query = _visible(user)
+    if scope == "mine":
+        return query.where(Simulation.requested_by_id == user.id)
+    if scope == "published":
+        return query.where(Simulation.published_at.is_not(None))
+    return query
+
+
+# --- 폴더 — 해석 작업 · DOE 가 한 폴더 공간을 나눠 쓴다(ADR 0013) -------------------------
+
+#: 폴더 경로가 틀렸을 때 · 폴더째 옮길 수 없을 때.
+_BAD_FOLDER = code("SIMULATIONS", 37)
+_BAD_RENAME = code("SIMULATIONS", 38)
+
+
+def job_folders(db: Session, *, user: User, scope: str | None) -> list[folders.FolderOut]:
+    """보이는 작업(`scope`)이 놓인 폴더와 **바로 그 폴더에** 있는 작업 수 — 위 폴더도
+    빠짐없이(나무를 그린다)."""
+    visible = _scoped(user, scope).subquery()
+    return folders.tree(db, visible.c.folder)
+
+
+def move_jobs(db: Session, *, user: User, ids: list[uuid.UUID], folder: str) -> int:
+    """작업 여럿을 한 폴더로(메시 수렴 수준도 따라간다). **하나라도 못 옮기면(안 보이거나 남의
+    것) 아무것도 안 옮긴다** — 반만 옮기면 사람은 무엇이 남았는지 모른다."""
+    path = folders.normalize(folder, _BAD_FOLDER)
+    for one in _jobs_to_move(db, user, ids):
+        one.folder = path
+    db.commit()
+    return len(set(ids))
+
+
+def _jobs_to_move(db: Session, user: User, ids: list[uuid.UUID]) -> list[Simulation]:
+    rows = list(db.scalars(_visible(user).where(Simulation.id.in_(ids))))
+    if len(rows) != len(set(ids)):
+        raise NotFound(code("SIMULATIONS", 5), "해석 작업을 찾을 수 없습니다.")
+    for one in rows:
+        _require_owner(user, one)
+    # 수준은 목록에 따로 안 선다 — 원래 작업을 따라가야 같은 폴더에서 찾는다.
+    return _with_levels(db, user, rows)
+
+
+def rename_folder(db: Session, *, user: User, path: str, to: str) -> int:
+    """폴더를 옮긴다 · 이름을 바꾼다 — 하위 폴더까지 함께, `to` 가 있으면 합친다. **내 작업만**
+    옮긴다(폴더는 사람이 제 것을 나누는 자리다 — 남의 게시 작업이 같은 이름의 폴더에 있어도
+    그대로 둔다). 지운 작업도 따라간다. 옮긴 작업 수를 돌려준다."""
+    old, new = folders.checked_rename(path, to, _BAD_RENAME)
+    if new == old:
+        return 0
+    rows = list(
+        db.scalars(
+            select(Simulation).where(
+                Simulation.requested_by_id == user.id, folders.under(Simulation.folder, old)
+            )
+        )
+    )
+    for one in rows:
+        one.folder = folders.renamed(one.folder, old, new, _BAD_RENAME)
+    db.commit()
+    return len(rows)
+
+
+def study_folders(db: Session, *, user: User, scope: str | None) -> list[folders.FolderOut]:
+    """DOE 목록의 폴더 나무 — 폴더마다 **바로 그 폴더에** 있는 DOE 수."""
+    counts: dict[str, int] = {}
+    for one in list_studies(db, user=user, scope=scope):
+        counts[one.folder] = counts.get(one.folder, 0) + 1
+    return _tree_of(counts)
+
+
+def _tree_of(counts: dict[str, int]) -> list[folders.FolderOut]:
+    """폴더마다의 수 → 나무의 줄들 — 위 폴더도 빠짐없이(0 개로), 맨 위는 늘 있다."""
+    every = dict(counts)
+    for path in counts:
+        parts = path.split("/") if path else []
+        for depth in range(1, len(parts)):
+            every.setdefault("/".join(parts[:depth]), 0)
+    every.setdefault("", 0)
+    return [folders.FolderOut(path=path, count=every[path]) for path in sorted(every)]
+
+
+def move_studies(db: Session, *, user: User, ids: list[str], folder: str) -> int:
+    """DOE 여럿을 한 폴더로 — **그 설계점 작업들을** 옮긴다(앞선 시도 · 메시 수렴 수준까지,
+    내가 건 점만 — 시스템 관리자는 모두). 하나라도 못 옮기면 아무것도 안 옮긴다."""
+    path = folders.normalize(folder, _BAD_FOLDER)
+    for one in _studies_to_move(db, user, ids):
+        one.folder = path
+    db.commit()
+    return len(dict.fromkeys(ids))
+
+
+def _studies_to_move(db: Session, user: User, ids: list[str]) -> list[Simulation]:
+    picked: list[Simulation] = []
+    for study_id in dict.fromkeys(ids):
+        points = _study_points(db, user, study_id, every=True)
+        if not points:
+            raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+        _require_study_owner(user, points)
+        picked.extend(_with_levels(db, user, _my_points(user, points)))
+    return picked
+
+
+# --- 「해석」 목록 — 항목은 단일 해석 하나이거나 DOE 한 벌이다(ADR 0014) --------------------
+
+#: 목록에 따로 서지 않는 작업 — DOE 설계점은 그 DOE 줄을 펼쳐 보고, 메시 수렴 수준은 원래
+#: 작업의 검증 탭에서 본다.
+FOLDED_KINDS = ("doe_point", "mesh_check")
+JOB_KEY = "job:"
+DOE_KEY = "doe:"
+
+
+def _singles(user: User, scope: str | None) -> Select[tuple[Simulation]]:
+    return _scoped(user, scope).where(Simulation.source_kind.notin_(FOLDED_KINDS))
+
+
+def list_items(
+    db: Session,
+    *,
+    user: User,
+    scope: str | None = None,
+    kind: Literal["job", "doe"] | None = None,
+    status: str | None = None,
+    folder: str | None = None,
+    workspace_slug: str | None = None,
+    limit: int,
+    offset: int,
+) -> tuple[list[ItemOut], int]:
+    """「해석」 목록 — **단일 해석과 DOE 한 벌이 한 줄씩**, 만든 차례로(새것이 위).
+
+    DOE 설계점 · 메시 수렴 수준은 줄로 서지 않는다 — 설계점은 DOE 줄을 펼쳐 보고, 수준은 원래
+    작업의 검증 탭에서 본다. 같은 것이 두 줄(낱개 설계점 200줄 + DOE 한 줄)로 보이면 사람은
+    무엇이 「한 건」 인지 잃는다.
+
+    **`status` 를 주면 낱개로 편다** — 「지금 대기 · 실패 중인 작업 전부」 는 설계점 하나하나가
+    답이다(줄 보기). 그때는 설계점까지 작업 줄로 낸다.
+    """
+    workspace = workspace_by_slug(db, workspace_slug).id if workspace_slug else None
+    if status:
+        rows, total = list_visible(
+            db,
+            user=user,
+            status=status,
+            workspace_slug=workspace_slug,
+            limit=limit,
+            offset=offset,
+            scope=scope,
+            folder=folder,
+        )
+        return [_job_item(db, one) for one in rows], total
+
+    singles: list[Simulation] = []
+    single_total = 0
+    if kind != "doe":
+        query = _singles(user, scope)
+        if folder is not None:
+            query = folders.narrowed(
+                query, Simulation.folder, folder, bool(folder), _BAD_FOLDER
+            )
+        if workspace is not None:
+            query = query.where(Simulation.owner_workspace_id == workspace)
+        single_total = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
+        # 앞쪽 몇 줄만 — DOE 와 섞어 자르므로 이 쪽의 `offset + limit` 줄이면 충분하다.
+        singles = list(
+            db.scalars(query.order_by(Simulation.created_at.desc()).limit(offset + limit))
+        )
+    studies: list[StudySummaryOut] = []
+    if kind != "job":
+        studies = list_studies(
+            db, user=user, scope=scope, folder=folder, workspace_id=workspace
+        )
+    merged: list[tuple[datetime, Simulation | StudySummaryOut]] = [
+        *((one.created_at, one) for one in singles),
+        *((one.created_at, one) for one in studies),
+    ]
+    merged.sort(key=lambda pair: pair[0], reverse=True)
+    page = [
+        _job_item(db, one) if isinstance(one, Simulation) else _doe_item(one)
+        for _, one in merged[offset : offset + limit]
+    ]
+    return page, single_total + len(studies)
+
+
+def _job_item(db: Session, simulation: Simulation) -> ItemOut:
+    return ItemOut(kind="job", key=f"{JOB_KEY}{simulation.id}", job=to_summary(db, simulation))
+
+
+def _doe_item(study: StudySummaryOut) -> ItemOut:
+    return ItemOut(kind="doe", key=f"{DOE_KEY}{study.study_id}", study=study)
+
+
+def item_folders(db: Session, *, user: User, scope: str | None) -> list[folders.FolderOut]:
+    """「해석」 목록의 폴더 나무 — 폴더마다 **바로 그 폴더에** 있는 항목 수(단일 해석 +
+    DOE)."""
+    counts: dict[str, int] = {}
+    singles = _singles(user, scope).subquery()
+    for path, count in db.execute(
+        select(singles.c.folder, func.count()).group_by(singles.c.folder)
+    ).all():
+        counts[path] = counts.get(path, 0) + int(count)
+    for one in list_studies(db, user=user, scope=scope):
+        counts[one.folder] = counts.get(one.folder, 0) + 1
+    return _tree_of(counts)
+
+
+def move_items(db: Session, *, user: User, keys: list[str], folder: str) -> int:
+    """항목 여럿(`job:<id>` · `doe:<스터디 id>`)을 한 폴더로 — DOE 는 그 설계점 작업들이, 단일
+    해석은 그 메시 수렴 수준까지 옮겨 간다. **하나라도 못 옮기면 아무것도 안 옮긴다.**"""
+    path = folders.normalize(folder, _BAD_FOLDER)
+    jobs: list[uuid.UUID] = []
+    studies: list[str] = []
+    for key in dict.fromkeys(keys):
+        if key.startswith(JOB_KEY):
+            try:
+                jobs.append(uuid.UUID(key.removeprefix(JOB_KEY)))
+            except ValueError:
+                raise NotFound(
+                    code("SIMULATIONS", 5), "해석 작업을 찾을 수 없습니다."
+                ) from None
+        elif key.startswith(DOE_KEY):
+            studies.append(key.removeprefix(DOE_KEY))
+        else:
+            raise AppError(
+                _BAD_FOLDER,
+                f"「{key}」 — 항목은 `job:<작업 id>` 나 `doe:<스터디 id>` 로 가리킵니다.",
+                status=400,
+            )
+    picked = [
+        *(_jobs_to_move(db, user, jobs) if jobs else []),
+        *(_studies_to_move(db, user, studies) if studies else []),
+    ]
+    for one in picked:
+        one.folder = path
+    db.commit()
+    return len(jobs) + len(studies)
 
 
 def result_json(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, Any]:
@@ -551,6 +790,18 @@ def _mass_of(summary: dict[str, Any]) -> float | None:
     return float(found) if isinstance(found, int | float) and found > 0 else None
 
 
+def _masses_of(summary: dict[str, Any]) -> dict[str, float]:
+    """요약의 바디별 질량 — 숫자만(옛 작업은 칸이 없다)."""
+    found = summary.get("mass_by_body")
+    if not isinstance(found, dict):
+        return {}
+    return {
+        str(name): float(kg)
+        for name, kg in found.items()
+        if isinstance(kg, int | float) and not isinstance(kg, bool)
+    }
+
+
 def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut:
     """견줄 값(mm · MPa · N · Hz) — 스터디 비교와 같은 `core_values.read` 로 꺼낸다. 결과가
     아직 없으면 `result_json` 과 같은 말(왜 없는지)로 거절한다."""
@@ -562,6 +813,7 @@ def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut
         recipe=simulation.recipe,
         solver=solver_of(simulation),
         mass_kg=_mass_of(summary),
+        mass_by_body=_masses_of(summary),
         nodes=found.nodes,
         first_elastic_hz=found.first_elastic_hz,
         frequencies=found.frequencies,
@@ -1572,7 +1824,12 @@ def _most(values: list[str], default: str) -> str:
 
 
 def list_studies(
-    db: Session, *, user: User, scope: str | None = None
+    db: Session,
+    *,
+    user: User,
+    scope: str | None = None,
+    folder: str | None = None,
+    workspace_id: uuid.UUID | None = None,
 ) -> list[StudySummaryOut]:
     """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다.
 
@@ -1580,7 +1837,11 @@ def list_studies(
     있는 것 전부(작업 목록과 같은 말이다).
 
     스터디 표를 따로 두면 작업을 지웠을 때 둘이 어긋나고, 그때 어느 쪽이 맞는지 알 수 없다.
+
+    `folder` — None 이면 전부, 빈 것이면 폴더에 넣지 않은 것만, 아니면 그 폴더와 그 아래. DOE
+    의 폴더는 그 설계점 작업들의 폴더(가장 많은 것)다.
     """
+    wanted = folders.normalize(folder, _BAD_FOLDER) if folder is not None else None
     rows = list(
         db.scalars(
             _visible(user)
@@ -1602,6 +1863,8 @@ def list_studies(
         if scope == "published" and not any(one.published_at for one in points):
             continue
         first = points[0]
+        if workspace_id is not None and first.owner_workspace_id != workspace_id:
+            continue
         factors: list[str] = []
         for point in points:
             for name in point.source_meta.get("params") or {}:
@@ -1611,6 +1874,11 @@ def list_studies(
         workspace = (
             db.get(Workspace, first.owner_workspace_id) if first.owner_workspace_id else None
         )
+        # 주인의 점이 놓인 폴더 — 남이 다시 가져온 점의 폴더가 섞여도 주인의 정리를 따른다.
+        owner = _study_owner(points)
+        place = _most([one.folder for one in points if one.requested_by_id == owner], "")
+        if wanted is not None and not _inside(place, wanted):
+            continue
         out.append(
             StudySummaryOut(
                 study_id=study_id,
@@ -1626,12 +1894,18 @@ def list_studies(
                 owner_id=_study_owner(points),
                 owner_name=_user_name(db, _study_owner(points)),
                 published=sum(1 for one in points if one.published_at is not None),
+                folder=place,
                 created_at=first.created_at,
                 finished_at=max(finished) if len(finished) == len(points) else None,
             )
         )
     out.sort(key=lambda one: one.created_at, reverse=True)
     return out
+
+
+def _inside(place: str, wanted: str) -> bool:
+    """`place` 가 고른 폴더(빈 것이면 맨 위만, 아니면 그 폴더와 그 아래)에 드나."""
+    return place == wanted or (bool(wanted) and place.startswith(wanted + "/"))
 
 
 def result_of(simulation: Simulation) -> dict[str, Any]:
@@ -1770,6 +2044,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         solver=solver_of(simulation),
         first_elastic_hz=summary.get("first_elastic_hz"),
         mass_kg=_mass_of(summary),
+        mass_by_body=_masses_of(summary),
         nodes=summary.get("nodes"),
         frequencies=[
             float(mode["frequency_hz"])

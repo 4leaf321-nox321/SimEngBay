@@ -5,7 +5,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { simulationApi } from '@/modules/simulations/api'
@@ -59,12 +59,18 @@ const STUDY: Study = {
   points: [point(1, 'failed'), point(2, 'canceled'), point(3, 'failed')],
 }
 
+function ListPlace() {
+  const { search } = useLocation()
+  return <p>해석 목록{search}</p>
+}
+
 function show(path = '/simulations/studies/st') {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/simulations/studies/:id" element={<StudyDetailPage />} />
-        <Route path="/simulations/studies" element={<p>DOE 목록</p>} />
+        {/* 지우면 「해석」 목록의 DOE 거르개로 간다(`/simulations?kind=doe`, ADR 0014). */}
+        <Route path="/simulations" element={<ListPlace />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -110,7 +116,7 @@ describe('스터디 상세', () => {
     expect(dialog.textContent).toContain('되돌릴 수 없습니다')
     await userEvent.click(within(dialog).getByRole('button', { name: '삭제' }))
     await waitFor(() => expect(simulationApi.removeStudy).toHaveBeenCalledWith('st'))
-    expect(await screen.findByText('DOE 목록')).toBeDefined()
+    expect(await screen.findByText('해석 목록?kind=doe')).toBeDefined()
   })
 
   it('도는 점이 있으면 지우지 않고 「모두 멈추기」 를 먼저 하게 한다', async () => {

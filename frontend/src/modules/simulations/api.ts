@@ -8,6 +8,7 @@
 import { api, downloadFile, fetchBytes } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
 import type { components } from '@/shared/api/schema'
+import type { FolderApi, FolderRow } from '@/shared/folders/paths'
 
 export type Simulation = components['schemas']['SimulationOut']
 export type SimulationSummary = components['schemas']['SimulationSummaryOut']
@@ -37,6 +38,7 @@ export type Comparison = components['schemas']['ComparisonOut']
 export type FrfComparison = components['schemas']['FrfComparisonOut']
 export type ConvergenceMetric = components['schemas']['ConvergenceMetricOut']
 export type Removed = components['schemas']['RemovedOut']
+export type Item = components['schemas']['ItemOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -172,6 +174,26 @@ export interface NewSimulation {
   name?: string
 }
 
+function scoped(path: string, scope?: ListScope): string {
+  return scope && scope !== 'all' ? `${path}?scope=${scope}` : path
+}
+
+/**
+ * **「해석」 목록의 폴더** — 항목(단일 해석 · DOE 한 벌) 단위로 센다(ADR 0013 · 0014). DOE 를 옮기면
+ * 그 설계점 작업들이, 단일 해석을 옮기면 메시 수렴 수준까지 따라간다. 고르기 열쇠는 항목의 `key`
+ * (`job:<id>` · `doe:<스터디 id>`)다.
+ */
+export function itemFolders(scope?: ListScope): FolderApi {
+  return {
+    folders: () => api.get<FolderRow[]>(scoped('/simulations/items/folders', scope)),
+    renameFolder: (path, to) => api.post<{ moved: number }>('/simulations/folders/rename', { path, to }),
+    move: (ids, folder) => api.post<{ moved: number }>('/simulations/items/move', { ids, folder }),
+  }
+}
+
+/** 「해석」 목록의 종류 거르개 — 비우면 둘 다. */
+export type ItemKind = 'job' | 'doe'
+
 /**
  * 목록의 보기 — **작업은 건 사람의 것**이고, 게시해야 남이 본다.
  * `mine` 내가 건 것 · `published` 게시된 것 · `all` 볼 수 있는 것 전부(시스템 관리자는 모두).
@@ -183,6 +205,8 @@ export const simulationApi = {
     status?: string
     workspaceSlug?: string
     scope?: ListScope
+    /** null = 전부, '' = 폴더에 넣지 않은 것만. 고른 폴더는 하위까지. */
+    folder?: string | null
     limit: number
     offset: number
   }) => {
@@ -193,7 +217,29 @@ export const simulationApi = {
     if (query.status) params.set('status', query.status)
     if (query.workspaceSlug) params.set('workspace_slug', query.workspaceSlug)
     if (query.scope && query.scope !== 'all') params.set('scope', query.scope)
+    if (query.folder != null) params.set('folder', query.folder)
     return api.get<Page<SimulationSummary>>(`/simulations?${params}`)
+  },
+  /**
+   * 「해석」 목록 — **단일 해석과 DOE 한 벌이 한 줄씩**(설계점 · 메시 수렴 수준은 줄로 서지 않는다).
+   * `status` 를 주면 서버가 설계점까지 낱개 작업으로 편다(대기 · 실패 중인 것 전부 보기).
+   */
+  items: (query: {
+    scope?: ListScope
+    kind?: ItemKind
+    status?: string
+    workspaceSlug?: string
+    folder?: string | null
+    limit: number
+    offset: number
+  }) => {
+    const params = new URLSearchParams({ limit: String(query.limit), offset: String(query.offset) })
+    if (query.scope && query.scope !== 'all') params.set('scope', query.scope)
+    if (query.kind) params.set('kind', query.kind)
+    if (query.status) params.set('status', query.status)
+    if (query.workspaceSlug) params.set('workspace_slug', query.workspaceSlug)
+    if (query.folder != null) params.set('folder', query.folder)
+    return api.get<Page<Item>>(`/simulations/items?${params}`)
   },
   get: (id: string) => api.get<Simulation>(`/simulations/${id}`),
   /** 폴링용 — 상세와 같지만 접근 로그에 안 남는다. */
@@ -250,10 +296,13 @@ export const simulationApi = {
    * 200개면 STEP 만 수십 MB 다.
    */
   /** 가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. */
-  studies: (scope?: ListScope) =>
-    api.get<StudySummary[]>(
-      `/simulations/studies${scope && scope !== 'all' ? `?scope=${scope}` : ''}`,
-    ),
+  studies: (scope?: ListScope, folder: string | null = null) => {
+    const params = new URLSearchParams()
+    if (scope && scope !== 'all') params.set('scope', scope)
+    if (folder != null) params.set('folder', folder)
+    const query = params.toString()
+    return api.get<StudySummary[]>(`/simulations/studies${query ? `?${query}` : ''}`)
+  },
   study: (studyId: string) => api.get<Study>(`/simulations/studies/${studyId}`),
   /**
    * 공용 폴더 훑기 — **설정된 뿌리 아래만.** 경로를 안 주면 첫 뿌리부터.

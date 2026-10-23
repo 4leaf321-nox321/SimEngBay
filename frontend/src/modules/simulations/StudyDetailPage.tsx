@@ -23,6 +23,7 @@ import { simulationApi } from '@/modules/simulations/api'
 import type { StudyPoint } from '@/modules/simulations/api'
 import { RECIPE_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
+import { listPath } from '@/modules/simulations/SimulationsLayout'
 import { StudyMeasurements } from '@/modules/simulations/StudyMeasurements'
 import { StudyExplorer } from '@/modules/simulations/StudyExplorer'
 import { StudyOverview } from '@/modules/simulations/StudyOverview'
@@ -106,7 +107,7 @@ export default function StudyDetailPage() {
   if (study.error) {
     return (
       <div className="space-y-6">
-        <PageHeader title="DOE 비교" back={{ to: '/simulations/studies', label: 'DOE 비교' }} />
+        <PageHeader title="DOE" back={{ to: listPath('mine', 'doe'), label: '해석 · DOE' }} />
         <ErrorNotice error={study.error} />
       </div>
     )
@@ -183,8 +184,8 @@ export default function StudyDetailPage() {
         }
         back={
           mine
-            ? { to: '/simulations/studies', label: '개인 작업 · DOE' }
-            : { to: '/simulations/studies?scope=published', label: '공용 작업공간 · DOE' }
+            ? { to: listPath('mine', 'doe'), label: '개인 작업 · DOE' }
+            : { to: listPath('published', 'doe'), label: '공용 작업공간 · DOE' }
         }
         actions={
           <>
@@ -313,7 +314,7 @@ export default function StudyDetailPage() {
         confirmDisabled={solving > 0}
         onConfirm={async () => {
           await simulationApi.removeStudy(id)
-          navigate('/simulations/studies', { replace: true })
+          navigate(listPath('mine', 'doe'), { replace: true })
         }}
         onClose={() => setRemoving(false)}
       />

@@ -56,11 +56,20 @@ class SimulationSummaryOut(BaseModel):
     published_at: datetime | None = None
     """게시한 시각. 차 있으면 누구나 본다(읽기만)."""
     published_by_name: str | None = None
+    folder: str = ""
+    """사람이 나눠 둔 폴더(`고객A/2026`) — 맨 위는 빈 것."""
     error_code: str | None
     summary: dict[str, Any] | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class StudyMoveRequest(BaseModel):
+    """DOE 여럿을 한 폴더로 — 스터디는 행이 아니라 id 가 글자다(`source_meta.study_id`)."""
+
+    ids: list[str] = Field(min_length=1, max_length=500)
+    folder: str = Field(default="", max_length=255)
 
 
 class ConditionLine(BaseModel):
@@ -201,6 +210,9 @@ class ValuesOut(BaseModel):
     recipe: str
     solver: str
     mass_kg: float | None = None
+    mass_by_body: dict[str, float] = Field(default_factory=dict)
+    """바디가 둘 이상이면 **바디마다** 질량(파트 이름 → kg). 지그와 부품은 같은 바디다 — 전체
+    질량에 강체 지그까지 든다. 시편만 견주려면 그 바디의 값을 본다."""
     nodes: int | None = None
     # --- 모달
     first_elastic_hz: float | None = None
@@ -377,8 +389,28 @@ class StudySummaryOut(BaseModel):
     owner_name: str | None = None
     published: int = 0
     """게시된 설계점 수. 남에게는 이것만 보인다."""
+    folder: str = ""
+    """그 설계점 작업들의 폴더(가장 많은 것) — 해석 작업과 한 폴더 공간이다."""
     created_at: datetime
     finished_at: datetime | None = None
+
+
+class ItemOut(BaseModel):
+    """「해석」 목록의 한 줄 — **단일 해석 하나이거나 DOE 한 벌**(ADR 0014). DOE 설계점 · 메시
+    수렴 수준은 줄로 서지 않는다(설계점은 DOE 줄을 펼쳐 본다)."""
+
+    kind: Literal["job", "doe"]
+    key: str
+    """고르기 · 폴더 옮기기의 열쇠 — `job:<작업 id>` · `doe:<스터디 id>`."""
+    job: SimulationSummaryOut | None = None
+    study: StudySummaryOut | None = None
+
+
+class ItemMoveRequest(BaseModel):
+    """항목 여럿을 한 폴더로 — `job:<작업 id>` · `doe:<스터디 id>` 가 섞여도 된다."""
+
+    ids: list[str] = Field(min_length=1, max_length=500)
+    folder: str = Field(default="", max_length=255)
 
 
 class StudyPointOut(BaseModel):
@@ -395,6 +427,9 @@ class StudyPointOut(BaseModel):
     solver: str = "ansys"
     first_elastic_hz: float | None = None
     mass_kg: float | None = None
+    mass_by_body: dict[str, float] = Field(default_factory=dict)
+    """바디가 둘 이상이면 **바디마다** 질량(파트 이름 → kg). 지그와 부품은 같은 바디다 — 전체
+    질량에 강체 지그까지 든다. 시편만 견주려면 그 바디의 값을 본다."""
     nodes: int | None = None
     frequencies: list[float] = Field(default_factory=list)
     """탄성 모드 주파수(앞에서부터). `k` 차 모드로 견주려면 이것이 있어야 한다."""

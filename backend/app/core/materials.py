@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core import units
+from app.core.numbers import significant
 from app.core.spec import MaterialSpec
 
 #: 표준 열쇠 — CompCore · MatNexus 와 같은 이름을 쓴다.
@@ -414,3 +415,20 @@ def _from_payload(name: str, bodies: tuple[str, ...], source: dict[str, Any]) ->
 _MODULUS_ITEMS: frozenset[str] = frozenset(
     {"탄성계수", "영률", "Young's modulus", "Youngs modulus", "E"}
 )
+
+
+def mass_summary(by_body: dict[str, float] | None) -> dict[str, Any]:
+    """질량 요약 칸 — 전체(`mass_kg`)와, 바디가 둘 이상이면 **바디마다**(`mass_by_body`,
+    파트 이름 → kg).
+
+    **해석에서 지그와 부품은 같은 바디다**(2026-10-23) — 강체 지그도 메시 · 질량 · 관성을
+    가진다(모달에서는 그 질량이 주파수를 바꾼다). 그래서 무엇이 「설계 대상」 인지 여기서
+    고르지 않고 전부 적는다 — 전체 질량은 모델 전체이고, 설계점 비교는 바디마다의 열
+    (「질량 · 시편」)을 고른다. 3점 굽힘 시편 3.8 g 이 강재 롤러 · 노즈와 합쳐 40.8 g
+    으로만 보였다(MCP 데모).
+    """
+    total = sum(by_body.values()) if by_body else 0.0
+    out: dict[str, Any] = {"mass_kg": significant(total) if total > 0 else None}
+    if by_body and len(by_body) > 1:
+        out["mass_by_body"] = {name: significant(kg) for name, kg in by_body.items()}
+    return out

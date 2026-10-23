@@ -2807,7 +2807,7 @@
           "simulations"
         ],
         "summary": "List Simulations",
-        "description": "볼 수 있는 작업 — 내가 건 것과 게시된 것(시스템 관리자는 전부). `scope` 로 좁힌다:\n`mine` 내가 건 것 · `published` 게시된 것.",
+        "description": "볼 수 있는 작업 — 내가 건 것과 게시된 것(시스템 관리자는 전부). `scope` 로 좁힌다:\n`mine` 내가 건 것 · `published` 게시된 것. `folder` — 빈 것이면 폴더에 넣지 않은 것만,\n아니면 그 폴더와 그 아래.",
         "operationId": "list_simulations_api_simulations_get",
         "parameters": [
           {
@@ -2860,6 +2860,22 @@
                 }
               ],
               "title": "Scope"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Folder"
             }
           },
           {
@@ -3102,8 +3118,82 @@
           "simulations"
         ],
         "summary": "List Studies",
-        "description": "가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. `scope` 로\n좁힌다: `mine` 내가 건 점이 있는 것 · `published` 게시된 점이 있는 것.",
+        "description": "가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. `scope` 로\n좁힌다: `mine` 내가 건 점이 있는 것 · `published` 게시된 점이 있는 것. `folder` — 빈 것이면\n폴더에 넣지 않은 것만, 아니면 그 폴더와 그 아래.",
         "operationId": "list_studies_api_simulations_studies_get",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mine",
+                    "published"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Folder"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudySummaryOut"
+                  },
+                  "title": "Response List Studies Api Simulations Studies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/folders": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Study Folders",
+        "description": "DOE 목록의 폴더 나무 — 폴더마다 바로 그 폴더에 있는 DOE 수(위 폴더도 빠짐없이).",
+        "operationId": "study_folders_api_simulations_studies_folders_get",
         "parameters": [
           {
             "name": "scope",
@@ -3134,9 +3224,51 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/StudySummaryOut"
+                    "$ref": "#/components/schemas/FolderOut"
                   },
-                  "title": "Response List Studies Api Simulations Studies Get"
+                  "title": "Response Study Folders Api Simulations Studies Folders Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/move": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Move Studies",
+        "description": "DOE 여럿을 한 폴더로 — 그 설계점 작업들이 옮겨 간다(해석 작업과 한 폴더 공간).",
+        "operationId": "move_studies_api_simulations_studies_move_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudyMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedOut"
                 }
               }
             }
@@ -3659,6 +3791,396 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ConditionsPreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/items": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "List Items",
+        "description": "「해석」 목록 — **단일 해석과 DOE 한 벌이 한 줄씩**(새것이 위). DOE 설계점 · 메시 수렴\n수준은 줄로 서지 않는다. `kind` — `job` 단일 해석만 · `doe` DOE 만. `status` 를 주면\n설계점까지 낱개 작업으로 편다(대기 · 실패 중인 것 전부 보기). `folder` — 빈 것이면 폴더에\n넣지 않은 것만, 아니면 그 폴더와 그 아래.",
+        "operationId": "list_items_api_simulations_items_get",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mine",
+                    "published"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "job",
+                    "doe"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Folder"
+            }
+          },
+          {
+            "name": "workspace_slug",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace Slug"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ItemOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/items/folders": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Item Folders",
+        "description": "「해석」 목록의 폴더 나무 — 폴더마다 바로 그 폴더에 있는 항목 수(단일 해석 + DOE).",
+        "operationId": "item_folders_api_simulations_items_folders_get",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mine",
+                    "published"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FolderOut"
+                  },
+                  "title": "Response Item Folders Api Simulations Items Folders Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/items/move": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Move Items",
+        "description": "항목 여럿(`job:<작업 id>` · `doe:<스터디 id>`)을 한 폴더로 — DOE 는 그 설계점 작업들이,\n단일 해석은 메시 수렴 수준까지 함께. 하나라도 못 옮기면 아무것도 안 옮긴다.",
+        "operationId": "move_items_api_simulations_items_move_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/folders": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Job Folders",
+        "description": "해석 작업의 폴더 나무 — 폴더마다 바로 그 폴더에 있는 작업 수(위 폴더도 빠짐없이).",
+        "operationId": "job_folders_api_simulations_folders_get",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mine",
+                    "published"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FolderOut"
+                  },
+                  "title": "Response Job Folders Api Simulations Folders Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/move": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Move Jobs",
+        "description": "작업 여럿을 한 폴더로(`고객A/2026`, 비우면 맨 위) — 건 사람이나 시스템 관리자만.\n하나라도 못 옮기면 아무것도 안 옮긴다.",
+        "operationId": "move_jobs_api_simulations_move_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/folders/rename": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Rename Folder",
+        "description": "폴더 이름 바꾸기 · 옮기기(하위까지, 있는 폴더면 합친다) — **폴더 지우기는 위 폴더로\n합치는 것**이다. 내 작업만 옮긴다. 해석 작업 · DOE 가 함께 옮겨 간다.",
+        "operationId": "rename_folder_api_simulations_folders_rename_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedOut"
                 }
               }
             }
@@ -6751,6 +7273,70 @@
         ],
         "title": "FactorRankOut"
       },
+      "FolderMoveRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "folder": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Folder",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "FolderMoveRequest"
+      },
+      "FolderOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "count"
+        ],
+        "title": "FolderOut"
+      },
+      "FolderRenameRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Path"
+          },
+          "to": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "To",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "FolderRenameRequest"
+      },
       "FrequencyComparisonOut": {
         "properties": {
           "matches": {
@@ -7063,6 +7649,74 @@
         ],
         "title": "HomeWorkspaceRequest",
         "description": "대표 소속을 정한다.\n\n**비우는 길은 두지 않는다.** 대표 소속이 없으면 로그인이 소속 중 첫 부서로\n떨어지는데 그것은 사람이 정한 값이 아니다. 지우고 싶은 상황은 실제로는\n\"다른 부서로 옮긴다\" 이므로 그때도 새 값을 준다."
+      },
+      "ItemMoveRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "folder": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Folder",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "ItemMoveRequest",
+        "description": "항목 여럿을 한 폴더로 — `job:<작업 id>` · `doe:<스터디 id>` 가 섞여도 된다."
+      },
+      "ItemOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "job",
+              "doe"
+            ],
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulationSummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "study": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudySummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "key"
+        ],
+        "title": "ItemOut",
+        "description": "「해석」 목록의 한 줄 — **단일 해석 하나이거나 DOE 한 벌**(ADR 0014). DOE 설계점 · 메시\n수렴 수준은 줄로 서지 않는다(설계점은 DOE 줄을 펼쳐 본다)."
       },
       "LicenseHolderOut": {
         "properties": {
@@ -7406,6 +8060,19 @@
         ],
         "title": "ModeTrackOut",
         "description": "기준 설계점의 모드 하나가 다른 점들에서 몇 번 모드인가.\n\n**순번으로 견주지 않는다.** 치수가 바뀌면 모드 순서가 뒤바뀌고(mode crossing), 그때\n「2차 대 두께」 는 서로 다른 모드를 이은 선이 된다."
+      },
+      "MovedOut": {
+        "properties": {
+          "moved": {
+            "type": "integer",
+            "title": "Moved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "moved"
+        ],
+        "title": "MovedOut"
       },
       "NoticeOut": {
         "properties": {
@@ -8269,6 +8936,37 @@
           "offset"
         ],
         "title": "Page[AuditEntryOut]"
+      },
+      "Page_ItemOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[ItemOut]"
       },
       "Page_OntologyObjectOut_": {
         "properties": {
@@ -9215,6 +9913,11 @@
             ],
             "title": "Published By Name"
           },
+          "folder": {
+            "type": "string",
+            "title": "Folder",
+            "default": ""
+          },
           "error_code": {
             "anyOf": [
               {
@@ -9464,6 +10167,11 @@
               }
             ],
             "title": "Published By Name"
+          },
+          "folder": {
+            "type": "string",
+            "title": "Folder",
+            "default": ""
           },
           "error_code": {
             "anyOf": [
@@ -10056,6 +10764,31 @@
         ],
         "title": "StudyMeasurementOut"
       },
+      "StudyMoveRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "folder": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Folder",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "StudyMoveRequest",
+        "description": "DOE 여럿을 한 폴더로 — 스터디는 행이 아니라 id 가 글자다(`source_meta.study_id`)."
+      },
       "StudyOut": {
         "properties": {
           "study_id": {
@@ -10224,6 +10957,13 @@
               }
             ],
             "title": "Mass Kg"
+          },
+          "mass_by_body": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Mass By Body"
           },
           "nodes": {
             "anyOf": [
@@ -10425,6 +11165,11 @@
             "type": "integer",
             "title": "Published",
             "default": 0
+          },
+          "folder": {
+            "type": "string",
+            "title": "Folder",
+            "default": ""
           },
           "created_at": {
             "type": "string",
@@ -10662,6 +11407,13 @@
               }
             ],
             "title": "Mass Kg"
+          },
+          "mass_by_body": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Mass By Body"
           },
           "nodes": {
             "anyOf": [

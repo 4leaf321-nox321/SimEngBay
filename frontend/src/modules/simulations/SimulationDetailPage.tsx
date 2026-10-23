@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Eraser, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Eraser, RotateCcw, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { FINAL_STATUSES, simulationApi } from '@/modules/simulations/api'
@@ -24,6 +24,7 @@ import { MeasurementsPanel } from '@/modules/simulations/MeasurementsPanel'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { QueueNotice } from '@/modules/simulations/QueueNotice'
 import { ResultGlance } from '@/modules/simulations/ResultGlance'
+import { listPath } from '@/modules/simulations/SimulationsLayout'
 import type { DetailTab } from '@/modules/simulations/ResultGlance'
 import { ResultPanel, useSimulationResult } from '@/modules/simulations/ResultPanel'
 import {
@@ -107,6 +108,8 @@ const SUMMARY_LABELS: Record<string, string> = {
   suppressed_bodies: '해석 제외 파트',
   shell_bodies: '쉘 파트',
   mass_kg: '질량',
+  // 지그와 부품은 같은 바디다 — 전체 질량에 강체 지그까지 든다. 바디마다 보여야 시편이 몇 g 인지 안다.
+  mass_by_body: '바디별 질량',
   constrained_regions: '구속 영역',
   shape_reused: '형상 캐시',
   recipe: '해석 종류',
@@ -122,6 +125,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
     [
       'bodies',
       'mass_kg',
+      'mass_by_body',
       'material',
       'material_from',
       'youngs_modulus_gpa',
@@ -189,6 +193,10 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'large_deflection') return value ? '켬 (기하 비선형)' : '끔'
   if (key === 'shape_reused') return value ? '다시 씀' : '새로 만듦'
   if (key === 'mass_kg' && typeof value === 'number') return shownMass(value)
+  if (key === 'mass_by_body' && value && typeof value === 'object')
+    return Object.entries(value as Record<string, unknown>)
+      .map(([name, kg]) => `${name} ${typeof kg === 'number' ? shownMass(kg) : '—'}`)
+      .join(' · ')
   if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(' · ')
   if (key === 'density_kg_m3' && typeof value === 'number')
     return `${value.toLocaleString()} kg/m³`
@@ -352,7 +360,7 @@ function SimulationDetail({ id }: { id: string }) {
   if (initial.error && !simulation) {
     return (
       <div className="space-y-6">
-        <PageHeader title="해석 작업" back={{ to: '/simulations', label: '해석 작업' }} />
+        <PageHeader title="해석" back={{ to: '/simulations', label: '해석' }} />
         <ErrorNotice error={initial.error} />
       </div>
     )
@@ -391,11 +399,7 @@ function SimulationDetail({ id }: { id: string }) {
           </>
         }
         // 남의 게시 결과면 공용 작업공간으로 돌아간다 — 개인 작업 목록에는 없다.
-        back={
-          mine
-            ? { to: '/simulations', label: '개인 작업' }
-            : { to: '/simulations?scope=published', label: '공용 작업공간' }
-        }
+        back={backOf(simulation, mine)}
         actions={
           <>
             {/* **끝난 작업만 게시한다** — 실패 · 도는 중인 결과는 남이 믿고 쓸 수 없다. */}
@@ -655,6 +659,39 @@ function replacedBy(simulation: Simulation): string | null {
   return typeof value === 'string' && value ? value : null
 }
 
+/**
+ * 같은 DOE 의 **이웃 설계점으로 ◀ ▶** — 200점짜리 DOE 에서 점마다 목록으로 돌아갔다 오지 않게.
+ * 그 DOE 를 읽어 점 번호 차례로 앞뒤를 찾는다(못 읽으면 단추를 안 그린다).
+ */
+function PointNav({ studyId, current }: { studyId: string; current: string }) {
+  const study = useResource(() => simulationApi.study(studyId), [studyId])
+  const points = [...(study.data?.points ?? [])].sort((a, b) => a.number - b.number)
+  const at = points.findIndex((one) => one.simulation_id === current)
+  if (at < 0) return null
+  const before = points[at - 1]
+  const after = points[at + 1]
+  const tag = (number: number) => `p${String(number).padStart(4, '0')}`
+  return (
+    <span className="flex items-center gap-1 text-xs">
+      {before ? (
+        <Link to={`/simulations/${before.simulation_id}`} className="hover:text-foreground flex items-center" aria-label={`이전 설계점 ${tag(before.number)}`}>
+          <ChevronLeft className="size-3.5" />
+          {tag(before.number)}
+        </Link>
+      ) : null}
+      <span>
+        {at + 1}/{points.length}
+      </span>
+      {after ? (
+        <Link to={`/simulations/${after.simulation_id}`} className="hover:text-foreground flex items-center" aria-label={`다음 설계점 ${tag(after.number)}`}>
+          {tag(after.number)}
+          <ChevronRight className="size-3.5" />
+        </Link>
+      ) : null}
+    </span>
+  )
+}
+
 function PreviousAttempts({ meta }: { meta: Record<string, unknown> }) {
   const previous = Array.isArray(meta.previous) ? meta.previous.map(String) : []
   // **옛 시도에서는 새 작업으로 간다** — 실패 목록에서 옛 시도를 열면 이미 다시 가져왔다는 것을
@@ -714,6 +751,19 @@ function afterRemove(simulation: Simulation): string {
     : '/simulations'
 }
 
+/**
+ * 돌아갈 곳 — **DOE 설계점이면 그 DOE**(설계점은 「해석」 목록에 따로 서지 않는다, ADR 0014),
+ * 아니면 「해석」 목록(남의 게시 결과면 공용 작업공간).
+ */
+function backOf(simulation: Simulation, mine: boolean): { to: string; label: string } {
+  const meta = (simulation.source_meta ?? {}) as Record<string, unknown>
+  const study = String(meta.study_id ?? meta.study_name ?? '')
+  if (simulation.source_kind === 'doe_point' && study) {
+    return { to: `/simulations/studies/${encodeURIComponent(study)}`, label: String(meta.study_name ?? 'DOE') }
+  }
+  return mine ? { to: '/simulations', label: '개인 작업' } : { to: listPath('published'), label: '공용 작업공간' }
+}
+
 function SourceLine({ simulation }: { simulation: Simulation }) {
   const meta = (simulation.source_meta ?? {}) as Record<string, unknown>
   if (simulation.source_kind === 'doe_point') {
@@ -723,15 +773,18 @@ function SourceLine({ simulation }: { simulation: Simulation }) {
       .join(' · ')
     if (!study) return null
     return (
-      <p className="text-muted-foreground text-sm">
-        DOE{' '}
-        <Link to={`/simulations/studies/${encodeURIComponent(study)}`} className="font-medium hover:underline">
-          {String(meta.study_name ?? study)}
-        </Link>{' '}
-        의 설계점 p{String(meta.point ?? 0).padStart(4, '0')}
-        {params && ` (${params})`}
-        <PreviousAttempts meta={meta} />
-      </p>
+      <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        {/* **어느 DOE 의 몇 번 점인가** — 경로로 적는다(DOE › p0003). */}
+        <nav aria-label="DOE 경로">
+          <Link to={`/simulations/studies/${encodeURIComponent(study)}`} className="font-medium hover:underline">
+            {String(meta.study_name ?? study)}
+          </Link>{' '}
+          › p{String(meta.point ?? 0).padStart(4, '0')}
+          {params && ` (${params})`}
+          <PreviousAttempts meta={meta} />
+        </nav>
+        <PointNav studyId={study} current={simulation.id} />
+      </div>
     )
   }
   if (simulation.source_kind === 'design') {

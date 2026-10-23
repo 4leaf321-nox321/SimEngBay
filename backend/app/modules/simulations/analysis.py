@@ -9,8 +9,8 @@
 - 설계 변수 `factor:<이름>` — 글자 값이 하나라도 있으면 범주다(좌표를 못 매긴다).
 - 결과 — 모달은 **추적한 모드** `mode:<기준 차수>`(MAC 로 이은 것 — 순번이 아니다. 치수가
   바뀌면 모드 순서가 뒤바뀐다), 정적 · 조화는 견줄 값(`max_mm` · `max_mpa` ·
-  `reaction:<영역>` · `probe:<이름>` …), 그리고 `mass_kg`. 값은 서버가 맞춘 단위(mm · MPa ·
-  N · Hz · kg)다.
+  `reaction:<영역>` · `probe:<이름>` …), 그리고 `mass_kg`(모델 전체)와 바디마다
+  `mass:<파트>`. 값은 서버가 맞춘 단위(mm · MPa · N · Hz · kg)다.
 - **끝난 점만** — 실패 · 대기 점의 빈 값이 0 으로 섞이지 않게.
 
 ## 민감도
@@ -118,6 +118,10 @@ def _reaction(region: str) -> Pick:
 
 def _relative(pair: str) -> Pick:
     return lambda point: _magnitude(point.relative_mm.get(pair))
+
+
+def _body_mass(body: str) -> Pick:
+    return lambda point: point.mass_by_body.get(body)
 
 
 def _param(name: str) -> Pick:
@@ -258,6 +262,12 @@ def columns_of(study: StudyOut) -> list[Column]:
         for name in study.factors
     ]
     results = _results(study, rows)
+    # **바디마다의 질량** — 지그와 부품은 같은 바디라 전체 질량에 강체 지그까지 든다. 시편만
+    # 견주려면 그 바디의 열을 고른다(「질량 · 시편」).
+    for body in _names(rows, lambda one: dict(one.mass_by_body)):
+        results.append(
+            Column(f"mass:{body}", f"질량 · {body}", "kg", "result", True, _body_mass(body))
+        )
     # **질량 0 은 없는 값이다** — 옛 작업은 kg 을 소수 넷째 자리로 잘라 작은 부품이 0 이 됐다.
     results.append(
         Column(
@@ -340,8 +350,8 @@ def effect(rows: list[StudyPointOut], factor: Column, result: Column) -> EffectO
             EffectLevelOut(
                 level=level if level is not None else "",
                 mean=significant(sum(values) / len(values)),
-                min=min(values),
-                max=max(values),
+                min=significant(min(values)),
+                max=significant(max(values)),
                 count=len(values),
             )
         )
@@ -423,12 +433,18 @@ def parse_condition(text: str) -> Condition:
     return Condition(column=column, op=op, value=value)  # type: ignore[arg-type]
 
 
+def _shown(value: Value) -> Value:
+    """보이는 값 — 숫자는 유효숫자로(반력 크기처럼 셈한 값에 자리가 길게 붙는다)."""
+    number = _number(value)
+    return significant(number) if number is not None else value
+
+
 def _chosen(row: StudyPointOut, shown: list[Column]) -> ChosenPointOut:
     return ChosenPointOut(
         number=row.number,
         simulation_id=row.simulation_id,
         params=dict(row.params),
-        values={column.key: column.value(row) for column in shown},
+        values={column.key: _shown(column.value(row)) for column in shown},
     )
 
 
@@ -489,8 +505,8 @@ def analyze(
         ranges.append(
             RangeOut(
                 result=target.key,
-                min=low[0],
-                max=high[0],
+                min=significant(low[0]),
+                max=significant(high[0]),
                 min_point=low[1].number,
                 max_point=high[1].number,
             )

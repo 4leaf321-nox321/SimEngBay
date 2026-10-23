@@ -30,7 +30,6 @@ from app.core import conditions as condition_model
 from app.core import materials, units
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
 from app.core.harmonic import HarmonicPlan, harmonic_plan
-from app.core.numbers import significant
 from app.core.regions import FaceRecord, match_regions
 from app.core.spec import (
     RIGID_BODY_MODES,
@@ -252,11 +251,12 @@ def build(
             _apply_loads(app, given_conditions, system, places, analysis, flipped)
         elif upstream is not None:
             _apply_loads(app, given_conditions, system, places, upstream, flipped)
-        mass = _mass_kg(used, active, system)
+        by_body = _masses_kg(used, active, system)
         if sheet_materials:
-            mass = round(
-                (mass or 0.0) + _sheet_mass(topology or {}, shells, sheet_materials), 4
-            )
+            by_body = {
+                **(by_body or {}),
+                **_sheet_masses(topology or {}, shells, sheet_materials),
+            }
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, view or {}, modelled
         )
@@ -344,7 +344,7 @@ def build(
                 ),
                 "ansys_version": version,
                 "constrained_regions": regions,
-                "mass_kg": mass,
+                **materials.mass_summary(by_body),
                 "shape_reused": reused,
                 "unit_system": system.key,
                 "solver_unit_system": system.solver,
@@ -1292,9 +1292,11 @@ def _write_boundary(
     )
 
 
-def _mass_kg(used: Applied, bodies: list[Any], system: units.UnitSystem) -> float | None:
-    """**바디마다** 부피 x 그 바디의 밀도. 설계점 비교의 두 번째 축이다 — 지그는 가볍고
-    단단해야 한다.
+def _masses_kg(
+    used: Applied, bodies: list[Any], system: units.UnitSystem
+) -> dict[str, float] | None:
+    """**바디마다** 부피 x 그 바디의 밀도 — 파트 이름 → kg(이름이 없으면 「바디 N」). 설계점
+    비교의 두 번째 축이다 — 지그는 가볍고 단단해야 한다.
 
     파트마다 물성이 다르면 한 밀도로 곱할 수 없다. 강판에 알루미늄 블록을 올린 조립에서
     그렇게 하면 질량이 3% 어긋나고, **그 3% 가 물성이 뒤바뀐 유일한 증거**다.
@@ -1303,14 +1305,15 @@ def _mass_kg(used: Applied, bodies: list[Any], system: units.UnitSystem) -> floa
     1.134e-4 m³). 못 읽으면 `None` 이다 — **틀린 질량은 맞는 침묵보다 나쁘다.**
     """
     try:
-        total = 0.0
-        for index, _, material in used.per_body:
+        out: dict[str, float] = {}
+        for index, name, material in used.per_body:
             volume = float(bodies[index].Volume.Value)
-            total += system.volume_m3(volume) * material.density_kg_m3
+            key = name or f"바디 {index + 1}"
+            out[key] = out.get(key, 0.0) + system.volume_m3(volume) * material.density_kg_m3
     except Exception:  # pragma: no cover - 형상에 따라 못 읽을 수 있다
         logger.warning("부피를 읽지 못했습니다 — 질량을 내지 않습니다", exc_info=True)
         return None
-    return significant(total) if total > 0 else None
+    return out
 
 
 def _part_names(
@@ -1910,18 +1913,19 @@ def _apply_sheet_materials(
     return made
 
 
-def _sheet_mass(
+def _sheet_masses(
     topology: dict[str, Any], shells: dict[str, float], made: dict[str, MaterialSpec]
-) -> float:
-    """쉘의 질량(kg) — 점 파일의 중간면 넓이(mm²) x 두께(mm) x 밀도. 계를 타지 않는다."""
-    total = 0.0
+) -> dict[str, float]:
+    """쉘 파트마다 질량(kg) — 점 파일의 중간면 넓이(mm²) x 두께(mm) x 밀도. 계를 타지
+    않는다."""
+    out: dict[str, float] = {}
     for row in (topology.get("midsurface") or {}).get("bodies") or []:
         name = str(row.get("name") or "") if isinstance(row, dict) else ""
         if name in made and name in shells:
-            total += (
+            out[name] = out.get(name, 0.0) + (
                 float(row.get("area") or 0.0) * shells[name] * 1e-9 * made[name].density_kg_m3
             )
-    return total
+    return out
 
 
 def _sheet_regions(bodies: list[Any], faces: dict[str, list[int]]) -> set[str]:

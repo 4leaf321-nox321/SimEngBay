@@ -32,6 +32,8 @@ from app.modules.simulations.schemas import (
     DoeImportRequest,
     DoeListingOut,
     DoePreviewOut,
+    ItemMoveRequest,
+    ItemOut,
     MeasurementOut,
     PublishOut,
     RecipeOut,
@@ -41,11 +43,13 @@ from app.modules.simulations.schemas import (
     SolverAvailabilityOut,
     StudyAnalysisOut,
     StudyMeasurementOut,
+    StudyMoveRequest,
     StudyOut,
     StudySummaryOut,
     ValuesOut,
     WorkersOut,
 )
+from app.shared import folders
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import AppError, code
 from app.shared.pagination import Page, clamp_limit
@@ -175,12 +179,36 @@ def add_study_measurement(
 @router.get("/studies", response_model=list[StudySummaryOut])
 def list_studies(
     scope: Literal["mine", "published"] | None = None,
+    folder: str | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[StudySummaryOut]:
     """가져온 DOE 목록. **작업 표에서 모은다** — 스터디를 따로 저장하지 않는다. `scope` 로
-    좁힌다: `mine` 내가 건 점이 있는 것 · `published` 게시된 점이 있는 것."""
-    return services.list_studies(db, user=user, scope=scope)
+    좁힌다: `mine` 내가 건 점이 있는 것 · `published` 게시된 점이 있는 것. `folder` — 빈 것이면
+    폴더에 넣지 않은 것만, 아니면 그 폴더와 그 아래."""
+    return services.list_studies(db, user=user, scope=scope, folder=folder)
+
+
+@router.get("/studies/folders", response_model=list[folders.FolderOut])
+def study_folders(
+    scope: Literal["mine", "published"] | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[folders.FolderOut]:
+    """DOE 목록의 폴더 나무 — 폴더마다 바로 그 폴더에 있는 DOE 수(위 폴더도 빠짐없이)."""
+    return services.study_folders(db, user=user, scope=scope)
+
+
+@router.post("/studies/move", response_model=folders.MovedOut)
+def move_studies(
+    body: StudyMoveRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> folders.MovedOut:
+    """DOE 여럿을 한 폴더로 — 그 설계점 작업들이 옮겨 간다(해석 작업과 한 폴더 공간)."""
+    return folders.MovedOut(
+        moved=services.move_studies(db, user=user, ids=body.ids, folder=body.folder)
+    )
 
 
 @router.get("/studies/{study_id}", response_model=StudyOut)
@@ -323,18 +351,110 @@ def preview_doe_point(
     return services.preview_doe_point(path, number, recipe=recipe)
 
 
+@router.get("/items", response_model=Page[ItemOut])
+def list_items(
+    scope: Literal["mine", "published"] | None = None,
+    kind: Literal["job", "doe"] | None = None,
+    status: str | None = None,
+    folder: str | None = None,
+    workspace_slug: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Page[ItemOut]:
+    """「해석」 목록 — **단일 해석과 DOE 한 벌이 한 줄씩**(새것이 위). DOE 설계점 · 메시 수렴
+    수준은 줄로 서지 않는다. `kind` — `job` 단일 해석만 · `doe` DOE 만. `status` 를 주면
+    설계점까지 낱개 작업으로 편다(대기 · 실패 중인 것 전부 보기). `folder` — 빈 것이면 폴더에
+    넣지 않은 것만, 아니면 그 폴더와 그 아래."""
+    size = clamp_limit(limit)
+    rows, total = services.list_items(
+        db,
+        user=user,
+        scope=scope,
+        kind=kind,
+        status=status,
+        folder=folder,
+        workspace_slug=workspace_slug,
+        limit=size,
+        offset=max(0, offset),
+    )
+    return Page(items=rows, total=total, limit=size, offset=max(0, offset))
+
+
+@router.get("/items/folders", response_model=list[folders.FolderOut])
+def item_folders(
+    scope: Literal["mine", "published"] | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[folders.FolderOut]:
+    """「해석」 목록의 폴더 나무 — 폴더마다 바로 그 폴더에 있는 항목 수(단일 해석 + DOE)."""
+    return services.item_folders(db, user=user, scope=scope)
+
+
+@router.post("/items/move", response_model=folders.MovedOut)
+def move_items(
+    body: ItemMoveRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> folders.MovedOut:
+    """항목 여럿(`job:<작업 id>` · `doe:<스터디 id>`)을 한 폴더로 — DOE 는 그 설계점 작업들이,
+    단일 해석은 메시 수렴 수준까지 함께. 하나라도 못 옮기면 아무것도 안 옮긴다."""
+    return folders.MovedOut(
+        moved=services.move_items(db, user=user, keys=body.ids, folder=body.folder)
+    )
+
+
+@router.get("/folders", response_model=list[folders.FolderOut])
+def job_folders(
+    scope: Literal["mine", "published"] | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[folders.FolderOut]:
+    """해석 작업의 폴더 나무 — 폴더마다 바로 그 폴더에 있는 작업 수(위 폴더도 빠짐없이)."""
+    return services.job_folders(db, user=user, scope=scope)
+
+
+@router.post("/move", response_model=folders.MovedOut)
+def move_jobs(
+    body: folders.FolderMoveRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> folders.MovedOut:
+    """작업 여럿을 한 폴더로(`고객A/2026`, 비우면 맨 위) — 건 사람이나 시스템 관리자만.
+    하나라도 못 옮기면 아무것도 안 옮긴다."""
+    return folders.MovedOut(
+        moved=services.move_jobs(db, user=user, ids=body.ids, folder=body.folder)
+    )
+
+
+@router.post("/folders/rename", response_model=folders.MovedOut)
+def rename_folder(
+    body: folders.FolderRenameRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> folders.MovedOut:
+    """폴더 이름 바꾸기 · 옮기기(하위까지, 있는 폴더면 합친다) — **폴더 지우기는 위 폴더로
+    합치는 것**이다. 내 작업만 옮긴다. 해석 작업 · DOE 가 함께 옮겨 간다."""
+    return folders.MovedOut(
+        moved=services.rename_folder(db, user=user, path=body.path, to=body.to)
+    )
+
+
 @router.get("", response_model=Page[SimulationSummaryOut])
 def list_simulations(
     status: str | None = None,
     workspace_slug: str | None = None,
     scope: Literal["mine", "published"] | None = None,
+    folder: str | None = None,
     limit: int | None = None,
     offset: int = 0,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Page[SimulationSummaryOut]:
     """볼 수 있는 작업 — 내가 건 것과 게시된 것(시스템 관리자는 전부). `scope` 로 좁힌다:
-    `mine` 내가 건 것 · `published` 게시된 것."""
+    `mine` 내가 건 것 · `published` 게시된 것. `folder` — 빈 것이면 폴더에 넣지 않은 것만,
+    아니면 그 폴더와 그 아래."""
     size = clamp_limit(limit)
     rows, total = services.list_visible(
         db,
@@ -344,6 +464,7 @@ def list_simulations(
         limit=size,
         offset=max(0, offset),
         scope=scope,
+        folder=folder,
     )
     return Page(
         items=[services.to_summary(db, one) for one in rows],

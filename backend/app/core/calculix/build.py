@@ -25,7 +25,6 @@ from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import deck as deck_writer
 from app.core.calculix.mesh import build_mesh, element_faces, probe_volumes, tributary_areas
 from app.core.harmonic import harmonic_plan
-from app.core.numbers import significant
 from app.core.regions import match_regions
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
 from app.core.stages import MIDSURFACE_NAME, ArtifactSpec, StageFailure, StageResult
@@ -332,9 +331,9 @@ def build(
     (workdir / BOUNDARY_NAME).write_text(
         json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
-    mass = _mass_kg(materials, body_of, mesh)
+    by_body = _masses_kg(materials, body_of, mesh)
     if shells:
-        mass = significant((mass or 0.0) + _shell_mass(shells, mesh.nodes))
+        by_body = {**(by_body or {}), **_shell_masses(shells, mesh.nodes)}
     return StageResult(
         artifacts=[ArtifactSpec("dat", path)],
         summary={
@@ -372,7 +371,7 @@ def build(
                 else {}
             ),
             "constrained_regions": plan.applied,
-            "mass_kg": mass,
+            **material_model.mass_summary(by_body),
             "unit_system": system.key,
             # **덱은 늘 mm · tonne · N 으로 쓴다**(형상이 mm 라서) — 선언된 계가 무엇이든.
             "solver_unit_system": "ConsistentNMM",
@@ -1216,32 +1215,44 @@ def _dot(first: tuple[float, float, float], second: tuple[float, float, float]) 
     return sum(one * two for one, two in zip(first, second, strict=True))
 
 
-def _shell_mass(
+def _shell_masses(
     shells: list[deck_writer.ShellSection], nodes: dict[int, tuple[float, float, float]]
-) -> float:
-    """쉘의 질량(kg) — 요소 넓이 x 두께 x 밀도. 넓이는 모서리 셋으로 잰다(평면 요소)."""
-    total = 0.0
+) -> dict[str, float]:
+    """쉘 파트마다 질량(kg) — 요소 넓이 x 두께 x 밀도. 넓이는 모서리 셋으로 잰다(평면 요소)."""
+    out: dict[str, float] = {}
     for sheet in shells:
         area = 0.0
         for _, ids in sheet.elements:
             x, y, z = _element_normal(nodes, ids)
             area += 0.5 * (x * x + y * y + z * z) ** 0.5
         # mm² x mm = mm³ → m³ 는 1e-9.
-        total += area * sheet.thickness * 1e-9 * sheet.material.density_kg_m3
-    return total
+        mass = area * sheet.thickness * 1e-9 * sheet.material.density_kg_m3
+        out[sheet.part] = out.get(sheet.part, 0.0) + mass
+    return out
 
 
-def _mass_kg(
+def _masses_kg(
     materials: list[material_model.Material], body_of: dict[str, int], mesh: Any
-) -> float | None:
-    """**바디마다** 부피 x 그 바디의 밀도. 설계점 비교의 두 번째 축이다."""
+) -> dict[str, float] | None:
+    """**바디마다** 부피 x 그 바디의 밀도 — 파트 이름 → kg. 하나라도 못 재면 `None`(틀린 질량은
+    맞는 침묵보다 나쁘다)."""
     by_entity = {one.index: one.volume for one in mesh.bodies}
-    total = 0.0
+    out: dict[str, float] = {}
     for material in materials:
         for body in material.bodies:
             entity = body_of.get(body)
             if entity is None or entity not in by_entity:
                 return None
             # 부피는 mm³ — SI 밀도와 곱하려면 m³ 로 옮긴다(1e-9).
-            total += by_entity[entity] * 1e-9 * material.density_kg_m3
-    return significant(total) if total else None
+            out[body] = out.get(body, 0.0) + by_entity[entity] * 1e-9 * material.density_kg_m3
+    return out
+
+
+def _mass_kg(
+    materials: list[material_model.Material], body_of: dict[str, int], mesh: Any
+) -> float | None:
+    """전체 질량 — 바디마다의 합(설계점 비교의 두 번째 축)."""
+    found: float | None = material_model.mass_summary(_masses_kg(materials, body_of, mesh))[
+        "mass_kg"
+    ]
+    return found

@@ -87,6 +87,22 @@ export function columnsOf(study: Study): Column[] {
   // **질량은 그 DOE 에 맞는 한 단위로**(kg · g · mg) — 작은 부품을 kg 으로 그리면 축이 모두 0
   // 근처다. 0 이하는 없는 값이다(옛 작업은 반올림으로 0 이 남았다).
   const mass = massScale(rows.map((one) => one.mass_kg))
+  // **바디마다의 질량** — 지그와 부품은 같은 바디라 전체 질량에 강체 지그까지 든다(서버
+  // `materials.mass_summary`). 시편만 견주려면 그 바디의 열을 고른다(「질량 · 시편」).
+  const bodies = [...new Set(rows.flatMap((one) => Object.keys(one.mass_by_body ?? {})))]
+  for (const body of bodies) {
+    results.push({
+      key: `mass:${body}`,
+      label: `질량 · ${body}`,
+      unit: mass.unit,
+      kind: 'result',
+      numeric: true,
+      value: (point) => {
+        const kg = point.mass_by_body?.[body]
+        return kg != null && kg > 0 ? kg * mass.factor : null
+      },
+    })
+  }
   if (rows.some((one) => one.mass_kg != null && one.mass_kg > 0)) {
     results.push({
       key: 'mass_kg',

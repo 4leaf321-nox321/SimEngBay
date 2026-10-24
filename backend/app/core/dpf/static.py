@@ -271,6 +271,15 @@ def _write(workdir: Path, result: dict[str, Any]) -> Path:
     return path
 
 
+def _last_set(model: Any) -> int:
+    """결과 파일의 마지막 단계 번호 — 선형 정적은 1, 비선형은 저장된 부단계 수. 못 읽으면 1."""
+    try:
+        return max(1, int(model.metadata.time_freq_support.n_sets))
+    except Exception:  # pragma: no cover - 결과 파일에 따라 못 읽을 수 있다
+        logger.warning("결과 단계 수를 못 읽었습니다 — 첫 단계를 그립니다", exc_info=True)
+        return 1
+
+
 def _draw(model: Any, mesh: Any, workdir: Path, result: dict[str, Any]) -> list[ArtifactSpec]:
     """변형 그림 — 모달의 모드 형상과 **같은 길**을 쓴다(표면만 · 중간 절점 버림).
 
@@ -279,10 +288,21 @@ def _draw(model: Any, mesh: Any, workdir: Path, result: dict[str, Any]) -> list[
     made: list[ArtifactSpec] = []
     try:
         skin = shapes.skin_of(mesh)
-        drawn = shapes.export_mode(model, skin, 1, workdir)
+        # **수와 같은 결과 단계를 그린다.** 수(`displacement.eval()` · 응력 · 반력)는 DPF 의
+        # 기본인 마지막 단계를 읽는다 — 그림만 1 로 박아 두면 비선형 정적(큰 변형 · 마찰 ·
+        # 부단계)에서 **첫 부단계의 모양**을 그렸다(그림과 숫자가 다른 하중, 2026-10-24).
+        # 파일 이름은 1 그대로.
+        last = _last_set(model)
+        drawn = shapes.export_mode(model, skin, 1, workdir, result_set=last)
         vtp = workdir / str(drawn["vtp"])
         made.append(ArtifactSpec("mode_vtp", vtp))
-        result["shape"] = {"vtp": drawn["vtp"], "points": drawn.get("points")}
+        result["shape"] = {
+            "vtp": drawn["vtp"],
+            "points": drawn.get("points"),
+            # 어느 단계를 그렸나 · 그 그림의 최대 변위 — 결과의 최대 변형과 같아야 한다.
+            "set": last,
+            "max_displacement": drawn.get("max_displacement"),
+        }
         if drawn.get("parts"):
             # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
             result["parts"] = drawn["parts"]

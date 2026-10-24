@@ -39,6 +39,7 @@ export type FrfComparison = components['schemas']['FrfComparisonOut']
 export type ConvergenceMetric = components['schemas']['ConvergenceMetricOut']
 export type Removed = components['schemas']['RemovedOut']
 export type Item = components['schemas']['ItemOut']
+export type StudyTable = components['schemas']['StudyTableOut']
 
 /**
  * `result.json` 의 모양 — **서버가 스키마로 굳히지 않는 것**이라 화면 쪽에 적는다.
@@ -380,9 +381,12 @@ export const simulationApi = {
   workers: () => api.get<WorkersOverview>('/simulations/workers'),
   /** 솔버마다 집을 워커가 살아 있나 — 작업을 거는 창이 경고에 쓴다. */
   solvers: () => api.get<SolverAvailability[]>('/simulations/solvers'),
-  /** 스터디를 CSV 로 — 화면과 같은 값 · 같은 단위(mm · MPa · N · Hz). */
-  exportStudy: (studyId: string, filename: string) =>
-    downloadFile(`/simulations/studies/${encodeURIComponent(studyId)}/export.csv`, filename),
+  /**
+   * DOE 비교 표 — CSV 와 같은 머리 · 줄(mm · MPa · N · Hz). **화면은 클립보드로 복사한다** — 사내 DRM 으로
+   * 파일을 내려받지 못한다(엑셀에 붙여 넣는다). CSV 파일(`export.csv`)은 연계 스크립트용으로 남아 있다.
+   */
+  studyTable: (studyId: string) =>
+    api.get<StudyTable>(`/simulations/studies/${encodeURIComponent(studyId)}/table`),
   /** 산출물 전부를 ZIP 하나로 — 없는 파일은 묶음 안의 `빠진_파일.txt` 가 말한다. */
   downloadAll: (simulationId: string, filename: string) =>
     downloadFile(`/simulations/${simulationId}/artifacts.zip`, filename),

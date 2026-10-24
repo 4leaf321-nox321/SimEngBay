@@ -16,7 +16,7 @@
  */
 
 import { useState } from 'react'
-import { Download, Eraser, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react'
+import { ClipboardCopy, Eraser, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
@@ -47,6 +47,7 @@ import {
 } from '@/shared/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
+import { copyText, toTsv } from '@/shared/lib/clipboard'
 
 /** DOE 화면의 탭 — 주소의 `?tab=` 이 정본이다. */
 type StudyTab = 'compare' | 'explore' | 'points' | 'checks'
@@ -94,13 +95,18 @@ export default function StudyDetailPage() {
     study.reload()
   }
 
-  async function exportCsv() {
-    if (!study.data) return
+  /**
+   * **비교 표를 클립보드로** — 사내 DRM 으로 파일을 내려받지 못한다. 탭으로 가른 글이라 엑셀 · 시트에
+   * 붙이면 칸이 그대로 선다. http 에서도 된다(`copyText`).
+   */
+  async function copyTable() {
     setFailed(null)
     try {
-      await simulationApi.exportStudy(id, `${study.data.name}.csv`)
+      const table = await simulationApi.studyTable(id)
+      await copyText(toTsv([table.head, ...table.rows]))
+      setNotice(`설계점 ${table.rows.length}개 · 열 ${table.head.length}개를 복사했습니다 — 엑셀에 붙여 넣으세요.`)
     } catch (caught) {
-      setFailed(caught instanceof Error ? caught : new Error('CSV 를 내려받지 못했습니다.'))
+      setFailed(caught instanceof Error ? caught : new Error('표를 복사하지 못했습니다.'))
     }
   }
 
@@ -225,9 +231,9 @@ export default function StudyDetailPage() {
                 중간 파일 정리
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={exportCsv}>
-              <Download className="size-4" />
-              CSV 내보내기
+            <Button variant="outline" size="sm" onClick={copyTable}>
+              <ClipboardCopy className="size-4" />
+              표 복사
             </Button>
             {mine && (
               <Button variant="outline" size="sm" onClick={() => setRemoving(true)}>

@@ -46,6 +46,7 @@ from app.modules.simulations.schemas import (
     StudyMoveRequest,
     StudyOut,
     StudySummaryOut,
+    StudyTableOut,
     ValuesOut,
     WorkersOut,
 )
@@ -248,6 +249,19 @@ def analyze_study(
         x=x,
         y=y,
     )
+
+
+@router.get("/studies/{study_id}/table", response_model=StudyTableOut)
+def study_table(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StudyTableOut:
+    """DOE 비교 표 — CSV 와 같은 값 · 같은 단위. 화면이 클립보드로 복사한다(사내 DRM 으로
+    파일을 못 내려받는다 — 엑셀에 붙여 넣는다)."""
+    study = services.get_study(db, user=user, study_id=study_id)
+    head, rows = services.study_table(study)
+    return StudyTableOut(name=study.name, head=head, rows=rows)
 
 
 @router.get("/studies/{study_id}/export.csv", include_in_schema=False)

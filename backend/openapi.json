@@ -3504,6 +3504,49 @@
         }
       }
     },
+    "/api/simulations/studies/{study_id}/table": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Study Table",
+        "description": "DOE 비교 표 — CSV 와 같은 값 · 같은 단위. 화면이 클립보드로 복사한다(사내 DRM 으로\n파일을 못 내려받는다 — 엑셀에 붙여 넣는다).",
+        "operationId": "study_table_api_simulations_studies__study_id__table_get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyTableOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/doe/find": {
       "get": {
         "tags": [
@@ -11202,6 +11245,39 @@
         ],
         "title": "StudySummaryOut",
         "description": "DOE 한 벌 — 목록 한 줄."
+      },
+      "StudyTableOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "head": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Head"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "head",
+          "rows"
+        ],
+        "title": "StudyTableOut",
+        "description": "DOE 비교 표 — CSV 와 같은 머리 · 줄(`services.study_table`). **화면은 이것을\n클립보드로** 복사한다 — 사내 DRM 으로 파일을 내려받지 못하는 자리라, 엑셀에 붙여 넣는 길이\n하나다."
       },
       "SystemAdminRequest": {
         "properties": {

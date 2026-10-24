@@ -100,6 +100,11 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 - `job_get(job_id, wait_seconds=25)` — 상태: `queued` → `fetching` → `modeling` → `solving` →
   `extracting` → `done`(또는 `failed` · `canceled`). 솔브는 몇 분에서 몇 시간이다. 여러 점이면
   `jobs_list(status=…)` 나 `study_get` 으로 한 번에 본다.
+- **`jobs_list` 는 화면의 「해석」 목록과 같다** — 단일 해석과 DOE 한 벌이 한 줄씩(`kind` · `key`).
+  DOE 설계점은 줄로 서지 않으니 DOE 줄의 `study_id` 로 `study_get` 을 본다. `status` 를 주면
+  설계점까지 낱개 작업으로 편다(대기 · 실패 중인 것 전부). 사람이 나눈 **정리 폴더**는
+  `jobs_folders()` 로 보고 `jobs_list(folder=…)` 로 거르며, 옮기기는 `jobs_move(keys, folder)` —
+  사용자가 정리해 달라고 할 때만. CAD 공유 폴더(`folder_*`)와는 다른 것이다.
 - **줄은 사람마다 번갈아 선다.** 워커는 같은 솔버 안에서 도는 작업이 적은 사람 · 오래 못 받은
   사람부터 집는다 — DOE 수백 점을 걸어도 남의 한 건을 막지 않고, 남이 많이 걸어도 내 것이 끼어든다.
   대기 중이면 `job_get` 의 `queue` 가 어디쯤인지 말한다(그 솔버의 대기 · 내 앞의 내 작업 · 줄을 나눠

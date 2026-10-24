@@ -60,7 +60,8 @@ INSTRUCTIONS = (
     "  공유 폴더를 둘러본다              folder_browse  (무엇이 있는지 모를 때)\n"
     "  걸기 전에 조건이 어떻게 걸리나   folder_preview  (설계점 하나는 number 를 준다)\n"
     "  해석을 건다                       jobs_create     (study_id 나 path · 점 하나 · 여럿)\n"
-    "  내 작업 · 게시된 작업             jobs_list\n"
+    "  내 해석 · DOE · 게시된 것         jobs_list       (DOE 는 한 줄 — 설계점은 study_get)\n"
+    "  정리 폴더로 나눠 보기 · 옮기기     jobs_folders · jobs_move\n"
     "  진행 상황 · 실패 까닭             job_get         (wait_seconds 로 기다린다)\n"
     "  결과 숫자                         job_result      (늘 mm · MPa · N · Hz)\n"
     "  설계점끼리 견준다                 studies_list → study_get\n"
@@ -637,23 +638,32 @@ async def jobs_list(
     ctx: Context,
     scope: str = "mine",
     status: str | None = None,
+    kind: str | None = None,
+    folder: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> Any:
-    """해석 작업 목록 — 최근 것부터.
+    """「해석」 목록 — **단일 해석과 DOE 한 벌이 한 줄씩**, 최근 것부터(화면과 같다). DOE
+    설계점은 줄로 서지 않는다 — DOE 줄의 `study_id` 로 `study_get` · `study_analyze` 를 본다.
 
     - `scope`: `mine` 내가 건 것(기본) · `published` 게시된 것(누구나 읽는다) · `all` 볼 수
       있는 전부(시스템 관리자는 모든 작업).
-    - `status`: `queued` · `modeling` · `solving` · `done` · `failed` · `canceled` 등으로
-      좁힌다.
+    - `kind`: `job` 단일 해석만 · `doe` DOE 만.
+    - `status`: `queued` · `solving` · `done` · `failed` · `canceled` 등 — **주면 설계점까지
+      낱개 작업으로 편다**(대기 · 실패 중인 작업 전부를 보는 길).
+    - `folder`: 사람이 나눠 둔 정리 폴더(`고객A/2026` — 그 아래까지, 빈 것이면 폴더에 안 넣은
+      것). CAD 공유 폴더(`folder_*`)와 다르다. 나무는 `jobs_folders`.
 
-    한 줄은 줄인 모양이다 — 단계 · 조건 · 실패 까닭은 `job_get`, 결과 숫자는 `job_result`."""
+    줄의 `key`(`job:<작업 id>` · `doe:<스터디 id>`)는 `jobs_move` 에 그대로 쓴다. 단계 · 조건 ·
+    실패 까닭은 `job_get`, 결과 숫자는 `job_result`."""
     got = await _get(
         ctx,
-        "/api/simulations",
+        "/api/simulations/items",
         {
             "scope": None if scope == "all" else scope,
             "status": status,
+            "kind": kind,
+            "folder": folder,
             "limit": max(1, min(limit, 100)),
             "offset": max(0, offset),
         },
@@ -663,8 +673,64 @@ async def jobs_list(
     return {
         "total": got.get("total"),
         "offset": got.get("offset"),
-        "items": [_slim_job(one) for one in got.get("items") or []],
+        "items": [_slim_item(one) for one in got.get("items") or []],
     }
+
+
+def _slim_item(item: dict[str, Any]) -> dict[str, Any]:
+    """목록 한 줄 — 단일 해석은 작업 줄, DOE 는 진행(점 수 · 끝난 · 실패 · 도는 수)까지."""
+    study = item.get("study")
+    if isinstance(study, dict):
+        return _compact(
+            {
+                "kind": "doe",
+                "key": item.get("key"),
+                "study_id": study.get("study_id"),
+                "name": study.get("name"),
+                "recipe": study.get("recipe"),
+                "solvers": study.get("solvers"),
+                "factors": study.get("factors"),
+                "points": study.get("points"),
+                "done": study.get("done"),
+                "failed": study.get("failed"),
+                "running": study.get("running"),
+                "published": study.get("published"),
+                "folder": study.get("folder"),
+                "owner": study.get("owner_name"),
+                "created_at": study.get("created_at"),
+            }
+        )
+    job = item.get("job") if isinstance(item.get("job"), dict) else {}
+    return {
+        "kind": "job",
+        "key": item.get("key"),
+        **_slim_job(job),
+        "folder": job.get("folder"),
+    }
+
+
+@mcp.tool()
+async def jobs_folders(ctx: Context, scope: str = "mine") -> Any:
+    """사람이 「해석」 목록을 나눠 둔 **정리 폴더**의 나무 — 경로마다 바로 그 폴더에 있는 항목
+    수(단일 해석 + DOE, 위 폴더도 빠짐없이 · 맨 위는 `""`). CAD 공유 폴더(`folder_*`)와 다르다.
+    폴더는 항목이 들고 있는 경로라 빈 폴더는 없다 — `jobs_move` 로 옮기면 생긴다."""
+    return _listed(
+        await _get(
+            ctx,
+            "/api/simulations/items/folders",
+            {"scope": None if scope == "all" else scope},
+        ),
+        "folders",
+    )
+
+
+@mcp.tool()
+async def jobs_move(ctx: Context, keys: list[str], folder: str = "") -> Any:
+    """항목 여럿을 한 정리 폴더로 — `keys` 는 `jobs_list` 줄의 `key`(`job:<작업 id>` ·
+    `doe:<스터디 id>`), `folder` 는 `고객A/2026` 같은 경로(없으면 생긴다, 비우면 맨 위). DOE 는
+    그 설계점 작업들이, 단일 해석은 메시 수렴 수준까지 따라간다. 내 것만 옮긴다 — 하나라도 못
+    옮기면 아무것도 안 옮긴다. 되돌리려면 원래 폴더로 다시 옮긴다."""
+    return await _post(ctx, "/api/simulations/items/move", {"ids": keys, "folder": folder})
 
 
 @mcp.tool()

@@ -207,13 +207,18 @@ describe('「해석」 목록', () => {
     show()
     fireEvent.click(await screen.findByLabelText('이 페이지 전체 선택'))
     // 고를 수 있는 줄(내 것)만 골랐다.
-    expect(await screen.findByText('2개 선택됨')).toBeDefined()
+    expect(await screen.findByText('2개 선택됨', undefined, { timeout: 5000 })).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '게시' }))
     const dialog = await screen.findByRole('dialog')
     expect(dialog.textContent).toContain('조직의 누구나')
     fireEvent.click(within(dialog).getByRole('button', { name: '게시' }))
+    // 하나씩 부르고 목록 · 나무를 다시 읽은 뒤에 말한다 — 시험을 여럿 함께 돌리면 1초를 넘는다.
     expect(
-      await screen.findByText(/항목 1개를 게시했습니다. 하지 못한 것 1개: ISO178 두께 훑기 — 끝난 설계점이 없어/),
+      await screen.findByText(
+        /항목 1개를 게시했습니다. 하지 못한 것 1개: ISO178 두께 훑기 — 끝난 설계점이 없어/,
+        undefined,
+        { timeout: 5000 },
+      ),
     ).toBeDefined()
     expect(calls.filter((one) => one.method === 'POST').map((one) => one.path).sort()).toEqual([
       '/simulations/j1/publish',

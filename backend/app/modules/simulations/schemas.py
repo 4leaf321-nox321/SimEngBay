@@ -395,6 +395,16 @@ class StudySummaryOut(BaseModel):
     finished_at: datetime | None = None
 
 
+class StudyTableOut(BaseModel):
+    """DOE 비교 표 — CSV 와 같은 머리 · 줄(`services.study_table`). **화면은 이것을
+    클립보드로** 복사한다 — 사내 DRM 으로 파일을 내려받지 못하는 자리라, 엑셀에 붙여 넣는 길이
+    하나다."""
+
+    name: str
+    head: list[str]
+    rows: list[list[str]]
+
+
 class ItemOut(BaseModel):
     """「해석」 목록의 한 줄 — **단일 해석 하나이거나 DOE 한 벌**(ADR 0014). DOE 설계점 · 메시
     수렴 수준은 줄로 서지 않는다(설계점은 DOE 줄을 펼쳐 본다)."""

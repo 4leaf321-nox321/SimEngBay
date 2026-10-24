@@ -117,6 +117,9 @@ const SUMMARY_LABELS: Record<string, string> = {
   tidied_bytes: '정리한 중간 파일',
 }
 
+/** 한 줄을 다 쓰고 접어 보이는 요약 칸 — 바디마다 늘어서는 값. */
+const WIDE_SUMMARY = new Set(['mass_by_body'])
+
 /** 요약 묶음 — 메시 · 모델 · 해석 · 실행. 모르는 열쇠는 「기타」 로. */
 const SUMMARY_GROUPS: [string, string[]][] = [
   ['메시', ['nodes', 'elements', 'element_size_mm', 'mesh_order', 'contact_pairs']],
@@ -554,9 +557,13 @@ function SimulationDetail({ id }: { id: string }) {
                     <h3 className="text-muted-foreground mb-2 text-xs font-medium">{group}</h3>
                     <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
                       {rows.map(([key, value]) => (
-                        <div key={key} className="min-w-0">
+                        // **바디별 질량은 한 줄을 다 쓰고 접어 보인다** — 잘라 두면 「시편」 다음 몇 개만 보인다.
+                        <div key={key} className={WIDE_SUMMARY.has(key) ? 'col-span-2 min-w-0' : 'min-w-0'}>
                           <dt className="text-muted-foreground text-xs">{SUMMARY_LABELS[key] ?? key}</dt>
-                          <dd className="truncate font-medium" title={shownSummary(key, value)}>
+                          <dd
+                            className={WIDE_SUMMARY.has(key) ? 'font-medium break-words' : 'truncate font-medium'}
+                            title={shownSummary(key, value)}
+                          >
                             {shownSummary(key, value)}
                           </dd>
                         </div>

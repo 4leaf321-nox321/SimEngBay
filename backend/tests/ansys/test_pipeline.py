@@ -849,6 +849,14 @@ def test_전단_이음에서_마찰이_일을_한다_Ansys(workdir: Path) -> Non
         for stage in STAGES:
             runner.run(StageContext(stage=stage, spec=spec, workdir=place))
         seen[point] = json.loads((place / "result.json").read_text(encoding="utf-8"))
+        # **그림과 수가 같은 결과 단계다** — 마찰 접촉은 비선형이라 부단계가 결과 파일에
+        # 남는다.
+        # 2026-10-24 전에는 그림이 첫 단계에 박혀 첫 부단계의 모양을 그렸다(`static._draw`).
+        shape = seen[point]["shape"]
+        assert shape["max_displacement"] == pytest.approx(
+            seen[point]["max_displacement"], rel=0.02
+        ), f"그림 {shape['max_displacement']} · 수 {seen[point]['max_displacement']}"
+        print(f"p{point:04d} 결과 단계 {shape['set']}개 중 마지막을 그렸다")
         deck = (place / "model.dat").read_text(encoding="utf-8", errors="replace")
         # **접촉은 CAD 가 선언한 하나뿐이어야 한다** — 자동 접촉이 남으면 그것이 이긴다.
         assert deck.count("Create Contact") == 1, "자동 접촉이 남아 있다"

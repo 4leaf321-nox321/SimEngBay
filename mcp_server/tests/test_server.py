@@ -35,6 +35,8 @@ TOOLS = {
     "folder_preview",
     "jobs_create",
     "jobs_list",
+    "jobs_folders",
+    "jobs_move",
     "job_get",
     "job_result",
     "job_retry",
@@ -208,7 +210,7 @@ def test_백엔드가_토큰을_거절하면_게이트웨이가_다시_받는_�
     assert GATEWAY_TOKEN_REJECTED.match(text), text
     # 경로는 물음표 앞까지 — 서버의 말은 그대로다.
     assert text == (
-        "Error executing tool jobs_list: GET /api/simulations → HTTP 401: "
+        "Error executing tool jobs_list: GET /api/simulations/items → HTTP 401: "
         "[SEB-AUTH-0101] 토큰이 유효하지 않습니다."
     )
     assert seen[0].headers["authorization"] == "Bearer old"
@@ -448,29 +450,85 @@ def test_미리_보기는_번호를_주면_설계점_하나로_간다() -> None:
 
 
 def test_목록은_줄여_보이고_전부는_scope_를_안_보낸다() -> None:
-    row = {
+    """「해석」 목록 — 단일 해석과 DOE 한 벌이 한 줄씩(화면과 같다). 상태로 거르면 서버가
+    설계점까지 낱개 작업으로 편다."""
+    job = {
         "id": "j1",
         "name": "브래킷 p0002",
         "recipe": "modal",
         "solver": "calculix",
         "status": "done",
         "published_at": None,
+        "folder": "고객A",
         "source_meta": {"study_id": "s1", "point": 2, "params": {"두께": 6}},
         "summary": {"first_elastic_hz": 812.4},
         "stages": [{"name": "solve"}],
         "artifacts": [{"kind": "frd"}],
     }
+    study = {
+        "study_id": "s1",
+        "name": "브래킷",
+        "recipe": "modal",
+        "points": 3,
+        "done": 2,
+        "failed": 1,
+        "running": 0,
+        "published": 0,
+        "folder": "",
+        "owner_name": "나",
+        "created_at": "2026-10-24T00:00:00Z",
+    }
+    rows = [
+        {"kind": "job", "key": "job:j1", "job": job, "study": None},
+        {"kind": "doe", "key": "doe:s1", "job": None, "study": study},
+    ]
     seen = _serve(
-        lambda _r: httpx.Response(200, json={"items": [row], "total": 1, "offset": 0})
+        lambda _r: httpx.Response(200, json={"items": rows, "total": 2, "offset": 0})
     )
-    got = _run(server.jobs_list, scope="all", limit=500)
+    got = _run(server.jobs_list, scope="all", limit=500, kind="doe", folder="고객A")
+    assert seen[0].url.path == "/api/simulations/items"
     assert "scope" not in seen[0].url.params and seen[0].url.params["limit"] == "100"
-    one = got["items"][0]
+    assert seen[0].url.params["kind"] == "doe" and seen[0].url.params["folder"] == "고객A"
+    one, doe = got["items"]
+    assert one["key"] == "job:j1" and one["kind"] == "job" and one["folder"] == "고객A"
     assert one["study_id"] == "s1" and one["params"] == {"두께": 6}
     assert one["published"] is False and "stages" not in one and "artifacts" not in one
+    assert doe == {
+        "kind": "doe",
+        "key": "doe:s1",
+        "study_id": "s1",
+        "name": "브래킷",
+        "recipe": "modal",
+        "points": 3,
+        "done": 2,
+        "failed": 1,
+        "running": 0,
+        "published": 0,
+        "folder": "",
+        "owner": "나",
+        "created_at": "2026-10-24T00:00:00Z",
+    }
 
     _run(server.jobs_list)
     assert seen[1].url.params["scope"] == "mine"
+
+
+def test_정리_폴더_나무와_옮기기는_제_경로로() -> None:
+    """정리 폴더(사람이 나눈 것)는 CAD 공유 폴더와 다른 길이다 — 「해석」 목록의 항목
+    열쇠로."""
+    seen = _serve(lambda _r: httpx.Response(200, json=[{"path": "", "count": 2}]))
+    assert _run(server.jobs_folders) == {"total": 1, "folders": [{"path": "", "count": 2}]}
+    assert seen[0].url.path == "/api/simulations/items/folders"
+    assert seen[0].url.params["scope"] == "mine"
+
+    moved = _serve(lambda _r: httpx.Response(200, json={"moved": 2}))
+    _run(server.jobs_move, ["job:j1", "doe:s1"], folder="고객A/2026")
+    assert moved[0].method == "POST"
+    assert moved[0].url.path == "/api/simulations/items/move"
+    assert json.loads(moved[0].content) == {
+        "ids": ["job:j1", "doe:s1"],
+        "folder": "고객A/2026",
+    }
 
 
 def test_기다리면_끝날_때까지_묻고_안_끝났으면_도는_채로_말한다(

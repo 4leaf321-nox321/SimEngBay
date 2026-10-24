@@ -66,12 +66,12 @@ import {
 import { FolderTree } from '@/shared/folders/FolderTree'
 import { useFolderSpace } from '@/shared/folders/useFolderSpace'
 import { useResource } from '@/shared/hooks/useResource'
-import { shownDateTime } from '@/shared/lib/datetime'
+import { shownDate, shownDateTime } from '@/shared/lib/datetime'
 import { cn } from '@/shared/lib/utils'
 
 const PER_PAGE = 50
 const ALL = '__all__'
-const COLUMNS = 8
+const COLUMNS = 7
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: ALL, label: '전체 상태' },
@@ -341,7 +341,6 @@ function ItemList({ scope }: { scope: ListScope }) {
                   <TableHead>종류</TableHead>
                   <TableHead>상태</TableHead>
                   <TableHead>결과</TableHead>
-                  <TableHead>부서</TableHead>
                   <TableHead>실행한 사람</TableHead>
                   <TableHead>생성</TableHead>
                 </TableRow>
@@ -455,10 +454,14 @@ function JobCells({ item, space }: { item: Item; space: Space }) {
           (shownOutcome(one) ?? '—')
         )}
       </TableCell>
-      <TableCell>{one.owner_workspace_name ?? '전역'}</TableCell>
-      <TableCell>{one.requested_by_name ?? '—'}</TableCell>
-      <TableCell className="whitespace-nowrap">
-        {shownDateTime(one.created_at)}
+      {/* 부서는 사람 아래 줄로 — 열 하나를 줄여 노트북 폭(1440)에서 「생성」 이 잘리지 않게. */}
+      <TableCell>
+        {one.requested_by_name ?? '—'}
+        <span className="text-muted-foreground block text-xs">{one.owner_workspace_name ?? '전역'}</span>
+      </TableCell>
+      {/* **날짜만 보이고 시각은 마우스를 올리면** — 시각까지 적으면 노트북 폭(1440)에서 잘렸다. */}
+      <TableCell className="whitespace-nowrap" title={shownDateTime(one.created_at)}>
+        {shownDate(one.created_at)}
         <span className="text-muted-foreground block text-xs">
           소요 {shownDuration(one.started_at, one.finished_at)}
         </span>
@@ -521,9 +524,13 @@ function DoeCells({ item, open, onToggle, space }: { item: Item; open: boolean; 
         </p>
       </TableCell>
       <TableCell className="text-muted-foreground text-sm">설계점 {one.points}개</TableCell>
-      <TableCell>{one.workspace_name ?? '전역'}</TableCell>
-      <TableCell>{one.owner_name ?? '—'}</TableCell>
-      <TableCell className="whitespace-nowrap">{shownDateTime(one.created_at)}</TableCell>
+      <TableCell>
+        {one.owner_name ?? '—'}
+        <span className="text-muted-foreground block text-xs">{one.workspace_name ?? '전역'}</span>
+      </TableCell>
+      <TableCell className="whitespace-nowrap" title={shownDateTime(one.created_at)}>
+        {shownDate(one.created_at)}
+      </TableCell>
     </>
   )
 }

@@ -28,10 +28,19 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       tidyStudy: vi.fn(),
       cancelStudy: vi.fn(),
       removeStudy: vi.fn(),
+      studyTable: vi.fn(),
       studyMeasurements: vi.fn(),
     },
   }
 })
+
+const clipboard = vi.hoisted(() => ({ copied: [] as string[] }))
+vi.mock('@/shared/lib/clipboard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/shared/lib/clipboard')>()),
+  copyText: async (text: string) => {
+    clipboard.copied.push(text)
+  },
+}))
 
 function point(number: number, status: string): StudyPoint {
   return {
@@ -105,6 +114,23 @@ describe('스터디 상세', () => {
     await userEvent.click(screen.getByRole('button', { name: '정리' }))
     await waitFor(() => expect(simulationApi.tidyStudy).toHaveBeenCalledWith('st'))
     await waitFor(() => expect(screen.getByText(/중간 파일 12개 · 3.0MB/)).toBeDefined())
+  })
+
+  it('비교 표는 내려받지 않고 클립보드로 — 탭으로 갈라 엑셀에 그대로 붙는다(사내 DRM)', async () => {
+    clipboard.copied.length = 0
+    vi.mocked(simulationApi.studyTable).mockReset().mockResolvedValue({
+      name: '브래킷',
+      head: ['점', '두께', '1차 모드 (Hz)'],
+      rows: [
+        ['1', '2', '812.4'],
+        ['2', '4', '1,203'],
+      ],
+    })
+    show()
+    await userEvent.click(await screen.findByRole('button', { name: /표 복사/ }))
+    await waitFor(() => expect(clipboard.copied).toHaveLength(1))
+    expect(clipboard.copied[0]).toBe('점\t두께\t1차 모드 (Hz)\n1\t2\t812.4\n2\t4\t1,203')
+    expect(await screen.findByText(/설계점 2개 · 열 3개를 복사했습니다/)).toBeDefined()
   })
 
   it('DOE 를 지우기 전에 무엇이 사라지는지 말하고, 지우면 목록으로 간다', async () => {

@@ -216,16 +216,22 @@ def test_게시해야_남의_Claude_가_보고_고치지는_못한다(
     job_id = made["created"][0]
 
     assert "SIMULATIONS" in theirs.refused(server.job_get, job_id)
-    assert theirs.call(server.jobs_list, scope="published")["items"] == [] or job_id not in {
-        one["id"] for one in theirs.call(server.jobs_list, scope="published")["items"]
+    # 상태로 거르면 설계점까지 낱개로 편다 — 이 작업은 DOE 설계점이다.
+    assert job_id not in {
+        one.get("id")
+        for one in theirs.call(server.jobs_list, scope="published", status="done")["items"]
     }
 
     published = mine.call(server.job_publish, job_id)
     assert published["published"] is True
     assert theirs.call(server.job_result, job_id)["recipe"] == "modal"
     assert job_id in {
-        one["id"] for one in theirs.call(server.jobs_list, scope="published")["items"]
+        one.get("id")
+        for one in theirs.call(server.jobs_list, scope="published", status="done")["items"]
     }
+    # 상태 없이는 DOE 한 줄로 — 그 설계점은 DOE 줄의 study_id 로 찾는다.
+    rows = theirs.call(server.jobs_list, scope="published")["items"]
+    assert made["study_id"] in {one.get("study_id") for one in rows if one["kind"] == "doe"}
     # 남의 게시 결과는 읽기만 — 서버의 말이 그대로 온다.
     assert theirs.refused(server.job_retry, job_id)
     assert theirs.refused(server.job_publish, job_id, unpublish=True)
@@ -272,4 +278,4 @@ def test_토큰이_거절되면_게이트웨이가_다시_받는_신호로_실�
     stale = Bot(f"{security.pat_prefix()}revoked")
     with pytest.raises(server.BackendUnauthorized) as caught:
         asyncio.run(server.jobs_list(stale.ctx))
-    assert str(caught.value).startswith("GET /api/simulations → HTTP 401: ")
+    assert str(caught.value).startswith("GET /api/simulations/items → HTTP 401: ")

@@ -58,11 +58,17 @@ def export_mode(
     workdir: Path,
     *,
     thumbnail: bool = True,
+    result_set: int | None = None,
 ) -> dict[str, Any]:
-    """모드 하나의 VTP(+PNG)를 만들고 파일 이름과 최대 변위를 돌려준다."""
+    """모드 하나의 VTP(+PNG)를 만들고 파일 이름과 최대 변위를 돌려준다.
+
+    `mode` 가 파일 이름(`mode_NN`)이고, 변위는 결과 단계 `result_set` 에서 읽는다(비면
+    `mode` — 모달은 단계가 곧 모드다). 정적은 파일 이름은 1 로 두고 **마지막 단계**를
+    그린다(`static._draw`).
+    """
     import numpy as np
 
-    surface = _surface_with_displacement(model, skin_mesh, mode)
+    surface = _surface_with_displacement(model, skin_mesh, result_set or mode)
     parts = _mark_parts(surface, skin_mesh, workdir)
     magnitude = surface.point_data["magnitude"]
     max_displacement = float(np.max(magnitude)) if len(magnitude) else 0.0

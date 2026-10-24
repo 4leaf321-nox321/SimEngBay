@@ -1363,6 +1363,11 @@ def test_정적_DOE_비교에_반력과_측정점이_실린다(client: TestClien
     assert len(rows) == 1 + len(body["points"])
     assert "반력 당기는 끝 Fx (N)" in head
     assert "측정점 이음 입구 위판 X (mm)" in head
+    # **화면이 복사하는 표도 같은 머리 · 같은 줄이다**(사내 DRM — 파일 대신 클립보드).
+    table = client.get(
+        f"/api/simulations/studies/{study_id}/table", headers=member.headers
+    ).json()
+    assert table["head"] == head and table["rows"] == rows[1:]
     assert "상대 변위 이음 입구 위판 - 이음 입구 아래판 X (mm)" in head
     column = head.index("최대 변형 (mm)")
     line = next(one for one in rows[1:] if one[-1] == first["simulation_id"])

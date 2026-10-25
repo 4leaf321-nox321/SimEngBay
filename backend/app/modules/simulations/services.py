@@ -1635,7 +1635,7 @@ def import_doe(
     로그에서 찾게 하지 않는다.
     """
     doe = _read_doe(path_text)
-    spec = _parsed_spec(spec_raw)
+    spec_raw, spec = _with_cad_modes(doe, spec_raw)
     wanted = set(numbers) if numbers else None
     chosen = [one for one in doe.points if wanted is None or one.number in wanted]
     if not chosen:
@@ -1761,7 +1761,48 @@ def import_doe(
                     "superseded_by": str(simulation.id),
                 }
             db.commit()
-    return DoeImportOut(study_id=doe.study_id, name=doe.name, created=created, skipped=skipped)
+    return DoeImportOut(
+        study_id=doe.study_id,
+        name=doe.name,
+        created=created,
+        skipped=skipped,
+        notes=_import_notes(doe, spec),
+    )
+
+
+def _with_cad_modes(
+    doe: DoeFolder, spec_raw: dict[str, Any]
+) -> tuple[dict[str, Any], ModalSpec | StaticSpec | HarmonicSpec]:
+    """**모드 수를 안 줬으면 CAD 가 적은 값**(없으면 스펙 기본 10) — 요소 크기 · 큰 변형처럼.
+
+    화면은 그 값을 칸에 미리 채워 늘 보낸다. MCP 처럼 비워 보내는 쪽이 이 길을 탄다 — 전에는
+    비우면 10 이 들어가 CAD 의 6 과 갈렸다(2026-10-24 E2E). **줬는지는 받은 글자에서 본다**
+    (`model_fields_set`) — 10 을 일부러 준 것과 안 준 것은 다르다.
+    """
+    spec = _parsed_spec(spec_raw)
+    if "modes" in type(spec).model_fields and "modes" not in spec.model_fields_set:
+        suggested = _doe_analysis(doe).modes
+        if suggested:
+            spec_raw = {**spec_raw, "modes": suggested}
+            spec = _parsed_spec(spec_raw)
+    return spec_raw, spec
+
+
+def _import_notes(doe: DoeFolder, spec: ModalSpec | StaticSpec | HarmonicSpec) -> list[str]:
+    """가져오면서 **사람이 알아야 할 것** — 막지는 않는다.
+
+    DOE 비교는 기준점의 앞 `MAX_TRACKS` 개 모드를 점마다 모양으로 이어 견준다. 구한 모드가 그
+    수뿐이면 치수에 따라 모드가 위로 밀려나 선이 끊긴다(실측 2026-10-25: 외팔보 두께 x 폭 20점,
+    6개만 구해 폭 방향 2차 굽힘이 14점에서 끊겼다).
+    """
+    compared = study_analysis.MAX_TRACKS
+    if isinstance(spec, ModalSpec) and not doe.single and spec.modes <= compared:
+        return [
+            f"모드를 {spec.modes}개만 구합니다 — DOE 비교는 기준점의 앞 {compared}개 모드를 "
+            f"점마다 모양으로 이어 견주는데, 구한 수가 그만큼뿐이면 치수에 따라 모드가 위로 "
+            f"밀려나 끊길 수 있습니다. {COMPARE_MODES}개를 권합니다."
+        ]
+    return []
 
 
 # --- 설계점 비교 -----------------------------------------------------------------

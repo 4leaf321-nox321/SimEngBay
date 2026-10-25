@@ -105,7 +105,10 @@ class ModalSpec(BaseModel):
     `constraints` 를 쓴다. `spec` 은 「내가 고른 영역만 완전 고정으로」 다."""
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     modes: int = Field(default=10, ge=1, le=100)
-    """찾을 **탄성** 모드 수. 강체 모드는 여기 세지 않는다 — 실행기가 6개를 더해 찾는다."""
+    """찾을 **탄성** 모드 수. 강체 모드는 여기 세지 않는다 — 실행기가 6개를 더해 찾는다.
+
+    CAD 폴더(DOE)를 가져올 때 **비워 보내면 CAD 가 적은 값**이 들어간다
+    (`services._with_cad_modes`) — 10 은 CAD 도 적지 않았을 때다."""
     constraints: list[Constraint] = Field(default_factory=list)
 
     @model_validator(mode="after")

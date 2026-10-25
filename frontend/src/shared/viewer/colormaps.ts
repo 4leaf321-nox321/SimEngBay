@@ -14,6 +14,13 @@
  *
  * **vtk.js 를 부르지 않는다** — 고르는 칸(여러 개 보기의 막대)이 이것을 쓸 때 vtk.js 덩어리가
  * 따라오면 안 된다(`MeshViewer` 만 vtk.js 를, 그것도 쓸 때만 받는다).
+ *
+ * ## DOE 그림도 같은 목록에서 고른다(2026-10-25)
+ *
+ * 다변수 탭의 색 막대(3D 산점도 · 등고선 · 평행 좌표 · 상관)도 이 목록을 plotly 의 colorscale 로
+ * 옮겨 쓴다(`plotlyScale`). **고른 것은 따로 기억한다**(`colormapChoice`) — 3D 는 변위라 Ansys
+ * 무지개가 기본이고, DOE 그림은 값의 크기라 밝기가 한 방향으로 오르는 Viridis 가 기본이다. 한
+ * 칸을 바꿨다고 다른 화면의 색이 바뀌면 사람은 데이터가 바뀐 것으로 읽는다.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -191,54 +198,84 @@ export function colormapOf(key: string | null | undefined): Colormap {
   return COLORMAPS.find((one) => one.key === key) ?? COLORMAPS[0]
 }
 
+function rgbOf([, r, g, b]: ColorStop): string {
+  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`
+}
+
 /** 범례 막대의 CSS 그라디언트 — 3D 와 같은 마디로 그린다. */
 export function gradientOf(map: Colormap): string {
-  const stops = map.stops.map(
-    ([at, r, g, b]) =>
-      `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}) ${(at * 100).toFixed(1)}%`,
-  )
+  const stops = map.stops.map((stop) => `${rgbOf(stop)} ${(stop[0] * 100).toFixed(1)}%`)
   return `linear-gradient(to right, ${stops.join(', ')})`
 }
 
-// --- 고른 색 — 모든 뷰어가 함께 본다 -------------------------------------------------
+/** plotly 의 `colorscale` — 같은 마디를 `[자리, 'rgb(…)']` 로. */
+export function plotlyScale(map: Colormap): [number, string][] {
+  return map.stops.map((stop) => [stop[0], rgbOf(stop)])
+}
 
-const STORAGE_KEY = `${STORAGE_PREFIX}.viewer.colormap`
+// --- 고른 색 — 같은 자리를 보는 칸이 모두 따르고, 브라우저가 기억한다 ----------------------
 
-function readStored(): string {
-  try {
-    return colormapOf(window.localStorage.getItem(STORAGE_KEY)).key
-  } catch {
-    // 사생활 보호 창이나 저장을 막은 브라우저 — 기본으로 그린다.
-    return DEFAULT_COLORMAP
+/** 고른 색 지도 하나. 3D 뷰어 · DOE 그림이 저마다 하나씩 갖는다. */
+export interface ColormapChoice {
+  fallback: string
+  current: () => string
+  set: (key: string) => void
+  subscribe: (listener: () => void) => () => void
+}
+
+/** `name` 은 저장 열쇠의 꼬리, `fallback` 은 처음 · 모르는 값(지운 색 · 손댄 저장값)일 때의 색. */
+export function colormapChoice(name: string, fallback: string): ColormapChoice {
+  const storageKey = `${STORAGE_PREFIX}.${name}`
+  const known = (key: string | null) => (COLORMAPS.some((one) => one.key === key) ? (key as string) : fallback)
+  let chosen: string | null = null
+  const listeners = new Set<() => void>()
+
+  function current(): string {
+    if (chosen === null) {
+      try {
+        chosen = known(window.localStorage.getItem(storageKey))
+      } catch {
+        // 사생활 보호 창이나 저장을 막은 브라우저 — 기본으로 그린다.
+        chosen = fallback
+      }
+    }
+    return chosen
+  }
+
+  return {
+    fallback,
+    current,
+    set(key) {
+      chosen = known(key)
+      try {
+        window.localStorage.setItem(storageKey, chosen)
+      } catch {
+        // 위와 같다 — 이 창에서만 바뀐다.
+      }
+      for (const listener of listeners) listener()
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
   }
 }
 
-let chosen: string | null = null
-const listeners = new Set<() => void>()
-
-function current(): string {
-  chosen ??= readStored()
-  return chosen
+/** 그 자리에서 지금 고른 색 지도. 어디서 바꿔도 같은 자리를 보는 칸이 다시 칠한다. */
+export function useChosenColormap(choice: ColormapChoice): Colormap {
+  return colormapOf(useSyncExternalStore(choice.subscribe, choice.current, () => choice.fallback))
 }
+
+/** 3D 뷰어의 색 — 모든 뷰어가 함께 본다(하나씩 크게 · 여러 개 · 정적). */
+export const VIEWER_COLORMAP = colormapChoice('viewer.colormap', DEFAULT_COLORMAP)
 
 export function setColormap(key: string): void {
-  chosen = colormapOf(key).key
-  try {
-    window.localStorage.setItem(STORAGE_KEY, chosen)
-  } catch {
-    // 위와 같다 — 이 창에서만 바뀐다.
-  }
-  for (const listener of listeners) listener()
+  VIEWER_COLORMAP.set(key)
 }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
-}
-
-/** 지금 고른 색 지도. 어디서 바꿔도 모든 뷰어가 다시 칠한다. */
+/** 지금 고른 3D 색 지도. 어디서 바꿔도 모든 뷰어가 다시 칠한다. */
 export function useColormap(): Colormap {
-  return colormapOf(useSyncExternalStore(subscribe, current, () => DEFAULT_COLORMAP))
+  return useChosenColormap(VIEWER_COLORMAP)
 }

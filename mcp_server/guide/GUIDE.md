@@ -85,7 +85,7 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 | `solver` | `calculix` | 조건이 CalculiX 에서 거절되면 `ansys` |
 | `mesh.element_size_mm` | CAD 값(「전체」 메시 힌트, 없으면 CompCore 의 제안값) | **비워 둔다** — 사람이 크기를 정해 달라고 할 때만. 주면 CAD 의 전역 크기를 덮는다(파트 · 면 크기는 CAD 그대로) |
 | `mesh.order` | `quadratic` | 거의 안 바꾼다 |
-| `modes` | 10 | 모달 · 조화 — 볼 탄성 모드 수(강체 6개는 따로 찾는다) |
+| `modes` | CAD 값(없으면 10) | 모달 · 조화 — 볼 탄성 모드 수(강체 6개는 따로 찾는다). DOE 는 **비교하는 6개보다 넉넉히**(10 권장) — 6개 이하면 치수에 따라 모드가 밀려나 비교 선이 끊긴다 |
 | `large_deflection` | CAD 값 | 정적 — 변형이 커서 모양이 바뀔 때(느리다) |
 | `frequency_range_hz` · `intervals` · `damping_ratio` | 0~2000 · 10 · 0.02 | 조화 — 감쇠가 없으면 거절 |
 
@@ -94,7 +94,8 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 
 ### 걸고 기다리기
 
-- `jobs_create(spec, study_id=…, numbers=[…])` — `created`(작업 id) · `skipped`(못 건 점과 까닭).
+- `jobs_create(spec, study_id=…, numbers=[…])` — `created`(작업 id) · `skipped`(못 건 점과 까닭) ·
+  `notes`(막지는 않지만 알아야 할 것 — 사람에게 그대로 전한다).
   `numbers` 를 비우면 걸 수 있는 전부. 이미 가져온 점은 다시 걸지 않는다(같은 해석을 두 번 안
   돌린다) — 거절 문구가 누구 작업인지 말한다.
 - `job_get(job_id, wait_seconds=25)` — 상태: `queued` → `fetching` → `modeling` → `solving` →

@@ -51,6 +51,7 @@ import { buildSpec, HARMONIC_DEFAULTS, isOrder, isRecipe, specProblem } from '@/
 import type { HarmonicInput, MeshOrder, RecipeName } from '@/modules/simulations/spec'
 import { HarmonicFields, MeshFields, RecipeSelect } from '@/modules/simulations/SpecFields'
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
+import { MAX_TRACKS } from '@/modules/simulations/studyTable'
 import type { Solver } from '@/modules/simulations/SolverSelect'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
@@ -824,6 +825,14 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                       {preview.suggested_modes ? (
                         <p className="text-muted-foreground text-xs">CAD 가 적은 값 {preview.suggested_modes}</p>
                       ) : null}
+                      {/* **DOE 비교의 여유** — 비교는 기준점의 앞 6개 모드를 점마다 모양으로 잇는다. 구한 수가
+                          그만큼뿐이면 치수에 따라 모드가 위로 밀려나 끊긴다(실측 2026-10-25). 막지는 않는다. */}
+                      {recipe === 'modal' && source === 'folder' && checked.size > 1 && Number(modes) <= MAX_TRACKS && (
+                        <p className="text-xs text-amber-700 dark:text-amber-400">
+                          DOE 비교는 앞 {MAX_TRACKS}개 모드를 점마다 모양으로 잇습니다 — {modes}개만 구하면 치수에 따라
+                          모드가 위로 밀려나 끊길 수 있습니다. 10개를 권합니다.
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}

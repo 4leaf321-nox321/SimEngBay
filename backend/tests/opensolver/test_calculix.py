@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from app.core.calculix import tools
+from app.core.modes import signature
 from app.core.run import run_stage
 from app.core.spec import parse_spec
 from app.core.stages import STAGES, StageFailure
@@ -115,6 +116,11 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     elastic = {one["number"] for one in result["modes"] if not one["rigid_body"]}
     assert {one["mode"] for one in result["probes"]} == elastic
     assert all(len(one["vector"]) == 3 for one in result["probes"])
+    # **모드 지문** — 설계점 사이에서 같은 모드를 잇는 열쇠. 전에는 Ansys 쪽에만 있어 CalculiX
+    # DOE 의 「모드 지도」 가 비었다. 규칙은 두 솔버가 같다(`core/modes/signature.py`).
+    signs = [one["signature"] for one in result["modes"] if not one["rigid_body"]]
+    assert all(len(one) == 3 * signature.GRID**3 for one in signs)
+    assert all(sum(one * one for one in sign) == pytest.approx(1, abs=1e-4) for sign in signs)
 
     # **그림은 파트마다 나뉜다** — 화면이 파트를 보이고 숨긴다. 이름은 모델링이 짝지은 것이고,
     # 그림의 셀 배열 `part` 가 그 순서의 번호다(두 바디가 맞닿은 면은 둘 다에 한 번씩).

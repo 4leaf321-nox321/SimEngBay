@@ -90,6 +90,38 @@ describe('StudyExplorer', () => {
     expect(drawn.at(-1)!.data[0].type).toBe('splom')
   })
 
+  it('색 막대의 색을 고른다 — 값 그림과 상관은 따로 기억하고, 주효과에는 고르기가 없다', () => {
+    render(<StudyExplorer study={study(FULL)} />)
+    const scaleOf = () =>
+      (drawn.at(-1)!.data[0].marker ?? drawn.at(-1)!.data[0]) as { colorscale?: [number, string][] }
+    // 값의 크기는 기본 Viridis — 밝기가 한 방향으로 오른다(어두운 보라 → 노랑).
+    expect(scaleOf().colorscale?.[0]).toEqual([0, 'rgb(68, 1, 84)'])
+
+    fireEvent.change(screen.getByLabelText('색 지도'), { target: { value: 'ansys' } })
+    expect(scaleOf().colorscale?.[0]).toEqual([0, 'rgb(0, 0, 255)'])
+    expect(scaleOf().colorscale?.at(-1)).toEqual([1, 'rgb(255, 0, 0)'])
+    // 다른 값 그림도 같은 색을 쓴다.
+    fireEvent.click(screen.getByRole('tab', { name: '평행 좌표' }))
+    expect((drawn.at(-1)!.data[0].line as { colorscale: unknown[] }).colorscale[0]).toEqual([
+      0,
+      'rgb(0, 0, 255)',
+    ])
+
+    // 상관(−1 ~ 1)은 무지개가 넘어오지 않는다 — 기본 파랑-빨강, 0 이 회색 가운데.
+    fireEvent.click(screen.getByRole('tab', { name: '상관' }))
+    const heat = drawn.at(-1)!.data[0] as { colorscale: [number, string][]; reversescale?: boolean }
+    expect(heat.colorscale[0]).toEqual([0, 'rgb(59, 76, 192)'])
+    expect(heat.colorscale.find(([at]) => at === 0.5)).toEqual([0.5, 'rgb(221, 221, 221)'])
+    expect(screen.getByLabelText<HTMLSelectElement>('색 지도').value).toBe('coolwarm')
+
+    fireEvent.click(screen.getByRole('tab', { name: '주효과' }))
+    expect(screen.queryByLabelText('색 지도')).toBeNull()
+
+    // 다음 시험이 기본에서 시작하게 되돌린다(브라우저가 기억하므로).
+    fireEvent.click(screen.getByRole('tab', { name: '3D 산점도' }))
+    fireEvent.change(screen.getByLabelText('색 지도'), { target: { value: 'viridis' } })
+  })
+
   it('끝난 점이 셋 미만이면 그리지 않고 그렇다고 말한다', () => {
     render(<StudyExplorer study={study(FULL.slice(0, 2))} />)
     expect(screen.queryByTestId('plot')).toBeNull()

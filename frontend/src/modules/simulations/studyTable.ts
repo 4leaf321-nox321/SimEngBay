@@ -28,8 +28,8 @@ export interface Column {
   value: (point: StudyPoint) => number | string | null
 }
 
-/** 모달에서 추적한 모드 몇 개까지 열로 둘지 — 비교 탭의 모드 지도와 같다. */
-const MAX_TRACKS = 6
+/** 모달에서 추적한 모드 몇 개까지 열로 둘지 — 비교 탭의 모드 지도와 같다(서버 `analysis.MAX_TRACKS`). */
+export const MAX_TRACKS = 6
 
 function frequency(point: StudyPoint, track: ModeTrack): number | null {
   const number = (track.numbers as Record<string, number>)[String(point.number)]
@@ -268,4 +268,242 @@ export function gridOf(rows: StudyPoint[], x: Column, y: Column, z: Column): Gri
     grid.push(line)
   }
   return { xs: sortedX, ys: sortedY, z: grid }
+}
+
+/**
+ * 변수 하나가 결과를 얼마나 움직이나 — **주효과의 폭**(수준별 평균의 최대 - 최소)을 결과의 평균에
+ * 견준 %. 서버 `analysis.effect` 와 같은 셈이다(MCP `study_analyze` 가 같은 순위를 말한다).
+ *
+ * 다른 변수는 섞인 채로 평균한다 — 전 조합 설계가 아니면(무작위 · LHS) 다른 변수의 효과가 섞일 수
+ * 있어 상관계수를 함께 낸다.
+ */
+export interface Sensitivity {
+  factor: Column
+  /** 수준이 하나뿐이거나 평균이 0 이면 null — 「영향 없음」 과 「말할 수 없음」 은 다르다. */
+  spreadPct: number | null
+  correlation: number | null
+}
+
+export function sensitivityOf(rows: StudyPoint[], factors: Column[], result: Column): Sensitivity[] {
+  const every = rows.map((row) => numberOf(result, row)).filter((one): one is number => one != null)
+  const middle = every.length ? every.reduce((sum, one) => sum + one, 0) / every.length : 0
+  const found = factors.map((factor) => {
+    const means = mainEffect(rows, factor, result).map((one) => one.mean)
+    const spread = means.length > 1 ? Math.max(...means) - Math.min(...means) : null
+    return {
+      factor,
+      spreadPct: spread != null && middle ? (spread / Math.abs(middle)) * 100 : null,
+      correlation: factor.numeric ? correlation(rows, factor, result) : null,
+    }
+  })
+  // 폭이 큰 차례 — 말할 수 없는 변수는 뒤로(서버와 같은 차례).
+  return found.sort((a, b) => Math.abs(b.spreadPct ?? -1) - Math.abs(a.spreadPct ?? -1))
+}
+
+/** 결과 하나의 최소 · 최대와 **그 점** — 「얼마에서 얼마」 만으로는 어느 설계가 그랬는지 모른다. */
+export interface Span {
+  min: number
+  max: number
+  minPoint: number
+  maxPoint: number
+}
+
+export function spanOf(rows: StudyPoint[], column: Column): Span | null {
+  let span: Span | null = null
+  for (const row of rows) {
+    const value = numberOf(column, row)
+    if (value == null) continue
+    if (span === null) {
+      span = { min: value, max: value, minPoint: row.number, maxPoint: row.number }
+      continue
+    }
+    // 같으면 앞의 점 — 서버의 min · max 와 같다.
+    if (value < span.min) span = { ...span, min: value, minPoint: row.number }
+    if (value > span.max) span = { ...span, max: value, maxPoint: row.number }
+  }
+  return span
+}
+
+// --- 최적점 찾기 ---------------------------------------------------------------------------
+
+export type Goal = 'min' | 'max'
+export type Op = '>=' | '<=' | '='
+
+/** 목표 하나 — 어느 결과를 작게(`min`) · 크게(`max`). */
+export interface Objective {
+  column: string
+  goal: Goal
+}
+
+/** 조건 한 줄 — 「1차 모드 ≥ 300」. 값이 비었으면 아직 걸지 않은 것이다. */
+export interface Condition {
+  column: string
+  op: Op
+  value: string
+}
+
+export interface Choice {
+  /** 조건을 모두 만족한 끝난 점. */
+  feasible: StudyPoint[]
+  /** 목표 하나면 목표 차례(좋은 것 먼저), 둘이면 파레토 점을 첫 목표 차례로. */
+  ranked: StudyPoint[]
+  /** 표에 붙일 표시 — 목표 하나의 맨 앞은 「최적」, 목표 둘의 파레토는 「후보」. */
+  marks: Map<number, 'best' | 'pareto'>
+  /** 값이 비어 아직 걸지 않은 조건 수 — 「왜 안 걸러지지」 에 답한다. */
+  idle: number
+}
+
+function holds(condition: Condition, column: Column, row: StudyPoint): boolean {
+  const found = column.value(row)
+  const raw = condition.value.trim()
+  const target = Number(raw)
+  if (condition.op === '=') {
+    // 숫자면 숫자로(「3」 과 「3.0」 은 같다), 아니면 글자 그대로(재료 이름).
+    return typeof found === 'number' && raw !== '' && Number.isFinite(target)
+      ? found === target
+      : String(found ?? '') === raw
+  }
+  if (typeof found !== 'number' || !Number.isFinite(target)) return false
+  return condition.op === '>=' ? found >= target : found <= target
+}
+
+/** `a` 가 `b` 를 앞서나 — 모든 목표에서 같거나 낫고, 하나라도 낫다. */
+function dominates(a: number[], b: number[], goals: Goal[]): boolean {
+  let better = false
+  for (let index = 0; index < goals.length; index += 1) {
+    const [x, y] = goals[index] === 'max' ? [a[index], b[index]] : [b[index], a[index]]
+    if (x < y) return false
+    if (x > y) better = true
+  }
+  return better
+}
+
+/**
+ * **조건을 만족한 점 중에서 고른다.** 서버 `analysis.analyze` 의 `choice` 와 같은 규칙이고(MCP 가
+ * 같은 답을 낸다), 목표를 둘 주면 **파레토** — 두 목표 모두에서 더 나은 점이 없는 점들 — 를 낸다.
+ * 무게와 강성처럼 서로 맞바꾸는 두 값은 「가장 좋은 하나」 가 없고, 그 사이에서 고르는 것은 사람의
+ * 몫이다.
+ */
+export function chooseFrom(
+  rows: StudyPoint[],
+  columns: Column[],
+  objectives: Objective[],
+  where: Condition[],
+): Choice {
+  const byKey = new Map(columns.map((one) => [one.key, one]))
+  const active = where.filter((one) => one.value.trim() !== '' && byKey.has(one.column))
+  const feasible = rows.filter((row) =>
+    active.every((one) => holds(one, byKey.get(one.column) as Column, row)),
+  )
+  const aims = objectives
+    .map((one) => ({ ...one, found: byKey.get(one.column) }))
+    .filter((one): one is Objective & { found: Column } => one.found != null)
+  const marks = new Map<number, 'best' | 'pareto'>()
+  const scored = feasible
+    .map((row) => ({ row, values: aims.map((one) => numberOf(one.found, row)) }))
+    .filter((one): one is { row: StudyPoint; values: number[] } => one.values.every((v) => v != null))
+  const first = (a: { values: number[] }, b: { values: number[] }) =>
+    aims[0].goal === 'max' ? b.values[0] - a.values[0] : a.values[0] - b.values[0]
+
+  let ranked: StudyPoint[] = feasible
+  if (aims.length === 1) {
+    ranked = [...scored].sort(first).map((one) => one.row)
+    if (ranked.length) marks.set(ranked[0].number, 'best')
+  } else if (aims.length >= 2) {
+    const goals = aims.map((one) => one.goal)
+    const front = scored.filter(
+      (one) => !scored.some((other) => other !== one && dominates(other.values, one.values, goals)),
+    )
+    ranked = [...front].sort(first).map((one) => one.row)
+    for (const one of ranked) marks.set(one.number, 'pareto')
+  }
+  return { feasible, ranked, marks, idle: where.length - active.length }
+}
+
+/** 설계점의 이름 — 「p0002」. */
+export function caseName(number: number): string {
+  return `p${String(number).padStart(4, '0')}`
+}
+
+/**
+ * 가로축이 설계 변수일 때 **눈금 아래에 적을 설계점** — 값마다 「p0002」, 같은 값에 점이 여럿이면
+ * (다른 변수가 따로 움직였다) 「p0002 외 3」. 숫자 값만 — 재료 같은 고르는 값은 축이 아니다.
+ */
+export function caseTicks(points: StudyPoint[], factor: string): { value: number; label: string }[] {
+  const byValue = new Map<number, number[]>()
+  for (const point of points) {
+    const value = point.params[factor]
+    if (typeof value !== 'number') continue
+    byValue.set(value, [...(byValue.get(value) ?? []), point.number])
+  }
+  return [...byValue.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([value, numbers]) => {
+      const sorted = [...numbers].sort((a, b) => a - b)
+      return {
+        value,
+        label: caseName(sorted[0]) + (sorted.length > 1 ? ` 외 ${sorted.length - 1}` : ''),
+      }
+    })
+}
+
+// --- 가로축과 단면 -------------------------------------------------------------------------
+
+/**
+ * 가로축 말고 **나머지 변수의 값이 같은 점들**(단면) — 그 안에서만 가로축을 따라 이을 수 있다.
+ *
+ * 변수가 여럿인 DOE 에서 가로축 값 순서로 점을 다 이으면, 같은 가로축 값에 다른 설계(폭 10 · 20 ·
+ * 30 …)가 세로로 쌓여 선이 지그재그로 서로 다른 설계를 잇는다 — 없는 그림보다 나쁘다. 가로축 값이
+ * 둘 이상인 묶음만 낸다(점 하나짜리 단면은 이을 것이 없다 — 무작위 · LHS 설계는 대개 이렇다).
+ */
+export interface Slice {
+  key: string
+  /** 「폭 = 20」 · 「폭 = 20 · 높이 = 5」 */
+  label: string
+  numbers: Set<number>
+}
+
+export function slicesOf(points: StudyPoint[], factors: string[], x: string): Slice[] {
+  const others = factors.filter((one) => one !== x)
+  if (others.length === 0) return []
+  const groups = new Map<string, { values: (number | string | null)[]; numbers: number[]; xs: Set<number> }>()
+  for (const point of points) {
+    const across = point.params[x]
+    if (typeof across !== 'number') continue
+    const values = others.map((name) => point.params[name] ?? null)
+    const key = JSON.stringify(values)
+    const group = groups.get(key) ?? { values, numbers: [], xs: new Set<number>() }
+    group.numbers.push(point.number)
+    group.xs.add(across)
+    groups.set(key, group)
+  }
+  const order = (a: number | string | null, b: number | string | null) =>
+    typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b))
+  return [...groups.entries()]
+    .filter(([, group]) => group.xs.size >= 2)
+    .sort(([, a], [, b]) => {
+      for (let index = 0; index < a.values.length; index += 1) {
+        const found = order(a.values[index], b.values[index])
+        if (found !== 0) return found
+      }
+      return 0
+    })
+    .map(([key, group]) => ({
+      key,
+      label: others.map((name, index) => `${name} = ${group.values[index] ?? '—'}`).join(' · '),
+      numbers: new Set(group.numbers),
+    }))
+}
+
+/**
+ * 처음 가로축 — **그 결과를 가장 크게 움직이는 변수.** 변수 순서(CompCore 가 보낸 차례)대로 고르면
+ * 1차를 거의 안 움직이는 변수가 먼저 보이고, 그 그림은 「변화가 없다」 로 읽힌다. 말할 수 없으면 null.
+ */
+export function leadingFactor(study: Study, result: string): string | null {
+  const columns = columnsOf(study)
+  const factors = columns.filter((one) => one.kind === 'factor')
+  const target = columns.find((one) => one.key === result) ?? columns.find((one) => one.kind === 'result')
+  if (!target || factors.length < 2) return null
+  const top = sensitivityOf(rowsOf(study), factors, target)[0]
+  return top?.spreadPct != null ? top.factor.label : null
 }

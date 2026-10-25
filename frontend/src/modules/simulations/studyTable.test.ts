@@ -5,12 +5,18 @@ import { describe, expect, it } from 'vitest'
 
 import type { Study, StudyPoint } from '@/modules/simulations/api'
 import {
+  caseTicks,
+  chooseFrom,
   columnsOf,
   correlation,
   gridOf,
+  leadingFactor,
   mainEffect,
   pearson,
   rowsOf,
+  sensitivityOf,
+  slicesOf,
+  spanOf,
 } from '@/modules/simulations/studyTable'
 
 function point(number: number, params: Record<string, number | string>, extra: Partial<StudyPoint> = {}): StudyPoint {
@@ -174,5 +180,133 @@ describe('gridOf', () => {
     const one = study(full.slice(0, 3))
     const columns = columnsOf(one)
     expect(gridOf(rowsOf(one), columns[0], columns[1], columns.find((c) => c.key === 'max_mm')!)).toBeNull()
+  })
+})
+
+/**
+ * 전 조합 2 x 2 — 두께가 변형을 크게, 폭은 작게 움직인다. 질량은 둘 다에 비례.
+ *   p1 두께 2 폭 10 → 4.0 mm · 20 g      p2 두께 3 폭 10 → 2.0 mm · 30 g
+ *   p3 두께 2 폭 20 → 3.6 mm · 40 g      p4 두께 3 폭 20 → 1.6 mm · 60 g
+ */
+const GRID = study([
+  point(1, { 두께: 2, 폭: 10 }, { max_displacement_mm: 4.0, mass_kg: 0.02 }),
+  point(2, { 두께: 3, 폭: 10 }, { max_displacement_mm: 2.0, mass_kg: 0.03 }),
+  point(3, { 두께: 2, 폭: 20 }, { max_displacement_mm: 3.6, mass_kg: 0.04 }),
+  point(4, { 두께: 3, 폭: 20 }, { max_displacement_mm: 1.6, mass_kg: 0.06 }),
+])
+const COLUMNS = columnsOf(GRID)
+const column = (key: string) => COLUMNS.find((one) => one.key === key)!
+
+describe('sensitivityOf — 변수가 여럿일 때 요약의 영향 순위', () => {
+  it('주효과의 폭 ÷ 평균(%) 이 큰 차례 — 서버 analysis.effect 와 같은 셈', () => {
+    const factors = COLUMNS.filter((one) => one.kind === 'factor')
+    const ranked = sensitivityOf(rowsOf(GRID), factors, column('max_mm'))
+    expect(ranked.map((one) => one.factor.label)).toEqual(['두께', '폭'])
+    // 두께: 수준 평균 3.8 · 1.8 → 폭 2.0, 전체 평균 2.8 → 71.4%. 폭: 3.0 · 2.6 → 14.3%.
+    expect(ranked[0].spreadPct).toBeCloseTo(71.43, 1)
+    expect(ranked[1].spreadPct).toBeCloseTo(14.29, 1)
+    expect(ranked[0].correlation).toBeLessThan(-0.9) // 두꺼우면 덜 휜다
+  })
+
+  it('수준이 하나뿐인 변수는 말할 수 없다(0 이 아니다)', () => {
+    const one = study([point(1, { 두께: 2, 폭: 10 }), point(2, { 두께: 2, 폭: 20 })], {
+      factors: ['두께', '폭'],
+    })
+    const columns = columnsOf(one)
+    const ranked = sensitivityOf(
+      rowsOf(one),
+      columns.filter((c) => c.kind === 'factor'),
+      columns.find((c) => c.key === 'mass_kg')!,
+    )
+    expect(ranked.find((r) => r.factor.label === '두께')?.spreadPct).toBeNull()
+  })
+})
+
+describe('spanOf · caseTicks', () => {
+  it('최소 · 최대와 그 점', () => {
+    expect(spanOf(rowsOf(GRID), column('max_mm'))).toEqual({ min: 1.6, max: 4, minPoint: 4, maxPoint: 1 })
+  })
+
+  it('눈금 아래의 설계점 — 같은 값에 점이 여럿이면 「외 n」', () => {
+    expect(caseTicks(GRID.points, '두께')).toEqual([
+      { value: 2, label: 'p0001 외 1' },
+      { value: 3, label: 'p0002 외 1' },
+    ])
+    expect(caseTicks([GRID.points[0]], '두께')).toEqual([{ value: 2, label: 'p0001' }])
+  })
+})
+
+describe('chooseFrom — 최적점 찾기', () => {
+  const rows = rowsOf(GRID)
+
+  it('목표 하나 — 조건을 만족한 점 중 목표가 가장 좋은 점이 「최적」', () => {
+    // 질량(g) 50 이하에서 변형이 가장 작은 점 — p4(60 g)는 빠지고 p2.
+    const found = chooseFrom(rows, COLUMNS, [{ column: 'max_mm', goal: 'min' }], [
+      { column: 'mass_kg', op: '<=', value: '50' },
+    ])
+    expect(found.feasible.map((one) => one.number)).toEqual([1, 2, 3])
+    expect(found.ranked.map((one) => one.number)).toEqual([2, 3, 1])
+    expect([...found.marks]).toEqual([[2, 'best']])
+  })
+
+  it('목표 둘 — 서로 맞바꾸는 점(파레토)이 「후보」, 앞서는 점이 있으면 빠진다', () => {
+    // 변형 작게 · 질량 작게: p3(3.6 mm · 40 g)은 p2(2.0 mm · 30 g)에 진다.
+    const found = chooseFrom(
+      rows,
+      COLUMNS,
+      [
+        { column: 'max_mm', goal: 'min' },
+        { column: 'mass_kg', goal: 'min' },
+      ],
+      [],
+    )
+    expect(found.ranked.map((one) => one.number)).toEqual([4, 2, 1])
+    expect(found.marks.get(3)).toBeUndefined()
+    expect(found.marks.get(4)).toBe('pareto')
+  })
+
+  it('값이 빈 조건은 아직 걸지 않는다 — 그 수를 따로 말한다', () => {
+    const found = chooseFrom(rows, COLUMNS, [], [{ column: 'max_mm', op: '>=', value: ' ' }])
+    expect(found.feasible).toHaveLength(4)
+    expect(found.idle).toBe(1)
+    expect(found.marks.size).toBe(0)
+  })
+
+  it('「=」 는 숫자면 숫자로, 글자면 글자 그대로(재료)', () => {
+    expect(
+      chooseFrom(rows, COLUMNS, [], [{ column: 'factor:두께', op: '=', value: '3.0' }]).feasible.map(
+        (one) => one.number,
+      ),
+    ).toEqual([2, 4])
+    const byMaterial = study([point(1, { 재료: 'SS400' }), point(2, { 재료: 'AL6061' })], { factors: ['재료'] })
+    expect(
+      chooseFrom(rowsOf(byMaterial), columnsOf(byMaterial), [], [
+        { column: 'factor:재료', op: '=', value: 'AL6061' },
+      ]).feasible.map((one) => one.number),
+    ).toEqual([2])
+  })
+})
+
+describe('slicesOf · leadingFactor — 변수가 여럿일 때 어디까지 잇나', () => {
+  it('나머지 변수가 같은 점끼리만 묶는다 — 그 안에서만 가로축을 따라 잇는다', () => {
+    const found = slicesOf(GRID.points, GRID.factors, '두께')
+    expect(found.map((one) => [one.label, [...one.numbers]])).toEqual([
+      ['폭 = 10', [1, 2]],
+      ['폭 = 20', [3, 4]],
+    ])
+  })
+
+  it('묶이지 않으면(무작위 · LHS — 점마다 값이 다르다) 단면이 없다 · 변수가 하나면 단면도 없다', () => {
+    const scattered = [point(1, { 두께: 2, 폭: 11 }), point(2, { 두께: 3, 폭: 17 }), point(3, { 두께: 4, 폭: 13 })]
+    expect(slicesOf(scattered, ['두께', '폭'], '두께')).toEqual([])
+    expect(slicesOf(GRID.points, ['두께'], '두께')).toEqual([])
+  })
+
+  it('처음 가로축은 그 결과를 가장 크게 움직이는 변수 — 변수 차례가 아니다', () => {
+    // 변형은 두께가 71%, 폭이 14% 를 움직인다. 질량은 폭(20 → 50 g 평균)이 두께보다 크다.
+    const widthFirst = { ...GRID, factors: ['폭', '두께'] }
+    expect(leadingFactor(widthFirst, 'max_mm')).toBe('두께')
+    expect(leadingFactor(widthFirst, 'mass_kg')).toBe('폭')
+    expect(leadingFactor(study([point(1, { 두께: 2 })], { factors: ['두께'] }), 'max_mm')).toBeNull()
   })
 })

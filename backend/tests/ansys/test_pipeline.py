@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from app.core import executors
+from app.core.modes import signature
 from app.core.spec import RIGID_BODY_MODES, parse_spec
 from app.core.stages import STAGES, StageContext, StageFailure
 
@@ -121,6 +122,9 @@ def test_CAD_가_낸_STEP_이_끝까지_간다(name: str, workdir: Path) -> None
     assert elastic[0]["frequency_hz"] > 100
     assert all(one["frequency_hz"] < 1.0 for one in result["modes"] if one["rigid_body"])
     assert int(summary["nodes"]) > 0
+    # **모드 지문** — 설계점 사이에서 같은 모드를 잇는 열쇠. 칸 · 순서 · 정규화는 CalculiX 쪽과
+    # 같은 함수다(`core/modes/signature.py`) — 가장 가까운 절점만 numpy 로 찾는다.
+    assert all(len(one["signature"]) == 3 * signature.GRID**3 for one in elastic)
 
     # --- 모드 형상 (3단계) ---------------------------------------------------
     drawn = [one for one in elastic if one.get("vtp")]

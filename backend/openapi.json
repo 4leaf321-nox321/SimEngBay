@@ -6855,6 +6855,13 @@
             },
             "type": "array",
             "title": "Skipped"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
           }
         },
         "type": "object",

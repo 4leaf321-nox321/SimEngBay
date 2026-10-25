@@ -13,6 +13,9 @@
  *
  * 값은 서버가 **mm · MPa · N · Hz 로 맞춰** 보낸다(`app/core/values.py`) — 솔버마다 단위가 달라도
  * 여기서는 다시 옮기지 않는다.
+ *
+ * 설계 변수가 여럿이면 요약의 「끝 점 둘」 은 그 변수의 효과가 아니다 — 범위 · 그 점 · 영향 순위로
+ * 적는다(`StudySummary`). 고를 점은 「최적점 찾기」 가 짚는다(`StudyChoice`, 2026-10-25).
  */
 
 import { useMemo, useState } from 'react'
@@ -20,6 +23,10 @@ import { Link } from 'react-router-dom'
 
 import type { Study, StudyPoint } from '@/modules/simulations/api'
 import { magnitudeOf, shownForce, shownMass, shownValue } from '@/modules/simulations/format'
+import { AxisPicker, useAxis } from '@/modules/simulations/StudyAxis'
+import { ChoiceMark, ChoicePanel, useChoice } from '@/modules/simulations/StudyChoice'
+import { FactorSummary } from '@/modules/simulations/StudySummary'
+import { caseName, caseTicks } from '@/modules/simulations/studyTable'
 import { Chart, Spectrum } from '@/shared/charts'
 import type { SpectrumPoint } from '@/shared/charts'
 import { colorAt } from '@/shared/charts'
@@ -131,8 +138,10 @@ function change(first: number | null, last: number | null): string {
 
 export function StudyValues({ study }: { study: Study }) {
   const factors = study.factors
-  const [factor, setFactor] = useState<string | null>(null)
-  const x = factor ?? factors[0] ?? ''
+  // 처음 가로축은 최대 변형(조화는 봉우리 변위)을 가장 크게 움직이는 변수, 선은 나머지를 고정한
+  // 단면만(`StudyAxis`).
+  const axis = useAxis(study, study.recipe === 'harmonic' ? 'peak_mm' : 'max_mm')
+  const x = axis.x
 
   const points = useMemo(() => {
     const rows = [...study.points]
@@ -156,14 +165,14 @@ export function StudyValues({ study }: { study: Study }) {
 
   const plotted = useMemo<SpectrumPoint[]>(() => {
     const made: SpectrumPoint[] = []
-    for (const one of done) {
+    for (const one of done.filter(axis.shows)) {
       const value = metric?.pick(one) ?? null
       const across = one.params[x]
       if (value == null || typeof across !== 'number') continue
-      made.push({ key: String(one.number), x: across, y: value, label: `p${String(one.number).padStart(4, '0')}` })
+      made.push({ key: String(one.number), x: across, y: value, label: caseName(one.number) })
     }
     return made
-  }, [done, metric, x])
+  }, [done, metric, x, axis.shows])
 
   const bars = useMemo(
     () =>
@@ -172,6 +181,9 @@ export function StudyValues({ study }: { study: Study }) {
         : done.map((one) => ({ name: String(one.params[x] ?? '—'), [metric.label]: metric.pick(one) })),
     [numeric, done, metric, x],
   )
+
+  // 표의 「최적」 · 「후보」 는 최적점 찾기의 답이다 — 처음 모양은 최대 변형 작게 · 질량 작게.
+  const choice = useChoice(study)
 
   const first = done[0]
   const last = done[done.length - 1]
@@ -183,23 +195,7 @@ export function StudyValues({ study }: { study: Study }) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-4">
-        {factors.length > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground text-sm">가로축</span>
-            <Select value={x} onValueChange={setFactor}>
-              <SelectTrigger className="h-8 w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {factors.map((one) => (
-                  <SelectItem key={one} value={one}>
-                    {one}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
+        <AxisPicker study={study} axis={axis} />
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground text-sm">세로축</span>
           <Select value={metric.key} onValueChange={setChosen}>
@@ -217,7 +213,11 @@ export function StudyValues({ study }: { study: Study }) {
         </div>
       </div>
 
-      {/* 한 줄 요약 — **무엇을 얼마나 바꿨더니 무엇이 얼마나 변했나.** */}
+      {/* 한 줄 요약 — **무엇을 얼마나 바꿨더니 무엇이 얼마나 변했나.** 변수가 여럿이면 끝 점 둘이
+          그 변수의 효과가 아니다 — 범위 · 그 점 · 영향 순위로. */}
+      {factors.length > 1 ? (
+        <FactorSummary study={study} primary={metric.key} />
+      ) : (
       <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-md border p-4 text-sm sm:grid-cols-4">
         <div>
           <dt className="text-muted-foreground text-xs">설계점</dt>
@@ -250,6 +250,7 @@ export function StudyValues({ study }: { study: Study }) {
           </dd>
         </div>
       </dl>
+      )}
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium">
@@ -259,7 +260,7 @@ export function StudyValues({ study }: { study: Study }) {
           <Spectrum
             points={plotted}
             lines={
-              metric.scatterOnly || plotted.length < 2
+              metric.scatterOnly || plotted.length < 2 || !axis.connect
                 ? []
                 : [{ key: metric.key, label: metric.label, color: colorAt(0), points: plotted }]
             }
@@ -269,6 +270,9 @@ export function StudyValues({ study }: { study: Study }) {
             height={320}
             title={`${x} 대 ${metric.label}`}
             emptyText="아직 그릴 결과가 없습니다. 설계점이 끝나면 여기에 표시됩니다."
+            xTicks={caseTicks(done.filter(axis.shows), x)}
+            // 잇지 않으면 같은 가로축 값에 점이 쌓인다 — 눈금 이름 대신 점마다 이름.
+            pointLabels={!axis.connect}
           />
         ) : (
           // **잇지 않는다.** 선은 「그 중간이 있다」 는 말인데 재료에는 중간이 없다.
@@ -289,6 +293,9 @@ export function StudyValues({ study }: { study: Study }) {
           </p>
         )}
       </section>
+
+      {/* 최적점 찾기 — 표의 「최적」 · 「후보」 가 이 답이다. */}
+      <ChoicePanel model={choice} />
 
       {/* 설계점 × 값 — 눈으로 훑고 값을 집어 가는 자리. */}
       <section className="space-y-2">
@@ -311,11 +318,15 @@ export function StudyValues({ study }: { study: Study }) {
             </TableHeader>
             <TableBody>
               {points.map((point) => (
-                <TableRow key={point.simulation_id}>
+                <TableRow
+                  key={point.simulation_id}
+                  className={choice.outcome.marks.has(point.number) ? 'bg-emerald-500/5' : undefined}
+                >
                   <TableCell>
                     <Link to={`/simulations/${point.simulation_id}`} className="font-mono hover:underline">
-                      p{String(point.number).padStart(4, '0')}
+                      {caseName(point.number)}
                     </Link>
+                    <ChoiceMark mark={choice.outcome.marks.get(point.number)} />
                   </TableCell>
                   {factors.map((one) => (
                     <TableCell key={one} className="font-mono">

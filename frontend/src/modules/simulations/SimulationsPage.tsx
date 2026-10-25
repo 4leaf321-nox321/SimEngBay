@@ -297,6 +297,12 @@ function ItemList({ scope }: { scope: ListScope }) {
                     </ul>
                   </>
                 )}
+                {/* 막지는 않지만 알아야 할 것 — 모드를 비교하는 수 이하로만 구하면 끊길 수 있다 등. */}
+                {(imported.notes ?? []).map((note) => (
+                  <p key={note} className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                    {note}
+                  </p>
+                ))}
                 <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setImported(null)}>
                   닫기
                 </Button>

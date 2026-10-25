@@ -17,10 +17,18 @@
  * 자유-자유 해석에서는 강체 모드가 유효질량을 전부 가져가서 탄성 모드의 값이 0 이다. 그때
  * 높이로 그리면 **빈 그림**이 되므로 균일한 높이로 세우고 `flatNote` 로 이유를 적는다 —
  * 「그림이 비었다」 와 「값이 0 이다」 는 다른 말이다.
+ *
+ * ## 점이 무엇인지 말한다(2026-10-25)
+ *
+ * DOE 그림의 점 하나는 설계점 하나다. 이름 없이 점만 찍으면 「이 점이 어느 설계냐」 를 표에서
+ * 값으로 거꾸로 찾아야 한다. 그래서 **손을 올리면 이름**(`label`)을, 점이 적으면 **점 옆에 이름**
+ * (`pointLabels`)을, 가로축이 설계 변수면 **눈금 아래에 그 값의 설계점**(`xTicks`)을 적는다.
+ * 많으면(`MAX_NAMED_*` 넘게) 적지 않는다 — 글자가 겹쳐 점을 가린다. 그때는 손을 올려 읽는다.
  */
 
 import {
   CartesianGrid,
+  LabelList,
   Legend,
   ReferenceArea,
   ReferenceLine,
@@ -46,7 +54,13 @@ export interface SpectrumLine {
   key: string
   label: string
   color?: string
-  points: { x: number; y: number }[]
+  /** `label` 은 손을 올렸을 때 그 점의 이름(설계점). */
+  points: { x: number; y: number; label?: string }[]
+  /**
+   * 점을 선으로 이을지(기본 잇는다). **잇지 않으면 점만** — 같은 가로축 값에 다른 설계가 쌓인 DOE
+   * 에서 이으면 서로 다른 설계를 잇는다(`StudyAxis`).
+   */
+  connect?: boolean
 }
 
 export interface SpectrumProps {
@@ -75,11 +89,93 @@ export interface SpectrumProps {
   title?: string
   onPick?: (point: SpectrumPoint) => void
   className?: string
+  /** `points` 의 점 옆에 `label` 을 늘 적는다(점이 `MAX_NAMED_POINTS` 개 이하일 때). */
+  pointLabels?: boolean
+  /**
+   * 가로축 눈금을 이 값들에 두고 **값 아래에 이름**을 한 줄 더 적는다 — 가로축이 설계 변수일 때
+   * 그 값의 설계점(「p0002」 · 「p0002 외 3」). `MAX_NAMED_TICKS` 개를 넘으면 보통 눈금으로 돌아간다.
+   */
+  xTicks?: { value: number; label: string }[]
 }
 
 const MARGIN = { top: 12, right: 16, bottom: 20, left: 8 }
 //: 줄기를 이보다 많이 그리지 않는다. 그 너머는 선이 겹쳐 검은 띠가 될 뿐이라 점만 남긴다.
 const MAX_STEMS = 300
+//: 이름을 늘 적는 상한 — 넘으면 글자가 겹쳐 점을 가린다(그때는 손을 올려 읽는다). 눈금은 한 줄에
+//: 늘어서 빨리 붙고, 점은 평면에 흩어져 더 견딘다(실측 2026-10-25: 2변수 20점의 질량 대 주파수).
+export const MAX_NAMED_TICKS = 12
+export const MAX_NAMED_POINTS = 30
+
+/** 툴팁에 실려 오는 점 하나 — 그린 데이터 그대로(`series` 는 선의 이름). */
+interface TipRow {
+  x?: number
+  y?: number
+  label?: string
+  series?: string
+}
+
+/** 손을 올린 점 — **이름이 먼저**, 그다음 좌표. 이름이 없으면 좌표만. */
+function Tip({
+  active,
+  row,
+  xLabel,
+  yLabel,
+}: {
+  active?: boolean
+  row?: TipRow
+  xLabel: string
+  yLabel: string
+}) {
+  if (!active || !row) return null
+  const title = [row.label, row.series].filter(Boolean).join(' · ')
+  return (
+    <div
+      className="rounded-md border px-2 py-1 text-xs"
+      style={{ background: 'var(--popover)', color: 'var(--popover-foreground)' }}
+    >
+      {title && <p className="font-medium">{title}</p>}
+      {row.x != null && (
+        <p>
+          {xLabel} {shownNumber(row.x)}
+        </p>
+      )}
+      {row.y != null && (
+        <p>
+          {yLabel} {shownNumber(row.y)}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** 눈금 하나 — 값, 그 아래 이름. */
+function NamedTick({
+  x,
+  y,
+  payload,
+  names,
+}: {
+  x?: number
+  y?: number
+  payload?: { value: number }
+  names: Map<number, string>
+}) {
+  const value = payload?.value
+  if (value == null) return null
+  const name = names.get(value)
+  return (
+    <g transform={`translate(${x ?? 0},${y ?? 0})`}>
+      <text dy={12} textAnchor="middle" fill={AXIS_COLOR} fontSize={12}>
+        {shownNumber(value)}
+      </text>
+      {name && (
+        <text dy={26} textAnchor="middle" fill={AXIS_COLOR} fontSize={10}>
+          {name}
+        </text>
+      )}
+    </g>
+  )
+}
 
 export function Spectrum({
   points = [],
@@ -94,6 +190,8 @@ export function Spectrum({
   title,
   onPick,
   className,
+  pointLabels = false,
+  xTicks,
 }: SpectrumProps) {
   const hasCurves = lines.some((one) => one.points.length > 0)
   if (points.length === 0 && !hasCurves) {
@@ -109,6 +207,9 @@ export function Spectrum({
   const drawn = flat ? points.map((one) => ({ ...one, y: 1 })) : points
   const top = flat ? 1 : peak
   const stems = withStems && drawn.length <= MAX_STEMS ? drawn : []
+  const named = xTicks && xTicks.length > 0 && xTicks.length <= MAX_NAMED_TICKS ? xTicks : null
+  const names = new Map((named ?? []).map((one) => [one.value, one.label]))
+  const labelled = pointLabels && drawn.length <= MAX_NAMED_POINTS
 
   return (
     <div className={className}>
@@ -118,7 +219,7 @@ export function Spectrum({
         aria-label={title ?? `${xLabel} 대 ${yLabel} 스펙트럼`}
       >
         <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={MARGIN}>
+          <ScatterChart margin={named ? { ...MARGIN, bottom: MARGIN.bottom + 14 } : MARGIN}>
             <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} />
             <XAxis
               type="number"
@@ -127,7 +228,20 @@ export function Spectrum({
               stroke={AXIS_COLOR}
               fontSize={12}
               tickFormatter={shownNumber}
-              label={{ value: xLabel, position: 'insideBottom', offset: -12, fontSize: 12 }}
+              label={{
+                value: xLabel,
+                position: 'insideBottom',
+                offset: named ? -26 : -12,
+                fontSize: 12,
+              }}
+              {...(named && {
+                // 눈금을 설계점 값에만 — 사이의 눈금(2.5 같은)은 그런 설계가 없다는 것을 흐린다.
+                ticks: named.map((one) => one.value),
+                tick: <NamedTick names={names} />,
+                height: 44,
+                domain: ['dataMin', 'dataMax'],
+                padding: { left: 24, right: 24 },
+              })}
             />
             <YAxis
               type="number"
@@ -165,16 +279,21 @@ export function Spectrum({
               <Scatter
                 key={one.key}
                 name={one.label}
-                data={one.points}
+                // 툴팁이 「p0002 · 2차」 로 말할 수 있게 선의 이름을 점마다 싣는다.
+                data={one.points.map((point) => ({ ...point, series: one.label }))}
                 fill={one.color ?? colorAt(index)}
-                line={{ stroke: one.color ?? colorAt(index), strokeWidth: 2 }}
+                line={
+                  one.connect === false ? undefined : { stroke: one.color ?? colorAt(index), strokeWidth: 2 }
+                }
                 // 선이 여럿이면 점을 함께 찍는다 — 설계점이 셋뿐일 때 선만 있으면 어디가
-                // 실제로 잰 자리인지 알 수 없다.
-                shape={lines.length > 1 ? undefined : () => <g />}
+                // 실제로 잰 자리인지 알 수 없다. 잇지 않으면 점이 곧 그림이다.
+                shape={lines.length > 1 || one.connect === false ? undefined : () => <g />}
               />
             ))}
             {lines.length > 1 && (
-              <Legend height={28} wrapperStyle={{ fontSize: 12 }} />
+              // **위에 둔다** — 아래에 두면 가로축 이름(축 아래)과 같은 자리라 「4차」 위에
+              // 「두께」 가 겹쳐 찍혔다(2026-10-24 화면).
+              <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: 12 }} />
             )}
             {drawn.length > 0 && (
               <Scatter
@@ -185,21 +304,22 @@ export function Spectrum({
                   const row = entry as SpectrumPoint | undefined
                   if (onPick && row?.key) onPick(row)
                 }}
-              />
+              >
+                {labelled && (
+                  <LabelList dataKey="label" position="right" fontSize={10} fill={AXIS_COLOR} />
+                )}
+              </Scatter>
             )}
             <Tooltip
               cursor={{ strokeDasharray: '3 3' }}
-              formatter={(value: unknown, name: unknown) =>
-                typeof value === 'number' ? [shownNumber(value), String(name)] : [String(value), String(name)]
-              }
-              labelFormatter={() => ''}
-              contentStyle={{
-                background: 'var(--popover)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                color: 'var(--popover-foreground)',
-                fontSize: 12,
-              }}
+              content={({ active, payload }) => (
+                <Tip
+                  active={active}
+                  row={payload?.[0]?.payload as TipRow | undefined}
+                  xLabel={xLabel}
+                  yLabel={yLabel}
+                />
+              )}
             />
           </ScatterChart>
         </ResponsiveContainer>

@@ -611,9 +611,14 @@ async def jobs_create(
     - `name`: 작업 이름 — 비우면 폴더 이름 · 「폴더 pNNNN (변수 값)」.
     - `workspace_slug`: 작업의 부서 꼬리표 — 비우면 화면처럼 내 대표 부서(없으면 첫 소속).
 
-    돌려주는 것: `study_id` · 만든 작업 id(`created`) · 걸지 못한 점과 까닭(`skipped`). 해석은
-    워커가 돌린다 — 끝났다고 말하지 말고 `job_get(job_id, wait_seconds=…)` 로 확인한다. 이미
-    가져온 점을 다시 걸면 거절된다(같은 해석을 두 번 돌리지 않는다)."""
+    돌려주는 것: `study_id` · 만든 작업 id(`created`) · 걸지 못한 점과 까닭(`skipped`) · 알아야 할
+    것(`notes` — 사람에게 그대로 전한다). 해석은 워커가 돌린다 — 끝났다고 말하지 말고
+    `job_get(job_id, wait_seconds=…)` 로 확인한다. 이미 가져온 점을 다시 걸면 거절된다(같은 해석을
+    두 번 돌리지 않는다).
+
+    **`modes` 는 비워 두면 CAD 가 적은 값**(없으면 10)이다. DOE 비교는 기준점의 앞 6개 모드를 점마다
+    앞 10개 안에서 모양으로 잇는다 — 6개 이하로 구하면 치수에 따라 끊길 수 있어 `notes` 가
+    알린다(10개 권장)."""
     if not workspace_slug:
         workspace_slug = await _home_workspace(ctx)
 

@@ -3,8 +3,10 @@
 **결과 모양은 Ansys 쪽과 같다**(`app/core/dpf/extract.py`). 화면 · 스터디 비교 · 모드 추적이 그
 모양을 읽으므로, 솔버가 바뀌었다고 다른 모양을 내면 전부 손봐야 한다. 그래서 같은 열쇠를 쓴다 —
 고유진동수 · **유효질량비**(`.dat` 의 유효모달질량 ÷ 전체 유효질량) · **모드 형상**(`.frd` 의
-변위를 `.vtp` 로). **없는 것은 넣지 않는다**: 썸네일 PNG 는 안 만든다(pyvista 가 필요하고,
-화면은 3D 뷰어로 본다). 비어 있는 것과 0 은 다르다.
+변위를 `.vtp` 로) · **모드 지문**(`signature` — 설계점 사이에서 같은 모드를 잇는다. 2026-10-24
+전에는 Ansys 쪽에만 있어서 CalculiX DOE 의 「모드 지도」 가 비었다). **없는 것은 넣지
+않는다**: 썸네일 PNG 는 안 만든다(pyvista 가 필요하고, 화면은 3D 뷰어로 본다). 비어 있는 것과
+0 은 다르다.
 
 `result.json` 에 **어느 솔버로 풀었는지 도장을 찍는다.** 두 솔버의 수가 몇 % 갈리므로(실측
 2026-10-02: 1차 1,266.4 대 1,263.5 Hz), 그 도장이 없으면 「어제와 값이 다르다」 가 영구
@@ -22,7 +24,8 @@ from typing import Any
 from app.core import conditions as condition_model
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, tables, vtp
-from app.core.calculix.mesh import read_mesh
+from app.core.calculix.mesh import Mesh, read_mesh
+from app.core.modes import signature
 from app.core.numbers import significant
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -81,14 +84,17 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
             one["dominant_direction"] = direction
             one["effective_mass_ratio"] = round(ratios[direction][int(one["number"])], 4)
 
+    # 그림 · 지문 · 측정점이 **같은 메시와 변위를 읽는다** — `.frd` 는 수십 MB 라 한 번만.
+    found = _read_shapes(workdir) if elastic else None
     shapes, parts = _draw_modes(
-        workdir, [one["number"] for one in elastic[:VISUAL_MODES]], modes
+        workdir, found, [one["number"] for one in elastic[:VISUAL_MODES]], modes
     )
+    _sign_modes(found, elastic)
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
     # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
     # 안 보인다」 가 첫 거름망이다.
-    spots = _probe_modes(workdir, elastic)
+    spots = _probe_modes(workdir, found, elastic)
 
     result: dict[str, Any] = {
         "recipe": "modal",
@@ -144,17 +150,72 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     )
 
 
-def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _read_shapes(workdir: Path) -> tuple[Mesh, list[frd_reader.Block]] | None:
+    """메시와 모드마다의 변위(`.frd` 의 블록 순서가 모드 순서다). **못 읽으면 None** — 그림 ·
+    지문 · 측정점만 없다, 해석은 끝난 것이다.
+
+    표면 삼각형은 `.msh` 에서 다시 읽는다 — 모델링이 남긴 파일이 정본이고, 그래야 이 단계를
+    따로 다시 돌릴 수 있다.
+    """
+    result = workdir / "model.frd"
+    msh = workdir / "model.msh"
+    if not result.is_file() or not msh.is_file():
+        return None
+    try:
+        mesh = read_mesh(msh, require_solid=False)
+        blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
+    except Exception:  # pragma: no cover - 파일이 깨진 경우
+        logger.warning("모드 형상을 못 읽었습니다 — 그림 · 지문 · 측정점 없이", exc_info=True)
+        return None
+    return mesh, blocks
+
+
+#: 그 절점의 값이 없을 때 — 움직이지 않은 것으로 센다.
+_STILL = [0.0, 0.0, 0.0]
+
+
+def _sign_modes(
+    found: tuple[Mesh, list[frd_reader.Block]] | None, wanted: list[dict[str, Any]]
+) -> None:
+    """탄성 모드마다 **지문**을 붙인다 — 설계점 사이에서 같은 모드를 잇는 열쇠(`core/modes`).
+
+    Ansys 쪽과 **같은 규칙**이다(`core/modes/signature.py`). 칸마다 가까운 절점은 메시 하나에
+    한 번만 찾는다. **못 뽑으면 지문만 없다** — 잇는 쪽이 「모른다」 로 두고, 해석은 끝난
+    것이다.
+    """
+    if found is None or not wanted:
+        return
+    mesh, blocks = found
+    # 변위가 있는 절점만 — 쉘을 접고 나면 펼쳤던 절점은 빠진다(`frd.fold_shells`).
+    ids = [node for node in mesh.nodes if blocks and node in blocks[0].values]
+    if not ids:
+        return
+    try:
+        spots = [ids[index] for index in signature.anchors([mesh.nodes[node] for node in ids])]
+        for mode in wanted:
+            number = int(mode["number"])
+            if number > len(blocks):
+                continue
+            rows = blocks[number - 1].values
+            mode["signature"] = signature.fingerprint(rows.get(node, _STILL) for node in spots)
+    except Exception:  # pragma: no cover - 값이 깨진 경우
+        logger.warning("모드 지문을 못 뽑았습니다 — 지문 없이 갑니다", exc_info=True)
+
+
+def _probe_modes(
+    workdir: Path,
+    found: tuple[Mesh, list[frd_reader.Block]] | None,
+    wanted: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """탄성 모드마다 **측정점**의 변위. 점 그룹이 없으면 빈 목록. 줄마다 `mode` 가 붙는다.
 
     모드 형상은 질량 정규화된 값이라 절대 크기가 아니다 — 그래서 단위를 `정규화` 로 적는다.
     「그 자리가 이 모드에서 움직이나」 가 이 값으로 답할 물음이다. 자리는 한 번만 찾는다.
     """
     topology = workdir / "topology.json"
-    result = workdir / "model.frd"
-    msh = workdir / "model.msh"
-    if not wanted or not topology.is_file() or not result.is_file() or not msh.is_file():
+    if not wanted or found is None or not topology.is_file():
         return []
+    mesh, blocks = found
     try:
         payload = json.loads(topology.read_text(encoding="utf-8"))
         # 쉘 파트의 측정점은 중간면 위의 점이다(지문의 `mid`).
@@ -162,8 +223,6 @@ def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, 
         payload = condition_model.shell_view(payload, set(shells)) if shells else payload
         if not probes.wanted(payload):
             return []
-        mesh = read_mesh(msh, require_solid=False)
-        blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
     except Exception:  # pragma: no cover - 파일이 깨진 경우
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return []
@@ -188,25 +247,17 @@ def _probe_modes(workdir: Path, wanted: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def _draw_modes(
-    workdir: Path, wanted: list[int], modes: list[dict[str, Any]]
+    workdir: Path,
+    found: tuple[Mesh, list[frd_reader.Block]] | None,
+    wanted: list[int],
+    modes: list[dict[str, Any]],
 ) -> tuple[list[str], list[str]]:
     """고른 모드의 형상을 `.vtp` 로 쓴다 — (파일 이름들, 파트 이름들). **못 만들면 그림만
-    없다** — 해석은 끝난 것이다.
-
-    `.frd` 의 블록 순서가 모드 순서다. 표면 삼각형은 `.msh` 에서 다시 읽는다 — 모델링이 남긴
-    파일이 정본이고, 그래야 이 단계를 따로 다시 돌릴 수 있다. 파트는 모드마다 같다
-    (`vtp.parted`).
+    없다** — 해석은 끝난 것이다. 파트는 모드마다 같다(`vtp.parted`).
     """
-    result = workdir / "model.frd"
-    msh = workdir / "model.msh"
-    if not wanted or not result.is_file() or not msh.is_file():
+    if not wanted or found is None:
         return [], []
-    try:
-        mesh = read_mesh(msh, require_solid=False)
-        blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
-    except Exception:  # pragma: no cover - 파일이 깨진 경우
-        logger.warning("모드 형상을 못 읽었습니다 — 그림 없이 갑니다", exc_info=True)
-        return [], []
+    mesh, blocks = found
     try:
         triangles, parts, names = vtp.parted(mesh, workdir)
     except Exception:  # pragma: no cover - 나누기만 못 한다

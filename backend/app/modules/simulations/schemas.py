@@ -367,6 +367,8 @@ class DoeImportOut(BaseModel):
     name: str
     created: list[uuid.UUID]
     skipped: list[DoePointPreview]
+    notes: list[str] = Field(default_factory=list)
+    """막지는 않지만 알아야 할 것 — 모드를 비교하는 수(6) 이하로만 구하면 끊길 수 있다 등."""
 
 
 class StudySummaryOut(BaseModel):

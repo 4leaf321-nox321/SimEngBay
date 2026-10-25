@@ -33,6 +33,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
+import { ColormapSelect } from '@/shared/viewer/ColormapSelect'
+import { colormapChoice, plotlyScale, useChosenColormap } from '@/shared/viewer/colormaps'
 
 export type ExplorerView = 'scatter3d' | 'contour' | 'effects' | 'splom' | 'parallel' | 'correlation'
 
@@ -55,7 +57,18 @@ const VIEWS: { id: ExplorerView; label: string; hint: string }[] = [
 
 /** 산점도 행렬에 한 번에 놓을 열 수 — 넘으면 칸이 너무 작아 읽히지 않는다. */
 const MAX_SPLOM = 6
-const SCALE = 'Viridis'
+
+/**
+ * 색 막대의 색 — **사람이 고르고 브라우저가 기억한다**(3D 뷰어와 같은 목록, 따로 기억).
+ *
+ * - 값의 크기(질량 · 주파수 · 변위)는 기본 Viridis — 밝기가 한 방향으로 올라 흑백으로 찍어도,
+ *   색약이어도 크고 작음이 읽힌다. 해석하는 사람에게 익숙한 Ansys 무지개도 고를 수 있다.
+ * - 상관(−1 ~ 1)은 **따로** 기억하고 기본은 파랑-빨강이다 — 0 이 가운데라 양쪽 끝이 다른 색이어야
+ *   「함께 오른다 / 반대로 간다」 가 갈린다. 값 그림에서 고른 무지개가 여기로 넘어오면 0 이 초록
+ *   한가운데에 묻힌다.
+ */
+const VALUE_COLORS = colormapChoice('doe.colormap', 'viridis')
+const SIGNED_COLORS = colormapChoice('doe.colormap.signed', 'coolwarm')
 
 function hoverOf(point: StudyPoint): string {
   const params = Object.entries(point.params)
@@ -116,6 +129,8 @@ export function StudyExplorer({ study }: { study: Study }) {
   const [picked, setPicked] = useState<string[]>(() =>
     [...factors, ...results].slice(0, 4).map((one) => one.key),
   )
+  const scale = plotlyScale(useChosenColormap(VALUE_COLORS))
+  const signedScale = plotlyScale(useChosenColormap(SIGNED_COLORS))
 
   if (rows.length < 3 || numeric.length < 2) {
     return (
@@ -153,7 +168,7 @@ export function StudyExplorer({ study }: { study: Study }) {
                 marker: {
                   size: 5,
                   color: values(cc),
-                  colorscale: SCALE,
+                  colorscale: scale,
                   showscale: true,
                   colorbar: { title: { text: cc ? labelOf(cc) : '' } },
                 },
@@ -182,11 +197,11 @@ export function StudyExplorer({ study }: { study: Study }) {
           text,
           hovertemplate: `%{text}<br>${labelOf(cz)} %{marker.color:.4g}<extra></extra>`,
           marker: grid
-            ? { size: 7, color: values(cz), colorscale: SCALE, line: { width: 1, color: '#fff' } }
+            ? { size: 7, color: values(cz), colorscale: scale, line: { width: 1, color: '#fff' } }
             : {
                 size: 11,
                 color: values(cz),
-                colorscale: SCALE,
+                colorscale: scale,
                 showscale: true,
                 colorbar: { title: { text: labelOf(cz) } },
               },
@@ -211,7 +226,7 @@ export function StudyExplorer({ study }: { study: Study }) {
                         x: grid.xs,
                         y: grid.ys,
                         z: grid.z,
-                        colorscale: SCALE,
+                        colorscale: scale,
                         contours: { coloring: 'heatmap', showlabels: true },
                         colorbar: { title: { text: labelOf(cz) } },
                         hovertemplate: `${labelOf(cx)} %{x}<br>${labelOf(cy)} %{y}<br>${labelOf(cz)} %{z:.4g}<extra></extra>`,
@@ -298,7 +313,7 @@ export function StudyExplorer({ study }: { study: Study }) {
                 marker: {
                   size: 5,
                   color: values(byKey(color)),
-                  colorscale: SCALE,
+                  colorscale: scale,
                   showscale: true,
                 },
                 diagonal: { visible: false },
@@ -331,7 +346,7 @@ export function StudyExplorer({ study }: { study: Study }) {
                 dimensions,
                 line: {
                   color: values(byKey(color)),
-                  colorscale: SCALE,
+                  colorscale: scale,
                   showscale: true,
                 },
               },
@@ -354,8 +369,7 @@ export function StudyExplorer({ study }: { study: Study }) {
                 z: matrix,
                 zmin: -1,
                 zmax: 1,
-                colorscale: 'RdBu',
-                reversescale: true,
+                colorscale: signedScale,
                 texttemplate: '%{z:.2f}',
                 hovertemplate: '%{y} ↔ %{x}<br>r = %{z:.2f}<extra></extra>',
               },
@@ -415,6 +429,14 @@ export function StudyExplorer({ study }: { study: Study }) {
         )}
         {view === 'effects' && (
           <Picker label="결과" value={effectOf} columns={results} onChange={setEffectOf} />
+        )}
+        {view !== 'effects' && (
+          // 주효과는 색 막대가 없다 — 평균과 범위를 선과 막대로 그린다.
+          <ColormapSelect
+            swatch
+            label="색 지도"
+            choice={view === 'correlation' ? SIGNED_COLORS : VALUE_COLORS}
+          />
         )}
       </div>
 

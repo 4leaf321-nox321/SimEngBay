@@ -7,7 +7,7 @@
 
 import { cloneElement } from 'react'
 import type { ReactElement } from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -110,10 +110,39 @@ describe('DOE 개요', () => {
 
   it('못 이은 모드 자리는 비운다', () => {
     // 숫자를 채우면 그 값이 같은 모드로 읽힌다.
-    const { container } = show()
-    const lastRow = container.querySelectorAll('tbody tr')[2]
+    show()
+    const matrix = screen.getByText('설계점 × 모드 (Hz)').closest('section') as HTMLElement
+    const lastRow = matrix.querySelectorAll('tbody tr')[2]
     expect(lastRow.textContent).toContain('1,713')
     expect(lastRow.textContent).not.toContain('3,374') // 2차를 못 이었다
+  })
+
+  it('못 이은 자리에는 까닭과 할 일을 적는다 — 닮은 정도로 가른다', () => {
+    // 2차 · p0003 은 닮은 정도 0.41 — 닮았지만 문턱(0.6) 아래: 모양이 바뀐 것, 형상을 직접 본다.
+    show()
+    const matrix = screen.getByText('설계점 × 모드 (Hz)').closest('section') as HTMLElement
+    const gap = matrix.querySelectorAll('tbody tr')[2].querySelector('[title]') as HTMLElement
+    expect(gap.title).toContain('닮은 정도 0.41')
+    expect(gap.title).toContain('모드 형상을 직접 보세요')
+    const note = within(matrix).getByLabelText('못 이은 자리')
+    expect(note.textContent).toContain('2차 — 1점에서 닮은 모드가 있지만 확실하지 않습니다')
+    expect(screen.getByText(/선이 끊긴 자리의 까닭과 할 일은/)).toBeDefined()
+  })
+
+  it('구한 모드 안에 닮은 것이 아예 없으면 — 모드 수를 늘려 다시 걸라고(DOE 를 지우고 다시 가져온다)', () => {
+    // 실측(외팔보 두께 × 폭): 폭 방향 2차 굽힘이 폭 20 이상에서 6번째 위로 밀려나 닮은 정도 0.01.
+    show({
+      ...STUDY,
+      tracks: [
+        STUDY.tracks![0],
+        { reference: 2, numbers: { 1: 2, 2: 3 }, confidence: { 2: 0.99, 3: 0.01 } },
+      ],
+    })
+    const matrix = screen.getByText('설계점 × 모드 (Hz)').closest('section') as HTMLElement
+    const note = within(matrix).getByLabelText('못 이은 자리')
+    expect(note.textContent).toContain('2차 — 1점에서 구한 모드(3개) 안에 닮은 모양이 없습니다')
+    expect(note.textContent).toContain('모드 수를 10개로 늘려 다시 걸면')
+    expect(note.textContent).toContain('이 DOE 를 지우고 다시 가져옵니다')
   })
 
   it('지문이 없는 옛 스터디도 그린다', () => {
@@ -121,6 +150,96 @@ describe('DOE 개요', () => {
     show({ ...STUDY, tracks: [], reference_point: null })
     expect(screen.getByText('6 → 20')).toBeDefined()
     expect(screen.getByRole('img', { name: /질량 대 주파수/ })).toBeDefined()
+    // **빈 까닭을 맞게 말한다** — 점은 다 끝났다. 「차례로 돕니다」 는 기다리라는 거짓말이다.
+    expect(screen.getByText(/모드 지문이 없는 작업이라 모드를 잇지 못합니다/)).toBeDefined()
+    expect(screen.queryByText(/설계점이 차례로 돕니다/)).toBeNull()
+    // 고를 모드가 없으면 빈 고르기 칸을 두지 않고, 무엇을 그렸는지 적는다.
+    const trade = screen.getByText('질량 대 주파수', { selector: 'h2' }).closest('section') as HTMLElement
+    expect(within(trade).queryByRole('combobox')).toBeNull()
+    expect(screen.getByText('1차 탄성 모드')).toBeDefined()
+  })
+})
+
+describe('설계 변수가 여럿', () => {
+  /** 두께 · 폭 2 x 2 — 끝 점 둘(p1 · p4)은 두께도 폭도 다르다. */
+  const TWO: Study = {
+    ...STUDY,
+    factors: ['두께', '폭'],
+    tracks: [{ reference: 1, numbers: { 1: 1, 2: 1, 3: 1, 4: 1 }, confidence: {} }],
+    points: [
+      { ...STUDY.points[0], number: 1, simulation_id: 'a', params: { 두께: 6, 폭: 20 }, frequencies: [1000], mass_kg: 0.5 },
+      { ...STUDY.points[1], number: 2, simulation_id: 'b', params: { 두께: 12, 폭: 20 }, frequencies: [1600], mass_kg: 1.0 },
+      { ...STUDY.points[2], number: 3, simulation_id: 'c', params: { 두께: 6, 폭: 40 }, frequencies: [1100], mass_kg: 1.0 },
+      { ...STUDY.points[2], number: 4, simulation_id: 'd', params: { 두께: 12, 폭: 40 }, frequencies: [1700], mass_kg: 2.0 },
+    ],
+  }
+
+  it('끝 점 둘을 견주지 않는다 — 변수마다 범위, 결과의 최소 ~ 최대와 그 점, 영향 순위', () => {
+    show(TWO)
+    // 「6 → 12 · +70%」 는 폭까지 다른 두 점의 차이라 두께의 효과가 아니다.
+    expect(screen.queryByText(/→/)).toBeNull()
+    expect(screen.getByText('설계 변수 2개')).toBeDefined()
+    expect(screen.getByText('6 ~ 12')).toBeDefined()
+    expect(screen.getByText('20 ~ 40')).toBeDefined()
+    // 1차 모드도 질량도 p0001 이 가장 작고 p0004 가 가장 크다.
+    expect(screen.getAllByText(/최소 p0001 · 최대 p0004/)).toHaveLength(2)
+    // 1차 모드: 두께 수준 평균 1050 · 1650 → 폭 600 ÷ 평균 1350 = 44%(r 0.98 ↑). 폭: 1300 · 1400 →
+    // 7% — 상관이 약해(r 0.16) 방향을 붙이지 않는다.
+    const ranking = screen.getByText('가장 크게 움직인 변수').parentElement as HTMLElement
+    expect(ranking.textContent).toContain('1차 모드 ← 두께 44% ↑ › 폭 7%질량')
+  })
+
+  it('선은 나머지 변수를 고정한 단면만 — 처음 가로축은 1차를 가장 크게 움직이는 변수', () => {
+    // 변수 차례는 두께 · 폭이지만 그것과 상관없이 두께(44%)가 폭(7%)보다 1차를 크게 움직인다.
+    show({ ...TWO, factors: ['폭', '두께'] })
+    expect(screen.getByText('가로축').parentElement?.textContent).toContain('두께')
+    const fixed = screen.getByLabelText<HTMLSelectElement>('나머지 고정')
+    // 단면은 폭 = 20 · 폭 = 40, 처음은 가운데(앞쪽).
+    expect([...fixed.options].map((one) => one.text)).toEqual(['폭 = 20', '폭 = 40', '고정 안 함 — 점만'])
+    expect(screen.getByText(/폭 = 20 인 점 2개만 잇습니다/)).toBeDefined()
+
+    // 고정을 풀면 잇지 않는다 — 같은 두께에 폭이 다른 설계가 쌓인다.
+    fireEvent.change(fixed, { target: { value: '' } })
+    expect(screen.getByText(/잇지 않고 점만 찍습니다/)).toBeDefined()
+    expect(screen.getByText(/색 하나가 모드 하나 — 잇지 않음/)).toBeDefined()
+  })
+
+  it('표에는 변수를 모두 적는다 — 가로축 하나만 적으면 같은 값의 줄들이 구별되지 않는다', () => {
+    show(TWO)
+    const matrix = screen.getByText('설계점 × 모드 (Hz)').closest('section') as HTMLElement
+    const head = matrix.querySelector('thead')?.textContent ?? ''
+    expect(head).toContain('두께')
+    expect(head).toContain('폭')
+  })
+})
+
+describe('최적점 찾기', () => {
+  const matrixRow = (index: number) => {
+    const matrix = screen.getByText('설계점 × 모드 (Hz)').closest('section') as HTMLElement
+    return matrix.querySelectorAll('tbody tr')[index]
+  }
+
+  it('처음은 예전 후보와 같다 — 1차 크게 · 질량 작게의 파레토', () => {
+    show()
+    const panel = screen.getByRole('region', { name: '최적점 찾기' })
+    expect(within(panel).getByText(/두 목표 모두에서 더 나은 점이 없는/)).toBeDefined()
+    expect(matrixRow(0).textContent).toContain('후보')
+  })
+
+  it('목표를 하나로 줄이고 조건을 걸면 그 안에서 「최적」 하나', () => {
+    show()
+    const panel = screen.getByRole('region', { name: '최적점 찾기' })
+    fireEvent.click(within(panel).getByRole('button', { name: '목표 2 빼기' }))
+    // 1차 크게 → p0003(1,713 Hz). 질량 1.5 kg 이하만 → p0002(1,651 Hz).
+    expect(matrixRow(2).textContent).toContain('최적')
+    fireEvent.click(within(panel).getByRole('button', { name: /조건/ }))
+    fireEvent.change(within(panel).getByLabelText('조건 1 열'), { target: { value: 'mass_kg' } })
+    fireEvent.change(within(panel).getByLabelText('조건 1 비교'), { target: { value: '<=' } })
+    fireEvent.change(within(panel).getByLabelText('조건 1 값'), { target: { value: '1.5' } })
+    expect(within(panel).getByText(/조건을 만족한 점/).textContent).toContain('2 / 3')
+    expect(within(panel).getByText(/p0002 — 조건 안에서 「1차 모드」 최대/)).toBeDefined()
+    expect(matrixRow(1).textContent).toContain('최적')
+    expect(matrixRow(2).textContent).not.toContain('최적')
   })
 })
 

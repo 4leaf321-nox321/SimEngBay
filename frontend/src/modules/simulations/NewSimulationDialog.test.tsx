@@ -346,6 +346,25 @@ describe('새 해석 작업', () => {
     expect((screen.getByLabelText('탄성 모드 수') as HTMLInputElement).value).toBe('8')
   })
 
+  it('DOE 를 모달로 걸 때 구하는 모드가 비교하는 수(6) 이하면 끊길 수 있다고 알린다 — 막지는 않는다', async () => {
+    // 실측(외팔보 두께 × 폭 20점): CAD 가 적은 6개만 구해 폭 방향 2차 굽힘이 14점에서 끊겼다.
+    vi.mocked(simulationApi.previewDoePoint).mockResolvedValue({
+      ...SHEAR,
+      recipe: 'modal',
+      suggested_recipe: 'modal',
+      suggested_modes: 6,
+    })
+    openAt(DOE)
+    await waitFor(() => expect(screen.getByText(/CAD 가 적은 값 6/)).toBeDefined())
+    expect(screen.getByText(/6개만 구하면 치수에 따라 모드가 위로 밀려나 끊길 수 있습니다/)).toBeDefined()
+    expect(screen.getByRole('button', { name: '3건 실행' })).toBeEnabled()
+
+    const field = screen.getByLabelText('탄성 모드 수')
+    await userEvent.clear(field)
+    await userEvent.type(field, '10')
+    expect(screen.queryByText(/밀려나 끊길 수 있습니다/)).toBeNull()
+  })
+
   it('해석 종류를 바꾸면 보는 점의 조건을 그 종류로 다시 읽는다', async () => {
     openAt(DOE)
     await waitFor(() => expect(screen.getByText('클램프')).toBeDefined())

@@ -116,7 +116,7 @@ def test_참여계수_표가_없어도_실패하지_않는다() -> None:
 def test_변위_지표는_정규화_방식과_무관하다() -> None:
     """**비율만 쓴다.** 모달 변위는 질량 정규화된 상대값이라 크기 자체에는 뜻이 없다 —
     전체를 10배 해도 축 비중과 국부성은 그대로여야 한다."""
-    from app.core.dpf import metrics
+    from app.core.modes import metrics
 
     vectors = [[0.0, 0.0, 1.0], [0.0, 0.0, 2.0], [0.0, 0.0, 1.0]]
     share = metrics.direction_share(vectors)
@@ -128,8 +128,41 @@ def test_변위_지표는_정규화_방식과_무관하다() -> None:
     assert metrics.localization(scaled) == metrics.localization(vectors)
 
 
+def test_국부성은_부피로_잰다_메시가_촘촘한_곳이_값을_가져가지_않는다() -> None:
+    """**움직이는 부피의 몫.** 같은 모양을 절점 수로 세면 촘촘한 쪽이 값을 가져간다(실측: 같은
+    모델의 1차가 Ansys 0.094 · CalculiX 0.055 로 갈렸다)."""
+    from app.core.modes import metrics
+
+    # 왼쪽 반(부피 1)만 움직이고 오른쪽 반(부피 1)은 그대로 — 왼쪽은 절점 둘, 오른쪽은 여덟.
+    vectors = [[0.0, 0.0, 1.0]] * 2 + [[0.0, 0.0, 0.0]] * 8
+    weights = [0.5] * 2 + [0.125] * 8
+    assert metrics.localization(vectors, weights) == 0.5  # 부피의 절반이 움직인다
+    assert metrics.localization(vectors) == 0.2  # 절점 수로는 열 중 둘 — 메시에 끌려간다
+    # 가중치가 없으면 옛 셈 그대로다.
+    assert metrics.localization(vectors, [1.0] * 10) == metrics.localization(vectors)
+
+
+def test_파트가_둘이면_어느_파트가_움직이나를_말하고_국부성은_그_안에서_잰다() -> None:
+    """받침판 위 기둥이 휘는 1차 — 전체로 재면 「국부」 지만 기둥 안에서는 전역이다."""
+    from app.core.modes import metrics
+
+    # 절점 넷: 받침판 둘(부피 9 씩, 거의 안 움직임) · 기둥 둘(부피 1 씩, 끝이 더 움직임).
+    vectors = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.001], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    parts = {"받침판": [9.0, 9.0, 0.0, 0.0], "기둥": [0.0, 0.0, 1.0, 1.0]}
+    weights = [9.0, 9.0, 1.0, 1.0]
+    told = metrics.describe(vectors, weights, parts)
+    assert told["dominant_part"] == "기둥"
+    assert told["part_share"]["기둥"] > 0.99
+    assert told["local_mode"] is False
+    assert told["localization"] == metrics.localization(vectors, parts["기둥"])
+    # 파트 없이(한 바디로) 재면 움직이는 부피가 작아 「국부」 — 진짜 국부 모드는 이렇게 잡힌다.
+    alone = metrics.describe(vectors, weights)
+    assert "dominant_part" not in alone
+    assert alone["local_mode"] is True
+
+
 def test_섞인_모드는_한_축이라고_말하지_않는다() -> None:
-    from app.core.dpf import metrics
+    from app.core.modes import metrics
 
     mixed = metrics.direction_share([[1.0, 1.0, 0.0]])
     assert mixed["x"] == mixed["y"] == 0.5
@@ -138,7 +171,7 @@ def test_섞인_모드는_한_축이라고_말하지_않는다() -> None:
 
 def test_한_구석만_움직이면_국부_모드다() -> None:
     """국부 모드를 1차 공진으로 읽으면 엉뚱한 곳을 보강하게 된다."""
-    from app.core.dpf import metrics
+    from app.core.modes import metrics
 
     uniform = [[0.0, 0.0, 1.0]] * 100
     assert metrics.localization(uniform) == 1.0
@@ -159,7 +192,7 @@ def test_몸통_일부가_휘는_정상_모드는_국부가_아니다() -> None:
     # 절점의 3분의 1이 사인 꼴로 움직이는 모드.
     import math
 
-    from app.core.dpf import metrics
+    from app.core.modes import metrics
 
     third = [[0.0, 0.0, math.sin(math.pi * index / 33)] for index in range(33)]
     rest = [[0.0, 0.0, 0.0]] * 67

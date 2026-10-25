@@ -32,6 +32,7 @@ import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ownsWork } from '@/shared/auth/roles'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { Input } from '@/shared/components/ui/input'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -65,6 +66,9 @@ export default function StudyDetailPage() {
   const navigate = useNavigate()
   const [notice, setNotice] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
+  // 모드 수 바꿔 다시 걸기 — 비교에서 모드가 끊긴 DOE 를 고치는 길(지우지 않고).
+  const [rerunning, setRerunning] = useState(false)
+  const [rerunModes, setRerunModes] = useState('10')
 
   /**
    * **실패한 설계점만 다시 실행한다** — 점마다 재시도를 누르게 하면 200점짜리 DOE 에서는 아무도
@@ -145,6 +149,11 @@ export default function StudyDetailPage() {
   const running = points.filter((one) => !['done', 'failed', 'canceled'].includes(one.status)).length
   // **도는 점이 있으면 지우지 않는다**(SIMULATIONS-0035) — 대기 중인 점은 서버가 취소로 닫고 지운다.
   const solving = points.filter((one) => !['done', 'failed', 'canceled', 'queued'].includes(one.status)).length
+  // **모드 수가 있는 해석만**, 도는 점이 없을 때만 — 옛 결과와 새 결과가 함께 돌면 비교가 섞인다.
+  const modeful = modal || study.data.recipe === 'harmonic'
+  const computed = Math.max(0, ...points.map((one) => one.frequencies?.length ?? 0))
+  const newModes = Number(rerunModes)
+  const validModes = Number.isInteger(newModes) && newModes >= 1 && newModes <= 100
   const failedPoints = points.filter((one) => one.status === 'failed').length
   const published = study.data.published ?? 0
 
@@ -181,11 +190,11 @@ export default function StudyDetailPage() {
                 · 모드 {tracked.length}개를 형상으로 이어 견줍니다(기준 p
                 {String(study.data.reference_point ?? 0).padStart(4, '0')})
               </>
-            ) : (
+            ) : finishedPoints > 0 ? (
               // **추적이 없으면 그렇다고 말한다** — 순번으로 이은 선은 모드가 뒤바뀌는 순간
-              // 서로 다른 모드를 잇는다.
+              // 서로 다른 모드를 잇는다. 끝난 점이 없으면(막 다시 걸었다) 아직 이을 것이 없을 뿐이다.
               <> · 모드 지문이 없어 차수로만 견줍니다(다시 걸면 지문이 생깁니다)</>
-            )}
+            ) : null}
           </>
         }
         back={
@@ -223,6 +232,12 @@ export default function StudyDetailPage() {
               <Button variant="outline" size="sm" onClick={() => setStopping(true)}>
                 <Square className="size-4" />
                 모두 멈추기 ({running})
+              </Button>
+            )}
+            {mine && modeful && running === 0 && finishedPoints > 0 && (
+              <Button variant="outline" size="sm" onClick={() => setRerunning(true)}>
+                <RefreshCw className="size-4" />
+                모드 수 바꿔 다시 걸기
               </Button>
             )}
             {mine && (
@@ -273,6 +288,53 @@ export default function StudyDetailPage() {
           )
         }}
         onClose={() => setTidying(false)}
+      />
+
+      <ConfirmDialog
+        open={rerunning}
+        title="모드 수 바꿔 다시 걸기"
+        description={
+          <span className="block space-y-2">
+            <span className="block">
+              설계점마다 같은 입력(형상 · 조건)으로 모드 수만 바꿔 다시 풉니다(내가 건 점만). 옛 결과는
+              지우지 않고 기록으로 남고, 비교는 새 결과로 바뀝니다. 게시는 옮기지 않습니다 — 새 결과를 본
+              뒤 다시 게시하세요.
+            </span>
+            <label className="flex items-center gap-2">
+              <span>새 모드 수</span>
+              <Input
+                aria-label="새 모드 수"
+                type="number"
+                min={1}
+                max={100}
+                className="h-8 w-24"
+                value={rerunModes}
+                onChange={(event) => setRerunModes(event.target.value)}
+              />
+              {computed > 0 && <span className="text-muted-foreground text-xs">지금 {computed}개</span>}
+            </label>
+            <span className="text-muted-foreground block text-xs">
+              비교는 기준점의 앞 6개 모드를 점마다 앞 10개 안에서 모양으로 잇습니다 — 10개를 권합니다(더
+              늘려도 비교는 그대로입니다).
+            </span>
+          </span>
+        }
+        confirmLabel={`설계점 ${finishedPoints}개 다시 걸기`}
+        confirmDisabled={!validModes}
+        onConfirm={async () => {
+          const done = await simulationApi.rerunStudy(id, newModes)
+          setNotice(
+            `설계점 ${done.created.length}개를 모드 ${newModes}개로 다시 걸었습니다 — 차례로 돌고 비교가 새 결과로 바뀝니다.` +
+              (done.skipped.length
+                ? ` 다시 걸지 못한 점: ${done.skipped
+                    .map((one) => `p${String(one.number).padStart(4, '0')} ${one.skip_reason ?? ''}`)
+                    .join(' · ')}`
+                : '') +
+              ((done.notes ?? []).length ? ` ${(done.notes ?? []).join(' ')}` : ''),
+          )
+          study.reload()
+        }}
+        onClose={() => setRerunning(false)}
       />
 
       <ConfirmDialog

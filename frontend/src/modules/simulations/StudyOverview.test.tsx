@@ -129,7 +129,7 @@ describe('DOE 개요', () => {
     expect(screen.getByText(/선이 끊긴 자리의 까닭과 할 일은/)).toBeDefined()
   })
 
-  it('구한 모드 안에 닮은 것이 아예 없으면 — 모드 수를 늘려 다시 걸라고(DOE 를 지우고 다시 가져온다)', () => {
+  it('구한 모드 안에 닮은 것이 아예 없으면 — 모드 수를 늘려 다시 걸라고(위의 단추로, 지우지 않고)', () => {
     // 실측(외팔보 두께 × 폭): 폭 방향 2차 굽힘이 폭 20 이상에서 6번째 위로 밀려나 닮은 정도 0.01.
     show({
       ...STUDY,
@@ -141,8 +141,9 @@ describe('DOE 개요', () => {
     const matrix = screen.getByText('설계점 × 모드 (Hz)').closest('section') as HTMLElement
     const note = within(matrix).getByLabelText('못 이은 자리')
     expect(note.textContent).toContain('2차 — 1점에서 구한 모드(3개) 안에 닮은 모양이 없습니다')
-    expect(note.textContent).toContain('모드 수를 10개로 늘려 다시 걸면')
-    expect(note.textContent).toContain('이 DOE 를 지우고 다시 가져옵니다')
+    expect(note.textContent).toContain('10개로 늘리면 이어질 수 있습니다')
+    expect(note.textContent).toContain('「모드 수 바꿔 다시 걸기」')
+    expect(note.textContent).toContain('옛 결과는 기록으로 남습니다')
   })
 
   it('지문이 없는 옛 스터디도 그린다', () => {
@@ -202,6 +203,39 @@ describe('설계 변수가 여럿', () => {
     fireEvent.change(fixed, { target: { value: '' } })
     expect(screen.getByText(/잇지 않고 점만 찍습니다/)).toBeDefined()
     expect(screen.getByText(/색 하나가 모드 하나 — 잇지 않음/)).toBeDefined()
+  })
+
+  it('가로축이 재료면 단면마다 막대를, 고정을 풀면 막대마다 설계점을 붙인다고 말한다', () => {
+    // 재료가 1차를 크게(1000 대 1600), 두께가 조금(1000 대 1100) 움직인다 — 처음 가로축이 재료다.
+    const point = (number: number, 재료: string, 두께: number, hz: number) => ({
+      ...STUDY.points[0],
+      number,
+      simulation_id: `m${number}`,
+      params: { 재료, 두께 },
+      frequencies: [hz],
+      mass_kg: 1,
+    })
+    show({
+      ...STUDY,
+      factors: ['두께', '재료'],
+      tracks: [{ reference: 1, numbers: { 1: 1, 2: 1, 3: 1, 4: 1 }, confidence: {} }],
+      points: [
+        point(1, 'AL6061', 6, 1000),
+        point(2, 'SS400', 6, 1600),
+        point(3, 'AL6061', 12, 1100),
+        point(4, 'SS400', 12, 1700),
+      ],
+    })
+    expect(screen.getByRole('img', { name: /값별 모드 고유진동수/ })).toBeDefined()
+    const fixed = screen.getByLabelText<HTMLSelectElement>('나머지 고정')
+    expect([...fixed.options].map((one) => one.text)).toEqual([
+      '두께 = 6',
+      '두께 = 12',
+      '고정 안 함 — 점마다 막대',
+    ])
+    expect(screen.getByText(/두께 = 6 인 점 2개만 재료 마다 막대로 놓습니다/)).toBeDefined()
+    fireEvent.change(fixed, { target: { value: '' } })
+    expect(screen.getByText(/막대마다 설계점을 붙입니다/)).toBeDefined()
   })
 
   it('표에는 변수를 모두 적는다 — 가로축 하나만 적으면 같은 값의 줄들이 구별되지 않는다', () => {

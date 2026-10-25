@@ -47,6 +47,7 @@ TOOLS = {
     "study_publish",
     "study_analyze",
     "study_cancel",
+    "study_rerun",
     "server_status",
     "files_tidy",
     "convergence_start",
@@ -729,6 +730,16 @@ def test_서버_상태는_누구나_솔버_요약_관리자는_워커까지() ->
     assert got["workers"] == [
         {"id": "h:1", "state": "busy", "solvers": None, "silent_seconds": None, "job": None}
     ]
+
+
+def test_DOE_모드_수_바꿔_다시_걸기는_제_경로로_모드_수를_싣는다() -> None:
+    answer = {"created": [], "skipped": [], "notes": []}
+    seen = _serve(lambda _r: httpx.Response(201, json=answer))
+    _run(server.study_rerun, "s1", 10)
+    assert [(one.method, one.url.path) for one in seen] == [
+        ("POST", "/api/simulations/studies/s1/rerun")
+    ]
+    assert json.loads(seen[0].content) == {"modes": 10}
 
 
 def test_DOE_멈추기와_중간_파일_정리는_제_경로로() -> None:

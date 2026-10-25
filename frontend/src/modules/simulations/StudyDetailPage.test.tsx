@@ -27,6 +27,7 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       retry: vi.fn(),
       tidyStudy: vi.fn(),
       cancelStudy: vi.fn(),
+      rerunStudy: vi.fn(),
       removeStudy: vi.fn(),
       studyTable: vi.fn(),
       studyMeasurements: vi.fn(),
@@ -91,6 +92,50 @@ describe('스터디 상세', () => {
     vi.mocked(simulationApi.retry).mockReset().mockResolvedValue({} as never)
     vi.mocked(simulationApi.tidyStudy).mockReset().mockResolvedValue({ bytes_freed: 3 * 1024 * 1024, files: 12, points: 3 })
     vi.mocked(simulationApi.studyMeasurements).mockReset().mockResolvedValue([])
+  })
+
+  it('모드 수를 바꿔 다시 건다 — 지우지 않고, 옛 결과는 기록으로(비교가 끊긴 DOE 를 고치는 길)', async () => {
+    // 6개만 구해 비교가 끊긴 DOE(실측 2026-10-25 외팔보 두께 x 폭).
+    const done = (number: number) => ({ ...point(number, 'done'), frequencies: [160, 810, 1030, 2860, 2940, 4860] })
+    vi.mocked(simulationApi.study).mockResolvedValue({ ...STUDY, points: [done(1), done(2), done(3)] })
+    vi.mocked(simulationApi.rerunStudy).mockReset().mockResolvedValue({
+      study_id: 'st',
+      name: '브래킷',
+      created: ['n1', 'n2'],
+      skipped: [{ number: 3, params: {}, usable: false, skip_reason: '입력 형상 파일이 없습니다' }],
+      notes: [],
+    })
+    show()
+    await userEvent.click(await screen.findByRole('button', { name: '모드 수 바꿔 다시 걸기' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('옛 결과는 지우지 않고 기록으로 남고')
+    expect(dialog.textContent).toContain('지금 6개')
+    const field = within(dialog).getByLabelText('새 모드 수')
+    expect((field as HTMLInputElement).value).toBe('10')
+    // 말이 안 되는 수면 누를 수 없다.
+    await userEvent.clear(field)
+    await userEvent.type(field, '0')
+    expect(within(dialog).getByRole('button', { name: '설계점 3개 다시 걸기' })).toBeDisabled()
+    await userEvent.clear(field)
+    await userEvent.type(field, '12')
+    await userEvent.click(within(dialog).getByRole('button', { name: '설계점 3개 다시 걸기' }))
+
+    await waitFor(() => expect(simulationApi.rerunStudy).toHaveBeenCalledWith('st', 12))
+    expect(await screen.findByText(/설계점 2개를 모드 12개로 다시 걸었습니다/)).toBeDefined()
+    expect(screen.getByText(/p0003 입력 형상 파일이 없습니다/)).toBeDefined()
+  })
+
+  it('도는 점이 있거나 정적 DOE 면 다시 걸기를 두지 않는다', async () => {
+    vi.mocked(simulationApi.study).mockResolvedValue({ ...STUDY, points: [point(1, 'done'), point(2, 'solving')] })
+    const { unmount } = show()
+    expect(await screen.findByRole('button', { name: /모두 멈추기/ })).toBeDefined()
+    expect(screen.queryByRole('button', { name: '모드 수 바꿔 다시 걸기' })).toBeNull()
+    unmount()
+
+    vi.mocked(simulationApi.study).mockResolvedValue({ ...STUDY, recipe: 'static', points: [point(1, 'done')] })
+    show()
+    expect(await screen.findByRole('button', { name: /표 복사/ })).toBeDefined()
+    expect(screen.queryByRole('button', { name: '모드 수 바꿔 다시 걸기' })).toBeNull()
   })
 
   it('실패 · 취소된 점을 한 번에 다시 실행한다', async () => {

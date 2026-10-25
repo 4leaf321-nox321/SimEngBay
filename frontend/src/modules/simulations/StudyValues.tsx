@@ -26,7 +26,7 @@ import { magnitudeOf, shownForce, shownMass, shownValue } from '@/modules/simula
 import { AxisPicker, useAxis } from '@/modules/simulations/StudyAxis'
 import { ChoiceMark, ChoicePanel, useChoice } from '@/modules/simulations/StudyChoice'
 import { FactorSummary } from '@/modules/simulations/StudySummary'
-import { caseName, caseTicks } from '@/modules/simulations/studyTable'
+import { barNames, caseName, caseTicks } from '@/modules/simulations/studyTable'
 import { Chart, Spectrum } from '@/shared/charts'
 import type { SpectrumPoint } from '@/shared/charts'
 import { colorAt } from '@/shared/charts'
@@ -174,13 +174,13 @@ export function StudyValues({ study }: { study: Study }) {
     return made
   }, [done, metric, x, axis.shows])
 
-  const bars = useMemo(
-    () =>
-      numeric || !metric
-        ? []
-        : done.map((one) => ({ name: String(one.params[x] ?? '—'), [metric.label]: metric.pick(one) })),
-    [numeric, done, metric, x],
-  )
+  const bars = useMemo(() => {
+    if (numeric || !metric) return []
+    // 단면을 골랐으면 그 점만 — 값마다 막대 하나. 아니면 겹치는 이름에 설계점을 붙인다.
+    const shown = done.filter(axis.shows)
+    const names = barNames(shown, x)
+    return shown.map((one) => ({ name: names.get(one.number), [metric.label]: metric.pick(one) }))
+  }, [numeric, done, metric, x, axis.shows])
 
   // 표의 「최적」 · 「후보」 는 최적점 찾기의 답이다 — 처음 모양은 최대 변형 작게 · 질량 작게.
   const choice = useChoice(study)

@@ -12,7 +12,7 @@ from typing import Any
 
 from app.core.doe import read_folder
 from app.core.spec import ModalSpec
-from app.modules.simulations.services import _import_notes, _with_cad_modes
+from app.modules.simulations.services import _mode_notes, _with_cad_modes
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "doe"
 #: CAD 가 모달 6 을 적은 두 점 DOE.
@@ -50,14 +50,14 @@ def test_일부러_준_값은_CAD_보다_앞선다_10_도_마찬가지() -> None
 
 def test_비교하는_수_이하로만_구하면_알린다() -> None:
     _, six = _with_cad_modes(SIX, {"recipe": "modal"})
-    (note,) = _import_notes(SIX, six)
+    (note,) = _mode_notes(six, single=SIX.single)
     assert "모드를 6개만 구합니다" in note
     assert "10개를 권합니다" in note
 
     _, eight = _with_cad_modes(EIGHT, {"recipe": "modal"})
-    assert _import_notes(EIGHT, eight) == []
+    assert _mode_notes(eight, single=EIGHT.single) == []
     # 설계 하나는 견줄 점이 없다 · 정적은 모드가 없다.
     _, single = _with_cad_modes(SINGLE, {"recipe": "modal", "modes": 4})
-    assert _import_notes(SINGLE, single) == []
+    assert _mode_notes(single, single=SINGLE.single) == []
     _, static = _with_cad_modes(SIX, {"recipe": "static"})
-    assert _import_notes(SIX, static) == []
+    assert _mode_notes(static, single=SIX.single) == []

@@ -420,6 +420,26 @@ export function chooseFrom(
   return { feasible, ranked, marks, idle: where.length - active.length }
 }
 
+/**
+ * 막대 그림(가로축이 고르는 값)의 **막대 이름** — 값이 겹치면 설계점을 덧붙인다(「SS400 · p0003」).
+ *
+ * 재료 x 두께 DOE 를 재료 축으로 그리면 「SS400」 이 두께마다 하나씩 서는데, 이름이 같으면 막대가
+ * 어느 설계인지 모르고 그림 도구는 같은 칸에 겹쳐 그린다. 단면을 고르면 값마다 하나라 겹치지 않는다.
+ */
+export function barNames(points: StudyPoint[], x: string): Map<number, string> {
+  const counts = new Map<string, number>()
+  for (const point of points) {
+    const value = String(point.params[x] ?? '—')
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  return new Map(
+    points.map((point) => {
+      const value = String(point.params[x] ?? '—')
+      return [point.number, (counts.get(value) ?? 0) > 1 ? `${value} · ${caseName(point.number)}` : value]
+    }),
+  )
+}
+
 /** 설계점의 이름 — 「p0002」. */
 export function caseName(number: number): string {
   return `p${String(number).padStart(4, '0')}`
@@ -466,15 +486,17 @@ export interface Slice {
 export function slicesOf(points: StudyPoint[], factors: string[], x: string): Slice[] {
   const others = factors.filter((one) => one !== x)
   if (others.length === 0) return []
-  const groups = new Map<string, { values: (number | string | null)[]; numbers: number[]; xs: Set<number> }>()
+  // 가로축이 재료 같은 **고르는 값**이어도 묶는다(2026-10-25) — 그때는 단면마다 막대가 값 하나씩
+  // 선다. 전에는 숫자 축만 묶어, 재료 축에서 「무작위 · LHS 설계라 묶이지 않는다」 는 틀린 말을 했다.
+  const groups = new Map<string, { values: (number | string | null)[]; numbers: number[]; xs: Set<string> }>()
   for (const point of points) {
     const across = point.params[x]
-    if (typeof across !== 'number') continue
+    if (across == null) continue
     const values = others.map((name) => point.params[name] ?? null)
     const key = JSON.stringify(values)
-    const group = groups.get(key) ?? { values, numbers: [], xs: new Set<number>() }
+    const group = groups.get(key) ?? { values, numbers: [], xs: new Set<string>() }
     group.numbers.push(point.number)
-    group.xs.add(across)
+    group.xs.add(String(across))
     groups.set(key, group)
   }
   const order = (a: number | string | null, b: number | string | null) =>

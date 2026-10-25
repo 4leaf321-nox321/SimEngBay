@@ -86,6 +86,30 @@ describe('모달 결과', () => {
     expect(screen.getByText(/국부/)).toBeDefined()
   })
 
+  it('파트가 둘 이상이면 어느 파트의 모드인지 먼저 말하고, 국부성은 그 파트 안의 값이다', () => {
+    // 고정된 받침판 위 기둥이 휘는 1차(실측 2026-10-25: 두 솔버 모두 기둥 100% · 전역 0.43).
+    const column = result({
+      modes: [
+        {
+          number: 1,
+          elastic_number: 1,
+          frequency_hz: 1263.5,
+          rigid_body: false,
+          direction_share: { x: 0.98, y: 0.01, z: 0.01 },
+          dominant_axis: 'X',
+          localization: 0.43,
+          local_mode: false,
+          part_share: { 기둥: 0.9998, 받침판: 0.0002 },
+          dominant_part: '기둥',
+        },
+      ],
+    })
+    render(<ModalResult simulationId="sim" result={column} artifacts={[]} />)
+    expect(screen.getByText('기둥 100%')).toBeDefined()
+    const verdict = screen.getByText(/전역/)
+    expect(verdict.getAttribute('title')).toContain('기둥 전체가 함께 움직이고')
+  })
+
   it('강체 모드는 지우지 않고 접는다', () => {
     // 지우면 「왜 3번부터 시작하지」 를 묻고, 늘어놓으면 표의 절반이 0 이다.
     render(<ModalResult simulationId="sim" result={result()} artifacts={[]} />)

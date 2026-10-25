@@ -317,6 +317,8 @@ def build(
             # 그림의 파트 이름 — 화면이 쉘 파트를 이름으로 보이고 숨긴다(`vtp.parted`).
             "parts": {str(surface): name for surface, name in layout.shell_parts.items()},
             "reach": round(0.55 * max(one.thickness for one in shells), 6),
+            # 파트마다 두께(mm) — 추출이 쉘의 부피(넓이 x 두께)로 모드 성격을 잰다.
+            "thickness": {one.part: one.thickness for one in shells},
         }
     # **실제로 붙인 물성 이름** — 결과에 스펙 이름을 적으면 CAD 물성으로 푼 것을 숨긴다.
     boundary["material"] = " · ".join(dict.fromkeys(one.name for one in materials))

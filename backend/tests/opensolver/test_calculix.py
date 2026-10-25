@@ -121,6 +121,19 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     signs = [one["signature"] for one in result["modes"] if not one["rigid_body"]]
     assert all(len(one) == 3 * signature.GRID**3 for one in signs)
     assert all(sum(one * one for one in sign) == pytest.approx(1, abs=1e-4) for sign in signs)
+    # **성격**(변위 축 비중 · 전역/국부 · 파트) — 지문처럼 전에는 Ansys 쪽에만 있었다
+    # (2026-10-25). 절점 수로 세던 때는 고정된 받침판에 절점이 많아 기둥이 휘는 1차가
+    # 「국부」(0.055)였다. 이제 부피로 재고, 바디가 둘이면 움직이는 파트 안에서 잰다 —
+    # 「기둥 · 전역」.
+    for one in (mode for mode in result["modes"] if not mode["rigid_body"]):
+        assert sum(one["direction_share"].values()) == pytest.approx(1, abs=1e-3)
+        assert 0 < one["localization"] <= 1
+        assert set(one["part_share"]) == {"기둥", "받침판"}
+    first = result["modes"][0]
+    assert first["dominant_axis"] in ("X", "Y"), "1차는 기둥이 옆으로 휜다"
+    assert first["dominant_part"] == "기둥" and first["part_share"]["기둥"] > 0.95
+    assert first["local_mode"] is False
+    assert first["localization"] == pytest.approx(0.43, abs=0.05)  # 외팔보 1차 굽힘다운 몫
 
     # **그림은 파트마다 나뉜다** — 화면이 파트를 보이고 숨긴다. 이름은 모델링이 짝지은 것이고,
     # 그림의 셀 배열 `part` 가 그 순서의 번호다(두 바디가 맞닿은 면은 둘 다에 한 번씩).
@@ -424,6 +437,7 @@ def test_두_솔버가_같은_폴더에서_같은_수를_낸다(ready: None, tmp
 
     both: dict[str, list[float]] = {}
     spots: dict[str, float] = {}
+    character: dict[str, dict[str, Any]] = {}
     for solver in ("calculix", "ansys"):
         work = tmp_path / solver
         work.mkdir()
@@ -456,6 +470,7 @@ def test_두_솔버가_같은_폴더에서_같은_수를_낸다(ready: None, tmp
         spots[solver] = next(
             one["value"] for one in result["probes"] if one["name"] == "측정점"
         )
+        character[solver] = next(one for one in result["modes"] if not one["rigid_body"])
 
     assert len(both["ansys"]) >= 5 and len(both["calculix"]) >= 5
     gaps = [
@@ -468,6 +483,14 @@ def test_두_솔버가_같은_폴더에서_같은_수를_낸다(ready: None, tmp
     assert max(gaps[:5]) < 0.03, f"모드별 차이 {[round(one * 100, 2) for one in gaps]}%"
     assert spots["calculix"] == pytest.approx(spots["ansys"], rel=0.05), (
         f"측정점 값이 갈렸다: Ansys {spots['ansys']} · CalculiX {spots['calculix']}"
+    )
+    # **성격도 같은 말을 한다** — 절점 수로 세던 때는 1차가 Ansys 0.094 · CalculiX 0.055 로
+    # 갈렸다(메시 촘촘함). 부피로 재고 파트 안에서 재면 실측 0.431 · 0.433(2026-10-25).
+    # Ansys 는 파트 이름을 CAD 바디 지문으로 짝지어 붙인다(`dpf/extract._volume_weights`).
+    for one in character.values():
+        assert one["dominant_part"] == "기둥" and one["local_mode"] is False
+    assert character["calculix"]["localization"] == pytest.approx(
+        character["ansys"]["localization"], abs=0.05
     )
 
 

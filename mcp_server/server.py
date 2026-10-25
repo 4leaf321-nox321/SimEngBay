@@ -913,6 +913,22 @@ async def study_cancel(ctx: Context, study_id: str) -> Any:
 
 
 @mcp.tool()
+async def study_rerun(ctx: Context, study_id: str, modes: int) -> Any:
+    """끝난 DOE 를 **모드 수만 바꿔** 다시 건다 — 점마다 마지막 작업의 입력을 그대로, 옛
+    결과는 기록으로 남는다(내가 건 점만). DOE 비교에서 모드가 끊겼을 때(`study_get` 표의 빈
+    자리 — 구한 모드 안에 닮은 모양이 없다) 고치는 길이다: 같은 폴더는 `jobs_create` 로 다시
+    가져올 수 없다.
+
+    - `modes`: 새로 구할 탄성 모드 수. 비교는 기준점의 앞 6개를 점마다 **앞 10개 안에서**
+      잇는다 — 10 을 권한다(그 위로 늘려도 비교는 그대로).
+    - 도는 점이 있으면 거절된다(끝나고 다시). 답은 `jobs_create` 와 같다 — `created` ·
+      `skipped`(입력 파일이 정리된 점 등) · `notes`. **사용자가 시킬 때만** — 솔버 시간을
+      다시 쓴다.
+    """
+    return await _post(ctx, f"/api/simulations/studies/{study_id}/rerun", {"modes": modes})
+
+
+@mcp.tool()
 async def server_status(ctx: Context) -> Any:
     """해석 서버가 지금 돌릴 수 있나 — 솔버마다 **살아 있는 워커 수 · 기다리는 작업 수**.
     「왜 안 도나」 · 「언제쯤 도나」 에 답하는 자리다(내 작업 하나의 줄 순번은 `job_get` 의

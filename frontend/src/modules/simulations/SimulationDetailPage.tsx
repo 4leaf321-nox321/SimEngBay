@@ -701,6 +701,10 @@ function PointNav({ studyId, current }: { studyId: string; current: string }) {
 
 function PreviousAttempts({ meta }: { meta: Record<string, unknown> }) {
   const previous = Array.isArray(meta.previous) ? meta.previous.map(String) : []
+  // **모드 수만 바꿔 다시 건 것**(DOE 의 「모드 수 바꿔 다시 걸기」)은 다시 가져온 것과 다르다 —
+  // 같은 입력으로 모드 수만 바꿨다고 말한다.
+  const rerun = (meta.rerun ?? null) as { modes?: number; from_modes?: number | null } | null
+  const rerunTo = typeof meta.rerun_to === 'number' ? meta.rerun_to : null
   // **옛 시도에서는 새 작업으로 간다** — 실패 목록에서 옛 시도를 열면 이미 다시 가져왔다는 것을
   // 알 길이 없었다.
   const replaced = typeof meta.superseded_by === 'string' && meta.superseded_by ? meta.superseded_by : null
@@ -708,7 +712,7 @@ function PreviousAttempts({ meta }: { meta: Record<string, unknown> }) {
     return (
       <>
         {' '}
-        · 다시 가져옴 —{' '}
+        · {rerunTo != null ? `모드 ${rerunTo}개로 다시 걸음` : '다시 가져옴'} —{' '}
         <Link to={`/simulations/${replaced}`} className="font-medium hover:underline">
           새 작업 보기
         </Link>
@@ -719,7 +723,11 @@ function PreviousAttempts({ meta }: { meta: Record<string, unknown> }) {
   return (
     <>
       {' '}
-      · 다시 가져옴 — 앞선 시도{' '}
+      ·{' '}
+      {rerun?.modes != null
+        ? `모드 ${rerun.from_modes ?? '?'} → ${rerun.modes}개로 다시 걸음`
+        : '다시 가져옴'}{' '}
+      — 앞선 시도{' '}
       {previous.map((id, index) => (
         <span key={id}>
           {index > 0 && ', '}

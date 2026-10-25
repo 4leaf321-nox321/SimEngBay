@@ -45,6 +45,7 @@ from app.modules.simulations.schemas import (
     StudyMeasurementOut,
     StudyMoveRequest,
     StudyOut,
+    StudyRerunRequest,
     StudySummaryOut,
     StudyTableOut,
     ValuesOut,
@@ -622,6 +623,18 @@ def cancel_study(
 ) -> dict[str, int]:
     """DOE 한 벌의 끝나지 않은 설계점을 모두 멈춘다(내가 건 점만)."""
     return services.cancel_study(db, user=user, study_id=study_id)
+
+
+@router.post("/studies/{study_id}/rerun", response_model=DoeImportOut, status_code=201)
+def rerun_study(
+    study_id: str,
+    body: StudyRerunRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DoeImportOut:
+    """끝난 DOE 를 **모드 수만 바꿔** 다시 건다 — 점마다 마지막 작업의 입력을 그대로, 옛 작업은
+    기록으로 남는다(내가 건 점만). 도는 점이 있으면 409."""
+    return services.rerun_study(db, user=user, study_id=study_id, modes=body.modes)
 
 
 @router.delete("/studies/{study_id}", response_model=RemovedOut)

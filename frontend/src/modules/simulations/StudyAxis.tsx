@@ -36,6 +36,8 @@ export interface Axis {
   connect: boolean
   /** 그림에 놓을 점인가 — 단면을 골랐으면 그 단면의 점만. */
   shows: (point: StudyPoint) => boolean
+  /** 가로축이 숫자인가 — 아니면(재료) 선이 아니라 막대로 그린다. 안내 말도 그에 맞춘다. */
+  numeric: boolean
 }
 
 /** `primary` 는 처음 가로축을 고를 때 볼 결과 열(`mode:1` · `max_mm` …). */
@@ -53,6 +55,7 @@ export function useAxis(study: Study, primary: string): Axis {
   const key = picked?.x === x ? picked.key : (slices[Math.floor((slices.length - 1) / 2)]?.key ?? '')
   const slice = slices.find((one) => one.key === key) ?? null
   const many = factors.length > 1
+  const numeric = study.points.every((one) => typeof one.params[x] !== 'string')
   // 그림이 이것으로 점을 거른다 — 단면이 같으면 같은 함수라야 그림을 다시 셈하지 않는다.
   const shows = useCallback(
     (point: StudyPoint) => !many || slice === null || slice.numbers.has(point.number),
@@ -66,7 +69,23 @@ export function useAxis(study: Study, primary: string): Axis {
     setSlice: (next) => setPicked({ x, key: next }),
     connect: !many || slice !== null,
     shows,
+    numeric,
   }
+}
+
+/** 지금 그림이 무엇을 하나 — 숫자 축은 잇는다 · 안 잇는다, 고르는 값(재료) 축은 막대가 어떻게 서나. */
+function noteOf(axis: Axis): string {
+  if (axis.slice) {
+    return axis.numeric
+      ? `${axis.slice.label} 인 점 ${axis.slice.numbers.size}개만 잇습니다 — 단면을 바꿔 견줘 보세요.`
+      : `${axis.slice.label} 인 점 ${axis.slice.numbers.size}개만 ${axis.x} 마다 막대로 놓습니다 — 단면을 바꿔 견줘 보세요.`
+  }
+  if (!axis.numeric) {
+    return '나머지 변수가 함께 변해 막대마다 설계점을 붙입니다 — 같은 값의 막대가 여럿입니다.'
+  }
+  return axis.slices.length === 0
+    ? '나머지 변수가 같은 점끼리 묶이지 않아(무작위 · LHS 설계) 잇지 않고 점만 찍습니다.'
+    : '나머지 변수가 함께 변해 잇지 않고 점만 찍습니다 — 이으면 서로 다른 설계를 잇습니다.'
 }
 
 export function AxisPicker({ study, axis }: { study: Study; axis: Axis }) {
@@ -101,16 +120,10 @@ export function AxisPicker({ study, axis }: { study: Study; axis: Axis }) {
               {one.label}
             </option>
           ))}
-          <option value="">고정 안 함 — 점만</option>
+          <option value="">{axis.numeric ? '고정 안 함 — 점만' : '고정 안 함 — 점마다 막대'}</option>
         </select>
       </label>
-      <p className="text-muted-foreground text-xs">
-        {axis.slice
-          ? `${axis.slice.label} 인 점 ${axis.slice.numbers.size}개만 잇습니다 — 단면을 바꿔 견줘 보세요.`
-          : axis.slices.length === 0
-            ? '나머지 변수가 같은 점끼리 묶이지 않아(무작위 · LHS 설계) 잇지 않고 점만 찍습니다.'
-            : '나머지 변수가 함께 변해 잇지 않고 점만 찍습니다 — 이으면 서로 다른 설계를 잇습니다.'}
-      </p>
+      <p className="text-muted-foreground text-xs">{noteOf(axis)}</p>
     </div>
   )
 }

@@ -65,7 +65,18 @@ const DIRECTION_LABELS: Record<string, string> = {
   ROTZ: 'Z 회전',
 }
 
-/** 그림 밑에 쓰는 한 줄 — 주 방향(유효질량)과 전역 · 국부. */
+/**
+ * **어느 파트의 모드인가** — 파트가 둘 이상일 때 「기둥 98%」. 다중 바디에서는 국부 · 전역 한
+ * 마디보다 이것이 먼저다(고정된 받침판 위 기둥이 휘는 1차는 기둥의 모드다 — 국부성은 그 파트
+ * 안에서 잰다).
+ */
+function partOf(one: ModeResult): string | null {
+  if (!one.dominant_part) return null
+  const share = one.part_share?.[one.dominant_part]
+  return share != null ? `${one.dominant_part} ${Math.round(share * 100)}%` : one.dominant_part
+}
+
+/** 그림 밑에 쓰는 한 줄 — 주 방향(유효질량) · 파트 · 전역 · 국부. */
 function modeNote(one: ModeResult): string {
   const parts: string[] = []
   if (one.dominant_direction) {
@@ -75,6 +86,8 @@ function modeNote(one: ModeResult): string {
   } else if (one.dominant_axis) {
     parts.push(DIRECTION_LABELS[one.dominant_axis] ?? one.dominant_axis)
   }
+  const part = partOf(one)
+  if (part) parts.push(part)
   if (one.localization != null) parts.push(one.local_mode ? '국부' : '전역')
   return parts.join(' · ')
 }
@@ -277,6 +290,11 @@ export function ModalResult({ simulationId, result, artifacts }: Props) {
                       <TableCell>
                         {/* **값을 함께 보여 준다.** 「전역/국부」 는 경계가 하나인 판정이고, 경계
                             근처의 모드는 숫자를 봐야 판단이 선다(참여비: 1=전체, 0에 가까울수록 국부). */}
+                        {partOf(one) && (
+                          <span className="mr-1.5" title="이 모드에서 가장 많이 움직이는 파트와 그 몫">
+                            {partOf(one)}
+                          </span>
+                        )}
                         {one.localization == null ? (
                           <span className="text-muted-foreground text-sm">—</span>
                         ) : (
@@ -286,7 +304,7 @@ export function ModalResult({ simulationId, result, artifacts }: Props) {
                                 ? 'text-amber-700 dark:text-amber-400'
                                 : 'text-muted-foreground'
                             }
-                            title={`참여비 ${one.localization} — 1 이면 전체가 함께 움직이고, 0 에 가까울수록 한 구석만 떱니다`}
+                            title={`참여비 ${one.localization} — 움직이는 부피의 몫. 1 이면 ${one.dominant_part ? `${one.dominant_part} ` : ''}전체가 함께 움직이고, 0 에 가까울수록 한 구석만 떱니다`}
                           >
                             {one.local_mode ? '국부' : '전역'}{' '}
                             <span className="font-mono text-xs">{one.localization.toFixed(2)}</span>
@@ -349,6 +367,7 @@ export function ModalResult({ simulationId, result, artifacts }: Props) {
                           ` · 변위 X ${Math.round(currentMode.direction_share.x * 100)}% ·
                            Y ${Math.round(currentMode.direction_share.y * 100)}% ·
                            Z ${Math.round(currentMode.direction_share.z * 100)}%`}
+                        {partOf(currentMode) && ` · ${partOf(currentMode)}`}
                         {currentMode.localization != null &&
                           ` · ${currentMode.local_mode ? '국부' : '전역'} 모드(${currentMode.localization.toFixed(2)})`}
                       </p>

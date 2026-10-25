@@ -31,7 +31,7 @@ import { massScale, shownMass } from '@/modules/simulations/format'
 import { AxisPicker, useAxis } from '@/modules/simulations/StudyAxis'
 import { ChoiceMark, ChoicePanel, useChoice } from '@/modules/simulations/StudyChoice'
 import { FactorSummary } from '@/modules/simulations/StudySummary'
-import { caseName, caseTicks } from '@/modules/simulations/studyTable'
+import { barNames, caseName, caseTicks } from '@/modules/simulations/studyTable'
 import { Chart, Spectrum } from '@/shared/charts'
 import type { SpectrumLine, SpectrumPoint } from '@/shared/charts'
 import { colorAt } from '@/shared/charts'
@@ -87,7 +87,7 @@ function remedyOf(gap: Gap): string {
   if (gap.computed >= SEARCHED) {
     return `비교는 점마다 앞 ${SEARCHED}개 안에서만 찾습니다 — 이 점에서는 그 모드가 훨씬 높은 차수입니다.`
   }
-  return `이 점에서는 그 모드가 더 높은 차수로 밀려났을 가능성이 큽니다 — 모드 수를 ${SEARCHED}개로 늘려 다시 걸면 이어질 수 있습니다(같은 폴더는 한 번만 가져오므로 이 DOE 를 지우고 다시 가져옵니다).`
+  return `이 점에서는 그 모드가 더 높은 차수로 밀려났을 가능성이 큽니다 — 위의 「모드 수 바꿔 다시 걸기」 로 ${SEARCHED}개로 늘리면 이어질 수 있습니다(옛 결과는 기록으로 남습니다).`
 }
 
 function gapTitle(gap: Gap): string {
@@ -176,15 +176,18 @@ export function StudyOverview({ study }: { study: Study }) {
   /** 범주 변수일 때 — 가로는 값(재료 이름), 계열은 모드. **잇지 않는다.** */
   const bars = useMemo(() => {
     if (numeric) return []
-    return points.map((point) => {
-      const row: Record<string, unknown> = { name: String(point.params[x] ?? '—') }
+    // 단면을 골랐으면 그 점만 — 값마다 막대 하나. 아니면 겹치는 이름에 설계점을 붙인다.
+    const shown = points.filter(axis.shows)
+    const names = barNames(shown, x)
+    return shown.map((point) => {
+      const row: Record<string, unknown> = { name: names.get(point.number) }
       for (const track of tracks) {
         const hz = frequency(point, track)
         if (hz != null) row[`${track.reference}차`] = hz
       }
       return row
     })
-  }, [numeric, points, tracks, x])
+  }, [numeric, points, tracks, x, axis.shows])
 
   /** 모드 지도 — 선 하나가 **추적된 모드 하나**다. */
   const lines = useMemo<SpectrumLine[]>(

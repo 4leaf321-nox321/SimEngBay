@@ -249,6 +249,27 @@ describe('해석 작업 화면', () => {
     expect(await screen.findByText('DOE 화면')).toBeDefined()
   })
 
+  it('모드 수만 바꿔 다시 건 작업은 「다시 가져옴」 이 아니라 그렇게 말한다 — 옛 작업도 새 작업도', async () => {
+    const point = { study_id: 'st', study_name: '브래킷', point: 1 }
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('done'),
+      source_kind: 'doe_point',
+      source_meta: { ...point, previous: ['old'], rerun: { modes: 10, from_modes: 6 } },
+    } as Simulation)
+    const { unmount } = show()
+    expect(await screen.findByText(/모드 6 → 10개로 다시 걸음/)).toBeDefined()
+    unmount()
+
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('done'),
+      source_kind: 'doe_point',
+      source_meta: { ...point, superseded_by: 'new', rerun_to: 10 },
+    } as Simulation)
+    show()
+    expect(await screen.findByText(/모드 10개로 다시 걸음/)).toBeDefined()
+    expect(screen.getByRole('link', { name: '새 작업 보기' }).getAttribute('href')).toBe('/simulations/new')
+  })
+
   it('도는 작업은 지우지 않는다 — 먼저 멈춘다', async () => {
     vi.mocked(simulationApi.get).mockResolvedValue(job('solving'))
     vi.mocked(simulationApi.status).mockResolvedValue(job('solving'))

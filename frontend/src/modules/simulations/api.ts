@@ -68,9 +68,16 @@ export interface ModeResult {
   direction_share?: { x: number; y: number; z: number }
   /** 위 비중에서 절반을 넘는 축. 섞인 모드면 없다. */
   dominant_axis?: string
-  /** 전역(1)에서 국부(≈0)까지. 한 구석만 떠는 모드를 가려낸다. */
+  /**
+   * 전역(1)에서 국부(≈0)까지 — **움직이는 부피의 몫**(부피 가중 참여비). 한 구석만 떠는 모드를
+   * 가려낸다. 파트가 둘 이상이면 `dominant_part` **안에서** 잰 값이다.
+   */
   localization?: number
   local_mode?: boolean
+  /** 파트가 둘 이상일 때 파트마다 움직임의 몫(합 1) — 「어느 파트의 모드인가」. */
+  part_share?: Record<string, number>
+  /** 가장 많이 움직이는 파트. */
+  dominant_part?: string
 }
 
 /**
@@ -290,6 +297,9 @@ export const simulationApi = {
   /** DOE 한 벌의 끝나지 않은 설계점을 모두 멈춘다(내가 건 점만). */
   cancelStudy: (studyId: string) =>
     api.post<{ points: number }>(`/simulations/studies/${encodeURIComponent(studyId)}/cancel`),
+  /** 끝난 DOE 를 **모드 수만 바꿔** 다시 건다 — 점마다 같은 입력, 옛 결과는 기록으로(내가 건 점만). */
+  rerunStudy: (studyId: string, modes: number) =>
+    api.post<DoeImport>(`/simulations/studies/${encodeURIComponent(studyId)}/rerun`, { modes }),
   /**
    * DOE 폴더 훑어 보기 — **걸기 전에** 점 몇 개 · 변수 무엇 · 건너뛸 것 몇 개인지.
    *

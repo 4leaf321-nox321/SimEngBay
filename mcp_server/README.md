@@ -13,13 +13,13 @@ AI(Claude Code · Claude Desktop · HWAX 포털의 Claude)가 해석 작업을 �
 - **해석이 늘어도 그대로** — 입력 칸은 `recipe_schema`(백엔드의 `GET /simulations/recipes`), 결과는 서버가
   단위를 맞춘 견줄 값(`GET /simulations/{id}/values`, 늘 mm · MPa · N · Hz).
 
-## 도구(26)
+## 도구(27)
 
 | 흐름 | 도구 |
 | --- | --- |
 | 안내 · 나 | `get_guide` · `whoami` · `recipe_schema` |
 | CAD 폴더 | `folder_find`(CompCore 스터디 id · 이름으로 — 경로를 몰라도) · `folder_browse` · `folder_preview`(스터디 · 설계점 하나 — 조건이 어떻게 걸리나) |
-| 걸기 · 보기 | `jobs_create` · `jobs_list` · `job_get`(기다리기) · `job_result` · `job_retry` · `job_cancel` · `study_cancel`(DOE 통째로) |
+| 걸기 · 보기 | `jobs_create` · `jobs_list` · `job_get`(기다리기) · `job_result` · `job_retry` · `job_cancel` · `study_cancel`(DOE 통째로) · `study_rerun`(DOE 를 모드 수만 바꿔 다시) |
 | 견주기 | `studies_list` · `study_get` · `study_analyze`(민감도 · 주효과 · 조건을 건 최적점 — 서버가 셈한다) · `convergence_start` · `convergence_get` · `measurement_add` · `measurements_get` |
 | 서버 · 정리 | `server_status`(솔버마다 워커 · 줄, 관리자는 워커까지) · `files_tidy`(중간 파일 — 사용자가 시킬 때만) · `jobs_folders` · `jobs_move`(사람이 나눈 정리 폴더 — CAD 공유 폴더와 다르다) |
 | 게시 | `job_publish` · `study_publish`(사용자가 시킬 때만) |

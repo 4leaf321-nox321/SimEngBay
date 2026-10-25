@@ -362,6 +362,14 @@ class DoeImportRequest(BaseModel):
     하나를 고를 때 쓴다."""
 
 
+class StudyRerunRequest(BaseModel):
+    """끝난 DOE 를 **모드 수만 바꿔** 다시 건다 — 비교가 끊긴 DOE 를 고치는 길."""
+
+    modes: int = Field(ge=1, le=100)
+    """새로 구할 탄성 모드 수. DOE 비교는 기준점의 앞 6개를 점마다 앞 10개 안에서 잇는다 —
+    10 을 권한다."""
+
+
 class DoeImportOut(BaseModel):
     study_id: str
     name: str

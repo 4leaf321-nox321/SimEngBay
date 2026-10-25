@@ -1766,7 +1766,7 @@ def import_doe(
         name=doe.name,
         created=created,
         skipped=skipped,
-        notes=_import_notes(doe, spec),
+        notes=_mode_notes(spec, single=doe.single),
     )
 
 
@@ -1788,15 +1788,15 @@ def _with_cad_modes(
     return spec_raw, spec
 
 
-def _import_notes(doe: DoeFolder, spec: ModalSpec | StaticSpec | HarmonicSpec) -> list[str]:
-    """가져오면서 **사람이 알아야 할 것** — 막지는 않는다.
+def _mode_notes(spec: ModalSpec | StaticSpec | HarmonicSpec, *, single: bool) -> list[str]:
+    """DOE 를 걸면서(가져오기 · 다시 걸기) **사람이 알아야 할 것** — 막지는 않는다.
 
     DOE 비교는 기준점의 앞 `MAX_TRACKS` 개 모드를 점마다 모양으로 이어 견준다. 구한 모드가 그
     수뿐이면 치수에 따라 모드가 위로 밀려나 선이 끊긴다(실측 2026-10-25: 외팔보 두께 x 폭 20점,
     6개만 구해 폭 방향 2차 굽힘이 14점에서 끊겼다).
     """
     compared = study_analysis.MAX_TRACKS
-    if isinstance(spec, ModalSpec) and not doe.single and spec.modes <= compared:
+    if isinstance(spec, ModalSpec) and not single and spec.modes <= compared:
         return [
             f"모드를 {spec.modes}개만 구합니다 — DOE 비교는 기준점의 앞 {compared}개 모드를 "
             f"점마다 모양으로 이어 견주는데, 구한 수가 그만큼뿐이면 치수에 따라 모드가 위로 "
@@ -3650,6 +3650,7 @@ def tidy_study(db: Session, *, user: User, study_id: str) -> dict[str, Any]:
 SIMULATION_DELETED = "simulation.deleted"
 STUDY_DELETED = "study.deleted"
 STUDY_CANCELED = "study.canceled"
+STUDY_RERUN = "study.rerun"
 
 
 def remove(db: Session, *, user: User, simulation_id: uuid.UUID) -> dict[str, int]:
@@ -3752,6 +3753,138 @@ def cancel_study(db: Session, *, user: User, study_id: str) -> dict[str, int]:
         )
         db.commit()
     return {"points": len(open_points)}
+
+
+def rerun_study(db: Session, *, user: User, study_id: str, modes: int) -> DoeImportOut:
+    """끝난 DOE 를 **모드 수만 바꿔** 다시 건다 — 점마다 작업 하나, 옛 작업은 기록으로 남는다.
+
+    왜: 6개만 구한 DOE 에서 치수에 따라 모드가 위로 밀려나 비교가 끊겼다(2026-10-25 외팔보
+    두께 x 폭). 같은 폴더는 한 번만 가져오므로(`import_doe`) 전에는 DOE 를 지우고 다시
+    가져와야 했다 — 결과를 지워야 고칠 수 있었다. 이제 **점마다 마지막 작업의 입력**(STEP · 점
+    파일 · 중간면)을 그대로 옮겨 모드 수만 바꾼 새 작업을 만들고, 옛 작업에는 대신한 작업을
+    적는다(`superseded_by` — 실패 점을 다시 가져올 때와 같은 표시). 스터디는 점마다 마지막
+    작업으로 견주므로(`_latest_per_point`) 비교는 새 결과로 바뀐다.
+
+    - 도는 점이 있으면 거절한다 — 끝나고 다시 건다(옛 것과 새 것이 함께 돌면 비교가 섞인다).
+    - 바꾸는 것은 **내가 건 점**뿐이다(시스템 관리자는 전부). 게시는 옮기지 않는다 — 새 결과를
+      확인한 뒤 다시 게시한다.
+    - 입력 파일이 정리돼 없는 점은 걸지 않고 까닭을 돌려준다.
+    """
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
+    mine = _my_points(user, points)
+    if any(not is_final(one.status) for one in mine):
+        raise AppError(
+            code("SIMULATIONS", 39),
+            "도는 설계점이 있습니다 — 모두 끝난 뒤에 다시 거세요"
+            "(옛 결과와 새 결과가 섞입니다).",
+            status=409,
+        )
+    recipes = {str((one.spec or {}).get("recipe")) for one in mine}
+    if not recipes <= {"modal", "harmonic"}:
+        raise AppError(
+            code("SIMULATIONS", 39),
+            "모드 수는 모달 · 조화 해석에만 있습니다.",
+            status=400,
+        )
+    if all(int((one.spec or {}).get("modes") or 0) == modes for one in mine):
+        raise AppError(
+            code("SIMULATIONS", 39),
+            f"이미 모드 {modes}개로 풀었습니다 — 다른 수를 주세요.",
+            status=400,
+        )
+
+    created: list[uuid.UUID] = []
+    skipped: list[DoePointPreview] = []
+    for old in mine:
+        number = int(old.source_meta.get("point") or 0)
+        params = dict(old.source_meta.get("params") or {})
+        source = resolve_work_path(f"{old.work_dir}/{INPUT_NAME}") if old.work_dir else None
+        if source is None or not source.is_file():
+            skipped.append(
+                DoePointPreview(
+                    number=number,
+                    params=params,
+                    usable=False,
+                    skip_reason=(
+                        "입력 형상 파일이 없습니다(정리됐거나 옛 작업) — 다시 걸 수 없습니다."
+                    ),
+                )
+            )
+            continue
+        topology_path = resolve_work_path(f"{old.work_dir}/{TOPOLOGY_NAME}")
+        mid_path = resolve_work_path(f"{old.work_dir}/{MIDSURFACE_NAME}")
+        workspace = (
+            db.get(Workspace, old.owner_workspace_id) if old.owner_workspace_id else None
+        )
+        spec = dict(old.spec or {})
+        # 칸이 없는 옛 작업이면 원래 솔버(Ansys)를 적어 둔다 — 새 기본값으로 바뀌지 않게.
+        spec.setdefault("solver", solver_of(old))
+        spec["modes"] = modes
+        meta = {
+            key: value
+            for key, value in (old.source_meta or {}).items()
+            if key not in ("superseded_by", "previous")
+        }
+        meta["previous"] = [str(old.id)]
+        meta["rerun"] = {"modes": modes, "from_modes": (old.spec or {}).get("modes")}
+        with source.open("rb") as stream:
+            simulation = create(
+                db,
+                user=user,
+                spec_raw=spec,
+                workspace_slug=workspace.slug if workspace else None,
+                name=old.name,
+                filename=INPUT_NAME,
+                stream=stream,
+                topology=(
+                    topology_path.read_bytes()
+                    if topology_path is not None and topology_path.is_file()
+                    else None
+                ),
+                midsurface=(
+                    mid_path.read_bytes()
+                    if mid_path is not None and mid_path.is_file()
+                    else None
+                ),
+                source_kind=old.source_kind,
+                source_ref=old.source_ref,
+                source_meta=meta,
+            )
+        # 사람이 나눠 둔 정리 폴더는 그대로 — 안 그러면 새 점들이 「폴더 없음」 으로 흩어진다.
+        simulation.folder = old.folder
+        # 「다시 가져옴」 과 가른다 — 화면이 「모드 10개로 다시 걸음」 이라고 말한다.
+        old.source_meta = {
+            **(old.source_meta or {}),
+            "superseded_by": str(simulation.id),
+            "rerun_to": modes,
+        }
+        created.append(simulation.id)
+        db.commit()
+
+    name = str(points[0].source_meta.get("study_name") or study_id)
+    audit.record(
+        db,
+        action=STUDY_RERUN,
+        actor=user,
+        target_table="simulations",
+        target_id=None,
+        target_label=name,
+        workspace_id=points[0].owner_workspace_id,
+        changes={"study_id": study_id, "points": len(created), "modes": modes},
+    )
+    db.commit()
+    spec_now = _parsed_spec({**dict(mine[0].spec or {}), "modes": modes})
+    single = all(one.source_kind == "design" for one in mine)
+    return DoeImportOut(
+        study_id=study_id,
+        name=name,
+        created=created,
+        skipped=skipped,
+        notes=_mode_notes(spec_now, single=single),
+    )
 
 
 def _attempts_of(db: Session, user: User, simulation: Simulation) -> list[Simulation]:

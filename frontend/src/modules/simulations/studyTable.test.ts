@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Study, StudyPoint } from '@/modules/simulations/api'
 import {
+  barNames,
   caseTicks,
   chooseFrom,
   columnsOf,
@@ -308,5 +309,31 @@ describe('slicesOf · leadingFactor — 변수가 여럿일 때 어디까지 잇
     expect(leadingFactor(widthFirst, 'max_mm')).toBe('두께')
     expect(leadingFactor(widthFirst, 'mass_kg')).toBe('폭')
     expect(leadingFactor(study([point(1, { 두께: 2 })], { factors: ['두께'] }), 'max_mm')).toBeNull()
+  })
+})
+
+describe('고르는 값(재료)이 섞인 여러 변수 DOE', () => {
+  const MIXED = [
+    point(1, { 재료: 'SS400', 두께: 2 }),
+    point(2, { 재료: 'AL6061', 두께: 2 }),
+    point(3, { 재료: 'SS400', 두께: 3 }),
+    point(4, { 재료: 'AL6061', 두께: 3 }),
+  ]
+
+  it('재료 축이어도 나머지(두께)가 같은 점끼리 단면으로 묶는다 — 「LHS 라 안 묶인다」 가 아니다', () => {
+    expect(slicesOf(MIXED, ['재료', '두께'], '재료').map((one) => [one.label, [...one.numbers]])).toEqual([
+      ['두께 = 2', [1, 2]],
+      ['두께 = 3', [3, 4]],
+    ])
+  })
+
+  it('막대 이름이 겹치면 설계점을 붙이고, 단면 안에서는 값 그대로', () => {
+    expect([...barNames(MIXED, '재료').values()]).toEqual([
+      'SS400 · p0001',
+      'AL6061 · p0002',
+      'SS400 · p0003',
+      'AL6061 · p0004',
+    ])
+    expect([...barNames(MIXED.slice(0, 2), '재료').values()]).toEqual(['SS400', 'AL6061'])
   })
 })

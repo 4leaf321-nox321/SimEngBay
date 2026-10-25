@@ -4,7 +4,8 @@
 모양을 읽으므로, 솔버가 바뀌었다고 다른 모양을 내면 전부 손봐야 한다. 그래서 같은 열쇠를 쓴다 —
 고유진동수 · **유효질량비**(`.dat` 의 유효모달질량 ÷ 전체 유효질량) · **모드 형상**(`.frd` 의
 변위를 `.vtp` 로) · **모드 지문**(`signature` — 설계점 사이에서 같은 모드를 잇는다. 2026-10-24
-전에는 Ansys 쪽에만 있어서 CalculiX DOE 의 「모드 지도」 가 비었다). **없는 것은 넣지
+전에는 Ansys 쪽에만 있어서 CalculiX DOE 의 「모드 지도」 가 비었다) · **성격**(변위 축 비중 ·
+전역/국부 — 2026-10-25 까지 Ansys 에만). **없는 것은 넣지
 않는다**: 썸네일 PNG 는 안 만든다(pyvista 가 필요하고, 화면은 3D 뷰어로 본다). 비어 있는 것과
 0 은 다르다.
 
@@ -25,7 +26,7 @@ from app.core import conditions as condition_model
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, tables, vtp
 from app.core.calculix.mesh import Mesh, read_mesh
-from app.core.modes import signature
+from app.core.modes import metrics, signature
 from app.core.numbers import significant
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -89,7 +90,7 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     shapes, parts = _draw_modes(
         workdir, found, [one["number"] for one in elastic[:VISUAL_MODES]], modes
     )
-    _sign_modes(found, elastic)
+    _describe_modes(workdir, found, elastic)
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
     # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
@@ -174,14 +175,92 @@ def _read_shapes(workdir: Path) -> tuple[Mesh, list[frd_reader.Block]] | None:
 _STILL = [0.0, 0.0, 0.0]
 
 
-def _sign_modes(
-    found: tuple[Mesh, list[frd_reader.Block]] | None, wanted: list[dict[str, Any]]
-) -> None:
-    """탄성 모드마다 **지문**을 붙인다 — 설계점 사이에서 같은 모드를 잇는 열쇠(`core/modes`).
+def _volume_weights(mesh: Mesh, workdir: Path, ids: list[int]) -> dict[str, list[float]]:
+    """절점마다 맡은 **부피**(mm³)를 파트마다 — 성격(`metrics.describe`)이 메시와 무관해지게.
 
-    Ansys 쪽과 **같은 규칙**이다(`core/modes/signature.py`). 칸마다 가까운 절점은 메시 하나에
-    한 번만 찾는다. **못 뽑으면 지문만 없다** — 잇는 쪽이 「모른다」 로 두고, 해석은 끝난
-    것이다.
+    사면체는 꼭짓점 넷으로 잰 부피를 그 요소의 절점에 고르게 나눈다. 쉘은 중간면 삼각형의 넓이
+    x 두께(모델링이 남긴 `boundary.json` 의 `shells.thickness` — 그 전 작업이면 접을 거리에서
+    되짚는다). 파트 이름은 그림과 같다(`vtp.parted` — 바디는 `bodies`, 쉘은 `shells.parts`).
+    """
+    index = {node: at for at, node in enumerate(ids)}
+    boundary: dict[str, Any] = {}
+    path = workdir / BOUNDARY_NAME
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            boundary = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            logger.warning("%s 를 읽지 못했습니다 — 파트 이름 없이 잽니다", BOUNDARY_NAME)
+    bodies = boundary.get("bodies")
+    name_of = {
+        int(entity): str(name)
+        for name, entity in (bodies.items() if isinstance(bodies, dict) else [])
+        if isinstance(entity, int)
+    }
+    found_shells = boundary.get("shells")
+    shells: dict[str, Any] = found_shells if isinstance(found_shells, dict) else {}
+    shell_names = {int(key): str(value) for key, value in (shells.get("parts") or {}).items()}
+    thickness = shells.get("thickness") or {}
+    reach = shells.get("reach")
+    # 두께를 안 남긴 옛 작업 — 접을 거리는 가장 두꺼운 쉘의 0.55 배다(`build`).
+    guessed = float(reach) / 0.55 if reach else 0.0
+    parts: dict[str, list[float]] = {}
+
+    def add(name: str, nodes: list[int], amount: float) -> None:
+        if amount <= 0 or not nodes:
+            return
+        row = parts.setdefault(name, [0.0] * len(ids))
+        share = amount / len(nodes)
+        for node in nodes:
+            at = index.get(node)
+            if at is not None:
+                row[at] += share
+
+    for entity, rows in mesh.solids.items():
+        name = name_of.get(entity, f"solid{entity}")
+        for _, nodes in rows:
+            a, b, c, d = (mesh.nodes[one] for one in nodes[:4])
+            add(name, nodes, abs(_triple(_minus(b, a), _minus(c, a), _minus(d, a))) / 6.0)
+    for surface in sorted(int(one) for one in shells.get("surfaces") or []):
+        name = shell_names.get(surface, f"쉘 {surface}")
+        depth = float(thickness.get(name) or guessed)
+        for triangle in mesh.face_triangles.get(surface, []):
+            a, b, c = (mesh.nodes[one] for one in triangle)
+            cross = _cross(_minus(b, a), _minus(c, a))
+            add(name, list(triangle), 0.5 * sum(one * one for one in cross) ** 0.5 * depth)
+    return parts
+
+
+def _minus(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, float, float]:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _cross(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _triple(a: tuple[float, ...], b: tuple[float, ...], c: tuple[float, ...]) -> float:
+    cross = _cross(b, c)
+    return a[0] * cross[0] + a[1] * cross[1] + a[2] * cross[2]
+
+
+def _describe_modes(
+    workdir: Path,
+    found: tuple[Mesh, list[frd_reader.Block]] | None,
+    wanted: list[dict[str, Any]],
+) -> None:
+    """탄성 모드마다 **성격과 지문**을 붙인다 — Ansys 쪽(`dpf/extract._describe_modes`)과 같은
+    열쇠 · 같은 셈(`core/modes`).
+
+    - `direction_share` · `dominant_axis` — 변위가 주로 어느 축인가(비율이라 정규화와 무관).
+    - `localization` · `local_mode` — 전체가 함께 움직이나, 한 구석만 떠는가(부피 가중 참여비).
+      전에는 CalculiX 결과의 「성격」 칸이 늘 비었다(2026-10-25).
+    - `part_share` · `dominant_part` — 바디가 둘 이상이면 어느 파트가 움직이나(국부 · 전역은 그
+      파트 안에서).
+    - `signature` — 설계점 사이에서 같은 모드를 잇는 열쇠. 칸마다 가까운 절점은 메시 하나에 한
+      번만 찾는다.
+
+    **못 셈하면 그 값만 없다** — 화면이 「—」 로 두고, 해석은 끝난 것이다.
     """
     if found is None or not wanted:
         return
@@ -192,14 +271,28 @@ def _sign_modes(
         return
     try:
         spots = [ids[index] for index in signature.anchors([mesh.nodes[node] for node in ids])]
-        for mode in wanted:
-            number = int(mode["number"])
-            if number > len(blocks):
-                continue
-            rows = blocks[number - 1].values
-            mode["signature"] = signature.fingerprint(rows.get(node, _STILL) for node in spots)
-    except Exception:  # pragma: no cover - 값이 깨진 경우
-        logger.warning("모드 지문을 못 뽑았습니다 — 지문 없이 갑니다", exc_info=True)
+    except Exception:  # pragma: no cover - 좌표가 깨진 경우
+        logger.warning("모드 지문 자리를 못 찾았습니다 — 지문 없이 갑니다", exc_info=True)
+        spots = []
+    try:
+        parts: dict[str, list[float]] | None = _volume_weights(mesh, workdir, ids) or None
+    except Exception:  # pragma: no cover - 메시가 깨진 경우
+        logger.warning("절점의 부피를 못 쟀습니다 — 절점 수로 셉니다", exc_info=True)
+        parts = None
+    weights = [sum(column) for column in zip(*parts.values(), strict=True)] if parts else None
+    for mode in wanted:
+        number = int(mode["number"])
+        if number > len(blocks):
+            continue
+        rows = blocks[number - 1].values
+        try:
+            vectors = [rows.get(node, _STILL)[:3] for node in ids]
+            mode.update(metrics.describe(vectors, weights, parts))
+            if spots:
+                picked = (rows.get(node, _STILL) for node in spots)
+                mode["signature"] = signature.fingerprint(picked)
+        except Exception:  # pragma: no cover - 값이 깨진 경우
+            logger.warning("모드 %s 의 성격을 못 셈했습니다", number, exc_info=True)
 
 
 def _probe_modes(

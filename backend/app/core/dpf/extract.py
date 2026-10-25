@@ -20,7 +20,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.dpf import fields, metrics, participation, probes, shapes, signature
+from app.core import conditions as condition_model
+from app.core import surface_parts
+from app.core.bodies import BodyRecord
+from app.core.dpf import fields, participation, probes, shapes, signature
+from app.core.modes import metrics
 from app.core.spec import RIGID_BODY_MODES, ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -106,7 +110,7 @@ def extract(
     # **변위에서 읽는 지표는 모든 모드에 붙인다.** 그림(VTP · PNG)은 앞 몇 개만 만들지만,
     # 「이 모드가 어느 축으로 · 전체가 함께 움직이나」 는 표의 모든 줄이 필요로 한다 —
     # 자유-자유에서는 유효질량비가 0 이라 이것 말고는 모드를 설명할 말이 없다.
-    _describe_modes(rst, modes)
+    _describe_modes(rst, workdir, modes)
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
     # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
@@ -198,16 +202,86 @@ def _probe_modes(
     return made
 
 
-def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:
-    """모드마다 축 비중 · 국부성을 붙인다.
+def _volume_weights(mesh: Any, workdir: Path) -> dict[str, Any]:
+    """절점마다 맡은 **부피**를 파트마다 — CalculiX 쪽(`calculix/read._volume_weights`)과 같은
+    뜻이라 두 솔버의 성격(`metrics.describe`)이 같은 값을 낸다(메시가 달라도).
 
-    **실패해도 해석은 끝난 것이다** — 설명이 빠질 뿐 고유진동수는 이미 나왔다.
+    Ansys 결과에는 파트 이름이 없다. **서로 이어지지 않은 요소 덩어리가 바디다** — 그림의 파트
+    나누기(`surface_parts`)와 같은 규칙으로, 덩어리마다 부피 · 무게중심을 재 CAD 바디 지문과
+    짝지어 이름을 붙인다(못 짝지으면 「파트 N」). 쉘(2차원 요소)은 넓이 x CAD 가 적은 쉘
+    두께다(여럿이면 평균 — 요소마다 어느 쉘인지는 모른다). 절점 순서는 메시 순서다
+    (`fields.ordered_by` 와 같다).
+    """
+    import numpy as np
+
+    grid = mesh.grid
+    count = int(mesh.nodes.n_nodes)
+    if int(grid.n_points) != count:
+        raise ValueError(f"격자 점 {grid.n_points} 개와 절점 {count} 개가 맞지 않습니다")
+    sizes = grid.compute_cell_sizes(length=False, area=True, volume=True)
+    volume = np.abs(np.asarray(sizes.cell_data["Volume"], dtype=float))
+    area = np.abs(np.asarray(sizes.cell_data["Area"], dtype=float))
+    unit = str(getattr(mesh, "unit", "") or "").strip().lower()
+    to_mm = shapes.LENGTH_TO_MM.get(unit, 1000.0)
+    path = workdir / shapes.TOPOLOGY_NAME
+    topology = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    depths = list(condition_model.read(topology).shells.values()) if topology else []
+    depth = (sum(depths) / len(depths) / to_mm) if depths else 0.0
+    amount = np.where(volume > 0, volume, area * depth)
+
+    offsets = np.asarray(grid.offset, dtype=np.int64)
+    links = np.asarray(grid.cell_connectivity, dtype=np.int64)
+    sizes_per_cell = np.diff(offsets)
+    cells = [links[offsets[at] : offsets[at + 1]].tolist() for at in range(len(offsets) - 1)]
+    labels = np.asarray(surface_parts.components(cells, count), dtype=np.int64)
+    groups = int(labels.max()) + 1 if len(labels) else 0
+    centers = np.asarray(grid.cell_centers().points, dtype=float)
+    records = []
+    for label in range(groups):
+        inside = labels == label
+        total = float(volume[inside].sum())
+        if total <= 0:
+            continue  # 쉘 덩어리 — 부피 지문이 없어 짝지을 수 없다
+        center = (centers[inside] * volume[inside, None]).sum(axis=0) / total * to_mm
+        records.append(
+            BodyRecord(
+                index=label,
+                volume=total * to_mm**3,
+                centroid=(float(center[0]), float(center[1]), float(center[2])),
+            )
+        )
+    names = surface_parts.names_for(groups, records, topology)
+
+    owner = np.repeat(np.arange(len(sizes_per_cell)), sizes_per_cell)
+    share = (amount / np.maximum(sizes_per_cell, 1))[owner]
+    parts: dict[str, Any] = {}
+    for label in range(groups):
+        picked = labels[owner] == label
+        weights = np.zeros(count, dtype=float)
+        np.add.at(weights, links[picked], share[picked])
+        if weights.sum() > 0:
+            parts[names[label]] = weights
+    return parts
+
+
+def _describe_modes(rst: Path, workdir: Path, modes: list[dict[str, Any]]) -> None:
+    """모드마다 **성격**(축 비중 · 부피 가중 국부성 · 파트) · 지문을 붙인다 — CalculiX 쪽과
+    같은 열쇠 · 같은 셈(`core/modes`).
+
+    **실패해도 해석은 끝난 것이다** — 설명이 빠질 뿐 고유진동수는 이미 나왔다. 부피를 못 재면
+    절점 수로 센다(옛 방식).
     """
     try:
         from ansys.dpf import core as dpf
 
         model = dpf.Model(str(rst))
         mesh = model.metadata.meshed_region
+        try:
+            parts: dict[str, Any] | None = _volume_weights(mesh, workdir) or None
+        except Exception:
+            logger.warning("절점의 부피를 못 쟀습니다 — 절점 수로 셉니다", exc_info=True)
+            parts = None
+        weights = sum(parts.values()) if parts else None
         for one in modes:
             if one["rigid_body"]:
                 # 강체 모드는 「통째로 움직이는 것」 이라 국부성이 뜻을 갖지 않는다. 표에서도
@@ -216,14 +290,7 @@ def _describe_modes(rst: Path, modes: list[dict[str, Any]]) -> None:
             field = model.results.displacement.on_time_scoping([int(one["number"])]).eval()[0]
             # **메시 절점 순서로 맞춘다**(`fields.py`) — 필드의 순서는 메시와 다르다.
             vectors = fields.ordered_by(mesh.nodes.scoping.ids, field)
-            share = metrics.direction_share(vectors)
-            one["direction_share"] = share
-            axis = metrics.dominant_axis(share)
-            if axis is not None:
-                one["dominant_axis"] = axis
-            value = metrics.localization(vectors)
-            one["localization"] = value
-            one["local_mode"] = metrics.is_local(value)
+            one.update(metrics.describe(vectors, weights, parts))
             # **설계점 사이에서 같은 모드를 잇는 열쇠**(core/modes). 만드는 데 메시가
             # 필요하고 그것은 여기에만 있다 — 잇는 계산은 서버가 지문만으로 한다.
             try:

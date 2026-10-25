@@ -10,8 +10,12 @@
 from __future__ import annotations
 
 import json
+import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from app.core import conditions
 
@@ -435,3 +439,30 @@ def test_모르는_단위나_빈_제안은_쓰지_않는다() -> None:
     # 조건이 비어도(형상만 보낸 폴더) 제안은 읽는다 — 조건 밖에 온다.
     shapes_only = {**payload, "conditions": {}}
     assert conditions.read(shapes_only).global_size(1.0) == (2.0, "compcore")
+
+
+def test_회전_속도의_축은_두_솔버가_같이_푼다() -> None:
+    """Ansys(성분 + 회전 중심)와 CalculiX(`CENTRIF`)가 `spin_axis` 하나를 쓴다 — 못 풀면 까닭을
+    문장으로 돌려준다(두 쪽이 같은 말로 막는다)."""
+    spin = conditions.Load(
+        name="회전",
+        kind="rotational_velocity",
+        magnitude=180.0,
+        unit="deg/s",
+        direction=(0, 0, 2),
+    )
+    found = conditions.spin_axis(spin, [])
+    assert isinstance(found, conditions.SpinAxis)
+    assert found.omega == pytest.approx(math.pi)
+    assert found.point == (0.0, 0.0, 0.0)
+    assert found.axis == (0.0, 0.0, 1.0)
+    assert conditions.spin_axis(replace(spin, unit="rev/s"), []) == (
+        "각속도 단위 「rev/s」 를 모릅니다 — rad/s · rpm · deg/s."
+    )
+    assert conditions.spin_axis(replace(spin, cs="축"), []) == "좌표계 「축」 가 없습니다."
+    assert conditions.spin_axis(replace(spin, direction=(0, 0, 0)), []) == (
+        "크기나 축 방향이 0 입니다."
+    )
+    assert conditions.spin_axis(replace(spin, direction=None), []) == (
+        "크기 · 축 방향이 있어야 합니다."
+    )

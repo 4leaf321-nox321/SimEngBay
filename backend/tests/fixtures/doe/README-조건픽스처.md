@@ -378,6 +378,12 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 
 ## 읽을 때 알아 둘 것
 
+- **2026-10-26 — `study.json` 에 `ontology`(대상 작업에 이은 기준정보)**(CompCore `77953c4`). 더한 열쇠뿐이고
+  이 폴더들의 픽스처에는 아직 없다(CompCore 쪽 픽스처도 그렇다) — 없으면 `{"tags": [], "links": []}` 로
+  읽는다(`app/core/doe/folder.read_ontology`). `tags[]`(작업의 태그) · `links[]`(부품 · 지그의 기준정보 칸 —
+  `on` · `relation_label`「적용 모델」 · `key` · `label` · `type_slug` …) 모양은 CompCore README 그대로다.
+  가져올 때 점마다 `source_meta.ontology` 에 싣고 미리보기 · 「해석」 목록 · DOE 화면 · MCP `study_get` 이
+  보인다. 우리 온톨로지 사본(SP 수신)에 같은 타입 · 식별자의 객체가 있으면 그 객체로 잇는다.
 - **2026-10-23 — 시험 지그(강체)에도 재료가 붙는다**(CompCore `4fc33fe` · v0.17.0, SimEngBay 의 요청). 「시험_보드굽힘_JESD22」 ·
   「시험_숏빔전단_D2344」 · 「시험_핀베어링_D5961」 을 CompCore 가 다시 뽑은 그대로 옮겼다 — 강체 지그(`롤러_*` ·
   `로딩_노즈*` · `핀`)는 「일반 구조용 강(지그 기본)」(`ref.source = "compcore-default"`, E 200 GPa · ν 0.3 ·

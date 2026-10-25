@@ -174,6 +174,16 @@ def build(
     held = _held_nodes(topology, given, mesh)
     constrained = plan_constrained(given, spec)
     shapes = _region_shapes(topology)
+    # 탄성 지지의 법선 스프링 · 볼트 예압의 단면 — 세 레시피가 같은 것을 쓴다(덱이 고른다).
+    springs = _support_springs(topology, given, mesh)
+    stress_mpa = system.stress_pa / units.STRESS_UNITS["mpa"]
+    # 볼트는 메시를 가른다 — 정적과 선응력 모달이 같은 갈라진 메시를 쓴다(조화는 볼트를 안
+    # 건다 — 덱이 까닭을 단다).
+    bolts, nodes, solids = (
+        _cut_bolts(topology, given, mesh, shapes)
+        if not isinstance(spec, HarmonicSpec)
+        else ({}, mesh.nodes, mesh.solids)
+    )
     # 원격점 자리 — 세 레시피가 같은 것을 쓴다(`deck._holds`). 강제 변위는 선언된 단위계의
     # 길이로 오므로 `system.length_mm` 을 함께 준다.
     centers = _region_centers(topology)
@@ -200,12 +210,14 @@ def build(
             ties=ties,
             centers=centers,
             length_mm=system.length_mm,
+            springs=springs,
+            stress_mpa=stress_mpa,
         )
     elif isinstance(spec, StaticSpec):
         places, areas, faces = _load_places(topology, given, mesh)
         plan = deck_writer.write_static(
-            nodes=mesh.nodes,
-            solids=mesh.solids,
+            nodes=nodes,
+            solids=solids,
             body_of=body_of,
             materials=materials,
             held_nodes=held,
@@ -225,9 +237,13 @@ def build(
             ties=ties,
             centers=centers,
             length_mm=system.length_mm,
+            springs=springs,
+            stress_mpa=stress_mpa,
+            bolts=bolts,
         )
     else:
         preload: list[str] | None = None
+        bolt_stage: tuple[list[str], list[str], list[str]] | None = None
         contact_faces: dict[str, list[tuple[int, str]]] | None = None
         if use_contact or given.prestressed:
             # **선응력 모달** — 비선형 정적을 앞에 두고 그 상태에서 모드를 뽑는다. 하중 줄은
@@ -235,8 +251,8 @@ def build(
             places, areas, faces = _load_places(topology, given, mesh)
             contact_faces = _contact_faces(topology, given, mesh) if use_contact else None
             ahead = deck_writer.write_static(
-                nodes=mesh.nodes,
-                solids=mesh.solids,
+                nodes=nodes,
+                solids=solids,
                 body_of=body_of,
                 materials=materials,
                 held_nodes=held,
@@ -253,16 +269,21 @@ def build(
                 ties=ties,
                 centers=centers,
                 length_mm=system.length_mm,
+                springs=springs,
+                stress_mpa=stress_mpa,
+                bolts=bolts,
             )
             preload = ahead.load_rows or None
+            if ahead.bolt_rows:
+                bolt_stage = (ahead.bolt_model, ahead.bolt_rows, ahead.bolt_locks)
             # **앞 정적 단계가 못 건 하중은 이 해석의 답을 바꾼다** — 조이는 하중이 빠진 채
             # 선응력 모달이 돌면 그냥 모달과 같은 값이 그럴듯하게 나온다. 그래서 막는다.
             # 구속 · 접촉의 말은 모달 덱이 똑같이 하고, 「하중이 없다」 는 접촉만 있는
             # 모달에서는 뜻이 없다 — 하중의 말만 옮긴다.
             refused_loads = [one for one in ahead.refused if one.what.startswith("하중 「")]
         plan = deck_writer.write_modal(
-            nodes=mesh.nodes,
-            solids=mesh.solids,
+            nodes=nodes,
+            solids=solids,
             body_of=body_of,
             materials=materials,
             held_nodes=held,
@@ -280,6 +301,9 @@ def build(
             ties=ties,
             centers=centers,
             length_mm=system.length_mm,
+            springs=springs,
+            stress_mpa=stress_mpa,
+            bolt_stage=bolt_stage,
         )
     plan.skipped += layout.skipped
     plan.refused += refused_loads
@@ -1144,7 +1168,11 @@ def _load_places(
     받는다.
     면을 찾는 일은 구속과 똑같이 `app/core/regions` 가 한다.
     """
-    wanted = [load.region for load in given.loads if load.region]
+    # 볼트 예압은 면이 아니라 **단면**으로 건다(`_cut_bolts`) — 바디로 걸었으면 거기서 까닭을
+    # 단다(여기서 짝짓다 「자리를 못 찾았다」 로 먼저 멈추지 않게).
+    wanted = [
+        load.region for load in given.loads if load.region and load.kind != "bolt_pretension"
+    ]
     if not wanted or not topology:
         return {}, {}, {}
     found = match_regions(topology, mesh.faces, wanted_regions=wanted)
@@ -1258,3 +1286,151 @@ def _mass_kg(
         "mass_kg"
     ]
     return found
+
+
+def _support_springs(
+    topology: dict[str, Any], given: condition_model.Conditions, mesh: Any
+) -> deck_writer.Springs:
+    """탄성 지지 영역 → 절점마다 (맡은 넓이 mm², 단위 법선) — 덱이 법선 스프링을 붙인다.
+
+    넓이는 힘을 나눌 때와 같은 규칙이다(`tributary_areas` — 요소면의 절점 전부에 고르게).
+    법선은 그 절점이 닿은 요소면 법선을 넓이로 더한 것이다 — 같은 기하 면의 삼각형은 감긴
+    방향이 같아서 서로 지우지 않는다. 스프링은 방향의 부호와 상관없다.
+    """
+    wanted = [rule.region for rule in given.constraints if rule.kind == "elastic_support"]
+    if not wanted or not topology:
+        return {}
+    found = match_regions(topology, mesh.faces, wanted_regions=wanted)
+    springs: deck_writer.Springs = {}
+    for name, ids in found.faces.items():
+        area: dict[int, float] = {}
+        normal: dict[int, list[float]] = {}
+        for face in ids:
+            for ring in mesh.face_rings.get(face, []):
+                a, b, c = (mesh.nodes[one] for one in ring[:3])
+                cross = deck_writer._cross(
+                    [b[axis] - a[axis] for axis in range(3)],
+                    [c[axis] - a[axis] for axis in range(3)],
+                )
+                size = sum(one * one for one in cross) ** 0.5 / 2
+                if size <= 0:
+                    continue
+                for node in ring:
+                    area[node] = area.get(node, 0.0) + size / len(ring)
+                    mine = normal.setdefault(node, [0.0, 0.0, 0.0])
+                    for axis in range(3):
+                        mine[axis] += cross[axis]
+        made: dict[int, tuple[float, tuple[float, float, float]]] = {}
+        for node, share in area.items():
+            vector = normal[node]
+            length = sum(one * one for one in vector) ** 0.5
+            if length > 0:
+                made[node] = (
+                    share,
+                    (vector[0] / length, vector[1] / length, vector[2] / length),
+                )
+        springs[name] = made
+        logger.info(
+            "탄성 지지 %s → 절점 %s · 넓이 %.4g mm²", name, len(made), sum(area.values())
+        )
+    return springs
+
+
+Nodes = dict[int, tuple[float, float, float]]
+Solids = dict[int, list[tuple[int, list[int]]]]
+
+
+def _cut_bolts(
+    topology: dict[str, Any],
+    given: condition_model.Conditions,
+    mesh: Any,
+    shapes: dict[str, dict[str, Any]],
+) -> tuple[dict[str, deck_writer.BoltSection | str], Nodes, Solids]:
+    """볼트 예압 하중 → **볼트를 가른 단면**(못 세우면 까닭)과 **갈라진 메시**(절점 · 솔리드).
+
+    - 축과 단면 자리는 **CAD 가 잰 원통면 지문**(`axis` · `centroid`)이다 — 원통면의 가운데를
+      지나 축에 수직인 평면. 바디로 건 예압은 받지 않는다 — CompCore 는 바디 이름표를 면
+      지문으로 풀지 않고(`regions` 에 없다), Ansys 쪽도 면으로만 짝짓는다.
+    - 그 원통면 절점을 가장 많이 가진 솔리드가 볼트다. 볼트의 요소를 **무게중심이 평면의
+      어느 쪽인가**로 둘로 가르고, 두 쪽이 함께 쓰는 절점을 앞쪽에서만 새 번호로 바꾼다
+      (`deck.BoltSection`). 정적과 그 뒤의 모달이 **같은 갈라진 메시**를 써야 하므로 한 번만
+      가른다.
+    """
+    out: dict[str, deck_writer.BoltSection | str] = {}
+    nodes: Nodes = dict(mesh.nodes)
+    solids: Solids = {key: list(rows) for key, rows in mesh.solids.items()}
+    for load in given.loads:
+        if load.kind != "bolt_pretension":
+            continue
+        shape = shapes.get(load.region) or {}
+        if not (shape.get("axis") and shape.get("centroid")):
+            out[load.name] = (
+                f"볼트 예압은 볼트 몸통의 원통면에 겁니다 — 「{load.region}」 은 원통면이"
+                " 아닙니다(바디로 건 예압은 아직 못 겁니다)."
+            )
+            continue
+        found = match_regions(topology, mesh.faces, wanted_regions=[load.region])
+        members: set[int] = set()
+        for face in found.faces.get(load.region, []):
+            members |= mesh.face_nodes.get(face, set())
+        counts = {
+            key: sum(1 for _, ids in rows for node in ids if node in members)
+            for key, rows in solids.items()
+        }
+        entity = max(counts, key=lambda key: counts[key]) if members and counts else None
+        if entity is None:
+            out[load.name] = f"원통면 「{load.region}」 을 메시에서 못 찾았습니다."
+            continue
+        point = [float(one) for one in shape["centroid"]]
+        axis = [float(one) for one in shape["axis"]]
+        length = sum(one * one for one in axis) ** 0.5
+        unit = [one / length for one in axis] if length else [0.0, 0.0, 1.0]
+        rows, pairs = _split(nodes, solids[entity], point, unit)
+        if not pairs:
+            out[load.name] = "볼트를 가를 단면이 비었습니다 — 단면 자리가 볼트 밖입니다."
+            continue
+        solids[entity] = rows
+        for behind, ahead in pairs:
+            nodes[ahead] = nodes[behind]
+        out[load.name] = deck_writer.BoltSection(
+            pairs=tuple(pairs),
+            point=(point[0], point[1], point[2]),
+            axis=(unit[0], unit[1], unit[2]),
+        )
+        logger.info("볼트 %s → 솔리드 %s · 단면 절점 %s", load.name, entity, len(pairs))
+    return out, nodes, solids
+
+
+def _split(
+    nodes: Nodes,
+    rows: list[tuple[int, list[int]]],
+    point: list[float],
+    axis: list[float],
+) -> tuple[list[tuple[int, list[int]]], list[tuple[int, int]]]:
+    """솔리드 하나를 평면(점 · 법선)의 앞뒤로 가른다 — **앞쪽 요소의 경계 절점을 새 번호로**.
+
+    경계 절점은 두 쪽 요소가 함께 쓰는 것 모두다 — 면으로 맞닿는 것뿐 아니라 모서리 ·
+    꼭짓점으로만 닿는 것까지(그것을 남기면 예압이 그 길로 샌다). 새 번호는 지금 절점 끝 다음
+    부터다. 돌려주는 것: 바뀐 요소 줄 · (원래 절점, 새 절점) 짝.
+    """
+
+    def ahead(ids: list[int]) -> bool:
+        corners = [nodes[one] for one in ids[:4]]
+        center = [sum(one[at] for one in corners) / 4 for at in range(3)]
+        return sum((center[at] - point[at]) * axis[at] for at in range(3)) > 0
+
+    sides = [ahead(ids) for _, ids in rows]
+    front: set[int] = set()
+    back: set[int] = set()
+    for (_, ids), side in zip(rows, sides, strict=True):
+        (front if side else back).update(ids)
+    shared = sorted(front & back)
+    if not shared:
+        return rows, []
+    start = max(nodes) + 1
+    renamed = {node: start + at for at, node in enumerate(shared)}
+    out = [
+        (number, [renamed.get(node, node) for node in ids] if side else ids)
+        for (number, ids), side in zip(rows, sides, strict=True)
+    ]
+    return out, [(node, renamed[node]) for node in shared]

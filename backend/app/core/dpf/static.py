@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import boundary
-from app.core.dpf import probes, shapes
+from app.core.dpf import fields, probes, shapes
 from app.core.spec import StaticSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -63,7 +63,7 @@ def extract(
         nodes, elements = int(mesh.nodes.n_nodes), int(mesh.elements.n_elements)
         system = str(model.metadata.result_info.unit_system_name)
         displacement = model.results.displacement.eval()[0]
-        max_displacement, displacement_unit = _peak(displacement)
+        max_displacement, displacement_unit = _peak(displacement, _body_nodes(mesh))
         stress, stress_unit = _von_mises(model)
         # **측정점** — 전체 최대는 구속 모서리의 수치적 첨두일 수 있고 센서는 그 자리에 없다.
         # 실측과 견줄 수 있는 값은 이쪽이고, CalculiX 쪽과 **같은 모양**으로 적는다.
@@ -122,16 +122,48 @@ def extract(
     )
 
 
-def _peak(field: Any) -> tuple[float, str]:
-    """벡터장의 최대 크기와 단위."""
+def _peak(field: Any, nodes: Any = None) -> tuple[float, str]:
+    """벡터장의 최대 크기와 단위. `nodes` 를 주면 그 절점 안에서만(`_body_nodes`)."""
     import numpy as np
 
-    data = np.asarray(field.data)
+    data = np.asarray(field.data) if nodes is None else fields.ordered_by(nodes, field)
     if data.size == 0:
         return 0.0, str(field.unit or "")
     if data.ndim == 2:
         return float(np.max(np.linalg.norm(data, axis=1))), str(field.unit or "")
     return float(np.max(np.abs(data))), str(field.unit or "")
+
+
+def _body_nodes(mesh: Any) -> Any:
+    """**몸의 절점** — 솔리드 · 쉘 모양 요소가 쓰는 절점 번호. 못 가르면 `None`(전부 본다).
+
+    결과 메시에는 몸이 아닌 절점도 있다 — 볼트 예압 절점(PRETS179, DPF 는 `Line3`)과 원격점의
+    파일럿(점 요소). 예압 절점의 「변위」 는 **조임량**이라, 전부에서 최대를 고르면 볼트의
+    조임량이 최대 변형으로 나왔다(실측 2026-10-26: 몸 1.26e-3 mm, 조임량 2.51e-3 mm).
+    Mechanical 의 Total Deformation 도 바디에서만 잰다. 강체 파트는 대상 요소(쉘 모양)로 남아
+    빠지지 않는다(`shapes._without_overlays`). CalculiX 쪽은 덱이 메시 절점만 낸다(`NALL`).
+    """
+    import numpy as np
+    from ansys.dpf import core as dpf
+
+    try:
+        kinds = np.asarray(mesh.elements.element_types_field.data)
+        body = {
+            int(one)
+            for one in np.unique(kinds)
+            if dpf.element_types.descriptor(int(one)).shape in ("solid", "shell")
+        }
+        if len(body) == len(np.unique(kinds)):
+            return None
+        scoping = dpf.Scoping(
+            ids=np.asarray(mesh.elements.scoping.ids)[np.isin(kinds, list(body))],
+            location=dpf.locations.elemental,
+        )
+        part = dpf.operators.mesh.from_scoping(scoping=scoping, mesh=mesh).outputs.mesh()
+        return np.asarray(part.nodes.scoping.ids)
+    except Exception:  # pragma: no cover - 판마다 칸이 다를 수 있다
+        logger.warning("몸의 절점을 못 갈랐습니다 — 전 절점에서 최대를 잽니다", exc_info=True)
+        return None
 
 
 def _strains(model: Any) -> Any:

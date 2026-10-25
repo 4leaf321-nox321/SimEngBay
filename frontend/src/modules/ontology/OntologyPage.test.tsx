@@ -109,9 +109,9 @@ const SS400: OntologyObjectDetail = {
   incoming: [],
 }
 
-function show() {
+function show(at = '/ontology') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[at]}>
       <OntologyPage />
     </MemoryRouter>,
   )
@@ -165,6 +165,12 @@ describe('온톨로지', () => {
     expect(await screen.findByText('나가는 선')).toBeDefined()
     // 표 · 칸 · 선 — 공급사 이름이 세 자리에 보인다.
     expect(screen.getAllByText(/ACME 정밀/).length).toBeGreaterThan(2)
+    expect(ontologyApi.object).toHaveBeenCalledWith('material', 'SS400')
+  })
+
+  it('주소에 타입 · 식별자가 있으면 그 객체를 바로 연다(DOE 의 기준정보에서 온다)', async () => {
+    show('/ontology?type=material&key=SS400')
+    expect(await screen.findByText('나가는 선')).toBeDefined()
     expect(ontologyApi.object).toHaveBeenCalledWith('material', 'SS400')
   })
 

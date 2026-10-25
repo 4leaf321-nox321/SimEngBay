@@ -25,6 +25,7 @@ import { RECIPE_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { listPath } from '@/modules/simulations/SimulationsLayout'
 import { StudyMeasurements } from '@/modules/simulations/StudyMeasurements'
+import { StudyOntology } from '@/modules/simulations/StudyOntology'
 import { StudyExplorer } from '@/modules/simulations/StudyExplorer'
 import { StudyOverview } from '@/modules/simulations/StudyOverview'
 import { StudyValues } from '@/modules/simulations/StudyValues'
@@ -195,6 +196,10 @@ export default function StudyDetailPage() {
               // 서로 다른 모드를 잇는다. 끝난 점이 없으면(막 다시 걸었다) 아직 이을 것이 없을 뿐이다.
               <> · 모드 지문이 없어 차수로만 견줍니다(다시 걸면 지문이 생깁니다)</>
             ) : null}
+            {/* 무엇의 해석인가 — CAD 가 그 작업에 이은 기준정보(적용 모델 · 태그). */}
+            <span className="mt-1.5 block">
+              <StudyOntology ontology={study.data.ontology} />
+            </span>
           </>
         }
         back={

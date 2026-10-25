@@ -41,6 +41,7 @@ CompCore 는 점 파일에 조건 한 벌을 실어 보낸다: 구속 7종 · �
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -1093,8 +1094,6 @@ def euler_xyz(frame: Frame) -> tuple[float, float, float]:
     만들면 원래 축이 나와야 한다 — 시험이 그것을 본다(둘이 어긋나면 성분이 딴 방향으로 걸리고,
     그 사실은 결과를 봐도 모른다).
     """
-    import math
-
     # 열이 각 축인 회전행렬 R = [x y z] 이고, 고정축 X → Y → Z 는 R = Rz·Ry·Rx 다.
     # 그래서 R[2][0] = -sin(pitch) · R[2][1] = cos(pitch)sin(roll) ·
     # R[1][0] = sin(yaw)cos(pitch) 다.
@@ -1106,3 +1105,88 @@ def euler_xyz(frame: Frame) -> tuple[float, float, float]:
         roll = math.atan2(-frame.z_axis[1], frame.y_axis[1])
         yaw = 0.0
     return tuple(round(math.degrees(one), 9) for one in (roll, pitch, yaw))  # type: ignore[return-value]
+
+
+#: 각속도 단위 → rad/s. CompCore 는 rad/s 로 보낸다 — 나머지는 사람이 적은 조건을 위해.
+ANGULAR_UNITS = {"rad/s": 1.0, "rpm": 2 * math.pi / 60, "deg/s": math.pi / 180}
+#: 볼트 예압의 단위 — 힘이면 N 으로, 길이(조임량)면 mm 로 가는 곱수. `unit` 이 둘을 가른다
+#: (CompCore: 「볼트만 예압(힘) · 조임량(길이)을 `unit` 으로 고른다」).
+PRELOAD_FORCE_UNITS = {"n": 1.0, "kn": 1e3}
+PRELOAD_LENGTH_UNITS = {"mm": 1.0, "m": 1e3, "cm": 10.0, "um": 1e-3}
+
+
+def preload_unit(load: Load) -> str:
+    """볼트 예압 단위의 열쇠(소문자 · 칸 없이) — 비어 있으면 힘(N)이다."""
+    return (load.unit or "N").replace(" ", "").lower()
+
+
+@dataclass(frozen=True)
+class SpinAxis:
+    """회전 속도 하나를 전역으로 푼 것 — 두 솔버가 같은 축을 쓴다."""
+
+    omega: float
+    """rad/s."""
+    point: tuple[float, float, float]
+    """축 위의 한 점 — **선언된 계의 길이**(좌표계 원점이 그렇게 온다)."""
+    axis: tuple[float, float, float]
+    """전역 단위 벡터."""
+
+
+def spin_axis(load: Load, frames: list[Frame]) -> SpinAxis | str:
+    """회전 속도 → 전역 축. 못 풀면 **까닭**(문장)을 돌려준다.
+
+    축은 **좌표계 원점을 지나고**(CompCore 계약 — 전역이면 원점), 방향은 그 좌표계의
+    성분이다.
+    """
+    if load.magnitude is None or load.direction is None:
+        return "크기 · 축 방향이 있어야 합니다."
+    scale = ANGULAR_UNITS.get((load.unit or "rad/s").replace(" ", "").lower())
+    if scale is None:
+        return f"각속도 단위 「{load.unit}」 를 모릅니다 — rad/s · rpm · deg/s."
+    point = (0.0, 0.0, 0.0)
+    axis = tuple(float(one) for one in load.direction)
+    if load.cs not in GLOBAL_FRAMES:
+        frame = next((one for one in frames if one.name == load.cs), None)
+        if frame is None:
+            return f"좌표계 「{load.cs}」 가 없습니다."
+        point = frame.origin
+        axis = _rotated(load.direction, frame)
+    length = sum(one * one for one in axis) ** 0.5
+    omega = load.magnitude * scale
+    if length == 0 or omega == 0:
+        return "크기나 축 방향이 0 입니다."
+    return SpinAxis(
+        omega,
+        point,
+        (axis[0] / length, axis[1] / length, axis[2] / length),
+    )
+
+
+#: 방향 성분을 좌표계(`cs`)로 읽는 하중 — 회전 속도는 축이 그 원점을 지나 따로 푼다
+#: (`spin_axis`). 압력은 면의 법선이다.
+DIRECTED_IN_FRAME = ("force", "moment", "bearing", "acceleration", "standard_earth_gravity")
+
+
+def _rotated(vector: tuple[float, ...], frame: Frame) -> tuple[float, float, float]:
+    """좌표계의 성분 → 전역 성분(축이 단위 벡터다 — 원점은 옮기지 않는다)."""
+    bases = (frame.x_axis, frame.y_axis, frame.z_axis)
+    x, y, z = (
+        sum(float(vector[k]) * basis[i] for k, basis in enumerate(bases)) for i in range(3)
+    )
+    return (x, y, z)
+
+
+def in_global(load: Load, frames: list[Frame]) -> Load | str:
+    """방향 성분을 **전역으로** 옮긴 하중 — 두 솔버가 전역 성분만 다룬다. 좌표계를 못 찾으면
+    까닭(문장)을 돌려준다.
+
+    CompCore 계약: 방향 성분의 축은 `cs` 다(구속과 같다). 전에는 두 솔버가 그 칸을 안 보고
+    성분을 전역으로 읽었다 — 돌린 좌표계로 적은 힘이 딴 방향으로 걸렸다(2026-10-26 고침).
+    CalculiX 는 가속도 · 모멘트를 아예 거절했다.
+    """
+    if load.kind not in DIRECTED_IN_FRAME or load.cs in GLOBAL_FRAMES or not load.direction:
+        return load
+    frame = next((one for one in frames if one.name == load.cs), None)
+    if frame is None:
+        return f"좌표계 「{load.cs}」 가 없습니다."
+    return replace(load, direction=_rotated(load.direction, frame), cs="global")

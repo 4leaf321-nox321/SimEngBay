@@ -842,7 +842,8 @@ async def study_get(ctx: Context, study_id: str) -> Any:
     """스터디 하나의 **설계점 비교** — 점마다 바꾼 값(`params`)과 그 결과(1차 공진 · 질량 ·
     최대 변위 · 최대 응력 · 반력 · 측정점, 늘 mm · MPa · N · Hz), 그리고 모드 추적(치수가
     바뀌어 모드 순서가 뒤바뀌어도 같은 모드끼리 잇는다). 「두께가 늘면 1차 공진이 어떻게
-    되나」 같은 물음에 답하는 자리다."""
+    되나」 같은 물음에 답하는 자리다. `ontology` 는 CAD 가 그 작업에 이은 기준정보다 — 태그와
+    부품 · 지그의 칸(「적용 모델」 …)으로 **무엇의 해석인가**를 말한다(없으면 비어 있다)."""
     got = await _get(ctx, f"/api/simulations/studies/{study_id}")
     if isinstance(got, dict) and isinstance(got.get("points"), list):
         got["points"] = [_compact(one) for one in got["points"]]

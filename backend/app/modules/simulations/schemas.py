@@ -248,6 +248,44 @@ class SimulationCreateForm(BaseModel):
     name: str | None = Field(default=None, max_length=120)
 
 
+class OntologyRefOut(BaseModel):
+    """CompCore 가 이은 기준정보 객체 하나 — 내보낼 때의 사본(`study.json` 의 `ontology`)."""
+
+    object_id: str = ""
+    key: str = ""
+    label: str
+    type_slug: str = ""
+    type_label: str = ""
+    known: bool = False
+    """우리 온톨로지 사본(SP 수신)에 같은 타입 · 식별자의 객체가 있나 — 있으면 화면이 그
+    객체로 잇는다. 「일반 태그」(`cc_tag`)처럼 CompCore 에만 있는 것은 없다."""
+
+
+class OntologyOwnerOut(BaseModel):
+    """기준정보 칸의 주인 — CompCore 의 부품 · 지그."""
+
+    kind: str = ""
+    """`part` · `jig`."""
+    id: str = ""
+    name: str = ""
+
+
+class OntologyLinkOut(OntologyRefOut):
+    """부품 · 지그의 기준정보 칸 한 줄 — 「(부품) — 적용 모델: (객체)」."""
+
+    on: OntologyOwnerOut = Field(default_factory=OntologyOwnerOut)
+    relation: str = ""
+    relation_label: str = ""
+
+
+class StudyOntologyOut(BaseModel):
+    """DOE 대상 작업에 이은 기준정보 — **「무엇의 해석인가」 를 폴더만 보고 안다**(CompCore
+    2026-10-26). 그 전에 내보낸 폴더면 둘 다 비어 있다."""
+
+    tags: list[OntologyRefOut] = Field(default_factory=list)
+    links: list[OntologyLinkOut] = Field(default_factory=list)
+
+
 class DoePointPreview(BaseModel):
     """가져오기 전에 보여 줄 한 줄 — **걸 수 있나, 아니면 왜 못 거나.**"""
 
@@ -296,6 +334,8 @@ class DoePreviewOut(BaseModel):
     돈다** — 둘 다 없으면 설계점마다 메시 단계에서 멈춘다."""
     suggested_large_deflection: bool | None = None
     """CAD 가 정적에 적은 큰 변형 — 창이 미리 채운다(사람이 고칠 수 있다)."""
+    ontology: StudyOntologyOut = Field(default_factory=StudyOntologyOut)
+    """대상 작업에 이은 기준정보(태그 · 적용 모델 …) — 걸기 전에 무엇의 해석인가를 본다."""
     conditions: ConditionsOut | None = None
     """조건이 든 첫 점의 조건이 그 해석 종류에서 어떻게 다뤄지나(반영 · 넘김 · 막음). 조건 없는
     폴더면 비운다."""
@@ -403,6 +443,8 @@ class StudySummaryOut(BaseModel):
     """그 설계점 작업들의 폴더(가장 많은 것) — 해석 작업과 한 폴더 공간이다."""
     created_at: datetime
     finished_at: datetime | None = None
+    ontology: StudyOntologyOut = Field(default_factory=StudyOntologyOut)
+    """대상 작업에 이은 기준정보 — 목록이 「적용 모델」 을 줄에 보인다."""
 
 
 class StudyTableOut(BaseModel):
@@ -502,6 +544,8 @@ class StudyOut(BaseModel):
     reference_point: int | None = None
     """모드를 잇는 기준이 된 설계점. 지문이 있는 첫 점이다."""
     tracks: list[ModeTrackOut] = Field(default_factory=list)
+    ontology: StudyOntologyOut = Field(default_factory=StudyOntologyOut)
+    """대상 작업에 이은 기준정보(태그 · 부품 · 지그의 기준정보 칸) — 가져올 때의 사본."""
 
 
 # --- DOE 분석 — 화면의 「다변수」 탭과 같은 표 · 같은 셈(`analysis.py`) ----------------------

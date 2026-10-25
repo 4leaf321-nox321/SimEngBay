@@ -4,9 +4,13 @@
  * 정본은 Standard Platform 이다. 여기서는 고치지 않는다 — 양쪽에서 고칠 수 있게 두면 다음 수신이
  * 한쪽 수정을 말없이 덮는다(SP 연동 지침서 §12-A 2). 바뀌는 길은 SP 에서 고치고 다음 수신을
  * 기다리거나, 시스템 관리자가 「지금 받기」 를 누르는 것이다.
+ *
+ * `?type=<slug>&key=<식별자>` 로 오면 그 타입을 고르고 그 객체를 연다 — DOE 화면이 CompCore 가
+ * 이은 기준정보(적용 모델 …)를 여기로 잇는다(`StudyOntology`).
  */
 
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import {
   ontologyApi,
@@ -53,8 +57,10 @@ export default function OntologyPage() {
   const status = useResource(() => ontologyApi.status(), [])
   const types = useResource(() => ontologyApi.types(), [])
   const runs = useResource(() => ontologyApi.runs(), [])
+  const [params] = useSearchParams()
+  const asked = { type: params.get('type'), key: params.get('key') }
   const [tab, setTab] = useState('types')
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(asked.type)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const running = Boolean(status.data?.running)
@@ -134,7 +140,14 @@ export default function OntologyPage() {
               onToggle={(slug, enabled) => void toggle(slug, enabled)}
             />
           )}
-          {chosen && <ObjectBrowser key={chosen.slug} kind={chosen} types={types.data ?? []} />}
+          {chosen && (
+            <ObjectBrowser
+              key={chosen.slug}
+              kind={chosen}
+              types={types.data ?? []}
+              initialKey={chosen.slug === asked.type ? asked.key : null}
+            />
+          )}
         </TabsContent>
         <TabsContent value="runs" className="pt-4">
           <RunTable runs={runs.data ?? []} />
@@ -315,12 +328,21 @@ function shownValue(value: unknown, property?: OntologyProperty, refLabels: Reco
   return property?.unit && text ? `${text} ${property.unit}` : text
 }
 
-function ObjectBrowser({ kind, types }: { kind: OntologyType; types: OntologyType[] }) {
+function ObjectBrowser({
+  kind,
+  types,
+  initialKey = null,
+}: {
+  kind: OntologyType
+  types: OntologyType[]
+  /** 처음 열어 둘 객체(주소의 `key`). */
+  initialKey?: string | null
+}) {
   const [q, setQ] = useState('')
   const [query, setQuery] = useState('')
   const [includeInactive, setIncludeInactive] = useState(false)
   const [offset, setOffset] = useState(0)
-  const [opened, setOpened] = useState<string | null>(null)
+  const [opened, setOpened] = useState<string | null>(initialKey)
   const page = useResource(
     () => ontologyApi.objects(kind.slug, { q: query, includeInactive, limit: PAGE, offset }),
     [kind.slug, query, includeInactive, offset],

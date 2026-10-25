@@ -77,6 +77,7 @@ from app.core.stages import (
     StageFailure,
 )
 from app.modules.accounts.models import User
+from app.modules.ontology import services as ontology_services
 from app.modules.simulations import analysis as study_analysis
 from app.modules.simulations.models import (
     FINAL_STATUSES,
@@ -109,6 +110,8 @@ from app.modules.simulations.schemas import (
     LicenseHolderOut,
     MeasurementOut,
     ModeTrackOut,
+    OntologyLinkOut,
+    OntologyRefOut,
     QueueOut,
     RecipeOut,
     RegionOut,
@@ -120,6 +123,7 @@ from app.modules.simulations.schemas import (
     StudyAnalysisOut,
     StudyMatchOut,
     StudyMeasurementOut,
+    StudyOntologyOut,
     StudyOut,
     StudyPointOut,
     StudySummaryOut,
@@ -1264,7 +1268,9 @@ def preview_doe_point(
     return preview_conditions(point.point_file.read_bytes(), recipe=recipe)
 
 
-def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
+def preview_doe(
+    path_text: str, *, recipe: str | None = None, db: Session | None = None
+) -> DoePreviewOut:
     """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유, 그리고 **첫 점의
     조건이 그 해석 종류에서 어떻게 다뤄지나**(반영 · 넘김 · 막음)."""
     doe = _read_doe(path_text)
@@ -1291,7 +1297,36 @@ def preview_doe(path_text: str, *, recipe: str | None = None) -> DoePreviewOut:
         suggested_element_size_basis=analysis.element_size_basis,
         suggested_order=analysis.order,
         suggested_large_deflection=analysis.large_deflection,
+        ontology=study_ontology(db, doe.ontology),
     )
+
+
+def study_ontology(db: Session | None, raw: Any) -> StudyOntologyOut:
+    """`study.json` 의 `ontology`(가져올 때 점마다 실은 사본) → 화면 · MCP 가 읽는 모양.
+
+    줄마다 **우리 온톨로지 사본에 같은 객체가 있나**(`known`)를 단다 — CompCore 의 기준정보도
+    Standard Platform 의 객체를 이식한 것이라 타입 · 식별자가 같으면 같은 객체다. 있으면 화면이
+    그 객체(온톨로지 화면)로 잇는다. `db` 가 없으면 잇지 않는다.
+    """
+    block = raw if isinstance(raw, dict) else {}
+    tags = [OntologyRefOut.model_validate(one) for one in block.get("tags") or []]
+    links = [OntologyLinkOut.model_validate(one) for one in block.get("links") or []]
+    every: list[OntologyRefOut] = [*tags, *links]
+    if db is not None:
+        pairs = {(one.type_slug, one.key) for one in every if one.type_slug and one.key}
+        found = ontology_services.labels_for(db, pairs)
+        for one in every:
+            one.known = (one.type_slug, one.key) in found
+    return StudyOntologyOut(tags=tags, links=links)
+
+
+def _points_ontology(db: Session, points: list[Simulation]) -> StudyOntologyOut:
+    """스터디의 기준정보 — **가장 늦게 가져온 점**의 사본(다시 내보내 가져오면 새것이다)."""
+    carried = [one for one in points if one.source_meta.get("ontology")]
+    if not carried:
+        return StudyOntologyOut()
+    newest = max(carried, key=lambda one: one.created_at)
+    return study_ontology(db, newest.source_meta.get("ontology"))
 
 
 @dataclass(frozen=True)
@@ -1720,6 +1755,9 @@ def import_doe(
             "unit_system": point.unit_system,
             "folder": str(doe.path),
         }
+        if doe.ontology.get("tags") or doe.ontology.get("links"):
+            # **대상 작업에 이은 기준정보** — 스터디는 행이 없으므로 점마다 싣는다(이름처럼).
+            meta["ontology"] = doe.ontology
         if point.number in earlier:
             # 앞선 시도(실패 · 취소) — 왜 다시 가져왔는지 그 작업에서 읽는다.
             meta["previous"] = [str(one.id) for one in earlier[point.number]]
@@ -1938,6 +1976,7 @@ def list_studies(
                 folder=place,
                 created_at=first.created_at,
                 finished_at=max(finished) if len(finished) == len(points) else None,
+                ontology=_points_ontology(db, points),
             )
         )
     out.sort(key=lambda one: one.created_at, reverse=True)
@@ -2035,6 +2074,7 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
             _study_point(one, results[int(one.source_meta.get("point") or 0)])
             for one in points
         ],
+        ontology=_points_ontology(db, points),
     )
 
 

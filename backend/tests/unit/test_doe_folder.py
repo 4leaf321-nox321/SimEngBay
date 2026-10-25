@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -325,3 +326,72 @@ def test_인자가_없는_폴더는_설계_하나다(tmp_path: Path) -> None:
     )
     widened = read_folder(copy)
     assert widened.factors == [] and widened.points[0].params == {}
+
+
+#: CompCore 가 2026-10-26 부터 `study.json` 에 싣는 기준정보 — 대상 작업의 태그와 부품의 칸.
+ONTOLOGY = {
+    "tags": [
+        {
+            "object_id": "11111111-1111-1111-1111-111111111111",
+            "key": "TAG-1",
+            "label": "고객사 A",
+            "type_slug": "customer",
+            "type_label": "고객사",
+        },
+        {"label": "", "type_slug": "cc_tag"},
+        "모양이 틀린 줄",
+    ],
+    "links": [
+        {
+            "on": {"kind": "part", "id": "p-1", "name": "브래킷"},
+            "relation": "applies_to",
+            "relation_label": "적용 모델",
+            "object_id": "22222222-2222-2222-2222-222222222222",
+            "key": "VM-001",
+            "label": "차종 X",
+            "type_slug": "vehicle_model",
+            "type_label": "차종",
+            "extra": "모르는 칸",
+        }
+    ],
+}
+
+
+def test_대상_작업에_이은_기준정보를_읽는다(tmp_path: Path) -> None:
+    """`ontology` 는 더한 열쇠다 — 그 전 폴더에는 없고 그때는 빈 두 목록이다(CompCore 계약).
+    이름 없는 줄 · 모양이 틀린 줄은 버리고, 아는 칸만 글자로 옮긴다."""
+    assert read_folder(FOLDER).ontology == {"tags": [], "links": []}
+
+    folder = tmp_path / FOLDER.name
+    shutil.copytree(FOLDER, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    (folder / "study.json").write_text(
+        json.dumps({**study, "ontology": ONTOLOGY}, ensure_ascii=False), encoding="utf-8"
+    )
+    read = read_folder(folder).ontology
+    assert read["tags"] == [
+        {
+            "object_id": "11111111-1111-1111-1111-111111111111",
+            "key": "TAG-1",
+            "label": "고객사 A",
+            "type_slug": "customer",
+            "type_label": "고객사",
+        }
+    ]
+    assert read["links"] == [
+        {
+            "on": {"kind": "part", "id": "p-1", "name": "브래킷"},
+            "relation": "applies_to",
+            "relation_label": "적용 모델",
+            "object_id": "22222222-2222-2222-2222-222222222222",
+            "key": "VM-001",
+            "label": "차종 X",
+            "type_slug": "vehicle_model",
+            "type_label": "차종",
+        }
+    ]
+    # 모양이 통째로 틀려도 폴더는 읽힌다 — 기준정보만 빈다.
+    (folder / "study.json").write_text(
+        json.dumps({**study, "ontology": ["틀림"]}, ensure_ascii=False), encoding="utf-8"
+    )
+    assert read_folder(folder).ontology == {"tags": [], "links": []}

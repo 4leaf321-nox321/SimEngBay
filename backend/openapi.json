@@ -7217,6 +7217,9 @@
             ],
             "title": "Suggested Large Deflection"
           },
+          "ontology": {
+            "$ref": "#/components/schemas/StudyOntologyOut"
+          },
           "conditions": {
             "anyOf": [
               {
@@ -8442,6 +8445,58 @@
         ],
         "title": "OntologyEdgeOut"
       },
+      "OntologyLinkOut": {
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "title": "Object Id",
+            "default": ""
+          },
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "default": ""
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug",
+            "default": ""
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label",
+            "default": ""
+          },
+          "known": {
+            "type": "boolean",
+            "title": "Known",
+            "default": false
+          },
+          "on": {
+            "$ref": "#/components/schemas/OntologyOwnerOut"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation",
+            "default": ""
+          },
+          "relation_label": {
+            "type": "string",
+            "title": "Relation Label",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "OntologyLinkOut",
+        "description": "부품 · 지그의 기준정보 칸 한 줄 — 「(부품) — 적용 모델: (객체)」."
+      },
       "OntologyObjectDetailOut": {
         "properties": {
           "type_slug": {
@@ -8624,6 +8679,28 @@
         ],
         "title": "OntologyObjectOut"
       },
+      "OntologyOwnerOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": ""
+          },
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "OntologyOwnerOut",
+        "description": "기준정보 칸의 주인 — CompCore 의 부품 · 지그."
+      },
       "OntologyPropertyOut": {
         "properties": {
           "key": {
@@ -8693,6 +8770,45 @@
           "key"
         ],
         "title": "OntologyPropertyOut"
+      },
+      "OntologyRefOut": {
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "title": "Object Id",
+            "default": ""
+          },
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "default": ""
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug",
+            "default": ""
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label",
+            "default": ""
+          },
+          "known": {
+            "type": "boolean",
+            "title": "Known",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "OntologyRefOut",
+        "description": "CompCore 가 이은 기준정보 객체 하나 — 내보낼 때의 사본(`study.json` 의 `ontology`)."
       },
       "OntologyRunOut": {
         "properties": {
@@ -10892,6 +11008,27 @@
         "title": "StudyMoveRequest",
         "description": "DOE 여럿을 한 폴더로 — 스터디는 행이 아니라 id 가 글자다(`source_meta.study_id`)."
       },
+      "StudyOntologyOut": {
+        "properties": {
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/OntologyRefOut"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/OntologyLinkOut"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "type": "object",
+        "title": "StudyOntologyOut",
+        "description": "DOE 대상 작업에 이은 기준정보 — **「무엇의 해석인가」 를 폴더만 보고 안다**(CompCore\n2026-10-26). 그 전에 내보낸 폴더면 둘 다 비어 있다."
+      },
       "StudyOut": {
         "properties": {
           "study_id": {
@@ -10973,6 +11110,9 @@
             },
             "type": "array",
             "title": "Tracks"
+          },
+          "ontology": {
+            "$ref": "#/components/schemas/StudyOntologyOut"
           }
         },
         "type": "object",
@@ -11306,6 +11446,9 @@
               }
             ],
             "title": "Finished At"
+          },
+          "ontology": {
+            "$ref": "#/components/schemas/StudyOntologyOut"
           }
         },
         "type": "object",

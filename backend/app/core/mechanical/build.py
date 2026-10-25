@@ -218,12 +218,17 @@ def build(
                 app,
                 large_deflection=statics.large_deflection,
                 substeps=statics.substeps if nonlinear else None,
+                steps=_static_steps(given_conditions),
             )
             upstream = analysis
         else:
             # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을
             # 안고 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다.
-            upstream = _add_static(app) if given_conditions.prestressed else None
+            upstream = (
+                _add_static(app, steps=_static_steps(given_conditions))
+                if given_conditions.prestressed
+                else None
+            )
             analysis = _add_modal(
                 app, spec, constrained=constrained, given=given_conditions, upstream=upstream
             )
@@ -250,7 +255,15 @@ def build(
             # (모달에 걸면 덱에 `sfedele,all` 만 남아 응답이 전부 0 으로 나온다 — 실측.)
             _apply_loads(app, given_conditions, system, places, analysis, flipped)
         elif upstream is not None:
-            _apply_loads(app, given_conditions, system, places, upstream, flipped)
+            _apply_loads(
+                app,
+                given_conditions,
+                system,
+                places,
+                upstream,
+                flipped,
+                steps=_static_steps(given_conditions),
+            )
         by_body = _masses_kg(used, active, system)
         if sheet_materials:
             by_body = {
@@ -933,10 +946,24 @@ def _add_harmonic(app: Any, spec: HarmonicSpec, modal: Any, plan: HarmonicPlan) 
 NONLINEAR_CONTACT_KINDS = ("frictional", "frictionless", "rough")
 
 
+def _static_steps(given: condition_model.Conditions) -> int:
+    """정적 해석의 단계 수 — **볼트가 있으면 둘**(1단계 조임 · 2단계 잠그고 다른 하중,
+    `_apply_loads`). CompCore 계약: 「먼저 체결한 뒤 그 길이를 고정한 상태에서 다른 하중을
+    적용합니다」. CalculiX 덱도 같은 두 단계다(`calculix.deck._bolt_blocks`)."""
+    return 2 if any(one.kind == "bolt_pretension" for one in given.loads) else 1
+
+
 def _add_static(
-    app: Any, *, large_deflection: bool | None = None, substeps: int | None = None
+    app: Any,
+    *,
+    large_deflection: bool | None = None,
+    substeps: int | None = None,
+    steps: int = 1,
 ) -> Any:
     """정적 해석. 구속과 하중이 여기 걸린다.
+
+    `steps` 가 둘이면(볼트, `_static_steps`) 단계 수를 먼저 세우고, 부단계 설정은 단계마다
+    같게 건다 — 2단계가 기본값(부단계 하나)으로 돌면 접촉이 열린 채 수렴하지 못한다.
 
     선응력의 디딤돌로 쓸 때는(모달이 뒤따를 때) **재시작 파일을 남기라고 이른다**
     (`RESCONTROL,LINEAR`). 그것이 없으면 모달의 재시작 덱이 「multiframe restart 파일이 없다」
@@ -948,6 +975,8 @@ def _add_static(
     나누게 한다 — 최대를 먼저 넣어야 처음 값이 범위를 넘지 않는다.
     """
     static = app.Model.AddStaticStructuralAnalysis()
+    if steps > 1:
+        static.AnalysisSettings.NumberOfSteps = steps
     if large_deflection is None:
         snippet = static.AddCommandSnippet()
         snippet.AppendText(
@@ -958,12 +987,14 @@ def _add_static(
     settings.LargeDeflection = bool(large_deflection)
     if substeps:
         enums = _global("Ansys").Mechanical.DataModel.Enums
-        settings.AutomaticTimeStepping = enums.AutomaticTimeStepping.On
-        settings.DefineBy = enums.TimeStepDefineByType.Substeps
-        settings.MaximumSubsteps = max(substeps * 10, 1000)
-        settings.InitialSubsteps = substeps
-        settings.MinimumSubsteps = 1
-        logger.info("초기 부단계 %s (CAD)", substeps)
+        for step in range(1, steps + 1):
+            settings.CurrentStepNumber = step
+            settings.AutomaticTimeStepping = enums.AutomaticTimeStepping.On
+            settings.DefineBy = enums.TimeStepDefineByType.Substeps
+            settings.MaximumSubsteps = max(substeps * 10, 1000)
+            settings.InitialSubsteps = substeps
+            settings.MinimumSubsteps = 1
+        logger.info("초기 부단계 %s (CAD) · 단계 %s", substeps, steps)
     return static
 
 
@@ -1017,6 +1048,7 @@ def _apply_loads(
     places: dict[str, Any],
     static: Any,
     flipped: set[str] | None = None,
+    steps: int = 1,
 ) -> None:
     """하중을 **정적 해석에** 건다 — 그 응력을 모달이 안고 푼다.
 
@@ -1026,6 +1058,12 @@ def _apply_loads(
     크기는 선언된 계의 값이라 단위를 붙여 준다. 방향은 성분 벡터이거나 면의 법선(압력)이다.
     """
     quantity = _global("Quantity")
+    # **볼트가 있으면 두 단계다**(`_static_steps`) — 1단계에 볼트만 조이고, 2단계에 그 길이를
+    # 잠근 채 다른 하중을 건다. 한 단계로 풀면 볼트 힘이 끝까지 예압 그대로 묶인 채 외력을
+    # 받아, CalculiX(두 단계)와 외력이 볼트 힘을 바꾸는 모델에서 갈렸다(2026-10-26). 중력은
+    # 단계마다 끌 수 없다(Mechanical 에 그 칸이 없다) — 조일 때도 있는 하중이라 두 단계에
+    # 다 걸고, CalculiX 도 그렇게 한다.
+    bolted = steps > 1
     for load in given.loads:
         maker = _LOAD_MAKERS.get(load.kind)
         if maker is None:  # pragma: no cover - 조건 층이 먼저 막는다
@@ -1040,7 +1078,21 @@ def _apply_loads(
                         f"하중 「{load.name}」 의 자리 「{load.region}」 를 못 찾았습니다",
                     )
                 made.Location = place
-            _load_magnitude(made, load, system, quantity)
+            if load.kind == "rotational_velocity":
+                _spin(made, load, given.frames, system, quantity)
+            else:
+                # **방향 성분은 그 좌표계의 것이다** — 전역으로 옮겨 건다(CalculiX 와 같은
+                # `conditions.in_global`). 전에는 `cs` 를 안 보고 전역으로 읽었다.
+                moved = condition_model.in_global(load, given.frames)
+                if isinstance(moved, str):
+                    raise StageFailure("internal", f"하중 「{load.name}」: {moved}")
+                _load_magnitude(made, moved, system, quantity, steps)
+            if bolted and load.kind == "bolt_pretension":
+                made.SetDefineBy(
+                    2, _global("Ansys").Mechanical.DataModel.Enums.BoltLoadDefineBy.Lock
+                )
+            elif bolted and load.kind != "standard_earth_gravity":
+                made.SetActivateAtLoadStep(1, False)
             if load.kind == "pressure" and load.region in (flipped or set()):
                 made.Magnitude.Output.DiscreteValues = [
                     quantity(
@@ -1058,14 +1110,18 @@ def _apply_loads(
 
 
 def _load_magnitude(
-    made: Any, load: condition_model.Load, system: units.UnitSystem, quantity: Any
+    made: Any,
+    load: condition_model.Load,
+    system: units.UnitSystem,
+    quantity: Any,
+    steps: int = 1,
 ) -> None:
     """크기와 방향 — **단위를 값에서 떼지 않는다**(CAD 가 `unit` 을 함께 보낸다)."""
     unit = load.unit or system.length_label
     if load.kind == "bolt_pretension":
         if load.preload is None:
             raise StageFailure("internal", f"볼트 「{load.name}」 에 예압이 없습니다")
-        made.Preload.Output.DiscreteValues = [quantity(f"{load.preload} [{unit}]")]
+        _bolt_preload(made, load, quantity, steps)
         return
     if load.direction is not None and load.kind in (
         "force",
@@ -1086,6 +1142,54 @@ def _load_magnitude(
         return
     if load.magnitude is not None and hasattr(made, "Magnitude"):
         made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
+
+
+def _bolt_preload(
+    made: Any, load: condition_model.Load, quantity: Any, steps: int = 1
+) -> None:
+    """볼트 예압 — **힘이면 `Preload`, 길이면 조임량(`Preadjustment`)**. `unit` 이 가른다.
+
+    길이를 `Preload` 에 넣으면 「mm 를 N 으로 못 바꾼다」 로 멈췄다(실측 2026-10-26 —
+    CompCore 는 조임량을 길이로 보낸다). 2025 R2 에서 조임량 칸 이름은 `Adjustment` 가 아니라
+    `Preadjustment` 다(실측). 단위가 비면 힘(N)이다(`conditions.preload_unit`).
+
+    값은 **단계마다 하나씩** 넣는다 — 두 단계(`_static_steps`)에 하나만 주면 「2개를 기다렸는데
+    1개」 로 멈췄다(실측). 2단계는 잠그므로(`Lock`) 그 값은 쓰이지 않는다.
+    """
+    given = load.unit or "N"
+    values = [quantity(f"{load.preload} [{given}]") for _ in range(steps)]
+    if condition_model.preload_unit(load) in condition_model.PRELOAD_LENGTH_UNITS:
+        by = _global("Ansys").Mechanical.DataModel.Enums.BoltLoadDefineBy
+        made.SetDefineBy(1, by.Adjustment)
+        made.Preadjustment.Output.DiscreteValues = values
+        return
+    made.Preload.Output.DiscreteValues = values
+
+
+def _spin(
+    made: Any,
+    load: condition_model.Load,
+    frames: list[condition_model.Frame],
+    system: units.UnitSystem,
+    quantity: Any,
+) -> None:
+    """회전 속도 — **성분과 회전 중심으로** 건다(`conditions.spin_axis`, CalculiX 와 같은 축).
+
+    크기만 주면 축이 없어 Mechanical 이 `cglo` 만 쓰고 원심력을 빼먹는다(실측 2026-10-26 —
+    변위가 0 으로 나왔다). 성분은 전역으로 풀어 주고, 중심은 좌표계 원점이다.
+    """
+    spin = condition_model.spin_axis(load, frames)
+    if isinstance(spin, str):
+        raise StageFailure("internal", f"회전 속도 「{load.name}」: {spin}")
+    made.DefineBy = _global("Ansys").Mechanical.DataModel.Enums.LoadDefineBy.Components
+    for name, part in zip(("XComponent", "YComponent", "ZComponent"), spin.axis, strict=True):
+        getattr(made, name).Output.DiscreteValues = [
+            quantity(f"{spin.omega * part} [rad s^-1]")
+        ]
+    for name, value in zip(
+        ("XCoordinate", "YCoordinate", "ZCoordinate"), spin.point, strict=True
+    ):
+        setattr(made, name, quantity(f"{value} [{system.length_label}]"))
 
 
 #: Mechanical 이 솔버 입력 파일 끝에 쓰는 표지. 이것이 없으면 중간에 끊긴 것이다.

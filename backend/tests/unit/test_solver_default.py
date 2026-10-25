@@ -32,22 +32,18 @@ def test_새_요청은_CalculiX_저장된_옛_스펙은_Ansys() -> None:
 
 
 def test_CalculiX_가_못_거는_조건은_만들_때_막는다() -> None:
-    """조건 층은 솔버를 모른다 — 탄성 지지는 Ansys 는 걸고 CalculiX 는 아직 못 건다. 만들 때
-    안 막으면 DOE 200점이 모델링에서 하나씩 같은 말을 한다."""
+    """조건 층은 솔버를 모른다 — 압축 전용 지지는 Ansys 는 걸고 CalculiX 는 아직 못 건다.
+    만들 때 안 막으면 DOE 200점이 모델링에서 하나씩 같은 말을 한다."""
     payload = json.loads(SIDE_POINT.read_text(encoding="utf-8"))
     support = payload["conditions"]["constraints"][0]
-    payload["conditions"]["constraints"][0] = {
-        **support,
-        "type": "elastic_support",
-        "stiffness": 10.0,
-    }
+    payload["conditions"]["constraints"][0] = {**support, "type": "compression_only"}
     calculix = parse_spec({"recipe": "modal", "mesh": {"element_size_mm": 5}})
     ansys = parse_spec({"recipe": "modal", "solver": "ansys"})
     gap = services.conditions_gap(calculix, payload)
     assert (
         gap is not None
         and "CalculiX 로는 아직 못 거는 조건" in gap
-        and "elastic_support" in gap
+        and "compression_only" in gap
     )
     assert services.conditions_gap(ansys, payload) is None
 

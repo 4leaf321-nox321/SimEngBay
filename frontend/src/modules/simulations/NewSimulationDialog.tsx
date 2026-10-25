@@ -53,6 +53,7 @@ import { HarmonicFields, MeshFields, RecipeSelect } from '@/modules/simulations/
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
 import { MAX_TRACKS } from '@/modules/simulations/studyTable'
 import type { Solver } from '@/modules/simulations/SolverSelect'
+import { StudyOntology } from '@/modules/simulations/StudyOntology'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
@@ -544,6 +545,9 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                         <span className="font-medium">{folder.name}</span>{' '}
                         <span className="text-muted-foreground text-xs">설계 하나</span>
                       </p>
+                      <div className="mt-1">
+                        <StudyOntology ontology={folder.ontology} />
+                      </div>
                       {/* 표가 없으니 걸 수 없는 까닭을 여기서 말한다 — 안 그러면 막힌 채 이유가 없다. */}
                       {folder.points[0] && !folder.points[0].usable && (
                         <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
@@ -573,6 +577,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                             — 체크한 점마다 작업을 하나씩 만들고, 행을 누르면 그 점을 오른쪽에서 봅니다.
                           </span>
                         </p>
+                        <StudyOntology ontology={folder.ontology} compact />
                       </div>
                       <div className="max-h-72 overflow-auto rounded-md border lg:max-h-none lg:min-h-40 lg:flex-1">
                         <Table>

@@ -33,7 +33,17 @@ logger = logging.getLogger(__name__)
 #: **원통 지지는 국부 좌표계로 건다**(`*TRANSFORM, TYPE=C`) — 그 계의 자유도 1 · 2 · 3 이
 #: 반경 · 접선 · 축이다. 그래서 「핀에 끼운 채 돈다」(접선만 자유)가 그대로 표현된다. 전역
 #: 좌표로 억지로 옮기면 그 모델은 돌지 못하고, 주파수가 올라간 채 그럴듯하게 나온다.
-SUPPORTED_CONSTRAINTS = ("fixed_support", "cylindrical", "displacement", "frictionless")
+#:
+#: **탄성 지지는 면 절점마다 법선 스프링**(`SPRINGA`)을 땅에 붙인다 — 강성은 기초 강성(응력/
+#: 길이) x 그 절점이 맡은 넓이다. Ansys 의 탄성 지지(면 법선의 기초 강성)와 같은 뜻이다
+#: (2026-10-26 — 전에는 「못 거는 구속」 이었다).
+SUPPORTED_CONSTRAINTS = (
+    "fixed_support",
+    "cylindrical",
+    "displacement",
+    "frictionless",
+    "elastic_support",
+)
 #: 원격 변위는 따로 건다 — 강체 파트 면이면 그 기준점, 변형체 면이면 원격점에 묶는다(`_holds`).
 REMOTE_CONSTRAINTS = ("remote_displacement",)
 
@@ -98,6 +108,39 @@ class Plan:
     local_frames: dict[int, tuple[list[float], list[float]]] = field(default_factory=dict)
     #: 원격 변위로 면을 묶은 원격점들(기준점 · 회전 절점) — 결과에서 빼야 한다(`_finish`).
     remote_points: list[int] = field(default_factory=list)
+    #: 덱이 새로 세운 절점 — 탄성 지지의 땅 절점 · 볼트 예압의 기준점. 메시 밖이라 결과에서
+    #: 뺀다(`_finish`). 다음에 세울 번호도 이것 다음이다.
+    extra_nodes: list[int] = field(default_factory=list)
+    #: 덱이 새로 쓴 요소(스프링)의 마지막 번호 — 탄성 지지가 여럿이면 이어서 매긴다.
+    last_element: int = 0
+    #: 볼트 예압(`BoltSection`) — 기준점 · 구속식(모델), 조이는 단계의 줄(중력도 함께), 그
+    #: 길이를 잠그는 줄. 정적은 「조인다 → 잠그고 다른 하중」 두 단계로 푼다(CompCore 계약의
+    #: 차례 — Ansys 경로도 같다). 선응력 모달이 그대로 다시 쓴다.
+    bolt_model: list[str] = field(default_factory=list)
+    bolt_rows: list[str] = field(default_factory=list)
+    bolt_locks: list[str] = field(default_factory=list)
+
+
+#: 탄성 지지 영역 → 절점마다 (맡은 넓이 mm², 면의 단위 법선) — 모델링이 메시에서 셈한다.
+Springs = dict[str, dict[int, tuple[float, tuple[float, float, float]]]]
+
+
+@dataclass(frozen=True)
+class BoltSection:
+    """볼트 예압을 걸 **단면** — 볼트 바디의 요소를 축 가운데 평면의 앞뒤로 가르고, 앞쪽 요소가
+    쓰던 경계 절점을 **새 절점으로 바꿔 두 쪽을 뗐다**(`pairs`). 덱이 짝마다 「앞 - 뒤 =
+    -기준점 1번 자유도 x 축」 을 건다(`*EQUATION`) — 기준점이 곧 조임량이다.
+
+    ccx 의 `*PRE-TENSION SECTION` 은 쓰지 않는다 — 사면체를 가르는 면은 계단 모양이라 모서리 ·
+    꼭짓점으로만 닿는 요소가 원래 절점을 함께 쥔 채 남고, 예압이 그 길로 샌다(실측 ccx 2.21:
+    예압 1000 N 에 고정 끝 반력이 요소 5 mm 315 N · 2.5 mm 80 N · 1.5 mm 46 N).
+    """
+
+    pairs: tuple[tuple[int, int], ...]
+    """(뒤쪽에 남은 원래 절점, 앞쪽이 새로 쓰는 절점)."""
+    point: tuple[float, float, float]
+    axis: tuple[float, float, float]
+    """단위 벡터 — 뒤에서 앞으로."""
 
 
 @dataclass(frozen=True)
@@ -255,6 +298,9 @@ def write_modal(
     ties: tuple[Tie, ...] | list[Tie] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
+    springs: Springs | None = None,
+    stress_mpa: float = 1.0,
+    bolt_stage: tuple[list[str], list[str], list[str]] | None = None,
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
 
@@ -269,7 +315,19 @@ def write_modal(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
-    lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
+    lines += _holds(
+        held_nodes,
+        given,
+        plan,
+        shapes,
+        rigid,
+        nodes,
+        centers,
+        length_mm,
+        springs,
+        stress_mpa,
+        _top_element(solids, shells),
+    )
 
     if contact_faces is None:
         # 메시를 쪼개 붙였다(절점 공유) — 그 사실을 적어 둔다. 조용히 두면 사람은 마찰이
@@ -308,7 +366,7 @@ def write_modal(
             stiffness=contact_stiffness(materials, element_size_mm),
         )
 
-    for load in [] if preload else given.loads:
+    for load in [] if preload or bolt_stage else given.loads:
         # 모달은 하중으로 답이 바뀌지 않는다 — Ansys 쪽과 같은 말을 적는다. **선응력 모달은
         # 다르다** — 그 하중이 앞 정적 단계에서 구조를 조여 답을 바꾼다.
         plan.skipped.append(
@@ -320,10 +378,19 @@ def write_modal(
     # 영역별 메시 힌트는 **메시를 만들 때** 걸린다(`build.py` 의 `_local_sizes`) — 덱에는
     # 남지 않으므로 여기서 할 일이 없다. 못 걸린 힌트는 그 자리에서 경고로 적는다.
 
-    if preload:
+    if preload or bolt_stage:
+        if bolt_stage:
+            # **볼트를 먼저 조인다** — 단면 · 기준점은 모델 줄이라 단계보다 앞이다. 그다음 그
+            # 길이를 잠그고 나머지 하중을 건다(정적 덱과 같은 차례 — `_bolt_blocks`).
+            model, rows, locks = bolt_stage
+            lines += model
+            lines += ["*STEP, NLGEOM", "*STATIC", "1.0, 1.0", *rows, "*END STEP"]
+        else:
+            locks = []
         # **① 비선형 정적** — 접촉이 닫히고 마찰이 걸리고 하중이 구조를 조인다.
         lines += ["*STEP, NLGEOM", "*STATIC", "1.0, 1.0"]
-        lines += preload
+        lines += locks
+        lines += preload or []
         lines += ["*NODE FILE", "U", "*END STEP"]
         # **② 그 상태에서 선형화해 모드를 뽑는다.** `PERTURBATION` 이 앞 단계의 강성(응력 ·
         # 접촉)을 물고 간다 — 물고 가는지는 **재 봐야 안다**(안 물면 선형 모달과 같은 값이
@@ -339,7 +406,9 @@ def write_modal(
         "U",
         "*END STEP",
     ]
-    plan.text = _finish(lines, rigid, shells, points=bool(plan.remote_points))
+    plan.text = _finish(
+        lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes or bolt_stage)
+    )
     return plan
 
 
@@ -387,6 +456,9 @@ def _nset(name: str, members: set[int]) -> list[str]:
 
 #: 걸 수 있는 하중 — 압력(면 법선) · 힘(면 절점에 분배) · 베어링(원통면의 반쪽) · 모멘트(면
 #: 절점에 회전 분포) · 가속도 · 중력(몸 전체의 관성력).
+#: **회전 속도**는 몸 전체의 원심력(`*DLOAD … CENTRIF`), **볼트 예압**은 볼트 바디를 갈라
+#: 그 사이를 조임량으로 묶는 구속식(`*EQUATION`, `BoltSection`)으로 건다(2026-10-26 — 전에는
+#: 「못 거는 하중」 이었다).
 SUPPORTED_LOADS = (
     "pressure",
     "force",
@@ -394,6 +466,8 @@ SUPPORTED_LOADS = (
     "moment",
     "acceleration",
     "standard_earth_gravity",
+    "rotational_velocity",
+    "bolt_pretension",
 )
 #: 모멘트 단위 → N·mm(덱의 계). CAD 는 선언한 계로 적는다(mm 계 N*mm · SI N*m).
 MOMENT_UNITS = {
@@ -454,6 +528,9 @@ def write_static(
     large_deflection: bool = False,
     substeps: int | None = None,
     masters: set[str] | frozenset[str] = frozenset(),
+    springs: Springs | None = None,
+    stress_mpa: float = 1.0,
+    bolts: dict[str, BoltSection | str] | None = None,
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
     「해석이 됐다」 처럼 보인다. 그래서 하중이 없으면 거절한다.
@@ -468,8 +545,21 @@ def write_static(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
-    lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
+    lines += _holds(
+        held_nodes,
+        given,
+        plan,
+        shapes,
+        rigid,
+        nodes,
+        centers,
+        length_mm,
+        springs,
+        stress_mpa,
+        _top_element(solids, shells),
+    )
     lines += _separate_reactions(plan)
+    lines += _bolt_blocks(given, bolts, plan, nodes, rigid)
     nonlinear = large_deflection
     if contact_faces is not None:
         nonlinear = nonlinear or any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
@@ -501,13 +591,16 @@ def write_static(
 
     # **비선형(접촉 · 큰 변형)은 증분으로 푼다** — 한 번에 걸면 접촉이 열린 채 수렴하지
     # 못한다.
-    lines.append("*STEP, NLGEOM" if nonlinear else "*STEP")
-    lines.append("*STATIC")
+    step = ["*STEP, NLGEOM" if nonlinear else "*STEP", "*STATIC"]
     if nonlinear:
-        lines.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
-    applied_loads = 0
+        step.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
+    applied_loads = sum(1 for one in plan.applied if one.startswith("bolt_pretension:"))
     pull = [0.0, 0.0, 0.0]
+    spins: list[Spin] = []
+    main: list[str] = []
     for load in given.loads:
+        if load.kind == "bolt_pretension":
+            continue  # 단면 · 단계를 위에서 세웠다(`_bolt_blocks`).
         refused = _on_rigid(load, load_nodes, rigid)
         if refused is not None:
             plan.refused.append(refused)
@@ -521,26 +614,43 @@ def write_static(
             shapes,
             plan.local_frames,
             _elsets(body_of, shells),
+            given.frames,
+            length_mm,
         )
         if why is not None:
             plan.refused.append(why)
             continue
-        lines += rows
-        plan.load_rows += rows
+        if plan.bolt_rows and load.kind == "standard_earth_gravity":
+            # **중력은 조일 때도 있다** — 볼트와 함께 ① 에 걸고 ② 로 그대로 넘긴다. Ansys 도
+            # 중력은 단계마다 끄지 못해 두 단계에 다 걸린다(`mechanical.build._apply_loads`).
+            plan.bolt_rows += rows
+        else:
+            main += rows
+            plan.load_rows += rows
         plan.applied.append(f"{load.kind}:{load.region}")
         applied_loads += 1
         if load.kind in INERTIAL_LOADS:
             pull = [
                 mine + theirs for mine, theirs in zip(pull, _gravity_of(rows), strict=True)
             ]
+        spin = _spin_of(rows) if load.kind == "rotational_velocity" else None
+        if spin is not None:
+            spins.append(spin)
+    if plan.bolt_rows:
+        # **① 볼트를 조인다** — 다른 하중 없이(중력만 함께). ② 에서 그 길이를 잠그고 나머지를
+        # 건다(CompCore 계약: 「먼저 체결한 뒤 그 길이를 고정한 상태에서 다른 하중을
+        # 적용합니다」 — Ansys 경로도 같은 두 단계다). 강제 변위는 모델 줄이라 ① 부터 걸린다
+        # (Ansys 도 변위는 첫 단계부터 건다).
+        lines += [*step, *plan.bolt_rows, "*END STEP"]
+    lines += [*step, *plan.bolt_locks, *main]
     if plan.printed_sets:
         # ccx 의 RF 는 그 절점에 직접 걸린 외력을 빼고 낸다 — 관성 하중의 몫과 압력 · 힘의 몫을
         # 둘 다 되돌린다. 찍는 집합마다 세고, 영역은 축마다 제 집합의 성분을 갖는다.
         inertia = (
             _inertia_offsets(
-                plan.printed_sets, pull, nodes, solids, body_of, materials, shells
+                plan.printed_sets, pull, nodes, solids, body_of, materials, shells, spins
             )
-            if any(pull)
+            if any(pull) or spins
             else {}
         )
         pushed = _load_offsets(
@@ -582,7 +692,9 @@ def write_static(
         "S, E",
         "*END STEP",
     ]
-    plan.text = _finish(lines, rigid, shells, points=bool(plan.remote_points))
+    plan.text = _finish(
+        lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
+    )
     return plan
 
 
@@ -721,6 +833,9 @@ def _holds(
     nodes: dict[int, tuple[float, float, float]] | None = None,
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
+    springs: Springs | None = None,
+    stress_mpa: float = 1.0,
+    top_element: int = 0,
 ) -> list[str]:
     """구속 — 레시피가 달라도 같은 부분이다.
 
@@ -739,6 +854,19 @@ def _holds(
     # 원격점에 묶인 면의 절점도 그 묶음이 쥔다 — 다른 구속을 따로 걸면 두 번 묶인다.
     bound = _bound(rigid) | _bound(list(remote.values()))
     for index, rule in enumerate(given.constraints):
+        if rule.kind == "elastic_support":
+            # **스프링은 자유도를 묶지 않는다** — 강체 · 원격점이 쥔 절점에도 그대로 붙는다.
+            lines += _elastic(
+                index,
+                rule,
+                (springs or {}).get(rule.region),
+                nodes or {},
+                plan,
+                _top_node(nodes or {}, rigid, list(remote.values()), plan),
+                top_element,
+                stress_mpa / length_mm,
+            )
+            continue
         on_rigid = next(
             (body for body in rigid if (held_nodes.get(rule.region) or set()) <= body.nodes),
             None,
@@ -901,6 +1029,165 @@ def _holds(
         _hold_reaction(plan, rule, name, members)
         plan.applied.append(f"{rule.kind}:{rule.region}")
     return lines
+
+
+def _top_node(
+    nodes: dict[int, tuple[float, float, float]],
+    rigid: tuple[RigidBody, ...] | list[RigidBody],
+    remote: list[RigidBody],
+    plan: Plan,
+) -> int:
+    """덱이 새로 세울 절점의 바로 앞 번호 — 메시 · 강체 기준점 · 원격점 · 이미 세운 것 다음."""
+    return max(
+        [
+            max(nodes, default=0),
+            *(one.rot for one in rigid),
+            *(one.rot for one in remote),
+            *plan.remote_points,
+            *plan.extra_nodes,
+        ]
+    )
+
+
+def _top_element(
+    solids: dict[int, list[tuple[int, list[int]]]],
+    shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+) -> int:
+    """요소 번호의 끝 — 스프링 요소는 이 다음부터 쓴다."""
+    numbers = [number for rows in solids.values() for number, _ in rows]
+    numbers += [number for sheet in shells for number, _ in sheet.elements]
+    return max(numbers, default=0)
+
+
+def _elastic(
+    index: int,
+    rule: condition_model.Constraint,
+    springs: dict[int, tuple[float, tuple[float, float, float]]] | None,
+    nodes_of: dict[int, tuple[float, float, float]],
+    plan: Plan,
+    top_node: int,
+    top_element: int,
+    to_n_mm3: float,
+) -> list[str]:
+    """탄성 지지 — 면 절점마다 **법선 스프링 하나**(`SPRINGA`)를 땅 절점에 잇는다.
+
+    강성은 기초 강성(응력/길이, `to_n_mm3` 로 N/mm³) x 그 절점이 맡은 넓이(mm²)다 — 합하면
+    「면 전체를 단위 길이 누르는 데 드는 힘」 이 기초 강성 x 면적이 된다. 땅 절점은 법선 쪽으로
+    1 mm 떨어진 자리에 두고 묶는다. ccx 의 스프링은 강성 하나를 요소 묶음에 주므로 같은 강성
+    (유효숫자 4자리)끼리 묶음을 나눈다. **반력은 땅 절점의 합**이다 — 지지가 몸에 준 힘이다.
+    """
+    what = f"구속 「{rule.name}」({rule.kind})"
+    if rule.stiffness is None or rule.stiffness <= 0:
+        plan.refused.append(condition_model.Note(what, "기초 강성이 없습니다."))
+        return []
+    if not springs:
+        plan.refused.append(
+            condition_model.Note(what, f"영역 「{rule.region}」 의 면을 못 찾았습니다.")
+        )
+        return []
+    foundation = rule.stiffness * to_n_mm3
+    ground = f"GROUND{index}"
+    nodes_rows = [f"*NODE, NSET={ground}"]
+    groups: dict[float, list[tuple[int, int]]] = {}
+    made: list[int] = []
+    for offset, (node, (area, normal)) in enumerate(sorted(springs.items()), start=1):
+        if area <= 0:
+            continue
+        number = top_node + offset
+        made.append(number)
+        x, y, z = (one + along for one, along in zip(nodes_of[node], normal, strict=True))
+        nodes_rows.append(f"{number}, {x:.6f}, {y:.6f}, {z:.6f}")
+        stiffness = float(f"{foundation * area:.4g}")
+        groups.setdefault(stiffness, []).append((node, number))
+    if not made:
+        plan.refused.append(condition_model.Note(what, "면적이 0 입니다."))
+        return []
+    lines = nodes_rows
+    element = max(top_element, plan.last_element)
+    for group, (stiffness, pairs) in enumerate(sorted(groups.items()), start=1):
+        name = f"SPRING{index}G{group}"
+        lines.append(f"*ELEMENT, TYPE=SPRINGA, ELSET={name}")
+        for node, number in pairs:
+            element += 1
+            lines.append(f"{element}, {node}, {number}")
+        # **둘째 줄은 「비움」 이다** — 그런데 ccx 는 빈 줄을 건너뛰므로 칸 하나를 둔다.
+        # 강성은 **소수점을 꼭 붙인다** — 「70」 처럼 적으면 ccx 가 자유도 번호로 읽고
+        # 「SPRING1 이 없다」 며 멈춘다(실측 ccx 2.21).
+        lines += [f"*SPRING, ELSET={name}", " ", f"{stiffness:.6e}"]
+    lines += ["*BOUNDARY", f"{ground}, 1, 3, 0.0"]
+    plan.extra_nodes += made
+    plan.printed_sets[ground] = frozenset(made)
+    plan.reaction_sets[rule.region] = ground
+    plan.reaction_nodes[rule.region] = frozenset(made)
+    plan.applied.append(f"elastic_support:{rule.region}")
+    plan.last_element = element
+    return lines
+
+
+def _bolt_blocks(
+    given: condition_model.Conditions,
+    bolts: dict[str, BoltSection | str] | None,
+    plan: Plan,
+    nodes: dict[int, tuple[float, float, float]],
+    rigid: tuple[RigidBody, ...] | list[RigidBody],
+) -> list[str]:
+    """볼트 예압 — 기준점 · 단면의 구속식은 모델 줄로 돌려주고, 조이는 줄 · 잠그는 줄은 `plan`
+    에 둔다.
+
+    기준점의 1번 자유도가 **조임량**이다(`BoltSection`) — 힘(`*CLOAD`)이면 그만큼 조이고, 길이
+    (`*BOUNDARY`)면 그만큼 줄인다. 양수가 인장이다. 다음 단계에서 `*BOUNDARY, FIXED` 로 그
+    자리를 잠그고 조인 힘을 거둔다(`*CLOAD, OP=NEW`) — 그 뒤로 볼트 힘은 다른 하중에 따라
+    변한다.
+    """
+    model: list[str] = []
+    forced = False
+    for load in given.loads:
+        if load.kind != "bolt_pretension":
+            continue
+        what = f"하중 「{load.name}」({load.kind})"
+        found = (bolts or {}).get(load.name)
+        if found is None or isinstance(found, str):
+            plan.refused.append(
+                condition_model.Note(what, found or "볼트를 가를 단면을 못 세웠습니다.")
+            )
+            continue
+        if load.preload is None:
+            plan.refused.append(condition_model.Note(what, "예압이 없습니다."))
+            continue
+        unit = condition_model.preload_unit(load)
+        forces = condition_model.PRELOAD_FORCE_UNITS
+        lengths = condition_model.PRELOAD_LENGTH_UNITS
+        if unit not in forces and unit not in lengths:
+            plan.refused.append(
+                condition_model.Note(
+                    what, f"예압 단위 「{load.unit}」 를 모릅니다 — 힘(N · kN) · 길이(mm · m)."
+                )
+            )
+            continue
+        ref = _top_node(nodes, rigid, [], plan) + 1
+        plan.extra_nodes.append(ref)
+        x, y, z = found.point
+        model += ["*NODE", f"{ref}, {x:.6f}, {y:.6f}, {z:.6f}", "*EQUATION"]
+        for behind, ahead in found.pairs:
+            for dof, part in enumerate(found.axis, start=1):
+                tie = f"{ahead}, {dof}, 1., {behind}, {dof}, -1."
+                if abs(part) < 1e-12:
+                    model += ["2", tie]
+                else:
+                    model += ["3", f"{tie}, {ref}, 1, {part:.8g}"]
+        if unit in forces:
+            forced = True
+            plan.bolt_rows += ["*CLOAD", f"{ref}, 1, {load.preload * forces[unit]:.8g}"]
+        else:
+            shorten = load.preload * lengths[unit]
+            plan.bolt_rows += ["*BOUNDARY", f"{ref}, 1, 1, {shorten:.8g}"]
+        plan.bolt_locks += ["*BOUNDARY, FIXED", f"{ref}, 1, 1"]
+        plan.applied.append(f"bolt_pretension:{load.region}")
+    if forced:
+        # 조인 힘을 거둔다 — 길이를 잠갔으니 그 힘은 이제 단면이 스스로 낸다.
+        plan.bolt_locks.append("*CLOAD, OP=NEW")
+    plan.bolt_model = model
+    return model
 
 
 def _hold_reaction(
@@ -1214,6 +1501,8 @@ def write_harmonic(
     ties: tuple[Tie, ...] | list[Tie] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
+    springs: Springs | None = None,
+    stress_mpa: float = 1.0,
 ) -> Plan:
     """조화 응답 덱 — **한 파일에 두 단계다.**
 
@@ -1227,7 +1516,19 @@ def write_harmonic(
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
-    lines += _holds(held_nodes, given, plan, shapes, rigid, nodes, centers, length_mm)
+    lines += _holds(
+        held_nodes,
+        given,
+        plan,
+        shapes,
+        rigid,
+        nodes,
+        centers,
+        length_mm,
+        springs,
+        stress_mpa,
+        _top_element(solids, shells),
+    )
 
     # ① 모드를 푸고 남긴다.
     lines += [
@@ -1253,6 +1554,16 @@ def write_harmonic(
     ]
     applied_loads = 0
     for load in given.loads:
+        if load.kind in ("rotational_velocity", "bolt_pretension"):
+            # 흔드는 하중이 아니다 — 조화 응답은 모드 위의 가진만 본다(조이거나 돌린 상태는
+            # 정적 · 선응력 모달이 본다).
+            plan.refused.append(
+                condition_model.Note(
+                    f"하중 「{load.name}」({load.kind})",
+                    "조화 응답의 가진으로 쓰지 않습니다 — 정적 · 선응력 모달에서 겁니다.",
+                )
+            )
+            continue
         refused = _on_rigid(load, load_nodes, rigid)
         if refused is not None:
             plan.refused.append(refused)
@@ -1266,6 +1577,8 @@ def write_harmonic(
             shapes,
             plan.local_frames,
             _elsets(body_of, shells),
+            given.frames,
+            length_mm,
         )
         if why is not None:
             plan.refused.append(why)
@@ -1292,7 +1605,9 @@ def write_harmonic(
             condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
         )
     lines += ["*NODE FILE", "U", "*END STEP"]
-    plan.text = _finish(lines, rigid, shells, points=bool(plan.remote_points))
+    plan.text = _finish(
+        lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
+    )
     return plan
 
 
@@ -1305,16 +1620,33 @@ def _load_rows(
     shapes: dict[str, dict[str, Any]] | None = None,
     frames: dict[int, tuple[list[float], list[float]]] | None = None,
     elsets: list[str] | None = None,
+    axes: list[condition_model.Frame] | None = None,
+    length_mm: float = 1.0,
 ) -> tuple[list[str], condition_model.Note | None]:
-    """하중 한 줄 뭉치 — 압력은 요소면, 힘 · 베어링 · 모멘트는 절점, 가속도 · 중력은 요소 묶음
-    전부(`elsets`). 못 걸면 까닭을 돌려준다."""
+    """하중 한 줄 뭉치 — 압력은 요소면, 힘 · 베어링 · 모멘트는 절점, 가속도 · 중력 · 원심력은
+    요소 묶음 전부(`elsets`). 못 걸면 까닭을 돌려준다. `axes` 는 CAD 의 좌표계들(회전 축이
+    그 원점을 지난다), `length_mm` 은 그 원점의 길이 단위다."""
     if load.kind not in SUPPORTED_LOADS:
         return [], condition_model.Note(
             f"하중 「{load.name}」({load.kind})",
             "CalculiX 경로가 아직 못 거는 하중입니다 — Ansys 로 돌리세요.",
         )
+    # **방향 성분은 그 좌표계의 것이다** — 전역으로 옮겨 두면 아래는 전역만 본다(Ansys 와 같은
+    # `conditions.in_global`).
+    moved = condition_model.in_global(load, axes or [])
+    if isinstance(moved, str):
+        return [], condition_model.Note(f"하중 「{load.name}」({load.kind})", moved)
+    load = moved
     if load.kind in INERTIAL_LOADS:
         return _inertia_rows(load, elsets or [])
+    if load.kind == "rotational_velocity":
+        return _spin_rows(load, elsets or [], axes or [], length_mm)
+    if load.kind == "bolt_pretension":
+        # 볼트는 단계를 따로 세운다(`_bolt_blocks`) — 여기로 오면 그 길을 못 탄 것이다.
+        return [], condition_model.Note(
+            f"하중 「{load.name}」({load.kind})",
+            "볼트 예압은 정적 · 선응력 모달에서만 겁니다.",
+        )
     if load.magnitude is None:
         return [], condition_model.Note(f"하중 「{load.name}」", "크기가 없습니다.")
     if load.kind == "moment":
@@ -1390,11 +1722,6 @@ def _inertia_rows(
     what = f"하중 「{load.name}」({load.kind})"
     if not elsets:
         return [], condition_model.Note(what, "요소가 없습니다.")
-    if load.cs not in condition_model.GLOBAL_FRAMES:
-        return [], condition_model.Note(
-            what,
-            f"좌표계 「{load.cs}」 의 가속도는 아직 못 겁니다 — 솔버를 ansys 로 바꾸세요.",
-        )
     pull: tuple[float, ...]
     if load.kind == "standard_earth_gravity":
         size = STANDARD_GRAVITY
@@ -1437,6 +1764,62 @@ def _gravity_of(rows: list[str]) -> list[float]:
     return [0.0, 0.0, 0.0]
 
 
+def _spin_rows(
+    load: condition_model.Load,
+    elsets: list[str],
+    axes: list[condition_model.Frame],
+    length_mm: float,
+) -> tuple[list[str], condition_model.Note | None]:
+    """회전 속도 — 몸 전체의 원심력(`*DLOAD … CENTRIF, ω², 축 위의 점, 축 방향`).
+
+    축은 `conditions.spin_axis` 가 푼다(Ansys 와 같은 축). ccx 는 ω²(rad²/s²)를 받는다 —
+    mm · tonne · s 계에서 밀도 x ω² x 반지름이 곧 N/mm³ 이다. 강체 파트의 요소도 넣는다
+    (가속도와 같다 — 질량이 거기 있다).
+    """
+    what = f"하중 「{load.name}」({load.kind})"
+    if not elsets:
+        return [], condition_model.Note(what, "요소가 없습니다.")
+    spin = condition_model.spin_axis(load, axes)
+    if isinstance(spin, str):
+        return [], condition_model.Note(what, spin)
+    point = [one * length_mm for one in spin.point]
+    unit = spin.axis
+    return [
+        "*DLOAD",
+        *(
+            f"{elset}, CENTRIF, {spin.omega**2:.8g}, {point[0]:.6f}, {point[1]:.6f}, "
+            f"{point[2]:.6f}, {unit[0]:.8g}, {unit[1]:.8g}, {unit[2]:.8g}"
+            for elset in elsets
+        ),
+    ], None
+
+
+#: 원심력 한 줄의 뜻 — (ω², 축 위의 점, 축 방향 단위 벡터).
+Spin = tuple[float, list[float], list[float]]
+
+
+def _spin_of(rows: list[str]) -> Spin | None:
+    """`_spin_rows` 가 쓴 첫 줄(`E1, CENTRIF, ω², 점 x, y, z, 축 x, y, z`)을 되읽는다 — 반력
+    보정이 쓴다(`_inertia_offsets`). 줄마다 같은 회전이다(요소 묶음만 다르다)."""
+    for row in rows:
+        parts = [one.strip() for one in row.split(",")]
+        if len(parts) == 9 and parts[1] == "CENTRIF":
+            values = [float(one) for one in parts[2:]]
+            return values[0], values[1:4], values[4:7]
+    return None
+
+
+def _spin_pull(spins: list[Spin], at: tuple[float, float, float]) -> list[float]:
+    """그 자리의 원심 가속도(mm/s²) — 축에서 바깥으로 ω² x 축까지의 거리."""
+    out = [0.0, 0.0, 0.0]
+    for square, point, axis in spins:
+        offset = [at[i] - point[i] for i in range(3)]
+        along = sum(offset[i] * axis[i] for i in range(3))
+        for i in range(3):
+            out[i] += square * (offset[i] - along * axis[i])
+    return out
+
+
 def _inertia_offsets(
     reaction_nodes: dict[str, frozenset[int]],
     pull: list[float],
@@ -1445,8 +1828,11 @@ def _inertia_offsets(
     body_of: dict[str, int],
     materials: list[Material],
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
+    spins: list[Spin] | None = None,
 ) -> dict[str, list[float]]:
     """반력 영역 → **관성 하중이 그 절점에 얹은 몫의 반대**(N). 반력 합에 더한다.
+
+    원심력(`spins`)은 절점마다 다르다 — 축까지의 거리에 비례한다(`_spin_pull`).
 
     ccx 의 RF 는 절점의 내력이다 — 그 절점에 직접 걸린 외력은 빠진다. 강체 파트를 고정하고
     중력을 걸면 그 파트의 무게가 전부 자기 절점에 얹혀 **반력이 0 으로 나온다**(실측
@@ -1503,9 +1889,16 @@ def _inertia_offsets(
                 add(node, mass / 3)
     out: dict[str, list[float]] = {}
     for region, members in reaction_nodes.items():
-        mass = sum(carried.get(node, 0.0) for node in members)
-        if mass:
-            out[region] = [-mass * one for one in pull]
+        total = [0.0, 0.0, 0.0]
+        for node in members:
+            mass = carried.get(node, 0.0)
+            if not mass:
+                continue
+            here = _spin_pull(spins, nodes[node]) if spins else [0.0, 0.0, 0.0]
+            for axis in range(3):
+                total[axis] += mass * (pull[axis] + here[axis])
+        if any(total):
+            out[region] = [-one for one in total]
     return out
 
 
@@ -1654,11 +2047,6 @@ def _moment_rows(
     if not members or nodes is None:
         return [], condition_model.Note(
             f"하중 「{load.name}」", f"영역 「{load.region}」 의 절점을 못 찾았습니다."
-        )
-    if load.cs not in condition_model.GLOBAL_FRAMES:
-        return [], condition_model.Note(
-            what,
-            f"좌표계 「{load.cs}」 의 모멘트는 아직 못 겁니다 — 솔버를 ansys 로 바꾸세요.",
         )
     scale = MOMENT_UNITS.get((load.unit or "N*mm").replace(" ", "").lower())
     if scale is None:

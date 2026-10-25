@@ -29,6 +29,7 @@ import { RECIPE_LABELS, SOLVER_LABELS, shownDuration } from '@/modules/simulatio
 import { NewSimulationDialog } from '@/modules/simulations/NewSimulationDialog'
 import { PublishedBadge } from '@/modules/simulations/Publishing'
 import { ScopeTabs, workScope } from '@/modules/simulations/SimulationsLayout'
+import { StudyOntology } from '@/modules/simulations/StudyOntology'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ownsWork } from '@/shared/auth/roles'
@@ -506,6 +507,7 @@ function DoeCells({ item, open, onToggle, space }: { item: Item; open: boolean; 
               )}
               변수 {one.factors.join(' · ') || '없음'}
             </p>
+            <StudyOntology ontology={one.ontology} compact />
           </div>
         </div>
       </TableCell>

@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from app.core import conditions as condition_model
 from app.core.calculix import deck
+from app.core.calculix.build import _split
 from app.core.materials import Material
 
 #: 사면체 둘이 면 2-3-4 를 나눠 쓴다. 바닥 면 1-2-3, 끝 면 2-3-5 · 3-4-5 …
@@ -46,19 +48,23 @@ def _static(
     held: dict[str, set[int]] | None = None,
     loads: dict[str, set[int]] | None = None,
     rigid: list[deck.RigidBody] | None = None,
+    **more: Any,
 ) -> deck.Plan:
     return deck.write_static(
-        nodes=NODES,
-        solids=SOLIDS,
-        body_of={"부품": 1, "지그": 2},
-        materials=[_material("부품", "지그")],
-        held_nodes=held or {"바닥": {1, 2, 3}},
-        load_nodes=loads or {},
-        load_faces={},
-        load_areas={},
-        given=given,
-        second_order=False,
-        rigid=rigid or [],
+        **{
+            "nodes": NODES,
+            "solids": SOLIDS,
+            "body_of": {"부품": 1, "지그": 2},
+            "materials": [_material("부품", "지그")],
+            "held_nodes": held or {"바닥": {1, 2, 3}},
+            "load_nodes": loads or {},
+            "load_faces": {},
+            "load_areas": {},
+            "given": given,
+            "second_order": False,
+            "rigid": rigid or [],
+            **more,
+        }
     )
 
 
@@ -628,3 +634,205 @@ def test_축마다_가른_반력은_제_집합의_성분만_읽는다(tmp_path: 
         encoding="utf-8",
     )
     assert _reactions(tmp_path) == {"X 면": [3.0, 2.0, 0.0]}
+
+
+PUSH = condition_model.Load(
+    name="누름", kind="force", region="끝", magnitude=1.0, direction=(0, 0, -1)
+)
+
+
+def test_탄성_지지는_면_절점마다_법선_스프링을_땅에_잇는다() -> None:
+    """기초 강성 x 그 절점이 맡은 넓이가 스프링 하나의 강성이다(mm 계: MPa/mm = N/mm³). 땅
+    절점은 법선 쪽 1 mm 에 두고 묶고, 반력은 땅 절점에서 읽는다 — Ansys 의 탄성 지지와 같은
+    뜻이다(실측 2026-10-26: 측면가진 1차 1278.9 Hz vs Ansys 1282.0 Hz)."""
+    soft = condition_model.Constraint(
+        name="바닥 탄성", kind="elastic_support", region="바닥", stiffness=2.0
+    )
+    down = (0.0, 0.0, -1.0)
+    plan = _static(
+        condition_model.Conditions(constraints=[soft], loads=[PUSH]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+        springs={"바닥": {1: (10.0, down), 2: (10.0, down), 3: (30.0, down)}},
+    )
+    assert plan.refused == []
+    text = plan.text
+    # 땅 절점은 메시 끝(5) 다음 번호부터, 법선 쪽 1 mm.
+    assert "*NODE, NSET=GROUND0\n6, 0.000000, 0.000000, -1.000000" in text
+    # 강성이 같은 것끼리 묶는다 — 20 N/mm 둘 · 60 N/mm 하나. **둘째 줄은 칸 하나**(ccx 는 빈
+    # 줄을 건너뛴다)이고, 강성은 지수 꼴(「70」 처럼 적으면 자유도 번호로 읽는다 — 실측).
+    assert "*ELEMENT, TYPE=SPRINGA, ELSET=SPRING0G1\n3, 1, 6\n4, 2, 7" in text
+    assert "*SPRING, ELSET=SPRING0G1\n \n2.000000e+01" in text
+    assert "*SPRING, ELSET=SPRING0G2\n \n6.000000e+01" in text
+    assert "*BOUNDARY\nGROUND0, 1, 3, 0.0" in text
+    assert plan.reaction_sets == {"바닥": "GROUND0"}
+    # 기초 강성이 없으면 막는다 — 조용히 고정으로 바꾸지 않는다.
+    bare = condition_model.Constraint(name="바닥 탄성", kind="elastic_support", region="바닥")
+    plan = _static(
+        condition_model.Conditions(constraints=[bare], loads=[PUSH]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+        springs={"바닥": {1: (10.0, down)}},
+    )
+    assert [one.why for one in plan.refused] == ["기초 강성이 없습니다."]
+
+
+def test_회전_속도는_좌표계_원점을_지나는_축으로_원심력을_건다() -> None:
+    """축은 좌표계 원점을 지나고 방향은 그 좌표계의 성분이다(CompCore 계약). ccx 는 ω² 를
+    받는다 — 60 rpm 은 2π rad/s 다. SI 폴더의 좌표계 원점은 m 로 온다(`length_mm`)."""
+    frame = condition_model.Frame(
+        name="축",
+        origin=(0.01, 0.0, 0.0),
+        x_axis=(0.0, 1.0, 0.0),
+        y_axis=(-1.0, 0.0, 0.0),
+        z_axis=(0.0, 0.0, 1.0),
+    )
+    spin = condition_model.Load(
+        name="회전",
+        kind="rotational_velocity",
+        cs="축",
+        magnitude=60.0,
+        unit="rpm",
+        direction=(1.0, 0.0, 0.0),
+    )
+    plan = _static(
+        condition_model.Conditions(constraints=[FIXED], loads=[spin], frames=[frame]),
+        length_mm=1000.0,
+    )
+    assert plan.refused == []
+    assert "E1, CENTRIF, 39.478418, 10.000000, 0.000000, 0.000000, 0, 1, 0" in plan.text
+    assert "E2, CENTRIF, 39.478418, 10.000000, 0.000000, 0.000000, 0, 1, 0" in plan.text
+    # **원심력이 반력 절점에 얹은 몫을 되돌린다**(ccx 의 RF 는 그것을 빼고 낸다). 바닥 절점
+    # 1 · 3 은 축(x=10 을 지나는 y 축)에서 10 mm, 2 는 축 위다.
+    rho = 7850 / 1e12
+    carried = rho * (1000 / 6) / 4 * 2 + rho * (2000 / 6) / 4
+    assert plan.reaction_offsets["바닥"] == pytest.approx(
+        [carried * (2 * math.pi) ** 2 * 10, 0.0, 0.0]
+    )
+    # 좌표계가 없으면 그렇다고 말한다.
+    plan = _static(condition_model.Conditions(constraints=[FIXED], loads=[spin]))
+    assert plan.refused[0].why == "좌표계 「축」 가 없습니다."
+
+
+def test_볼트_예압은_갈라진_절점을_조임량으로_묶고_다음_단계에_잠근다() -> None:
+    """앞 - 뒤 = -조임량 x 축(`*EQUATION`) — 기준점 1번 자유도가 조임량이고 양수가 인장이다.
+    첫 단계에서 조이고, 다음 단계에서 그 길이를 잠근 채 조인 힘을 거두고 다른 하중을 건다."""
+    bolt = condition_model.Load(
+        name="예압", kind="bolt_pretension", region="몸통", preload=2.0, unit="kN"
+    )
+    cut = deck.BoltSection(pairs=((4, 6),), point=(0.0, 0.0, 5.0), axis=(0.0, 0.0, 1.0))
+    plan = _static(
+        condition_model.Conditions(constraints=[FIXED], loads=[bolt, PUSH]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+        nodes={**NODES, 6: NODES[4]},
+        bolts={"예압": cut},
+    )
+    assert plan.refused == []
+    text = plan.text
+    assert (
+        "*NODE\n7, 0.000000, 0.000000, 5.000000\n*EQUATION\n"
+        "2\n6, 1, 1., 4, 1, -1.\n2\n6, 2, 1., 4, 2, -1.\n3\n6, 3, 1., 4, 3, -1., 7, 1, 1\n"
+    ) in text
+    assert "*STEP\n*STATIC\n*CLOAD\n7, 1, 2000\n*END STEP" in text
+    assert "*BOUNDARY, FIXED\n7, 1, 1\n*CLOAD, OP=NEW\n*CLOAD\n5, 3, -1" in text
+    # 조임량(길이)이면 기준점을 그만큼 옮기고, 거둘 힘이 없다.
+    bolt = condition_model.Load(
+        name="예압", kind="bolt_pretension", region="몸통", preload=0.01, unit="mm"
+    )
+    plan = _static(
+        condition_model.Conditions(constraints=[FIXED], loads=[bolt, PUSH]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+        nodes={**NODES, 6: NODES[4]},
+        bolts={"예압": cut},
+    )
+    assert "*STEP\n*STATIC\n*BOUNDARY\n7, 1, 1, 0.01\n*END STEP" in plan.text
+    assert "OP=NEW" not in plan.text
+    # 단면을 못 세웠으면 그 까닭으로 막는다.
+    plan = _static(
+        condition_model.Conditions(constraints=[FIXED], loads=[bolt]),
+        bolts={"예압": "볼트 예압은 볼트 몸통의 원통면에 겁니다"},
+    )
+    assert plan.refused[0].why == "볼트 예압은 볼트 몸통의 원통면에 겁니다"
+
+
+def test_볼트가_있으면_중력은_조일_때부터_다른_하중은_잠근_뒤에() -> None:
+    """중력은 조일 때도 있다 — ① 에 볼트와 함께 걸고 ② 로 넘긴다(Ansys 도 중력은 단계마다
+    끄지 못한다). 힘 · 압력 같은 다른 하중은 ② 에만 — Ansys 는 그 하중을 ① 에서 끈다."""
+    bolt = condition_model.Load(
+        name="예압", kind="bolt_pretension", region="몸통", preload=1000.0, unit="N"
+    )
+    earth = condition_model.Load(name="중력", kind="standard_earth_gravity")
+    cut = deck.BoltSection(pairs=((4, 6),), point=(0.0, 0.0, 5.0), axis=(0.0, 0.0, 1.0))
+    plan = _static(
+        condition_model.Conditions(constraints=[FIXED], loads=[bolt, PUSH, earth]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+        nodes={**NODES, 6: NODES[4]},
+        bolts={"예압": cut},
+    )
+    assert plan.refused == []
+    first, second = plan.text.split("*END STEP")[:2]
+    assert "GRAV" in first and "5, 3, -1" not in first
+    assert "GRAV" not in second and "5, 3, -1" in second
+    # 선응력 모달이 다시 쓰는 하중 줄에는 중력이 없다 — 조이는 줄에 들었다.
+    assert not any("GRAV" in one for one in plan.load_rows)
+    assert any("GRAV" in one for one in plan.bolt_rows)
+
+
+def test_볼트를_가를_때_꼭짓점으로만_닿는_요소도_뗀다() -> None:
+    """앞쪽 요소가 쓰는 경계 절점은 **면으로 맞닿든 꼭짓점으로만 닿든** 모두 새 번호로 바꾼다.
+    하나라도 남기면 예압이 그 길로 샌다 — ccx 의 `*PRE-TENSION SECTION` 이 그랬다(실측
+    2026-10-26: 예압 1000 N 에 고정 끝 반력이 요소 1.5 mm 에서 46 N)."""
+    nodes = {
+        **NODES,
+        6: (-10.0, -10.0, 20.0),
+        7: (-10.0, 0.0, 20.0),
+        8: (0.0, -10.0, 20.0),
+    }
+    # 1 은 평면(z=4) 뒤, 2 는 앞에서 면 2-3-4 로, 3 은 앞에서 꼭짓점 4 로만 1 에 닿는다.
+    rows = [(1, [1, 2, 3, 4]), (2, [2, 3, 4, 5]), (3, [4, 6, 7, 8])]
+    out, pairs = _split(nodes, rows, [0.0, 0.0, 4.0], [0.0, 0.0, 1.0])
+    assert pairs == [(2, 9), (3, 10), (4, 11)]
+    assert out == [(1, [1, 2, 3, 4]), (2, [9, 10, 11, 5]), (3, [11, 6, 7, 8])]
+    # 평면이 몸 밖이면 가를 것이 없다.
+    assert _split(nodes, rows, [0.0, 0.0, 50.0], [0.0, 0.0, 1.0]) == (rows, [])
+
+
+def test_방향_성분은_그_좌표계의_것이다() -> None:
+    """힘 · 가속도 · 모멘트의 방향은 `cs` 의 성분이다(CompCore 계약) — 전역으로 옮겨 건다.
+    전에는 힘을 전역 성분으로 잘못 읽고, 가속도 · 모멘트는 거절했다(Ansys 도 같은 도우미)."""
+    turned = condition_model.Frame(
+        name="돌린 계",
+        origin=(5.0, 0.0, 0.0),
+        x_axis=(0.0, 1.0, 0.0),
+        y_axis=(-1.0, 0.0, 0.0),
+        z_axis=(0.0, 0.0, 1.0),
+    )
+    push = condition_model.Load(
+        name="누름",
+        kind="force",
+        region="끝",
+        cs="돌린 계",
+        magnitude=2.0,
+        direction=(1, 0, 0),
+    )
+    lift = condition_model.Load(
+        name="가속",
+        kind="acceleration",
+        cs="돌린 계",
+        magnitude=1000.0,
+        unit="mm/s^2",
+        direction=(1, 0, 0),
+    )
+    plan = _static(
+        condition_model.Conditions(constraints=[FIXED], loads=[push, lift], frames=[turned]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+    )
+    assert plan.refused == []
+    # 돌린 계의 x 는 전역 y — 힘은 +Y 로, 가속도는 관성으로 -Y 로 당긴다. 원점은 상관없다.
+    assert "*CLOAD\n5, 2, 2" in plan.text
+    assert "E1, GRAV, 1000, -0, -1, -0" in plan.text
+    assert condition_model.in_global(push, []) == "좌표계 「돌린 계」 가 없습니다."

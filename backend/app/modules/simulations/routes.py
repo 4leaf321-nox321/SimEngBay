@@ -332,7 +332,7 @@ def preview_doe(
     폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 파일을 올리는 것이 아니다 —
     설계점 200개면 STEP 만 수십 MB 다.
     """
-    return services.preview_doe(path, recipe=recipe)
+    return services.preview_doe(path, recipe=recipe, db=db)
 
 
 @router.post("/doe/import", response_model=DoeImportOut, status_code=201)

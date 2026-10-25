@@ -149,16 +149,15 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
 
 
 def test_능력표에_없는_구속은_까닭을_달아_거절한다(ready: None, tmp_path: Path) -> None:
-    """탄성 지지는 아직 못 건다 — **조용히 완전 고정으로 바꾸지 않는다.**
+    """압축 전용 지지는 아직 못 건다 — **조용히 완전 고정으로 바꾸지 않는다.**
 
-    고정으로 바꿔 풀면 더 단단한 모델이 되어 주파수가 올라가는데, 결과만 보면 알 수 없다.
+    고정으로 바꿔 풀면 떨어져야 할 면이 붙어 있는 모델이 되는데, 결과만 보면 알 수 없다.
     능력표(`calculix/deck.py` 의 `SUPPORTED_CONSTRAINTS`)에 없으면 멈추고, **어떻게 하면
     되는지**까지 말한다.
     """
     shutil.copy(SIDE_SHAKE / "points" / "p0001.step", tmp_path / "input.step")
     payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
-    payload["conditions"]["constraints"][0]["type"] = "elastic_support"
-    payload["conditions"]["constraints"][0]["stiffness"] = 1000.0
+    payload["conditions"]["constraints"][0]["type"] = "compression_only"
     (tmp_path / "topology.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
@@ -166,8 +165,62 @@ def test_능력표에_없는_구속은_까닭을_달아_거절한다(ready: None
     with pytest.raises(StageFailure) as caught:
         _run(tmp_path, SPEC)
 
-    assert "elastic_support" in str(caught.value)
+    assert "compression_only" in str(caught.value)
     assert "ansys" in str(caught.value).lower(), "어떻게 하면 되는지까지 말해야 한다"
+
+
+def _side_shake_conditions(work: Path, recipe: str, **changes: Any) -> None:
+    """`조건_측면가진` p0001 의 조건 칸을 바꿔 둔다(레시피도 조건의 해석 종류에 맞춘다)."""
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    payload["conditions"].update(changes)
+    payload["conditions"].setdefault("analysis", {})["type"] = recipe
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_탄성_지지는_면_법선으로만_받친다(ready: None, tmp_path: Path) -> None:
+    """바닥을 기초 강성 1e6 N/mm³ 로 받치면 굽힘은 고정과 거의 같고, 면 안으로 미끄러지고 도는
+    모드 셋이 0 Hz 로 나온다 — **Ansys 도 같다**(실측 2026-10-26: Ansys 0 · 0 · 0 · 1,282.0 Hz,
+    CalculiX 1,278.9 Hz)."""
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    support = {
+        **payload["conditions"]["constraints"][0],
+        "type": "elastic_support",
+        "stiffness": 1e6,
+    }
+    _side_shake_conditions(tmp_path, "modal", constraints=[support])
+
+    _run(tmp_path, {**SPEC, "modes": 4})
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    found = [one["frequency_hz"] for one in result["modes"]]
+    assert all(abs(one) < 1.0 for one in found[:3]), found
+    assert found[3] == pytest.approx(1282.0, rel=0.02)
+
+
+def test_회전_속도의_원심력이_반력에_든다(ready: None, tmp_path: Path) -> None:
+    """x 축 둘레 500 rad/s — 바닥 반력 Z 는 몸의 원심력 합이다: 받침판(강, 무게중심이 축에서
+    5 mm) 628 N + 기둥(알루미늄, 50 mm) 268 N. 원심력이 바닥 절점에 얹은 몫까지 되돌려야
+    맞는다(ccx 의 RF 는 그것을 빼고 낸다 — Ansys 는 -896.0 N, 실측 2026-10-26)."""
+    spin = {
+        "name": "회전",
+        "type": "rotational_velocity",
+        "on": "",
+        "cs": "global",
+        "magnitude": 500.0,
+        "unit": "rad/s",
+        "direction": [1, 0, 0],
+    }
+    _side_shake_conditions(tmp_path, "static", loads=[spin])
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+
+    _run(tmp_path, {**spec, "recipe": "static"})
+
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["reactions"]["바닥"][2] == pytest.approx(-896.0, rel=0.005)
+    assert result["max_displacement"] == pytest.approx(1.971e-3, rel=0.03)
 
 
 #: `조건_원통_SI` 를 Ansys 로 돌린 값(실측 2026-10-03 · 요소 4 mm · 물성은 스펙).

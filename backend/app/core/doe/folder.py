@@ -121,6 +121,10 @@ class DoeFolder:
     single: bool = False
     """**설계 하나**(CompCore v0.9.0) — 인자가 0개인 DOE 다. `study.json` 의 `factors == []` 로
     판별한다(CompCore 가 그렇게 하라고 했다 — 따로 표시하지 않는다)."""
+    ontology: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    """대상 작업에 이은 **기준정보**(`study.json` 의 `ontology`, CompCore 2026-10-26) —
+    `{"tags": [...], "links": [...]}`. 「어느 모델의 부품 해석인가」 를 폴더만 보고 안다.
+    그 전에 내보낸 폴더에는 없다 — 빈 두 목록이다(`read_ontology`)."""
 
     @property
     def usable(self) -> list[DoePoint]:
@@ -184,7 +188,52 @@ def read_folder(path: Path) -> DoeFolder:
         seed=study.get("seed"),
         method=str(study.get("method") or ""),
         single=isinstance(study.get("factors"), list) and not study["factors"],
+        ontology=read_ontology(study),
     )
+
+
+#: 기준정보 객체 한 줄의 칸 — 태그와 부품 · 지그의 기준정보 칸이 같이 쓴다.
+_OBJECT_FIELDS = ("object_id", "key", "label", "type_slug", "type_label")
+
+
+def read_ontology(study: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """`study.json` 의 `ontology` — **내보낼 때의 사본**이다(나중에 CompCore 에서 이어도 이
+    폴더는 그대로). 없거나 모양이 틀리면 빈 두 목록으로 읽는다(CompCore 계약: 없으면
+    `{"tags": [], "links": []}`). 줄마다 아는 칸만 글자로 옮긴다 — 화면이 읽는 것이 그것뿐이고,
+    설계점 작업마다 한 벌씩 남는다.
+
+    - `tags[]`: `object_id` · `key` · `label` · `type_slug` · `type_label`(「일반 태그」 는
+      `cc_tag`).
+    - `links[]`: 위 칸 + `on`(`kind` · `id` · `name` — 어느 부품 · 지그의 칸인가) ·
+      `relation` · `relation_label`(「적용 모델」).
+    """
+    block = study.get("ontology")
+    block = block if isinstance(block, dict) else {}
+
+    def text(value: Any) -> str:
+        return "" if value is None else str(value)
+
+    def picked(row: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+        return {name: text(row.get(name)) for name in names}
+
+    tags = [
+        picked(row, _OBJECT_FIELDS)
+        for row in block.get("tags") or []
+        if isinstance(row, dict) and row.get("label")
+    ]
+    links: list[dict[str, Any]] = []
+    for row in block.get("links") or []:
+        if not isinstance(row, dict) or not row.get("label"):
+            continue
+        owner = row.get("on")
+        owner = owner if isinstance(owner, dict) else {}
+        links.append(
+            {
+                "on": picked(owner, ("kind", "id", "name")),
+                **picked(row, ("relation", "relation_label", *_OBJECT_FIELDS)),
+            }
+        )
+    return {"tags": tags, "links": links}
 
 
 def _factors(study: dict[str, Any], columns: list[str]) -> list[str]:

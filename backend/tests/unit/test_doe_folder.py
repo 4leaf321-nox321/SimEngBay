@@ -199,8 +199,11 @@ def test_스터디를_id_나_이름으로_찾는다() -> None:
     assert [(one.name, one.matched_by) for one in by_prefix] == [(FOLDER.name, "id")]
     study_id = json.loads((FOLDER / "study.json").read_text(encoding="utf-8"))["id"]
     assert by_prefix[0].study_id == study_id
-    # 하이픈이 든 전체 id 도 · 공백과 밑줄을 섞은 이름도 같은 폴더다.
-    assert find([FIXTURES_ROOT], "db734ea2-7b18-4b23")[0][0].name == "설계하나_측면가진"
+    # 하이픈이 든 전체 id 도 · 공백과 밑줄을 섞은 이름도 같은 폴더다. id 는 CompCore 가 다시
+    # 뽑을 때마다 바뀌므로 폴더에서 읽는다.
+    single = FIXTURES_ROOT / "설계하나_측면가진" / "study.json"
+    single_id = json.loads(single.read_text(encoding="utf-8"))["id"]
+    assert find([FIXTURES_ROOT], single_id[:18])[0][0].name == "설계하나_측면가진"
     assert find([FIXTURES_ROOT], " 브래킷 두께훑기 ")[0][0].matched_by == "name"
     # 묶음 폴더 한 단 아래까지 본다(시험 규격) — 스터디 폴더 안(`points/`)으로는 안 들어간다.
     nested, _ = find([FIXTURES_ROOT], "V노치전단")

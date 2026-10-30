@@ -70,32 +70,35 @@
       -20.0,
       10.0
     ],
+    "min_wall_by_body": {
+      "전체": 6.0
+    },
     "shortest_edge": 12.0,
     "short_edges": 0,
     "narrowest_face": 9.6873,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "전체": 6.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 3.0,
     "basis": "최소 벽 두께(6 mm)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 6.0,
       "wall_body": "전체",
       "longest": 100.0,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 64433,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "1f452320-07c8-4441-90c1-535f1b4325b1",
+      "id": "b0453f7c-1134-4aae-929c-a77cf498f8fc",
       "name": "시험_방향하중",
       "method": "factorial",
       "seed": 1
@@ -472,7 +475,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

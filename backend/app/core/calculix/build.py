@@ -180,7 +180,7 @@ def build(
     # 볼트는 메시를 가른다 — 정적과 선응력 모달이 같은 갈라진 메시를 쓴다(조화는 볼트를 안
     # 건다 — 덱이 까닭을 단다).
     bolts, nodes, solids = (
-        _cut_bolts(topology, given, mesh, shapes)
+        _cut_bolts(topology, given, mesh, shapes, body_of, system.length_mm)
         if not isinstance(spec, HarmonicSpec)
         else ({}, mesh.nodes, mesh.solids)
     )
@@ -325,6 +325,9 @@ def build(
         "recipe": spec.recipe,
         "solver": "calculix",
     }
+    if plan.bolt_report:
+        # **볼트 힘 · 조임량을 읽을 자리**(`static_read._bolts`).
+        boundary["bolts"] = plan.bolt_report
     if plan.reaction_sets:
         # **반력을 읽을 자리** — 추출 단계가 `.dat` 의 합에서 영역 이름으로 되찾는다.
         boundary["reaction_sets"] = plan.reaction_sets
@@ -1168,8 +1171,8 @@ def _load_places(
     받는다.
     면을 찾는 일은 구속과 똑같이 `app/core/regions` 가 한다.
     """
-    # 볼트 예압은 면이 아니라 **단면**으로 건다(`_cut_bolts`) — 바디로 걸었으면 거기서 까닭을
-    # 단다(여기서 짝짓다 「자리를 못 찾았다」 로 먼저 멈추지 않게).
+    # 볼트 예압은 면이 아니라 **단면**으로 건다(`_cut_bolts`) — 바디에 건 것도 거기서 푼다
+    # (바디 그룹은 면이 아니라 여기서 짝지으면 멈춘다).
     wanted = [
         load.region for load in given.loads if load.region and load.kind != "bolt_pretension"
     ]
@@ -1345,16 +1348,19 @@ def _cut_bolts(
     given: condition_model.Conditions,
     mesh: Any,
     shapes: dict[str, dict[str, Any]],
+    body_of: dict[str, int],
+    length_mm: float,
 ) -> tuple[dict[str, deck_writer.BoltSection | str], Nodes, Solids]:
     """볼트 예압 하중 → **볼트를 가른 단면**(못 세우면 까닭)과 **갈라진 메시**(절점 · 솔리드).
 
-    - 축과 단면 자리는 **CAD 가 잰 원통면 지문**(`axis` · `centroid`)이다 — 원통면의 가운데를
-      지나 축에 수직인 평면. 바디로 건 예압은 받지 않는다 — CompCore 는 바디 이름표를 면
-      지문으로 풀지 않고(`regions` 에 없다), Ansys 쪽도 면으로만 짝짓는다.
-    - 그 원통면 절점을 가장 많이 가진 솔리드가 볼트다. 볼트의 요소를 **무게중심이 평면의
-      어느 쪽인가**로 둘로 가르고, 두 쪽이 함께 쓰는 절점을 앞쪽에서만 새 번호로 바꾼다
-      (`deck.BoltSection`). 정적과 그 뒤의 모달이 **같은 갈라진 메시**를 써야 하므로 한 번만
-      가른다.
+    - **원통면에 건 예압**: 축과 단면 자리는 CAD 가 잰 원통면 지문(`axis` · `centroid`)이다 —
+      원통면의 가운데를 지나 축에 수직인 평면. 그 원통면 절점을 가장 많이 가진 솔리드가 볼트다.
+    - **바디에 건 예압**(CompCore 2f402f2 — 우리가 고른 (가)): 바디 그룹의 지문은 그 바디의
+      `bodies[]` 줄이고, 단면은 **하중의 좌표계**다 — Z 축이 볼트 축, 원점이 단면 자리(Ansys 의
+      바디 예압과 같은 뜻). 원점은 선언된 계의 길이로 온다(`length_mm`).
+    - 볼트의 요소를 **무게중심이 평면의 어느 쪽인가**로 둘로 가르고, 두 쪽이 함께 쓰는 절점을
+      앞쪽에서만 새 번호로 바꾼다(`deck.BoltSection`). 정적과 그 뒤의 모달이 **같은 갈라진
+      메시**를 써야 하므로 한 번만 가른다.
     """
     out: dict[str, deck_writer.BoltSection | str] = {}
     nodes: Nodes = dict(mesh.nodes)
@@ -1363,31 +1369,50 @@ def _cut_bolts(
         if load.kind != "bolt_pretension":
             continue
         shape = shapes.get(load.region) or {}
-        if not (shape.get("axis") and shape.get("centroid")):
+        entity: int | None
+        if shape.get("volume") is not None:
+            name = str(shape.get("name") or load.region)
+            frame = next((one for one in given.frames if one.name == load.cs), None)
+            if frame is None:
+                out[load.name] = (
+                    f"바디에 건 볼트 예압은 좌표계가 있어야 합니다(「{load.cs}」 가 "
+                    "없습니다) — Z 축이 볼트 축, 원점이 단면 자리입니다."
+                )
+                continue
+            entity = body_of.get(name)
+            if entity is None:
+                out[load.name] = f"바디 「{name}」 를 메시에서 못 찾았습니다."
+                continue
+            point = [one * length_mm for one in frame.origin]
+            axis = [float(one) for one in frame.z_axis]
+        elif shape.get("axis") and shape.get("centroid"):
+            found = match_regions(topology, mesh.faces, wanted_regions=[load.region])
+            members: set[int] = set()
+            for face in found.faces.get(load.region, []):
+                members |= mesh.face_nodes.get(face, set())
+            counts = {
+                key: sum(1 for _, ids in rows for node in ids if node in members)
+                for key, rows in solids.items()
+            }
+            entity = max(counts, key=lambda key: counts[key]) if members and counts else None
+            if entity is None:
+                out[load.name] = f"원통면 「{load.region}」 을 메시에서 못 찾았습니다."
+                continue
+            point = [float(one) for one in shape["centroid"]]
+            axis = [float(one) for one in shape["axis"]]
+        else:
             out[load.name] = (
-                f"볼트 예압은 볼트 몸통의 원통면에 겁니다 — 「{load.region}」 은 원통면이"
-                " 아닙니다(바디로 건 예압은 아직 못 겁니다)."
+                "볼트 예압은 볼트 몸통의 원통면이나 볼트 바디에 겁니다 — "
+                f"「{load.region}」 은 둘 다 아닙니다."
             )
             continue
-        found = match_regions(topology, mesh.faces, wanted_regions=[load.region])
-        members: set[int] = set()
-        for face in found.faces.get(load.region, []):
-            members |= mesh.face_nodes.get(face, set())
-        counts = {
-            key: sum(1 for _, ids in rows for node in ids if node in members)
-            for key, rows in solids.items()
-        }
-        entity = max(counts, key=lambda key: counts[key]) if members and counts else None
-        if entity is None:
-            out[load.name] = f"원통면 「{load.region}」 을 메시에서 못 찾았습니다."
-            continue
-        point = [float(one) for one in shape["centroid"]]
-        axis = [float(one) for one in shape["axis"]]
         length = sum(one * one for one in axis) ** 0.5
         unit = [one / length for one in axis] if length else [0.0, 0.0, 1.0]
         rows, pairs = _split(nodes, solids[entity], point, unit)
         if not pairs:
-            out[load.name] = "볼트를 가를 단면이 비었습니다 — 단면 자리가 볼트 밖입니다."
+            out[load.name] = "볼트를 가를 단면이 비었습니다 — 단면 자리가 볼트 밖입니다" + (
+                f"(좌표계 「{load.cs}」 의 원점 · Z 축)." if shape.get("volume") else "."
+            )
             continue
         solids[entity] = rows
         for behind, ahead in pairs:

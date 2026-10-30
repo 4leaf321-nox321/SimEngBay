@@ -884,7 +884,8 @@ async def study_analyze(
       메우지 않는다).
 
     열 key: `factor:<변수>` · 모달 `mode:<기준 차수>`(형상으로 이은 모드 — 순번이 아니다) ·
-    정적 `max_mm` · `max_mpa` · `reaction:<영역>` · `probe:<측정점>` · 조화 `peak_hz` ·
+    정적 `max_mm` · `max_mpa` · `reaction:<영역>` · `bolt:<볼트>`(끝의 볼트 힘) ·
+    `probe:<측정점>` · 조화 `peak_hz` ·
     `peak_mm` · 공통 `mass_kg`(모델 전체 — 강체 지그까지) · 바디마다 `mass:<파트>`(시편만
     견주려면 이것). 모르는 key 면 쓸 수 있는 열을 알려 준다. 끝난 점만 센다."""
     got = await _get(

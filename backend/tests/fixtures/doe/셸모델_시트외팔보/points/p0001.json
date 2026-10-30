@@ -132,18 +132,18 @@
     "edges": 7,
     "min_wall": null,
     "min_wall_at": null,
+    "min_wall_by_body": {},
     "shortest_edge": 10.0,
     "short_edges": 0,
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {}
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 5.0,
     "basis": "가장 긴 변(100 mm)의 1/20 — 벽 두께를 모른다(시트만 있거나 형상 점검을 껐다)",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": null,
@@ -151,13 +151,16 @@
       "longest": 100.0,
       "skipped": [
         "전체"
-      ]
+      ],
+      "nodes_estimate": 240,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "eaad6dc9-7487-4620-88b1-04f9ec09a5c3",
+      "id": "eeaf0538-1b4e-48e6-8374-c3858c04863b",
       "name": "셸모델_시트외팔보",
       "method": "factorial",
       "seed": 1
@@ -478,7 +481,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

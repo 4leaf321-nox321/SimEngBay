@@ -1,5 +1,5 @@
 {
-  "id": "649c2d0e-7e5a-4475-bafa-0ff839a48649",
+  "id": "88d289e3-ea25-499d-903f-f5a4603aa4cc",
   "name": "셸모델_두께없음",
   "description": "",
   "method": "factorial",
@@ -20,7 +20,7 @@
       {
         "id": "imported",
         "op": "import_step",
-        "file": "00d42875-076e-4c27-80bb-5edd08eae2e8",
+        "file": "44ab1c83-d1b4-4a68-b865-79d9f44482c2",
         "label": "sheet_no_thickness.step"
       }
     ],
@@ -220,8 +220,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-08c4b89b@example.local"
+    "email": "member-b6eb3d42@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

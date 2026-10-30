@@ -119,6 +119,10 @@ class Plan:
     bolt_model: list[str] = field(default_factory=list)
     bolt_rows: list[str] = field(default_factory=list)
     bolt_locks: list[str] = field(default_factory=list)
+    #: 볼트 이름 → 결과에서 되읽을 것 — 기준점 집합 둘(① 끝 `BOLTnA` · 끝 `BOLTn`, 같은
+    #: 절점이다)과 단면 앞쪽 집합 둘(`BOLTnCUTA` · `BOLTnCUT`), 예압의 꼴(`force` · `length`)과
+    #: 값(N · mm), 볼트 축. `boundary.json` 의 `bolts` 다.
+    bolt_report: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 #: 탄성 지지 영역 → 절점마다 (맡은 넓이 mm², 면의 단위 법선) — 모델링이 메시에서 셈한다.
@@ -641,7 +645,7 @@ def write_static(
         # 건다(CompCore 계약: 「먼저 체결한 뒤 그 길이를 고정한 상태에서 다른 하중을
         # 적용합니다」 — Ansys 경로도 같은 두 단계다). 강제 변위는 모델 줄이라 ① 부터 걸린다
         # (Ansys 도 변위는 첫 단계부터 건다).
-        lines += [*step, *plan.bolt_rows, "*END STEP"]
+        lines += [*step, *plan.bolt_rows, *_bolt_prints(plan, "A"), "*END STEP"]
     lines += [*step, *plan.bolt_locks, *main]
     if plan.printed_sets:
         # ccx 의 RF 는 그 절점에 직접 걸린 외력을 빼고 낸다 — 관성 하중의 몫과 압력 · 힘의 몫을
@@ -681,6 +685,7 @@ def write_static(
         # 찍는다**(`GLOBAL=YES`) — 원통 지지와 절점을 나눈 고정면이면 그 절점은 국부 좌표계라,
         # 안 그러면 반경 · 접선 · 축 성분이 X · Y · Z 에 섞여 더해진다.
         lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY, GLOBAL=YES", "RF"]
+    lines += _bolt_prints(plan, "")
     if plan.reaction_sets:
         logger.info("반력 자리 %s", plan.reaction_sets)
     lines += [
@@ -1167,7 +1172,24 @@ def _bolt_blocks(
         ref = _top_node(nodes, rigid, [], plan) + 1
         plan.extra_nodes.append(ref)
         x, y, z = found.point
-        model += ["*NODE", f"{ref}, {x:.6f}, {y:.6f}, {z:.6f}", "*EQUATION"]
+        # **기준점의 변위가 조임량이고, 단면 앞쪽 절점의 내력 합이 볼트 힘이다.** 기준점은
+        # 요소가 없어 ccx 가 반력을 0 으로 찍는다(실측 2.21, 2026-10-29 — 구속식으로 넘어간
+        # 힘은 RF 에 안 든다). 앞쪽 절점은 갈라 새로 세운 것이라 앞쪽 볼트 요소만 쥔다.
+        # 단계마다 다른 이름의 집합으로 찍어 ① 끝(조인 힘)과 끝(잠근 뒤)을 가른다
+        # (`static_read._bolts`).
+        tag = f"BOLT{len(plan.bolt_report) + 1}"
+        front = {one for _, one in found.pairs}
+        model += [
+            "*NODE",
+            f"{ref}, {x:.6f}, {y:.6f}, {z:.6f}",
+            f"*NSET, NSET={tag}A",
+            str(ref),
+            f"*NSET, NSET={tag}",
+            str(ref),
+            *_nset(f"{tag}CUTA", front),
+            *_nset(f"{tag}CUT", front),
+            "*EQUATION",
+        ]
         for behind, ahead in found.pairs:
             for dof, part in enumerate(found.axis, start=1):
                 tie = f"{ahead}, {dof}, 1., {behind}, {dof}, -1."
@@ -1175,6 +1197,12 @@ def _bolt_blocks(
                     model += ["2", tie]
                 else:
                     model += ["3", f"{tie}, {ref}, 1, {part:.8g}"]
+        plan.bolt_report[load.name] = {
+            "set": tag,
+            "kind": "force" if unit in forces else "length",
+            "preload": load.preload * (forces[unit] if unit in forces else lengths[unit]),
+            "axis": list(found.axis),
+        }
         if unit in forces:
             forced = True
             plan.bolt_rows += ["*CLOAD", f"{ref}, 1, {load.preload * forces[unit]:.8g}"]
@@ -1188,6 +1216,16 @@ def _bolt_blocks(
         plan.bolt_locks.append("*CLOAD, OP=NEW")
     plan.bolt_model = model
     return model
+
+
+def _bolt_prints(plan: Plan, suffix: str) -> list[str]:
+    """단면 앞쪽 절점의 내력 합(볼트 힘) · 기준점의 변위(조임량)를 `.dat` 에 찍는 줄 —
+    `suffix` 가 `A` 면 ① 의 집합이다(`Plan.bolt_report`)."""
+    out: list[str] = []
+    for row in plan.bolt_report.values():
+        out += [f"*NODE PRINT, NSET={row['set']}CUT{suffix}, TOTALS=ONLY", "RF"]
+        out += [f"*NODE PRINT, NSET={row['set']}{suffix}", "U"]
+    return out
 
 
 def _hold_reaction(

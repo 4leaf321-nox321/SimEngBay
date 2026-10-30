@@ -1,5 +1,5 @@
 {
-  "id": "1f452320-07c8-4441-90c1-535f1b4325b1",
+  "id": "b0453f7c-1134-4aae-929c-a77cf498f8fc",
   "name": "시험_방향하중",
   "description": "",
   "method": "factorial",
@@ -296,8 +296,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-ffcc2269@example.local"
+    "email": "member-bef46c6e@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

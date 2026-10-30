@@ -1,5 +1,5 @@
 {
-  "id": "1d65e8e9-289d-421b-9cfb-5fd4f32d50ad",
+  "id": "ca2a4dcf-dc93-4f4a-b650-246422b3bd2c",
   "name": "시험_정하중_T2",
   "description": "",
   "method": "factorial",
@@ -300,8 +300,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-e4b5a741@example.local"
+    "email": "member-85673530@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

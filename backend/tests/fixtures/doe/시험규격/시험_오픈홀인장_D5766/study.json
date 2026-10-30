@@ -1,5 +1,5 @@
 {
-  "id": "4b9c361e-eefd-4c27-8e2a-b6ecccbff25b",
+  "id": "0472d847-3ca8-4d65-9353-0e6ea1f7a73c",
   "name": "시험_오픈홀인장_D5766",
   "description": "",
   "method": "factorial",
@@ -356,8 +356,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-2b0a834e@example.local"
+    "email": "member-12a82a54@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

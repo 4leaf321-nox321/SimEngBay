@@ -184,33 +184,36 @@
       -8.333,
       0.0
     ],
+    "min_wall_by_body": {
+      "아래판": 5.0,
+      "위판": 5.0
+    },
     "shortest_edge": 2.5,
     "short_edges": 0,
     "narrowest_face": 4.1667,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "아래판": 5.0,
-      "위판": 5.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 2.5,
     "basis": "최소 벽 두께(5 mm, 「아래판」)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": true,
     "inputs": {
       "min_wall": 5.0,
       "wall_body": "아래판",
       "longest": 160.0,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 40000,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 2,
     "study": {
-      "id": "bf4405f7-fbaf-471d-9900-f52ff82b6024",
+      "id": "c404c272-a01c-498a-b475-b56debf40031",
       "name": "조건_전단이음",
       "method": "table",
       "seed": 1
@@ -915,7 +918,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "id": "550fc7c9-6c66-4fa9-ad5b-cb0ef5b122eb",
+  "id": "3851a558-7665-4959-b6ed-5c30b0b655ea",
   "name": "시험_숏빔전단_D2344",
   "description": "",
   "method": "factorial",
@@ -404,8 +404,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-375135f7@example.local"
+    "email": "member-2581baed@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

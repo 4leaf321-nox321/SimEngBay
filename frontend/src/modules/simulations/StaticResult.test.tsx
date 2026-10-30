@@ -122,6 +122,20 @@ describe('정적 결과', () => {
     expect(screen.getByText(/변형 그림을 만들지 않았습니다/)).toBeDefined()
   })
 
+  it('볼트는 조인 힘 · 끝의 힘 · 조임량을 보여 준다', () => {
+    // CompCore 볼트 픽스처 점 1(Ansys 실측 2026-10-27) — 1000 N 으로 조이고, 잠근 뒤 끌어올리면 는다.
+    const bolted: StaticResultData = {
+      ...SHEAR,
+      bolts: { '볼트 예압': { tightened_n: 1000, force_n: 1066.21, adjustment_mm: 0.00247097 } },
+    }
+    render(<StaticResult simulationId="sim" result={bolted} artifacts={[]} />)
+    expect(screen.getByRole('heading', { name: '볼트' })).toBeDefined()
+    expect(screen.getByText('볼트 예압')).toBeDefined()
+    expect(screen.getByText('1,000 N')).toBeDefined()
+    expect(screen.getByText('1,066.2 N')).toBeDefined()
+    expect(screen.getByText('0.002471 mm')).toBeDefined()
+  })
+
   it('측정점 · 반력이 없는 결과는 그 표를 그리지 않는다', () => {
     // 점 그룹이 없는 작업 · 모의 실행기 작업이 그렇다 — 빈 표는 「0 이 여럿」 으로 읽힌다.
     const bare: StaticResultData = { ...SHEAR, probes: undefined, reactions: undefined }

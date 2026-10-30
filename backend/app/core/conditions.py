@@ -478,9 +478,25 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
                 Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", flat[place])
             )
             continue
-        if place in odd and live:
+        bolted_body = (
+            str(row.get("type") or "") == "bolt_pretension" and entities.get(place) == "body"
+        )
+        if place in odd and live and not bolted_body:
             made.refused.append(
                 Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", odd[place])
+            )
+            continue
+        if bolted_body and live and str(row.get("cs") or "") in GLOBAL_FRAMES:
+            # **바디에 건 예압은 단면을 좌표계로 정한다**(CompCore 2f402f2 — 우리가 고른 (가)):
+            # Z 축이 볼트 축, 원점이 단면 자리. Ansys 의 바디 예압과 같은 뜻이다. 전역이면
+            # 원점(0, 0, 0)을 지나는 평면이라 거의 늘 엉뚱한 자리다 — CompCore 도 저장할 때
+            # 막는다.
+            made.refused.append(
+                Note(
+                    f"하중 「{row.get('name') or '이름 없는 하중'}」",
+                    "바디에 건 볼트 예압은 좌표계가 있어야 합니다 — Z 축이 볼트 축, 원점이 "
+                    "단면 자리입니다",
+                )
             )
             continue
         _load(row, recipe, made)
@@ -1014,6 +1030,31 @@ def _initial(row: dict[str, Any], recipe: str, made: Conditions) -> None:
         made.skipped.append(
             Note("초기조건 (환경 온도)", "열응력을 풀지 않으므로 모달 결과를 바꾸지 않습니다")
         )
+        return
+    if kind == "prestress":
+        # **선응력은 `analysis.prestressed` 와 한 짝이다**(CompCore: 「초기조건의 「선응력」 과
+        # 함께 사용합니다」) — 같은 하중의 정적을 앞에 풀고 그 응력을 안고 모드를 뽑는다.
+        # 전에는 이 줄을 「아직 걸 수 없다」 로 막아 선응력 모달 폴더가 통째로 멈췄다(CompCore
+        # 볼트 픽스처, 2026-10-27). 다른 해석의 단계(`from_step`)에서 가져오는 것은 아직
+        # 못 한다.
+        source = str(row.get("from_step") or "").strip()
+        if source:
+            made.refused.append(
+                Note(
+                    "초기조건 (선응력)",
+                    f"다른 해석({source})의 응력은 아직 못 가져옵니다 — 비우면 같은 하중의 "
+                    "정적을 앞에 풉니다",
+                )
+            )
+        elif recipe != "modal":
+            made.skipped.append(Note("초기조건 (선응력)", "모달에서만 씁니다"))
+        elif not made.analysis.prestressed:
+            made.skipped.append(
+                Note(
+                    "초기조건 (선응력)",
+                    "해석 설정의 「선응력 반영」 이 꺼져 있어 쓰지 않습니다",
+                )
+            )
         return
     made.refused.append(Note("초기조건", f"아직 걸 수 없습니다: {kind}"))
 

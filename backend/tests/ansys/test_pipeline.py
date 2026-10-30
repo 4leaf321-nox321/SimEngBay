@@ -881,6 +881,102 @@ def test_전단_이음에서_마찰이_일을_한다_Ansys(workdir: Path) -> Non
     assert 1e-6 < abs(strain[0]) < 1e-2, f"εxx {strain[0]}"
 
 
+BOLTED = FIXTURES / "doe" / "조건_볼트예압_정적"
+BOLTED_MODAL = FIXTURES / "doe" / "조건_볼트예압_선응력모달"
+#: 같은 체결에 예압을 바디 「볼트」 에 걸고 단면을 좌표계 「볼트 단면」 으로 정한 폴더.
+BOLTED_BODY = FIXTURES / "doe" / "조건_볼트예압_바디"
+
+
+def _bolted(workdir: Path, folder: Path, point: int, recipe: str) -> dict[str, Any]:
+    """볼트 폴더의 한 점을 CAD 의 메시 힌트 그대로(전체 2 mm · 자유 몸통 1 mm) 푼다."""
+    place = workdir / f"{folder.name}-{recipe}-p{point:04d}"
+    place.mkdir()
+    shutil.copy(next(iter((folder / "shapes").glob("*.step"))), place / "input.step")
+    shutil.copy(folder / "points" / f"p{point:04d}.json", place / "topology.json")
+    spec: dict[str, Any] = {"recipe": recipe, "solver": "ansys", "material": SPEC["material"]}
+    if recipe == "modal":
+        spec["modes"] = 6
+    parse_spec(spec)
+    (place / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    runner = _executor()
+    for stage in STAGES:
+        runner.run(StageContext(stage=stage, spec=spec, workdir=place))
+    loaded: dict[str, Any] = json.loads((place / "result.json").read_text(encoding="utf-8"))
+    return loaded
+
+
+def test_볼트는_조인_뒤_길이를_잠그고_외력을_받는다_Ansys(workdir: Path) -> None:
+    """CompCore 볼트 예압 픽스처(f500bcd) — 판정은 그 README 그대로다.
+
+    - 점 1(1000 N): 1단계 끝 1000 N, 2단계 ≈ 1.05 ~ 1.2 kN. **정확히 1000 N 이면 길이를 안
+      잠근 것**(차례가 틀림), 1.6 kN 이상이면 예압이 사라진 것.
+    - 점 2(조임량 0.0025 mm): 1단계 끝 ≈ 1.0 ~ 1.2 kN, 2단계는 점 1 과 같은 꼴로 는다.
+    - 선응력 모달: 두 점의 주파수가 거의 같다 — 크게 다르면 정적의 접촉 상태가 안 넘어간 것.
+
+    실측 2026-10-27(2025 R2): 점 1 1000 → 1066.2 N · 점 2 1011.7 → 1076.7 N · 바닥 -600 N ·
+    1차 2235.1 · 2239.8 Hz. CalculiX 는 아직 이 조립을 수렴시키지 못한다(판 사이 마찰 + 볼트,
+    첫 증분에서 잔차가 줄지 않는다).
+    """
+    forced = _bolted(workdir, BOLTED, 1, "static")
+    bolt = forced["bolts"]["볼트 예압"]
+    assert bolt["tightened_n"] == pytest.approx(1000.0)
+    assert 1050 < bolt["force_n"] < 1200, f"2단계 볼트 힘 {bolt['force_n']} N"
+    assert forced["reactions"]["바닥"][2] == pytest.approx(-600.0, rel=0.01)
+
+    adjusted = _bolted(workdir, BOLTED, 2, "static")
+    tight = adjusted["bolts"]["볼트 예압"]
+    assert tight["adjustment_mm"] == pytest.approx(0.0025, rel=0.01)
+    assert 1000 < tight["tightened_n"] < 1200, f"1단계 끝 예압 {tight['tightened_n']} N"
+    assert tight["force_n"] - tight["tightened_n"] == pytest.approx(
+        bolt["force_n"] - bolt["tightened_n"], rel=0.2
+    ), "2단계에 는 몫이 점 1 과 같은 꼴이어야 한다"
+
+    first = [
+        _first_elastic(_bolted(workdir, BOLTED_MODAL, point, "modal")) for point in (1, 2)
+    ]
+    assert first[0] == pytest.approx(first[1], rel=0.02), f"선응력 모달 1차 {first}"
+
+    # **바디에 건 예압**(좌표계가 단면) — 원통면 예압의 자유 몸통 가운데와 같은 자리를 자르므로
+    # 볼트 힘이 같아야 한다(CompCore 2f402f2).
+    body = _bolted(workdir, BOLTED_BODY, 1, "static")["bolts"]["볼트 예압"]
+    assert body["tightened_n"] == pytest.approx(1000.0)
+    assert body["force_n"] == pytest.approx(bolt["force_n"], rel=0.02), (
+        f"바디 예압 {body['force_n']} N · 원통면 예압 {bolt['force_n']} N"
+    )
+
+
+#: 판끼리까지 본딩인 가벼운 볼트 폴더(CompCore 9e32998) — 접촉 셋이 모두 본딩이라 선형이다.
+BOLTED_BONDED = FIXTURES / "doe" / "조건_볼트예압_판본딩"
+
+
+def test_판까지_본딩한_볼트는_선형이라_두_점의_증가분이_같다_Ansys(workdir: Path) -> None:
+    """CompCore 판정(README 「조건_볼트예압_판본딩」): 점 1 끝은 1000 N 보다 크고 마찰 폴더의
+    +66 N 보다 훨씬 작다(판끼리 붙어 끌어올림을 나눠 받는다), 두 점의 2단계 증가분이 같다.
+
+    실측 2026-10-29(2025 R2): 점 1 1000 → 1012.54 N · 점 2 1092.79 → 1105.51 N · 바닥 -600 N,
+    두 점 3분 남짓. CalculiX 는 1012.48 · 1082.23 → 1094.71 N(`tests/opensolver`).
+    """
+    forced = _bolted(workdir, BOLTED_BONDED, 1, "static")
+    bolt = forced["bolts"]["볼트 예압"]
+    assert bolt["tightened_n"] == pytest.approx(1000.0)
+    assert 1000.5 < bolt["force_n"] < 1066, f"2단계 볼트 힘 {bolt['force_n']} N"
+    assert forced["reactions"]["바닥"][2] == pytest.approx(-600.0, rel=0.01)
+
+    adjusted = _bolted(workdir, BOLTED_BONDED, 2, "static")
+    tight = adjusted["bolts"]["볼트 예압"]
+    assert tight["adjustment_mm"] == pytest.approx(0.0025, rel=0.01)
+    assert tight["force_n"] - tight["tightened_n"] == pytest.approx(
+        bolt["force_n"] - bolt["tightened_n"], rel=0.05
+    ), "선형이라 두 점의 2단계 증가분이 같아야 한다"
+    # CalculiX 와 5 % 안(실측 2026-10-29 — 0.01 % · 1 %).
+    assert bolt["force_n"] == pytest.approx(1012.48, rel=0.05)
+    assert tight["tightened_n"] == pytest.approx(1082.23, rel=0.05)
+
+
+def _first_elastic(result: dict[str, Any]) -> float:
+    return float(next(one["frequency_hz"] for one in result["modes"] if not one["rigid_body"]))
+
+
 def test_형상_캐시가_앞_점의_접촉을_물려주지_않는다(workdir: Path) -> None:
     """**캐시는 조건을 걸기 전에 남긴다.**
 

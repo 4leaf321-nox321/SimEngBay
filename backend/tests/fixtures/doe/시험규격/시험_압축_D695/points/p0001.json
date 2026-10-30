@@ -70,32 +70,35 @@
       4.233,
       4.233
     ],
+    "min_wall_by_body": {
+      "전체": 12.7
+    },
     "shortest_edge": 12.7,
     "short_edges": 0,
     "narrowest_face": 6.35,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "전체": 12.7
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 1.2,
     "basis": "가장 긴 변(25.4 mm)의 1/20 — 벽(12.7 mm)의 절반보다 작게, 그 방향에 요소 스무 개 이상",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 12.7,
       "wall_body": "전체",
       "longest": 25.4,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 59270,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "6cf4f110-a410-4b33-9587-c36747213f8f",
+      "id": "782ebc3d-8a9a-472c-8080-c65242498b60",
       "name": "시험_압축_D695",
       "method": "factorial",
       "seed": 1
@@ -402,7 +405,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

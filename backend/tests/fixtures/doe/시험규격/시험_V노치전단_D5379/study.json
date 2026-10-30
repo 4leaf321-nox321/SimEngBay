@@ -1,5 +1,5 @@
 {
-  "id": "83246060-ad0e-48ac-88a1-ae2cea904280",
+  "id": "1a0c97c0-ec1f-49e3-8f94-6288dbe0bcd5",
   "name": "시험_V노치전단_D5379",
   "description": "",
   "method": "factorial",
@@ -396,8 +396,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-470aee13@example.local"
+    "email": "member-57808910@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

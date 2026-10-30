@@ -96,32 +96,35 @@
       -0.0,
       0.0
     ],
+    "min_wall_by_body": {
+      "전체": 4.0
+    },
     "shortest_edge": 2.042,
     "short_edges": 0,
     "narrowest_face": 1.3519,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "전체": 4.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 2.0,
     "basis": "최소 벽 두께(4 mm)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 4.0,
       "wall_body": "전체",
       "longest": 76.0,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 18539,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "83246060-ad0e-48ac-88a1-ae2cea904280",
+      "id": "1a0c97c0-ec1f-49e3-8f94-6288dbe0bcd5",
       "name": "시험_V노치전단_D5379",
       "method": "factorial",
       "seed": 1
@@ -444,7 +447,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

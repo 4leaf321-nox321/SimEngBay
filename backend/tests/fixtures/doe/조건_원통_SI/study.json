@@ -1,5 +1,5 @@
 {
-  "id": "40df3ae8-a26a-457f-a9a9-ff3cb13f1ab0",
+  "id": "8d743b99-9ddf-4af5-b93f-bc8f2c393a96",
   "name": "조건_원통_SI",
   "description": "",
   "method": "factorial",
@@ -310,8 +310,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-7306d875@example.local"
+    "email": "member-6afad462@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

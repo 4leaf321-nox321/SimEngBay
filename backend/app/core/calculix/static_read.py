@@ -87,6 +87,9 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     forces = _reactions(workdir)
     if forces:
         result["reactions"] = forces
+    bolts = _bolts(workdir)
+    if bolts:
+        result["bolts"] = bolts
     if mesh_counts:
         result["mesh"] = mesh_counts
     if max_displacement <= 0:
@@ -193,6 +196,72 @@ def _reactions(workdir: Path) -> dict[str, list[float]]:
             significant((by_set[str(name).upper()][axis] if name else 0.0) + extra[axis])
             for axis, name in enumerate(row)
         ]
+    return out
+
+
+#: `.dat` 의 변위 머리 — `displacements (vx,vy,vz) for set BOLT1 and time  0.2000000E+01`.
+_MOVED = re.compile(r"displacements \(vx,vy,vz\) for set (\S+) and time\s+(\S+)")
+
+
+def _last_rows(
+    lines: list[str], pattern: re.Pattern[str], width: int
+) -> dict[str, list[float]]:
+    """집합 이름 → 그 머리 뒤 첫 수 줄(칸 `width` 개)의 **마지막 것**(증분마다 찍힌다)."""
+    found: dict[str, list[float]] = {}
+    for index, line in enumerate(lines):
+        head = pattern.search(line)
+        if not head:
+            continue
+        for follow in lines[index + 1 : index + 4]:
+            parts = follow.split()
+            if len(parts) != width:
+                continue
+            try:
+                found[head.group(1).upper()] = [float(one) for one in parts]
+            except ValueError:
+                continue
+            break
+    return found
+
+
+def _pull(total: list[float], axis: list[float]) -> float:
+    """단면 앞쪽 내력 합 → 볼트 힘(인장이 양수)."""
+    return -sum(part * one for part, one in zip(total, axis, strict=True))
+
+
+def _bolts(workdir: Path) -> dict[str, dict[str, float | None]]:
+    """볼트 이름 → **조인 힘 · 끝의 힘(N, 인장이 양수) · 조임량(mm)**.
+
+    기준점의 1번 자유도가 조임량이고(`deck.BoltSection`), 단면 앞쪽 절점의 내력 합을 축에
+    내린 것이 볼트 힘이다 — 앞쪽 요소가 뒤쪽에 끌려 축의 반대로 당겨지므로 부호를 뒤집는다.
+    ① 끝은 `…A`, 끝은 이름 그대로의 집합으로 따로 찍었다(같은 절점).
+    """
+    boundary_path = workdir / "boundary.json"
+    data = workdir / "model.dat"
+    if not boundary_path.is_file() or not data.is_file():
+        return {}
+    try:
+        report = json.loads(boundary_path.read_text(encoding="utf-8")).get("bolts") or {}
+    except (OSError, ValueError):
+        return {}
+    if not report:
+        return {}
+    lines = data.read_text(encoding="utf-8", errors="replace").splitlines()
+    forces = _last_rows(lines, _TOTAL, 3)
+    moved = _last_rows(lines, _MOVED, 4)
+    out: dict[str, dict[str, float | None]] = {}
+    for name, row in report.items():
+        tag = str(row.get("set") or "").upper()
+        axis = row.get("axis") or [0.0, 0.0, 0.0]
+        final = forces.get(f"{tag}CUT")
+        if final is None:
+            continue
+        early = forces.get(f"{tag}CUTA")
+        out[name] = {
+            "tightened_n": significant(_pull(early, axis)) if early else None,
+            "force_n": significant(_pull(final, axis)),
+            "adjustment_mm": significant(moved[tag][1]) if tag in moved else None,
+        }
     return out
 
 

@@ -1,5 +1,5 @@
 {
-  "id": "4cc6ccb5-3127-4a29-ab39-ab111ec9b949",
+  "id": "fc3cd967-e20f-499f-8f18-7b05b1a9eed5",
   "name": "시험_압착",
   "description": "",
   "method": "factorial",
@@ -293,8 +293,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-05907a61@example.local"
+    "email": "member-d858ffc1@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "id": "5b83ae28-3b15-457d-96b8-248f2df5d03b",
+  "id": "9862e985-f6f7-4b44-a7db-196b0db1a467",
   "name": "시험_손잡이",
   "description": "",
   "method": "factorial",
@@ -275,8 +275,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-d0e722e5@example.local"
+    "email": "member-4503ee1b@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

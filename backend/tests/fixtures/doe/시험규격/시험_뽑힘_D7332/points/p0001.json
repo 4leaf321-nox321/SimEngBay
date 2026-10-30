@@ -172,33 +172,36 @@
       -4.233,
       7.0
     ],
+    "min_wall_by_body": {
+      "시편": 4.0,
+      "체결구": 3.0
+    },
     "shortest_edge": 3.0,
     "short_edges": 0,
     "narrowest_face": 2.8913,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "시편": 4.0,
-      "체결구": 3.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
-    "element_size": 1.5,
-    "basis": "최소 벽 두께(3 mm, 「체결구」)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "element_size": 2.5,
+    "basis": "최소 벽 두께(3 mm, 「체결구」)의 절반 — 가장 얇은 벽에 요소 두 개 · 그 크기(1.5 mm)는 절점이 301,457개쯤이라 상한(100,000)을 넘어 2.5 mm 로 키웠다 — 얇은 벽은 국부 메시로 촘촘히",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 3.0,
       "wall_body": "체결구",
       "longest": 100.0,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 65115,
+      "max_nodes": 100000,
+      "capped_from": 1.5
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "7b88729c-5b4c-4805-8f08-1dedd5b0faaa",
+      "id": "2a74b913-c7bf-402b-86f9-084530d5259c",
       "name": "시험_뽑힘_D7332",
       "method": "factorial",
       "seed": 1
@@ -584,7 +587,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

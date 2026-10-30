@@ -1,5 +1,5 @@
 {
-  "id": "65d4fc99-3e26-4872-ab96-5958d55cf654",
+  "id": "9571d038-1fd4-4a18-af87-7946fe3164dd",
   "name": "시험_겹치기이음_D1002",
   "description": "",
   "method": "factorial",
@@ -430,8 +430,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-1cb44606@example.local"
+    "email": "member-70a4bb2e@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

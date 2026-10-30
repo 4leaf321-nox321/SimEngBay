@@ -1,5 +1,5 @@
 {
-  "id": "27fd04a7-e4a7-4620-b93b-9f1c0b93ce85",
+  "id": "fd26e179-7764-4e2c-ba28-e4dce63008f7",
   "name": "시험_오픈홀압축_D6484",
   "description": "",
   "method": "factorial",
@@ -327,8 +327,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-d712b89c@example.local"
+    "email": "member-980ce649@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

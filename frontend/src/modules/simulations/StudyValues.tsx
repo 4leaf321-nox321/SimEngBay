@@ -104,6 +104,15 @@ export function metricsOf(recipe: string, points: StudyPoint[]): Metric[] {
         force: true,
       }),
     ),
+    ...names(points, (one) => one.bolts_n).map(
+      (name): Metric => ({
+        key: `bolt:${name}`,
+        label: `볼트 ${name} 힘`,
+        unit: 'N',
+        pick: (one) => one.bolts_n?.[name] ?? null,
+        force: true,
+      }),
+    ),
     ...names(points, (one) => one.probes_mm).map(
       (name): Metric => ({
         key: `probe:${name}`,

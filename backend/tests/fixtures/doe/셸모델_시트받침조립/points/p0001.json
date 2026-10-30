@@ -194,20 +194,20 @@
       3.333,
       0.0
     ],
+    "min_wall_by_body": {
+      "base": 10.0
+    },
     "shortest_edge": 10.0,
     "short_edges": 0,
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "base": 10.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 5.0,
     "basis": "최소 벽 두께(10 mm, 「base」)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 10.0,
@@ -215,13 +215,16 @@
       "longest": 100.0,
       "skipped": [
         "skin"
-      ]
+      ],
+      "nodes_estimate": 1040,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "786bcfb1-80bc-4726-9fd7-95b253fb581e",
+      "id": "9b46bb2c-62d1-453e-91c2-a1652d84e48d",
       "name": "셸모델_시트받침조립",
       "method": "factorial",
       "seed": 1
@@ -595,7 +598,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

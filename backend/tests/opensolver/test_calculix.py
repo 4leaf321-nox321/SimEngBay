@@ -223,6 +223,86 @@ def test_회전_속도의_원심력이_반력에_든다(ready: None, tmp_path: P
     assert result["max_displacement"] == pytest.approx(1.971e-3, rel=0.03)
 
 
+def _bolt_deck(work: Path, folder: str) -> str:
+    """볼트 폴더 1번 점의 덱까지만 쓴다 — 이 조립(판 사이 마찰 + 볼트)은 CalculiX 로 끝까지
+    풀기에 아직 너무 무겁다(`docs/해석-연동-계획.md` 「CompCore 볼트 예압 픽스처」)."""
+    source = FIXTURES / "doe" / folder
+    work.mkdir(parents=True)
+    shutil.copy(next(iter((source / "shapes").glob("*.step"))), work / "input.step")
+    shutil.copy(source / "points" / "p0001.json", work / "topology.json")
+    spec = {key: value for key, value in SPEC.items() if key not in ("modes", "mesh")}
+    for stage in ("fetching", "modeling"):
+        run_stage(
+            stage,
+            parse_spec({**spec, "recipe": "static"}),
+            work,
+            input_name="input.step",
+            version=252,
+            ansys_root=None,
+            solver_processes=2,
+            timeout_seconds=1800,
+            visual_modes=6,
+        )
+    return (work / "model.inp").read_text(encoding="utf-8")
+
+
+def test_바디에_건_볼트_예압은_원통면_예압과_같은_단면을_자른다(
+    ready: None, tmp_path: Path
+) -> None:
+    """CompCore 2f402f2 — 「조건_볼트예압_바디」 는 「…_정적」 과 같은 체결인데 예압을 바디
+    「볼트」 에 걸고, 단면을 좌표계 「볼트 단면」(원점 (0, 0, 14), Z 축)으로 정한다. 원통면
+    예압의 자유 몸통 가운데와 같은 자리라 **같은 절점을 같은 축으로 갈라야 한다**(실측
+    2026-10-28: 둘 다 짝 280 · 기준점 (0, 0, 14))."""
+
+    def section(deck: str) -> tuple[list[str], str]:
+        rows = deck.split("*EQUATION\n", 1)[1].split("\n*", 1)[0].splitlines()
+        ref = deck.split("*NSET, NSET=BOLT1A\n", 1)[0].rsplit("*NODE\n", 1)[1].strip()
+        return [one for one in rows if ", 3, 1., " in one], ref
+
+    face = section(_bolt_deck(tmp_path / "face", "조건_볼트예압_정적"))
+    body = section(_bolt_deck(tmp_path / "body", "조건_볼트예압_바디"))
+    assert len(face[0]) > 100
+    assert body == face
+
+
+#: 판끼리까지 본딩인 가벼운 볼트 폴더(CompCore 9e32998) — 접촉 셋이 모두 본딩이라 선형이다.
+BOLTED_BONDED = FIXTURES / "doe" / "조건_볼트예압_판본딩"
+#: 같은 폴더를 Ansys 로 푼 값(실측 2026-10-29, 2025 R2) — 점 → (① 끝, 끝의 볼트 힘 N).
+BOLTED_BONDED_ANSYS = {1: (1000.0, 1012.54), 2: (1092.79, 1105.51)}
+
+
+def test_판까지_본딩한_볼트는_Ansys_와_같은_힘을_낸다(ready: None, tmp_path: Path) -> None:
+    """CompCore 판정(README 「조건_볼트예압_판본딩」): 점 1 은 끝에 1000 N 보다 커야 하고,
+    선형이라 **두 점의 2단계 증가분이 같아야 하며**, 두 솔버가 5 % 안에서 맞아야 한다.
+
+    실측(2026-10-29, CAD 메시 힌트 그대로): CalculiX 점 1 1000 → 1012.48 N · 점 2 1082.23 →
+    1094.71 N(증가분 둘 다 +12.48 N), 점마다 30초쯤. 판끼리 붙어 끌어올림 600 N 의 2 % 만
+    볼트로 간다 — 마찰 폴더(+66 N)보다 훨씬 작다. 볼트 힘을 기준점 반력으로 읽던 때는 0 이
+    나왔다(`static_read._bolts`).
+    """
+    spec = {key: value for key, value in SPEC.items() if key not in ("modes", "mesh")}
+    found: dict[int, dict[str, float]] = {}
+    for point in (1, 2):
+        work = tmp_path / f"p{point}"
+        work.mkdir()
+        shutil.copy(next(iter((BOLTED_BONDED / "shapes").glob("*.step"))), work / "input.step")
+        shutil.copy(BOLTED_BONDED / "points" / f"p{point:04d}.json", work / "topology.json")
+        _run(work, {**spec, "recipe": "static"})
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        assert result["reactions"]["바닥"][2] == pytest.approx(-600.0, rel=0.01)
+        found[point] = result["bolts"]["볼트 예압"]
+
+    assert found[1]["tightened_n"] == pytest.approx(1000.0)
+    assert 1000.5 < found[1]["force_n"] < 1066, f"끝의 볼트 힘 {found[1]['force_n']} N"
+    assert found[2]["adjustment_mm"] == pytest.approx(0.0025)
+    grown = [found[one]["force_n"] - found[one]["tightened_n"] for one in (1, 2)]
+    assert grown[0] == pytest.approx(grown[1], rel=0.01), f"증가분 {grown}"
+    for point, (early, final) in BOLTED_BONDED_ANSYS.items():
+        assert found[point]["tightened_n"] == pytest.approx(early, rel=0.05)
+        assert found[point]["force_n"] == pytest.approx(final, rel=0.05)
+        assert grown[point - 1] == pytest.approx(final - early, rel=0.05)
+
+
 #: `조건_원통_SI` 를 Ansys 로 돌린 값(실측 2026-10-03 · 요소 4 mm · 물성은 스펙).
 #: 1차는 **0 Hz** 다 — 접선이 자유라 핀을 축으로 돈다. 그 뒤가 탄성 모드다.
 CYLINDER_ANSYS_HZ = (2165.2, 4746.0, 11051.5, 11640.5, 13943.9)

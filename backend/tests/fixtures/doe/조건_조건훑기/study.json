@@ -1,5 +1,5 @@
 {
-  "id": "8ef5780f-dff6-4ce6-a5a1-947fb883eeea",
+  "id": "b7c51a01-5b7e-4dd2-8a00-ba2265b7ff25",
   "name": "조건_조건훑기",
   "description": "",
   "method": "factorial",
@@ -489,8 +489,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-7306d875@example.local"
+    "email": "member-6afad462@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

@@ -141,8 +141,20 @@ export interface StaticResult {
   probes?: ProbeRow[]
   /** 변위로 당긴 영역 → 그 자리가 버틴 **반력 합** `[Fx, Fy, Fz]`(단위는 `units.force`). */
   reactions?: Record<string, [number, number, number]>
+  /** 볼트 이름 → 조인 힘 · 끝의 힘(N, 인장이 양수) · 조임량(mm). 볼트가 없으면 없다. */
+  bolts?: Record<string, BoltRow>
   warning?: string
   fake?: boolean
+}
+
+/**
+ * 볼트 하나 — **두 단계**(① 조임 · ② 길이를 잠그고 다른 하중)의 값. `tightened_n` 은 ① 끝의 힘(힘으로
+ * 조였으면 준 예압), `force_n` 은 끝의 힘(외력이 바꾼 뒤), `adjustment_mm` 은 조임량(단면이 줄어든 길이).
+ */
+export interface BoltRow {
+  tightened_n: number | null
+  force_n: number | null
+  adjustment_mm: number | null
 }
 
 export interface SimulationResult {

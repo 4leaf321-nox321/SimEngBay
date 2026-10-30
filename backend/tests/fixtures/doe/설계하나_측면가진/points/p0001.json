@@ -138,33 +138,36 @@
       -26.667,
       0.0
     ],
+    "min_wall_by_body": {
+      "받침판": 10.0,
+      "기둥": 10.0
+    },
     "shortest_edge": 10.0,
     "short_edges": 0,
     "narrowest_face": 5.0,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "받침판": 10.0,
-      "기둥": 10.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
     "element_size": 5.0,
     "basis": "최소 벽 두께(10 mm, 「받침판」)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": true,
     "inputs": {
       "min_wall": 10.0,
       "wall_body": "받침판",
       "longest": 110.0,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 14800,
+      "max_nodes": 100000,
+      "capped_from": null
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "db734ea2-7b18-4b23-9633-2a9bfa9cbfe0",
+      "id": "fa897246-391a-4c26-b86b-1d6d819ba671",
       "name": "설계하나_측면가진",
       "method": "factorial",
       "seed": 1
@@ -789,7 +792,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

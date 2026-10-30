@@ -1087,6 +1087,9 @@ def _apply_loads(
                 if isinstance(moved, str):
                     raise StageFailure("internal", f"하중 「{load.name}」: {moved}")
                 _load_magnitude(made, moved, system, quantity, steps)
+            if load.kind == "bolt_pretension" and load.cs not in condition_model.GLOBAL_FRAMES:
+                # **바디에 건 예압은 좌표계가 단면이다** — Z 축이 볼트 축, 원점이 단면 자리.
+                made.CoordinateSystem = _frame_named(app, load.cs)
             if bolted and load.kind == "bolt_pretension":
                 made.SetDefineBy(
                     2, _global("Ansys").Mechanical.DataModel.Enums.BoltLoadDefineBy.Lock
@@ -1142,6 +1145,14 @@ def _load_magnitude(
         return
     if load.magnitude is not None and hasattr(made, "Magnitude"):
         made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
+
+
+def _frame_named(app: Any, name: str) -> Any:
+    """세운 좌표계 하나(`_build_frames`) — 이름으로."""
+    for one in app.Model.CoordinateSystems.Children:
+        if str(one.Name) == name:
+            return one
+    raise StageFailure("internal", f"좌표계 「{name}」 가 없습니다")
 
 
 def _bolt_preload(
@@ -1526,6 +1537,23 @@ def _apply_constraints(
     return applied
 
 
+def _bolted_bodies(
+    given: condition_model.Conditions, topology: dict[str, Any]
+) -> dict[str, str]:
+    """바디에 건 볼트 예압의 영역 → 그 바디 이름. 바디 그룹의 지문은 그 바디의 `bodies[]`
+    줄이다(CompCore 2f402f2 — `volume` 이 있다). 원통면 예압은 여기 없다(면으로 짝짓는다)."""
+    regions = (topology.get("regions") or {}) if topology else {}
+    out: dict[str, str] = {}
+    for load in given.loads:
+        if load.kind != "bolt_pretension" or not load.region:
+            continue
+        rows = regions.get(load.region)
+        first = rows[0] if isinstance(rows, list) and rows else {}
+        if isinstance(first, dict) and first.get("volume") is not None:
+            out[load.region] = str(first.get("name") or load.region)
+    return out
+
+
 def _named_selection(app: Any, name: str, ids: list[int]) -> Any:
     """면 번호들을 이름 붙인 선택으로 — 구속 · 접촉이 이것을 가리킨다."""
     selection_type = _global("Ansys").ACT.Interfaces.Common.SelectionTypeEnum
@@ -1557,10 +1585,12 @@ def _apply_given_conditions(
         | {one.source for one in given.contacts}
         | {one.target for one in given.contacts}
         # **하중의 자리도 여기서 함께 짝짓는다** — 빼 두면 선응력에서 「자리를 못 찾았다」 로
-        # 늦게 죽는다(실측 2026-10-02).
+        # 늦게 죽는다(실측 2026-10-02). 바디에 건 볼트 예압은 면이 아니라 따로 고른다.
         | {one.region for one in given.loads if one.region}
     )
-    if not wanted:
+    bolted_bodies = _bolted_bodies(given, topology)
+    wanted = [one for one in wanted if one not in bolted_bodies]
+    if not wanted and not bolted_bodies:
         return [], {}, set(), {}
 
     # 파트 이름은 **남은 파트로만** 짝짓는다 — 뺀 파트 · 쉘 파트도 CAD 바디 목록에 남아
@@ -1582,6 +1612,18 @@ def _apply_given_conditions(
         )
 
     places = {name: _named_selection(app, name, matched.faces[name]) for name in wanted}
+    names = _part_names(bodies, kept_parts, system)
+    for region, part in bolted_bodies.items():
+        # **바디에 건 볼트 예압 — 그 바디를 고른다**(바디 짝짓기, 물성과 같은 규칙). 단면은
+        # 하중의 좌표계가 정한다(`_apply_loads`).
+        ids = [geo for geo, name in names.items() if name == part]
+        if not ids:
+            raise StageFailure(
+                "region_unresolved",
+                f"볼트 예압의 바디 「{part}」 를 형상에서 찾지 못했습니다",
+                details={"failures": [region]},
+            )
+        places[region] = _named_selection(app, region, ids)
     frames = _build_frames(app, given, system)
     applied: list[str] = []
     rigid_of = _rigid_owner(bodies, matched.faces, rigid_ids or set())

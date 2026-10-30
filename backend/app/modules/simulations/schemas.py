@@ -223,6 +223,9 @@ class ValuesOut(BaseModel):
     max_von_mises_mpa: float | None = None
     reactions_n: dict[str, list[float]] = Field(default_factory=dict)
     """변위를 준 영역 → 반력 합 `[Fx, Fy, Fz]`(N)."""
+    bolts_n: dict[str, float] = Field(default_factory=dict)
+    """볼트 → 끝의 볼트 힘(N, 인장이 양수) — 잠근 뒤 다른 하중까지 받은 값(`result.json` 의
+    `bolts[이름].force_n`)."""
     probe_vectors_mm: dict[str, list[float]] = Field(default_factory=dict)
     """측정점 → 변위 성분 `[ux, uy, uz]`(mm)."""
     probe_strains: dict[str, list[float]] = Field(default_factory=dict)
@@ -504,6 +507,9 @@ class StudyPointOut(BaseModel):
     peak_displacement_mm: float | None = None
     reactions_n: dict[str, list[float]] = Field(default_factory=dict)
     """변위를 준 영역 → 반력 합 `[Fx, Fy, Fz]`(N)."""
+    bolts_n: dict[str, float] = Field(default_factory=dict)
+    """볼트 → 끝의 볼트 힘(N, 인장이 양수) — 잠근 뒤 다른 하중까지 받은 값(`result.json` 의
+    `bolts[이름].force_n`)."""
     probes_mm: dict[str, float] = Field(default_factory=dict)
     """측정점 → 값(mm). 정적은 변위 크기, 조화는 **그 자리 곡선의 봉우리** 진폭."""
     probe_vectors_mm: dict[str, list[float]] = Field(default_factory=dict)
@@ -556,7 +562,7 @@ class AnalysisColumnOut(BaseModel):
 
     key: str
     """`factor:<변수>` · `mode:<기준 차수>` · `max_mm` · `max_mpa` · `reaction:<영역>` ·
-    `probe:<이름>` · `mass_kg` …"""
+    `bolt:<볼트>` · `probe:<이름>` · `mass_kg` …"""
     label: str
     unit: str
     kind: Literal["factor", "result"]

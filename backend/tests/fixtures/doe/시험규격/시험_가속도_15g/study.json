@@ -1,5 +1,5 @@
 {
-  "id": "0e2c9861-2b29-4a92-8db4-7b6565aa2641",
+  "id": "f9aa3fbd-78db-423d-8041-dfc8d1c96d98",
   "name": "시험_가속도_15g",
   "description": "",
   "method": "factorial",
@@ -268,8 +268,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-56a7dd95@example.local"
+    "email": "member-b368e55d@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

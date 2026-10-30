@@ -111,32 +111,35 @@
       -11.667,
       4.0
     ],
+    "min_wall_by_body": {
+      "전체": 4.0
+    },
     "shortest_edge": 4.0,
     "short_edges": 0,
     "narrowest_face": 3.6,
     "narrow_faces": 0,
     "warnings": [],
-    "notes": [],
-    "min_wall_by_body": {
-      "전체": 4.0
-    }
+    "notes": []
   },
   "mesh_suggestion": {
-    "element_size": 2.0,
-    "basis": "최소 벽 두께(4 mm)의 절반 — 가장 얇은 벽에 요소 두 개",
-    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm)",
+    "element_size": 2.5,
+    "basis": "최소 벽 두께(4 mm)의 절반 — 가장 얇은 벽에 요소 두 개 · 그 크기(2 mm)는 절점이 112,147개쯤이라 상한(100,000)을 넘어 2.5 mm 로 키웠다 — 얇은 벽은 국부 메시로 촘촘히",
+    "rule": "최소 벽 두께/2 를 가장 긴 변/200 ~ 1/20 사이로 맞추고 깔끔한 수로 내림(mm) · 추정 절점 수가 상한을 넘으면 그 안에 들 때까지 키움",
     "in_conditions": false,
     "inputs": {
       "min_wall": 4.0,
       "wall_body": "전체",
       "longest": 250.0,
-      "skipped": []
+      "skipped": [],
+      "nodes_estimate": 57419,
+      "max_nodes": 100000,
+      "capped_from": 2.0
     }
   },
   "point": {
     "number": 1,
     "study": {
-      "id": "4b9c361e-eefd-4c27-8e2a-b6ecccbff25b",
+      "id": "0472d847-3ca8-4d65-9353-0e6ea1f7a73c",
       "name": "시험_오픈홀인장_D5766",
       "method": "factorial",
       "seed": 1
@@ -467,7 +470,7 @@
     "geometry": "mm",
     "regions": "mm",
     "midsurface": "mm",
-    "coordinate_systems": "mm",
-    "mesh_suggestion": "mm"
+    "mesh_suggestion": "mm",
+    "coordinate_systems": "mm"
   }
 }

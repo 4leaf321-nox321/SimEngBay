@@ -10,7 +10,7 @@
  * 그대로 보여 준다.
  */
 
-import type { ModeResult, ProbeRow } from '@/modules/simulations/api'
+import type { BoltRow, ModeResult, ProbeRow } from '@/modules/simulations/api'
 import { axisOf, magnitudeOf, shownForce, shownValue } from '@/modules/simulations/format'
 import {
   Table,
@@ -150,6 +150,44 @@ export function ReactionTable({
       </Table>
       <p className="text-muted-foreground text-xs">
         변위를 준 구속의 반력 합입니다. 같은 평면에 다른 구속이 있으면 함께 더해집니다.
+      </p>
+    </div>
+  )
+}
+
+/** 정적 — 볼트마다 조인 힘 · 끝의 힘 · 조임량(두 단계: ① 조임 · ② 길이를 잠그고 다른 하중). */
+export function BoltTable({ bolts }: { bolts: Record<string, BoltRow> }) {
+  const rows = Object.entries(bolts)
+  if (rows.length === 0) return null
+  const force = (value: number | null) => (value == null ? '—' : shownForce(value, 'N'))
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium">볼트</h3>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>볼트</TableHead>
+            <TableHead className="text-right">조인 힘</TableHead>
+            <TableHead className="text-right">끝의 힘</TableHead>
+            <TableHead className="text-right">조임량</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map(([name, row]) => (
+            <TableRow key={name}>
+              <TableCell className="font-medium">{name}</TableCell>
+              <TableCell className="text-right font-mono">{force(row.tightened_n)}</TableCell>
+              <TableCell className="text-right font-mono">{force(row.force_n)}</TableCell>
+              <TableCell className="text-right font-mono">
+                {row.adjustment_mm == null ? '—' : `${row.adjustment_mm.toPrecision(4)} mm`}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <p className="text-muted-foreground text-xs">
+        먼저 볼트만 조이고(조인 힘), 그 길이를 잠근 채 다른 하중을 겁니다 — 끝의 힘은 외력이 바꾼 뒤의 볼트
+        힘입니다(인장이 양수). 조임량은 단면이 줄어든 길이입니다.
       </p>
     </div>
   )

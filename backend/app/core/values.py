@@ -69,6 +69,9 @@ class Values:
     peak_displacement_mm: float | None = None
     reactions_n: dict[str, list[float]] = field(default_factory=dict)
     """변위를 준 영역 → 반력 합 `[Fx, Fy, Fz]`(N)."""
+    bolts_n: dict[str, float] = field(default_factory=dict)
+    """볼트 → 끝의 볼트 힘(N, 인장이 양수) — 잠근 뒤 다른 하중까지 받은 값(`result.json` 의
+    `bolts[이름].force_n`)."""
     probes_mm: dict[str, float] = field(default_factory=dict)
     """측정점 → 값(mm). 정적은 변위 크기, 조화는 **그 자리 곡선의 봉우리** 진폭."""
     probe_vectors_mm: dict[str, list[float]] = field(default_factory=dict)
@@ -116,6 +119,9 @@ def read(result: dict[str, Any]) -> Values:
         for region, vector in (result.get("reactions") or {}).items():
             if isinstance(vector, list) and len(vector) == 3:
                 made.reactions_n[str(region)] = [float(one) for one in vector]
+        for name, row in (result.get("bolts") or {}).items():
+            if isinstance(row, dict) and isinstance(row.get("force_n"), int | float):
+                made.bolts_n[str(name)] = float(row["force_n"])
         placed: list[tuple[str, list[float], str]] = []
         for row in result.get("probes") or []:
             scale = to_mm(row.get("unit"))

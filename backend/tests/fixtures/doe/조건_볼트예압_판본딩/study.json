@@ -1,0 +1,599 @@
+{
+  "id": "61dccfbe-76ae-4e09-b151-cccf5796a285",
+  "name": "조건_볼트예압_판본딩",
+  "description": "",
+  "method": "table",
+  "samples": 2,
+  "seed": 1,
+  "factors": [
+    {
+      "end": null,
+      "mode": "choice",
+      "name": "예압 방식",
+      "start": null,
+      "steps": 5,
+      "value": null,
+      "bodies": [],
+      "target": {
+        "item": "볼트 예압",
+        "field": "unit",
+        "group": "loads"
+      },
+      "values": [
+        "N",
+        "mm"
+      ],
+      "property": null,
+      "resolution": null
+    },
+    {
+      "mode": "list",
+      "name": "예압",
+      "values": [
+        0.0025,
+        1000.0
+      ],
+      "resolution": 1e-06
+    }
+  ],
+  "constraints": [],
+  "measures": [],
+  "batches": [],
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.5,
+    "short_edge": 0.1,
+    "narrow_face": 0.1
+  },
+  "recipe": {
+    "nodes": [
+      {
+        "id": "아래판_원형",
+        "op": "box",
+        "align": [
+          "center",
+          "center",
+          "min"
+        ],
+        "width": 40,
+        "height": 10,
+        "length": 60
+      },
+      {
+        "at": [
+          [
+            0,
+            0
+          ]
+        ],
+        "id": "아래판",
+        "op": "hole",
+        "target": "아래판_원형",
+        "diameter": 8
+      },
+      {
+        "at": [
+          0,
+          0,
+          10
+        ],
+        "id": "위판_원형",
+        "op": "box",
+        "align": [
+          "center",
+          "center",
+          "min"
+        ],
+        "width": 40,
+        "height": 8,
+        "length": 60
+      },
+      {
+        "at": [
+          [
+            0,
+            0
+          ]
+        ],
+        "id": "위판",
+        "op": "hole",
+        "target": "위판_원형",
+        "diameter": 9
+      },
+      {
+        "at": [
+          0,
+          0,
+          18
+        ],
+        "id": "볼트",
+        "op": "bolt",
+        "head": "hex",
+        "length": 18,
+        "nominal": 8
+      },
+      {
+        "id": "조립",
+        "op": "group",
+        "targets": [
+          "아래판",
+          "위판",
+          "볼트"
+        ]
+      },
+      {
+        "id": "새김",
+        "op": "imprint",
+        "target": "조립"
+      }
+    ],
+    "params": {
+      "예압": 1000.0
+    }
+  },
+  "conditions": {
+    "loads": [
+      {
+        "on": "자유 몸통",
+        "name": "볼트 예압",
+        "type": "bolt_pretension",
+        "unit": "N",
+        "preload": "=예압"
+      },
+      {
+        "on": "위판 윗면",
+        "name": "끌어올림",
+        "type": "force",
+        "direction": [
+          0,
+          0,
+          1
+        ],
+        "magnitude": 600
+      }
+    ],
+    "units": {
+      "system": "mm_n_tonne"
+    },
+    "analysis": {
+      "type": "static",
+      "steps": 2
+    },
+    "contacts": [
+      {
+        "name": "머리-위판",
+        "type": "bonded",
+        "source": "머리 밑",
+        "target": "머리 자리"
+      },
+      {
+        "name": "판-판",
+        "type": "bonded",
+        "source": "위판 밑",
+        "target": "아래판 위"
+      },
+      {
+        "name": "나사 물림",
+        "type": "bonded",
+        "source": "물린 몸통",
+        "target": "물린 구멍"
+      }
+    ],
+    "materials": [
+      {
+        "ref": {
+          "code": "M-000138",
+          "name": "SECC-EXAD87-DP_선언물성_0.8",
+          "source": "matnexus",
+          "fetched_at": "2026-09-28T00:00:00Z",
+          "material_id": "6c296526-322f-494d-a792-ea7b4ade4694"
+        },
+        "payload": {
+          "id": "6c296526-322f-494d-a792-ea7b4ade4694",
+          "code": "M-000138",
+          "note": "예시 데이터 — 값은 강판 대표값·합성 곡선",
+          "alias": null,
+          "grade": "SECC-EXAD87-DP",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 7850.0,
+          "details": "선언물성",
+          "category": "Steel",
+          "legacy_id": null,
+          "created_at": "2026-09-05T15:59:15.786123+09:00",
+          "updated_at": "2026-09-05T15:59:15.809514+09:00",
+          "record_name": "SECC-EXAD87-DP_선언물성_0.8",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [
+            "브라켓"
+          ],
+          "poisson_ratio": 0.29,
+          "spec_thickness": 0.0008,
+          "applied_products": [
+            "예시 제품"
+          ],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 470.0,
+                  "value_si": 470.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "열전도율",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 50.0,
+                  "value_si": 50.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "탄소강 상온",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 1.2e-05,
+                  "value_si": 1.2e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "탄소강 20~100 °C",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "전단탄성계수",
+              "note": null,
+              "scale": null,
+              "points": [
+                {
+                  "value": 80.0,
+                  "value_si": 80000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "E/(2(1+ν)), ν=0.29",
+              "input_unit": "GPa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "예시",
+              "scale": null,
+              "points": [
+                {
+                  "value": 205.0,
+                  "value_si": 205000000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "KS D 3506 · 일반 강판 대표값",
+              "input_unit": "GPa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "apply_to": [
+          "볼트"
+        ]
+      },
+      {
+        "ref": {
+          "code": "M-000158",
+          "name": "AL5052H32DEMO_-_-",
+          "source": "matnexus",
+          "fetched_at": "2026-09-28T00:00:00Z",
+          "material_id": "334ec690-e61e-4ff2-a326-a8f81becf7b5"
+        },
+        "payload": {
+          "id": "334ec690-e61e-4ff2-a326-a8f81becf7b5",
+          "code": "M-000158",
+          "note": null,
+          "alias": "Al5052-H32 Bilinear",
+          "grade": "AL5052H32DEMO",
+          "access": {
+            "reason": null,
+            "can_edit": true,
+            "registrant": "시스템 관리자",
+            "can_hand_over": true,
+            "registrant_id": "4981cf77-35fa-4d38-8297-aa0a0aba78ae",
+            "edit_workspace": "기본 부서",
+            "edit_workspace_slug": "default"
+          },
+          "family": "Metal",
+          "density": 2680.0,
+          "details": null,
+          "category": "Aluminum",
+          "legacy_id": null,
+          "created_at": "2026-09-06T15:01:22.619540+09:00",
+          "updated_at": "2026-09-06T15:01:22.670989+09:00",
+          "record_name": "AL5052H32DEMO_-_-",
+          "density_unit": "kg/m3",
+          "sample_count": 0,
+          "applied_parts": [],
+          "poisson_ratio": 0.33,
+          "spec_thickness": null,
+          "applied_products": [],
+          "owner_workspace_id": "3b8e5d68-6b4d-45c8-a8e5-81abc150e0df",
+          "declared_properties": [
+            {
+              "item": "비열",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 880.0,
+                  "value_si": 880.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "J/(kg.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 비열 0.880 J/g-°C [tier 2]",
+              "input_unit": "J/(kg.K)"
+            },
+            {
+              "item": "선팽창계수(CTE)",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 2.38e-05,
+                  "value_si": 2.38e-05,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1/K",
+              "reference": "MatWeb: Aluminum 5052-H32 · CTE 23.8 μm/m-°C [tier 2]",
+              "input_unit": "1/K"
+            },
+            {
+              "item": "연신율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 0.12,
+                  "value_si": 0.12,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "1",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 연신율 ~12% [tier 2]",
+              "input_unit": "1"
+            },
+            {
+              "item": "열전도율",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 138.0,
+                  "value_si": 138.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "W/(m.K)",
+              "reference": "MatWeb: Aluminum 5052-H32 · 열전도 138 W/m-K [tier 2]",
+              "input_unit": "W/(m.K)"
+            },
+            {
+              "item": "인장강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 228000000.0,
+                  "value_si": 228000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, UTS ~228-230 MPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "탄성계수",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 70300000000.0,
+                  "value_si": 70300000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MatWeb: Aluminum 5052-H32 · 탄성계수 70.3 GPa [tier 2]",
+              "input_unit": "Pa"
+            },
+            {
+              "item": "항복강도",
+              "note": "문헌 물성 카탈로그에서 채택 (스냅샷)",
+              "scale": null,
+              "points": [
+                {
+                  "value": 193000000.0,
+                  "value_si": 193000000.0,
+                  "temperature_k": null
+                }
+              ],
+              "source": "literature",
+              "si_unit": "Pa",
+              "reference": "MakeItFrom: 5052-H32 Aluminum · H32, 0.2% proof ~180-193 MPa [tier 2]",
+              "input_unit": "Pa"
+            }
+          ],
+          "spec_thickness_unit": "m",
+          "owner_workspace_name": "기본 부서"
+        },
+        "apply_to": [
+          "아래판",
+          "위판"
+        ]
+      }
+    ],
+    "mesh_hints": [
+      {
+        "on": "전체",
+        "order": "quadratic",
+        "element_size": 2
+      },
+      {
+        "on": "자유 몸통",
+        "element_size": 1
+      }
+    ],
+    "constraints": [
+      {
+        "on": "바닥",
+        "name": "바닥 고정",
+        "type": "fixed_support"
+      }
+    ],
+    "named_selections": [
+      {
+        "name": "바닥",
+        "entity": "face",
+        "select": {
+          "body": "아래판",
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            -1
+          ]
+        }
+      },
+      {
+        "name": "위판 윗면",
+        "entity": "face",
+        "select": {
+          "body": "위판",
+          "near": [
+            25,
+            0,
+            18
+          ],
+          "what": "faces",
+          "normal": [
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      {
+        "name": "자유 몸통",
+        "entity": "face",
+        "select": {
+          "body": "볼트",
+          "kind": "cylinder",
+          "near": [
+            4,
+            0,
+            14
+          ],
+          "what": "faces"
+        }
+      },
+      {
+        "name": "머리 밑",
+        "entity": "face",
+        "select": {
+          "tag": "볼트/위판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "머리 자리",
+        "entity": "face",
+        "select": {
+          "tag": "위판/볼트",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "위판 밑",
+        "entity": "face",
+        "select": {
+          "tag": "위판/아래판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "아래판 위",
+        "entity": "face",
+        "select": {
+          "tag": "아래판/위판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "물린 몸통",
+        "entity": "face",
+        "select": {
+          "tag": "볼트/아래판",
+          "what": "faces"
+        }
+      },
+      {
+        "name": "물린 구멍",
+        "entity": "face",
+        "select": {
+          "tag": "아래판/볼트",
+          "what": "faces"
+        }
+      }
+    ]
+  },
+  "owner": {
+    "name": "member",
+    "email": "member-1fb1e429@example.local"
+  },
+  "requested_by": null,
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
+}

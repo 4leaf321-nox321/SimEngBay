@@ -9,8 +9,8 @@
 - 설계 변수 `factor:<이름>` — 글자 값이 하나라도 있으면 범주다(좌표를 못 매긴다).
 - 결과 — 모달은 **추적한 모드** `mode:<기준 차수>`(MAC 로 이은 것 — 순번이 아니다. 치수가
   바뀌면 모드 순서가 뒤바뀐다), 정적 · 조화는 견줄 값(`max_mm` · `max_mpa` ·
-  `reaction:<영역>` · `probe:<이름>` …), 그리고 `mass_kg`(모델 전체)와 바디마다
-  `mass:<파트>`. 값은 서버가 맞춘 단위(mm · MPa · N · Hz · kg)다.
+  `reaction:<영역>` · `bolt:<볼트>` · `probe:<이름>` …), 그리고 `mass_kg`(모델 전체)와
+  바디마다 `mass:<파트>`. 값은 서버가 맞춘 단위(mm · MPa · N · Hz · kg)다.
 - **끝난 점만** — 실패 · 대기 점의 빈 값이 0 으로 섞이지 않게.
 
 ## 민감도
@@ -123,6 +123,10 @@ def _reaction(region: str) -> Pick:
     return lambda point: _magnitude(point.reactions_n.get(region))
 
 
+def _bolt(name: str) -> Pick:
+    return lambda point: point.bolts_n.get(name)
+
+
 def _relative(pair: str) -> Pick:
     return lambda point: _magnitude(point.relative_mm.get(pair))
 
@@ -227,6 +231,10 @@ def _results(study: StudyOut, rows: list[StudyPointOut]) -> list[Column]:
                 True,
                 _reaction(region),
             )
+        )
+    for name in _names(rows, lambda one: dict(one.bolts_n)):
+        made.append(
+            Column(f"bolt:{name}", f"볼트 {name} 힘", "N", "result", True, _bolt(name))
         )
     for name in _names(rows, lambda one: dict(one.probes_mm)):
         made.append(

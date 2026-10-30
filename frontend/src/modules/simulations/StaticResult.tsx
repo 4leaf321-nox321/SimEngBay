@@ -10,7 +10,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import type { Artifact, StaticResult as StaticResultData } from '@/modules/simulations/api'
 import { simulationApi } from '@/modules/simulations/api'
 import { shownValue as shown } from '@/modules/simulations/format'
-import { ReactionTable, StaticProbeTable } from '@/modules/simulations/ProbeTables'
+import { BoltTable, ReactionTable, StaticProbeTable } from '@/modules/simulations/ProbeTables'
 
 // **3D 뷰어는 `lazy()` 로만 받는다** — vtk.js 한 덩어리가 수백 KB 다(`shared/viewer`).
 const MeshViewer = lazy(() => import('@/shared/viewer/MeshViewer'))
@@ -81,6 +81,7 @@ export function StaticResult({ simulationId, result, artifacts }: Props) {
       {/* **센서 자리의 값과 버틴 힘** — 실측과 견줄 수 있는 것은 전체 최대가 아니라 이쪽이다. */}
       <StaticProbeTable probes={result.probes ?? []} />
       <ReactionTable reactions={result.reactions ?? {}} unit={result.units.force} />
+      <BoltTable bolts={result.bolts ?? {}} />
 
       {/* 정적의 변형은 **실제 크기**라 과장을 작게 둔다 — 모달처럼 흔들 이유도 없다(주기 0). */}
       {!vtp && <p className="text-muted-foreground text-sm">이 작업은 변형 그림을 만들지 않았습니다.</p>}

@@ -731,11 +731,21 @@ def test_볼트_예압은_갈라진_절점을_조임량으로_묶고_다음_단�
     assert plan.refused == []
     text = plan.text
     assert (
-        "*NODE\n7, 0.000000, 0.000000, 5.000000\n*EQUATION\n"
+        "*NODE\n7, 0.000000, 0.000000, 5.000000\n"
+        "*NSET, NSET=BOLT1A\n7\n*NSET, NSET=BOLT1\n7\n"
+        "*NSET, NSET=BOLT1CUTA\n6\n*NSET, NSET=BOLT1CUT\n6\n*EQUATION\n"
         "2\n6, 1, 1., 4, 1, -1.\n2\n6, 2, 1., 4, 2, -1.\n3\n6, 3, 1., 4, 3, -1., 7, 1, 1\n"
     ) in text
-    assert "*STEP\n*STATIC\n*CLOAD\n7, 1, 2000\n*END STEP" in text
+    # 단면 앞쪽 절점(6)의 내력 합이 볼트 힘, 기준점의 변위가 조임량 — ① 끝은 `…A` 로 찍는다.
+    assert (
+        "*STEP\n*STATIC\n*CLOAD\n7, 1, 2000\n"
+        "*NODE PRINT, NSET=BOLT1CUTA, TOTALS=ONLY\nRF\n*NODE PRINT, NSET=BOLT1A\nU\n*END STEP"
+    ) in text
     assert "*BOUNDARY, FIXED\n7, 1, 1\n*CLOAD, OP=NEW\n*CLOAD\n5, 3, -1" in text
+    assert "*NODE PRINT, NSET=BOLT1CUT, TOTALS=ONLY\nRF\n*NODE PRINT, NSET=BOLT1\nU" in text
+    assert plan.bolt_report == {
+        "예압": {"set": "BOLT1", "kind": "force", "preload": 2000.0, "axis": [0.0, 0.0, 1.0]}
+    }
     # 조임량(길이)이면 기준점을 그만큼 옮기고, 거둘 힘이 없다.
     bolt = condition_model.Load(
         name="예압", kind="bolt_pretension", region="몸통", preload=0.01, unit="mm"
@@ -747,7 +757,7 @@ def test_볼트_예압은_갈라진_절점을_조임량으로_묶고_다음_단�
         nodes={**NODES, 6: NODES[4]},
         bolts={"예압": cut},
     )
-    assert "*STEP\n*STATIC\n*BOUNDARY\n7, 1, 1, 0.01\n*END STEP" in plan.text
+    assert "*STEP\n*STATIC\n*BOUNDARY\n7, 1, 1, 0.01\n*NODE PRINT, NSET=BOLT1CUTA" in plan.text
     assert "OP=NEW" not in plan.text
     # 단면을 못 세웠으면 그 까닭으로 막는다.
     plan = _static(
@@ -836,3 +846,79 @@ def test_방향_성분은_그_좌표계의_것이다() -> None:
     assert "*CLOAD\n5, 2, 2" in plan.text
     assert "E1, GRAV, 1000, -0, -1, -0" in plan.text
     assert condition_model.in_global(push, []) == "좌표계 「돌린 계」 가 없습니다."
+
+
+def test_볼트_힘은_단면_앞쪽_내력의_합이고_조임량은_기준점의_변위다(tmp_path: Path) -> None:
+    """① 끝은 `…A`, 끝은 이름 그대로의 집합에서 마지막 증분을 읽는다. 기준점은 요소가 없어
+    ccx 가 반력을 0 으로 찍는다 — 볼트 힘은 단면 앞쪽 절점의 내력 합을 축에 내려 뒤집은 것이다.
+
+    값은 「조건_볼트예압_판본딩」 을 ccx 2.21 로 푼 .dat 그대로다(2026-10-29) — 점 1 은
+    1000 N 으로 조이고 잠근 뒤 끌어올리면 1012.48 N, 기준점 반력은 두 단계 다 1e-13 쯤이다."""
+    from app.core.calculix.static_read import _bolts
+    from app.core.values import read as read_values
+
+    (tmp_path / "boundary.json").write_text(
+        json.dumps(
+            {
+                "bolts": {
+                    "힘": {
+                        "set": "BOLT1",
+                        "kind": "force",
+                        "preload": 1000.0,
+                        "axis": [0, 0, 1],
+                    },
+                    # 축이 뒤집혀도(앞쪽이 -Z) 인장은 양수다.
+                    "조임": {
+                        "set": "BOLT2",
+                        "kind": "length",
+                        "preload": 0.0025,
+                        "axis": [0, 0, -1],
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "model.dat").write_text(
+        "\n".join(
+            [
+                " total force (fx,fy,fz) for set BOLT1A and time  0.1000000E+01",
+                "",
+                "       -4.733991E-13  0.000000E+00  0.000000E+00",
+                " total force (fx,fy,fz) for set BOLT1CUTA and time  0.1000000E+01",
+                "",
+                "       -1.148656E-01  1.331854E-03 -1.000000E+03",
+                " total force (fx,fy,fz) for set BOLT2CUTA and time  0.1000000E+01",
+                "",
+                "        0.000000E+00  0.000000E+00  1.011700E+03",
+                " total force (fx,fy,fz) for set BOLT1CUT and time  0.5000000E+00",
+                "",
+                "        0.000000E+00  0.000000E+00 -1.006000E+03",
+                " total force (fx,fy,fz) for set BOLT1CUT and time  0.2000000E+01",
+                "",
+                "       -1.158074E-01  4.540751E-03 -1.012480E+03",
+                " total force (fx,fy,fz) for set BOLT1 and time  0.2000000E+01",
+                "",
+                "       -2.904343E-13  0.000000E+00  0.000000E+00",
+                " displacements (vx,vy,vz) for set BOLT1 and time  0.2000000E+01",
+                "",
+                "     47989  2.310033E-03  0.000000E+00  0.000000E+00",
+                " total force (fx,fy,fz) for set BOLT2CUT and time  0.2000000E+01",
+                "",
+                "        0.000000E+00  0.000000E+00  1.024000E+03",
+                " displacements (vx,vy,vz) for set BOLT2 and time  0.2000000E+01",
+                "",
+                "     47990  2.500000E-03  0.000000E+00  0.000000E+00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bolts = _bolts(tmp_path)
+    assert bolts == {
+        "힘": {"tightened_n": 1000.0, "force_n": 1012.48, "adjustment_mm": 0.00231003},
+        "조임": {"tightened_n": 1011.7, "force_n": 1024.0, "adjustment_mm": 0.0025},
+    }
+    # DOE 비교는 끝의 힘으로 견준다.
+    found = read_values({"recipe": "static", "units": {}, "bolts": bolts})
+    assert found.bolts_n == {"힘": 1012.48, "조임": 1024.0}

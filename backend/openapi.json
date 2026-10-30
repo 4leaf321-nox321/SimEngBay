@@ -11280,6 +11280,13 @@
             "type": "object",
             "title": "Reactions N"
           },
+          "bolts_n": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Bolts N"
+          },
           "probes_mm": {
             "additionalProperties": {
               "type": "number"
@@ -11770,6 +11777,13 @@
             },
             "type": "object",
             "title": "Reactions N"
+          },
+          "bolts_n": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Bolts N"
           },
           "probe_vectors_mm": {
             "additionalProperties": {

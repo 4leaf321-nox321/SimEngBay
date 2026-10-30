@@ -205,10 +205,15 @@ def not_a_face(rows: list[Any]) -> str:
     """면이 아닌 지문이면 그 종류 이름. 면이면 빈 글자.
 
     CAD 의 선택 그룹은 면 · 엣지 · 점 · 바디를 담을 수 있고(CompCore 3장), 지문의 모양이 종류
-    마다 다르다 — 엣지는 `midpoint` · `length`, 점은 `point` 다. 우리 매처는 면만 안다.
+    마다 다르다 — 엣지는 `midpoint` · `length`, 점은 `point`, 바디는 `volume` 이다. 우리 매처는
+    면만 안다.
     조건 읽기(`conditions.read`)도 이것으로 막는다 — 미리보기와 모델링이 같은 말을 해야 한다.
     """
     first = rows[0] if rows and isinstance(rows[0], dict) else {}
+    if "volume" in first:
+        # 바디 그룹 — CompCore 가 그 바디의 `bodies[]` 줄을 그대로 싣는다(2f402f2). 중심이
+        # 있어 면처럼 보이지만 면이 아니다. 볼트 예압만 바디를 받는다(`conditions.read`).
+        return "바디(body)"
     if "centroid" in first:
         return ""
     if "midpoint" in first:

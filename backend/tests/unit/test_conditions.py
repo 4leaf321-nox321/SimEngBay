@@ -466,3 +466,52 @@ def test_회전_속도의_축은_두_솔버가_같이_푼다() -> None:
     assert conditions.spin_axis(replace(spin, direction=None), []) == (
         "크기 · 축 방향이 있어야 합니다."
     )
+
+
+def test_볼트_폴더는_막힘_없이_읽히고_초기조건_선응력은_선응력_모달의_짝이다() -> None:
+    """CompCore 볼트 예압 픽스처(f500bcd) — 정적은 예압 · 끌어올림 · 본딩 둘 · 마찰 하나,
+    선응력 모달은 거기에 `initial: [{"type": "prestress"}]` 가 붙는다. 전에는 그 초기조건을
+    「아직 걸 수 없다」 로 막아 선응력 모달 폴더가 통째로 멈췄다."""
+    static = conditions.read(_point("조건_볼트예압_정적"), recipe="static")
+    assert static.refused == []
+    bolt = next(one for one in static.loads if one.kind == "bolt_pretension")
+    assert (bolt.region, bolt.preload, bolt.unit) == ("자유 몸통", 1000.0, "N")
+    adjusted = conditions.read(_point("조건_볼트예압_정적", 2), recipe="static")
+    assert next(one for one in adjusted.loads if one.kind == "bolt_pretension").unit == "mm"
+
+    modal = conditions.read(_point("조건_볼트예압_선응력모달"), recipe="modal")
+    assert modal.refused == [] and modal.prestressed
+
+    payload = _point("조건_볼트예압_선응력모달")
+    payload["conditions"]["initial"] = [{"type": "prestress", "from_step": "다른 정적"}]
+    refused = conditions.read(payload, recipe="modal").refused
+    assert [one.what for one in refused] == ["초기조건 (선응력)"]
+    payload["conditions"]["initial"] = [{"type": "prestress"}]
+    payload["conditions"]["analysis"]["prestressed"] = False
+    skipped = conditions.read(payload, recipe="modal").skipped
+    assert any(one.what == "초기조건 (선응력)" for one in skipped)
+
+
+def test_바디에_건_볼트_예압은_좌표계가_단면이고_바디_그룹은_볼트_예압만_받는다() -> None:
+    """CompCore 2f402f2(우리가 고른 (가)) — 바디 그룹의 지문은 그 바디의 `bodies[]` 줄이고,
+    예압의 단면은 하중의 좌표계다(Z 축 = 볼트 축, 원점 = 단면 자리). 좌표계가 없으면(전역)
+    막는다. 바디 그룹은 면이 아니다 — 힘 · 구속을 걸면 그렇다고 말한다(면 매처에서 엉뚱하게
+    멈추지 않게)."""
+    payload = _point("조건_볼트예압_바디")
+    made = conditions.read(payload, recipe="static")
+    assert made.refused == []
+    bolt = next(one for one in made.loads if one.kind == "bolt_pretension")
+    assert (bolt.region, bolt.cs) == ("볼트", "볼트 단면")
+    assert [one.origin for one in made.frames if one.name == "볼트 단면"] == [(0.0, 0.0, 14.0)]
+
+    payload["conditions"]["loads"][0]["cs"] = "global"
+    refused = conditions.read(payload, recipe="static").refused
+    assert [one.what for one in refused] == ["하중 「볼트 예압」"]
+    assert "좌표계가 있어야" in refused[0].why
+
+    payload = _point("조건_볼트예압_바디")
+    payload["conditions"]["loads"][1]["on"] = "볼트"
+    refused = conditions.read(payload, recipe="static").refused
+    assert [one.why for one in refused] == [
+        "「볼트」 은 바디(body) 그룹입니다 — 지금은 면 그룹만 걸 수 있습니다"
+    ]

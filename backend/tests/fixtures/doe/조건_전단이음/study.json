@@ -1,5 +1,5 @@
 {
-  "id": "bf4405f7-fbaf-471d-9900-f52ff82b6024",
+  "id": "c404c272-a01c-498a-b475-b56debf40031",
   "name": "조건_전단이음",
   "description": "",
   "method": "table",
@@ -599,8 +599,12 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-07985dd6@example.local"
+    "email": "member-649b6603@example.local"
   },
   "requested_by": null,
-  "cloned_from": null
+  "cloned_from": null,
+  "ontology": {
+    "tags": [],
+    "links": []
+  }
 }

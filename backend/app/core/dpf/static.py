@@ -30,6 +30,7 @@ from typing import Any
 
 from app.core import boundary
 from app.core.dpf import fields, probes, shapes
+from app.core.numbers import significant
 from app.core.spec import StaticSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -78,6 +79,7 @@ def extract(
         )
         # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다.
         forces = _reactions(model, mesh, topology, workdir)
+        bolts = _bolts(model, mesh, topology, displacement_unit)
     except StageFailure:
         raise
     except Exception as failure:
@@ -96,6 +98,7 @@ def extract(
         "max_displacement": max_displacement,
         **({"probes": spots} if spots else {}),
         **({"reactions": forces} if forces else {}),
+        **({"bolts": bolts} if bolts else {}),
         "max_von_mises": stress,
         "material": boundary.used_material(workdir, spec),
     }
@@ -249,6 +252,83 @@ def _reactions(
         if total is not None:
             found[rule.region] = total
     return found
+
+
+#: 볼트 예압 요소(PRETS179)의 APDL 번호 — DPF 는 `Line3` 로 보인다(실측 2026-10-26).
+PRETENSION_ELEMENT = 179
+
+
+def _bolts(
+    model: Any, mesh: Any, topology: dict[str, Any], displacement_unit: str
+) -> dict[str, dict[str, float | None]]:
+    """볼트 이름 → **조인 힘 · 끝의 힘(N, 인장이 양수) · 조임량(mm)** — CalculiX 쪽과 같은 열쇠
+    (`calculix.static_read._bolts`).
+
+    Mechanical 은 볼트 단면을 PRETS179 로 가르고, 그 셋째 절점(예압 절점)의 1번 자유도가
+    조임량이다. 잠근 뒤(2단계, `mechanical.build._apply_loads`) 그 절점의 반력이 볼트 힘이다.
+    힘으로 조였으면 1단계의 예압 절점은 묶이지 않아 반력이 없다 — 조인 힘은 준 예압 그대로다.
+    예압 절점은 볼트를 만든 차례로 번호가 붙는다고 본다(조건의 볼트 하중 차례 — 작은 번호가
+    앞의 볼트).
+    """
+    from app.core import conditions as condition_model
+
+    try:
+        given = condition_model.read(topology, recipe="static") if topology else None
+    except ValueError:
+        return {}
+    bolts = [one for one in (given.loads if given else []) if one.kind == "bolt_pretension"]
+    if not bolts:
+        return {}
+    try:
+        import numpy as np
+
+        kinds = np.asarray(mesh.property_field("apdl_element_type").data)
+        ids = np.asarray(mesh.elements.scoping.ids)
+        nodes = sorted(
+            {
+                int(mesh.elements.element_by_id(int(one)).node_ids[-1])
+                for one in ids[kinds == PRETENSION_ELEMENT]
+            }
+        )
+        last = _last_set(model)
+
+        def at(result: Any, step: int) -> dict[int, list[float]]:
+            field = result.on_time_scoping([step]).eval()[0]
+            rows = np.asarray(field.data, dtype=float).reshape(-1, 3)
+            return {
+                int(node): list(rows[index])
+                for index, node in enumerate(field.scoping.ids)
+                if int(node) in nodes
+            }
+
+        first_forces = at(model.results.reaction_force, 1)
+        final_forces = at(model.results.reaction_force, last)
+        moved = at(model.results.displacement, last)
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("볼트 힘을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        return {}
+    to_mm = probes.scale_for(displacement_unit)
+    out: dict[str, dict[str, float | None]] = {}
+    for load, node in zip(bolts, nodes, strict=False):
+        unit = condition_model.preload_unit(load)
+        force_unit = condition_model.PRELOAD_FORCE_UNITS.get(unit)
+        early = first_forces.get(node)
+        tightened = (
+            (load.preload or 0.0) * force_unit
+            if force_unit is not None
+            else (BOLT_FORCE_SIGN * early[0] if early else None)
+        )
+        final = final_forces.get(node)
+        out[load.name] = {
+            "tightened_n": significant(tightened) if tightened is not None else None,
+            "force_n": significant(BOLT_FORCE_SIGN * final[0]) if final else None,
+            "adjustment_mm": significant(moved[node][0] * to_mm) if node in moved else None,
+        }
+    return out
+
+
+#: 예압 절점 반력의 부호 → 볼트 힘(인장 양수).
+BOLT_FORCE_SIGN = 1.0
 
 
 def _rigid_hold(given: Any, regions: dict[str, Any]) -> str | None:

@@ -824,6 +824,7 @@ def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut
         max_displacement_mm=found.max_displacement_mm,
         max_von_mises_mpa=found.max_von_mises_mpa,
         reactions_n=found.reactions_n,
+        bolts_n=found.bolts_n,
         probe_vectors_mm=found.probe_vectors_mm,
         probe_strains=found.probe_strains,
         relative_mm=found.relative_mm,
@@ -2136,6 +2137,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         peak_hz=found.peak_hz if found else None,
         peak_displacement_mm=found.peak_displacement_mm if found else None,
         reactions_n=found.reactions_n if found else {},
+        bolts_n=found.bolts_n if found else {},
         probes_mm=found.probes_mm if found else {},
         probe_vectors_mm=found.probe_vectors_mm if found else {},
         probe_peaks_hz=found.probe_peaks_hz if found else {},
@@ -2190,6 +2192,9 @@ def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
                     else None
                 )
             )
+        for name in _keys_in(points, lambda one: one.bolts_n):
+            head.append(f"볼트 {name} 힘 (N)")
+            picks.append(lambda one, n=name: one.bolts_n.get(n))
         for name in _keys_in(points, lambda one: one.probes_mm):
             head.append(f"측정점 {name} 변위 (mm)")
             picks.append(lambda one, n=name: one.probes_mm.get(n))

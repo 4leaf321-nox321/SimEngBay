@@ -1,0 +1,3 @@
+﻿point,status,예압 방식,예압,step_file,point_file,unresolved,interference,warnings,error
+1,ok,N,1000.0,shapes/c830bdfb634f.step,points/p0001.json,,ok,,
+2,ok,mm,0.0025,shapes/c830bdfb634f.step,points/p0002.json,,ok,,

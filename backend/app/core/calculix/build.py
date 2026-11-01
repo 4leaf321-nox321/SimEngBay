@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,13 @@ from app.core.calculix import deck as deck_writer
 from app.core.calculix.mesh import build_mesh, element_faces, probe_volumes, tributary_areas
 from app.core.harmonic import harmonic_plan
 from app.core.regions import match_regions
+from app.core.regions.match import (
+    AREA_TOLERANCE_RATIO,
+    PLANE_TOLERANCE_MIN,
+    PLANE_TOLERANCE_RATIO,
+    RADIUS_TOLERANCE,
+    model_scale,
+)
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
 from app.core.stages import MIDSURFACE_NAME, ArtifactSpec, StageFailure, StageResult
 from app.core.statics import static_plan
@@ -98,6 +106,11 @@ def build(
     static_driven = isinstance(spec, StaticSpec) and given.driven
     frictional = [one for one in given.contacts if one.kind in deck_writer.NONLINEAR_CONTACTS]
     use_contact = static_driven and bool(frictional)
+    # **맞닿은 마찰면은 메시를 나눈 채 그 면만 가른다**(2026-10-30, `_open_interfaces`). 본딩은
+    # 절점 공유로 붙고 접촉 쌍은 마찰면 하나뿐이다 — 셋 다 접촉 쌍으로 걸던 볼트 조립(본딩 둘 +
+    # 판 사이 마찰)은 첫 증분조차 12분에 못 넘었다. 강체 파트가 끼거나 면이 떨어져 있으면
+    # 전처럼 쪼개지 않고 접촉 쌍으로 건다.
+    opened = use_contact and _touching(topology, frictional, given)
     # **큰 변형은 사람이 적었으면 그것, 비웠으면 CAD 가 적은 것이다**(`statics.static_plan`).
     statics = static_plan(spec, given) if isinstance(spec, StaticSpec) else None
     large = statics.large_deflection if statics is not None else False
@@ -112,7 +125,7 @@ def build(
         system,
         second_order,
         timeout_seconds,
-        fragment=not use_contact,
+        fragment=not use_contact or opened,
         size=size,
     )
     local = _local_sizes(
@@ -124,7 +137,7 @@ def build(
         size,
         second_order,
         timeout_seconds,
-        fragment=not use_contact,
+        fragment=not use_contact or opened,
         layout=layout,
     )
     mesh = build_mesh(
@@ -134,7 +147,7 @@ def build(
         second_order=second_order,
         timeout_seconds=timeout_seconds,
         local_sizes=local,
-        fragment=not use_contact,
+        fragment=not use_contact or opened,
         removed=layout.removed,
         volume_sizes=layout.sizes,
         shell_step=layout.shell_step,
@@ -157,7 +170,7 @@ def build(
     # **강체 파트의 접촉면은 독립(master) 쪽에 둔다**(`deck.contact_block`).
     masters = (
         _rigid_contact_regions(topology, given, mesh, rigid)
-        if rigid and use_contact
+        if rigid and use_contact and not opened
         else set()
     )
     # **쉘 파트의 영역은 중간면에서 찾는다**(지문의 `mid`) — 뒤의 짝짓기가 모두 이 판을 본다.
@@ -174,7 +187,8 @@ def build(
     held = _held_nodes(topology, given, mesh)
     constrained = plan_constrained(given, spec)
     shapes = _region_shapes(topology)
-    # 탄성 지지의 법선 스프링 · 볼트 예압의 단면 — 세 레시피가 같은 것을 쓴다(덱이 고른다).
+    # 탄성 · 압축 전용 지지의 법선 요소 · 볼트 예압의 단면 — 세 레시피가 같은 것을 쓴다(덱이
+    # 고른다).
     springs = _support_springs(topology, given, mesh)
     stress_mpa = system.stress_pa / units.STRESS_UNITS["mpa"]
     # 볼트는 메시를 가른다 — 정적과 선응력 모달이 같은 갈라진 메시를 쓴다(조화는 볼트를 안
@@ -188,6 +202,8 @@ def build(
     # 길이로 오므로 `system.length_mm` 을 함께 준다.
     centers = _region_centers(topology)
     refused_loads: list[condition_model.Note] = []
+    # 맞닿은 마찰면을 가르며 바꾼 절점 — 바디 → {원래: 새}(`_open_interfaces`).
+    renamed: dict[str, dict[int, int]] = {}
     if isinstance(spec, HarmonicSpec):
         places, areas, faces = _load_places(topology, given, mesh)
         shake = harmonic_plan(spec, given)
@@ -212,9 +228,15 @@ def build(
             length_mm=system.length_mm,
             springs=springs,
             stress_mpa=stress_mpa,
+            element_size_mm=size,
         )
     elif isinstance(spec, StaticSpec):
         places, areas, faces = _load_places(topology, given, mesh)
+        touching: dict[str, list[tuple[int, str]]] | None = None
+        if opened:
+            nodes, solids, touching, renamed = _open_interfaces(
+                topology, frictional, nodes, solids, body_of
+            )
         plan = deck_writer.write_static(
             nodes=nodes,
             solids=solids,
@@ -224,9 +246,18 @@ def build(
             load_nodes=places,
             load_faces=faces,
             load_areas=areas,
-            given=given,
+            # 갈랐으면 접촉 쌍은 마찰면뿐이다 — 본딩은 절점 공유로 붙었다(아래에서 적는다).
+            given=replace(given, contacts=frictional) if opened else given,
             shapes=shapes,
-            contact_faces=_contact_faces(topology, given, mesh) if use_contact else None,
+            contact_faces=(
+                touching
+                if opened
+                else _contact_faces(topology, given, mesh)
+                if use_contact
+                else None
+            ),
+            pairing="NODE TO SURFACE" if opened else "SURFACE TO SURFACE",
+            average_force=_average_force(given) if opened else None,
             masters=masters,
             element_size_mm=size,
             large_deflection=large,
@@ -241,6 +272,15 @@ def build(
             stress_mpa=stress_mpa,
             bolts=bolts,
         )
+        if opened:
+            for pair in given.contacts:
+                if pair.kind not in deck_writer.NONLINEAR_CONTACTS:
+                    plan.skipped.append(
+                        condition_model.Note(
+                            f"접촉 「{pair.name}」({pair.kind})",
+                            "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다.",
+                        )
+                    )
     else:
         preload: list[str] | None = None
         bolt_stage: tuple[list[str], list[str], list[str]] | None = None
@@ -337,6 +377,13 @@ def build(
     # **측정점이 어느 바디의 것인가** — 같은 자리에 두 바디의 꼭짓점이 겹치면(이음 입구) 바디로
     # 갈라야 미끄럼을 잴 수 있다. 추출이 그 바디의 절점 안에서만 가장 가까운 것을 찾는다.
     boundary["bodies"] = {name: entity for name, entity in body_of.items()}
+    if renamed:
+        # 가른 마찰면 — 그 바디의 측정점은 새 번호를 읽는다(`probes.locate`). 추출은 가르기
+        # 전 메시(`model.msh`)를 읽어 두 바디가 같은 절점을 쥔 것으로 본다.
+        boundary["renamed"] = {
+            name: {str(old): new for old, new in pairs.items()}
+            for name, pairs in renamed.items()
+        }
     if shells:
         # **결과를 읽을 때 쉘을 접는다**(`frd.read_folded`) — 펼친 절점은 두께의 절반 안이다.
         boundary["shells"] = {
@@ -1121,6 +1168,188 @@ def _contact_faces(
     return rows
 
 
+def _touching(
+    topology: dict[str, Any] | None,
+    pairs: list[condition_model.Contact],
+    given: condition_model.Conditions,
+) -> bool:
+    """마찰 접촉이 모두 **같은 자리에 맞닿은 두 바디의 면**인가 — CAD 지문으로 본다.
+
+    평면이면 중심이 같고(짝짓기의 평면 허용오차) 법선이 반대이고 넓이가 같다. 원통이면 반지름과
+    중심이 같다. 그러면 메시를 나눌 때 두 면이 한 면(공유 절점)이 되고, 그 면만 가르면 짝 맞는
+    접촉면이 된다(`_open_interfaces`). 강체 파트의 면은 아니다 — 강체 절점은 `*RIGID BODY` 가
+    쥐어 독립 쪽에 둬야 해서 전처럼 접촉 쌍으로 건다(`deck.contact_block` 의 `masters`).
+    """
+    regions = (topology or {}).get("regions") or {}
+    scale = model_scale(topology or {})
+    near = max(PLANE_TOLERANCE_RATIO * scale, PLANE_TOLERANCE_MIN)
+
+    def same(one: dict[str, Any], other: dict[str, Any]) -> bool:
+        a, b = one.get("centroid"), other.get("centroid")
+        if not (isinstance(a, list) and isinstance(b, list) and len(a) == len(b) == 3):
+            return False
+        if math.dist(a, b) > near:
+            return False
+        if one.get("radius") is not None or other.get("radius") is not None:
+            # 원통은 축이 있어야 그 면 위의 절점을 고른다(`_on_surface`).
+            return (
+                one.get("radius") is not None
+                and other.get("radius") is not None
+                and abs(float(one["radius"]) - float(other["radius"])) <= RADIUS_TOLERANCE
+                and bool(other.get("axis"))
+            )
+        normal, facing = one.get("normal"), other.get("normal")
+        if not (isinstance(normal, list) and isinstance(facing, list)):
+            return False
+        if sum(float(x) * float(y) for x, y in zip(normal, facing, strict=True)) > -0.999:
+            return False
+        area, theirs = float(one.get("area") or 0), float(other.get("area") or 0)
+        return area > 0 and abs(area - theirs) <= AREA_TOLERANCE_RATIO * area
+
+    for pair in pairs:
+        source = [one for one in regions.get(pair.source) or [] if isinstance(one, dict)]
+        target = [one for one in regions.get(pair.target) or [] if isinstance(one, dict)]
+        if not source or not target:
+            return False
+        sides = [{str(one.get("body") or "") for one in rows} for rows in (source, target)]
+        if any(len(side) != 1 or "" in side for side in sides) or sides[0] == sides[1]:
+            return False
+        if (sides[0] | sides[1]) & set(given.rigid):
+            return False
+        if not all(any(same(one, other) for other in target) for one in source):
+            return False
+        if not all(any(same(other, one) for one in source) for other in target):
+            return False
+    return True
+
+
+def _open_interfaces(
+    topology: dict[str, Any],
+    pairs: list[condition_model.Contact],
+    nodes: Nodes,
+    solids: Solids,
+    body_of: dict[str, int],
+) -> tuple[Nodes, Solids, dict[str, list[tuple[int, str]]], dict[str, dict[int, int]]]:
+    """나눠 쪼갠 메시에서 **맞닿은 마찰면만 가른다** → (절점, 솔리드, 영역 → 요소면, 바디 →
+    {원래 절점: 새 절점}).
+
+    메시를 나누면(BooleanFragments) 맞닿은 두 면이 한 면이 되어 절점을 함께 쓴다 — 본딩은
+    그대로 붙는다. 마찰면은 그 공유 면의 절점(꼭짓점 · 중간 절점)을 **원본 면 쪽 바디의
+    요소에서만** 새 번호로 바꿔 떼어 낸다(볼트 단면을 가르는 `_split` 와 같은 방식). 두 면의
+    요소면이 짝이 맞아 절점-면 접촉이 잘 수렴한다(실측 2026-10-30: 볼트 조립의 첫 증분 반복
+    4번). 공유 면은 그 면의 지문(평면 · 원통) 위에 꼭짓점 셋이 다 놓이고 양쪽 바디가 다 가진
+    사면체 면이다.
+
+    그 면의 모서리 절점을 원본 면 바디의 다른 면에 건 하중 · 구속이 쓰면 그 절점은 대상 쪽에
+    남는다 — 둘레 한 줄이라 답에는 거의 안 든다.
+    """
+    regions = topology.get("regions") or {}
+    near = max(PLANE_TOLERANCE_RATIO * model_scale(topology), PLANE_TOLERANCE_MIN) * 1e-3
+    out_nodes: Nodes = dict(nodes)
+    out_solids: Solids = {key: list(rows) for key, rows in solids.items()}
+    found: dict[str, list[tuple[int, str]]] = {}
+    moved_by: dict[str, dict[int, int]] = {}
+
+    def body_name(region: str) -> str:
+        return str(((regions.get(region) or [{}])[0]).get("body") or "")
+
+    def body_index(region: str) -> int:
+        return body_of.get(body_name(region), -1)
+
+    for pair in pairs:
+        shape = (regions.get(pair.target) or [{}])[0]
+        on = _on_surface(shape, near)
+        sides: list[dict[frozenset[int], tuple[int, str, list[int]]]] = []
+        for region in (pair.source, pair.target):
+            seen: dict[frozenset[int], tuple[int, str, list[int]]] = {}
+            for number, ids in out_solids.get(body_index(region), []):
+                for label, corners in deck_writer.TET_FACES.items():
+                    trio = [ids[one] for one in corners]
+                    if all(on(out_nodes[one]) for one in trio):
+                        seen.setdefault(frozenset(trio), (number, label, ids))
+            sides.append(seen)
+        shared = sorted(set(sides[0]) & set(sides[1]), key=sorted)
+        if not shared:
+            raise StageFailure(
+                "internal",
+                f"접촉 「{pair.name}」 의 두 면이 메시에서 맞닿지 않았습니다 — {MESH_LIMIT}",
+            )
+        moved: set[int] = set()
+        for key in shared:
+            _, label, ids = sides[0][key]
+            corners = deck_writer.TET_FACES[label]
+            moved |= {ids[one] for one in corners}
+            if len(ids) >= 10:
+                moved |= {
+                    ids[deck_writer.TET_MIDDLES[(min(edge), max(edge))]]
+                    for edge in deck_writer.face_edges(corners)
+                }
+        start = max(out_nodes) + 1
+        renamed = {node: start + at for at, node in enumerate(sorted(moved))}
+        out_nodes.update({new: out_nodes[old] for old, new in renamed.items()})
+        source = body_index(pair.source)
+        out_solids[source] = [
+            (number, [renamed.get(one, one) for one in ids])
+            for number, ids in out_solids[source]
+        ]
+        moved_by.setdefault(body_name(pair.source), {}).update(renamed)
+        found[pair.source] = [(sides[0][key][0], sides[0][key][1]) for key in shared]
+        found[pair.target] = [(sides[1][key][0], sides[1][key][1]) for key in shared]
+        logger.info(
+            "접촉 %s → 맞닿은 면 %s 개를 갈랐다(절점 %s)", pair.name, len(shared), len(moved)
+        )
+    return out_nodes, out_solids, found, moved_by
+
+
+def _on_surface(shape: dict[str, Any], near: float) -> Any:
+    """지문 한 장(평면 · 원통) 위에 놓였나를 보는 함수 — 절점 자리를 받는다."""
+    center = [float(one) for one in shape.get("centroid") or [0.0, 0.0, 0.0]]
+    if shape.get("radius") is not None:
+        axis = [float(one) for one in shape.get("axis") or []]
+        size = math.sqrt(sum(one * one for one in axis))
+        if not size:
+            raise StageFailure("internal", "원통 접촉면의 지문에 축이 없습니다.")
+        unit = [one / size for one in axis]
+        radius = float(shape["radius"])
+
+        def on_cylinder(point: tuple[float, float, float]) -> bool:
+            offset = [point[at] - center[at] for at in range(3)]
+            along = sum(offset[at] * unit[at] for at in range(3))
+            away = math.sqrt(max(sum(one * one for one in offset) - along * along, 0.0))
+            return abs(away - radius) <= near + 1e-3 * radius
+
+        return on_cylinder
+    normal = [float(one) for one in shape.get("normal") or [0.0, 0.0, 1.0]]
+    size = math.sqrt(sum(one * one for one in normal)) or 1.0
+
+    def on_plane(point: tuple[float, float, float]) -> bool:
+        return (
+            abs(sum((point[at] - center[at]) * normal[at] for at in range(3)) / size) <= near
+        )
+
+    return on_plane
+
+
+def _average_force(given: condition_model.Conditions) -> float | None:
+    """수렴 판정의 **평균 힘**(N) — 가장 큰 힘 하중(볼트 예압의 힘 포함)의 1/100.
+
+    ccx 는 「가장 큰 잔차 ≤ 0.005 x 평균 힘」 으로 본다. 평균 힘은 모든 요소 절점력의 평균이라
+    볼트 근처만 힘을 받는 조립에서는 아주 작다(볼트 조립 첫 증분 0.009 N) — 접촉면의 붙음 ·
+    미끄럼이 흔드는 0.01 ~ 0.08 N 을 끝내 못 넘어 반복 한계에 걸렸다. 이 값을 주면 한 절점의
+    잔차를 하중의 5e-5 까지 받아 준다(1000 N 이면 0.05 N). 변위 쪽 기준(보정 ≤ 증분의 1 %)은
+    그대로다. 힘 하중이 없으면(변위로만 당김) ccx 의 기본을 쓴다.
+    """
+    largest = 0.0
+    for load in given.loads:
+        if load.kind == "force" and load.magnitude:
+            largest = max(largest, abs(load.magnitude))
+        elif load.kind == "bolt_pretension" and load.preload:
+            scale = condition_model.PRELOAD_FORCE_UNITS.get(condition_model.preload_unit(load))
+            if scale is not None:
+                largest = max(largest, abs(load.preload) * scale)
+    return largest / 100 if largest > 0 else None
+
+
 def _region_shapes(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """영역 이름 → **CAD 가 보낸 지문 한 장**(첫 항목).
 
@@ -1294,16 +1523,24 @@ def _mass_kg(
 def _support_springs(
     topology: dict[str, Any], given: condition_model.Conditions, mesh: Any
 ) -> deck_writer.Springs:
-    """탄성 지지 영역 → 절점마다 (맡은 넓이 mm², 단위 법선) — 덱이 법선 스프링을 붙인다.
+    """탄성 · 압축 전용 지지 영역 → 절점마다 (맡은 넓이 mm², 바깥 단위 법선) — 덱이 법선
+    스프링 · 간극을 붙인다.
 
     넓이는 힘을 나눌 때와 같은 규칙이다(`tributary_areas` — 요소면의 절점 전부에 고르게).
-    법선은 그 절점이 닿은 요소면 법선을 넓이로 더한 것이다 — 같은 기하 면의 삼각형은 감긴
-    방향이 같아서 서로 지우지 않는다. 스프링은 방향의 부호와 상관없다.
+    법선은 그 절점이 닿은 요소면 법선을 넓이로 더한 것이다. **바깥으로 세운다** — 그 면을
+    가진 사면체의 남은 꼭짓점 반대쪽이다. 스프링은 부호와 상관없지만 압축 전용의 간극은 그
+    쪽으로 밀 때만 닫힌다 — 감긴 방향(CAD 면의 매개변수 방향)을 믿으면 반대로 받친다.
     """
-    wanted = [rule.region for rule in given.constraints if rule.kind == "elastic_support"]
+    wanted = [
+        rule.region
+        for rule in given.constraints
+        if rule.kind in ("elastic_support", "compression_only")
+    ]
     if not wanted or not topology:
         return {}
     found = match_regions(topology, mesh.faces, wanted_regions=wanted)
+    owners = element_faces(mesh)
+    elements = {number: ids for rows in mesh.solids.values() for number, ids in rows}
     springs: deck_writer.Springs = {}
     for name, ids in found.faces.items():
         area: dict[int, float] = {}
@@ -1318,6 +1555,14 @@ def _support_springs(
                 size = sum(one * one for one in cross) ** 0.5 / 2
                 if size <= 0:
                     continue
+                owner = owners.get(frozenset(ring[:3]))
+                if owner is not None:
+                    rest = [one for one in elements[owner[0]][:4] if one not in ring[:3]]
+                    inside = mesh.nodes[rest[0]] if rest else None
+                    if inside is not None and (
+                        sum(cross[axis] * (inside[axis] - a[axis]) for axis in range(3)) > 0
+                    ):
+                        cross = [-one for one in cross]
                 for node in ring:
                     area[node] = area.get(node, 0.0) + size / len(ring)
                     mine = normal.setdefault(node, [0.0, 0.0, 0.0])
@@ -1334,7 +1579,7 @@ def _support_springs(
                 )
         springs[name] = made
         logger.info(
-            "탄성 지지 %s → 절점 %s · 넓이 %.4g mm²", name, len(made), sum(area.values())
+            "법선 지지 %s → 절점 %s · 넓이 %.4g mm²", name, len(made), sum(area.values())
         )
     return springs
 

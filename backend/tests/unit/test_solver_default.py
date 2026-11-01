@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.core.spec import parse_spec, parse_stored_spec
 from app.modules.simulations import services
 
@@ -31,14 +33,21 @@ def test_새_요청은_CalculiX_저장된_옛_스펙은_Ansys() -> None:
     assert parse_stored_spec({**raw, "solver": "calculix"}).solver == "calculix"
 
 
-def test_CalculiX_가_못_거는_조건은_만들_때_막는다() -> None:
-    """조건 층은 솔버를 모른다 — 압축 전용 지지는 Ansys 는 걸고 CalculiX 는 아직 못 건다.
-    만들 때 안 막으면 DOE 200점이 모델링에서 하나씩 같은 말을 한다."""
+def test_CalculiX_가_못_거는_조건은_만들_때_막는다(monkeypatch: pytest.MonkeyPatch) -> None:
+    """조건 층은 솔버를 모른다 — CalculiX 의 능력표(`deck.SUPPORTED_CONSTRAINTS`)에 없는 종류는
+    만들 때 막는다. 안 막으면 DOE 200점이 모델링에서 하나씩 같은 말을 한다. 압축 전용 지지가
+    마지막 예였는데 이제 건다(2026-10-30) — 능력표에서 빼 보고 막는 길을 본다."""
+    from app.core.calculix import deck
+
     payload = json.loads(SIDE_POINT.read_text(encoding="utf-8"))
     support = payload["conditions"]["constraints"][0]
     payload["conditions"]["constraints"][0] = {**support, "type": "compression_only"}
     calculix = parse_spec({"recipe": "modal", "mesh": {"element_size_mm": 5}})
     ansys = parse_spec({"recipe": "modal", "solver": "ansys"})
+    assert services.conditions_gap(calculix, payload) is None
+
+    without = tuple(one for one in deck.SUPPORTED_CONSTRAINTS if one != "compression_only")
+    monkeypatch.setattr(deck, "SUPPORTED_CONSTRAINTS", without)
     gap = services.conditions_gap(calculix, payload)
     assert (
         gap is not None

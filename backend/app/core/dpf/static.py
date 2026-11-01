@@ -195,8 +195,8 @@ def _strains(model: Any) -> Any:
 def _reactions(
     model: Any, mesh: Any, topology: dict[str, Any], workdir: Path | None = None
 ) -> dict[str, list[float]]:
-    """변위로 당긴 · 원격 변위로 붙든 영역마다 **반력 합**(N). CalculiX 쪽과 같은
-    열쇠(`reactions`)로 낸다.
+    """변위로 당긴 · 원격 변위로 붙든 · 탄성 지지로 받친 영역마다 **반력 합**(N). CalculiX 쪽과
+    같은 열쇠(`reactions`)로 낸다.
 
     모델링이 남긴 **그 영역의 절점**(`reaction_nodes.json`)이 있으면 그 절점의 반력을 더한다 —
     변위면 그 면의 메시 절점(`_write_reaction_nodes`), 원격 변위 · 강체 구속이면 그 원격점
@@ -251,7 +251,24 @@ def _reactions(
         total = probes.reaction(model, mesh, rows[0])
         if total is not None:
             found[rule.region] = total
+    for region, elements in _foundations(workdir).items():
+        total = probes.foundation_on(model, elements)
+        if total is not None:
+            found[region] = total
     return found
+
+
+def _foundations(workdir: Path | None) -> dict[str, list[int]]:
+    """탄성 지지 영역 → 그 면 요소 번호(모델링이 남긴 `foundation_elements.json`)."""
+    path = workdir / "foundation_elements.json" if workdir is not None else None
+    if path is None or not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        return {str(key): [int(one) for one in value] for key, value in loaded.items()}
+    except (OSError, ValueError, TypeError, AttributeError):
+        logger.warning("foundation_elements.json 을 못 읽었습니다 — 탄성 지지 반력 없이")
+        return {}
 
 
 #: 볼트 예압 요소(PRETS179)의 APDL 번호 — DPF 는 `Line3` 로 보인다(실측 2026-10-26).

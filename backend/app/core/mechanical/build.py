@@ -219,6 +219,9 @@ def build(
                 large_deflection=statics.large_deflection,
                 substeps=statics.substeps if nonlinear else None,
                 steps=_static_steps(given_conditions),
+                nodal_forces=any(
+                    one.kind == "elastic_support" for one in given_conditions.constraints
+                ),
             )
             upstream = analysis
         else:
@@ -274,7 +277,7 @@ def build(
             app, spec, given_conditions, system, places, view or {}, modelled
         )
         # **반력을 읽는 구속의 절점을 남긴다** — 추출이 그 절점의 반력만 더한다.
-        _write_reaction_nodes(app, workdir, given_conditions, places, topology)
+        faces = _write_reaction_nodes(app, workdir, given_conditions, places, topology)
         size_mm = _global_size_mm(spec, given_conditions, system)
 
         dat = workdir / "model.dat"
@@ -318,8 +321,10 @@ def build(
         if artifacts_extra:
             _check_input_complete(workdir / UPSTREAM_NAME)
         _check_input_complete(dat)
-        # **원격 변위의 반력 자리** — 원격점 절점은 입력 파일을 써야 번호가 생긴다.
+        # **원격 변위 · 탄성 지지의 반력 자리** — 원격점 절점 · 면 요소는 입력 파일을 써야
+        # 번호가 생긴다.
         _write_remote_reaction_nodes(workdir, dat, remote_tags)
+        _write_foundation_elements(workdir, dat, faces)
 
         return StageResult(
             artifacts=artifacts,
@@ -959,6 +964,7 @@ def _add_static(
     large_deflection: bool | None = None,
     substeps: int | None = None,
     steps: int = 1,
+    nodal_forces: bool = False,
 ) -> Any:
     """정적 해석. 구속과 하중이 여기 걸린다.
 
@@ -973,6 +979,10 @@ def _add_static(
     `substeps`(CAD 의 「초기 부단계 수」)를 주면 자동 시간 단계를 부단계로 정하고 처음을 그
     수로 나눈다(`NSUBST`). 최대는 넉넉히(그 10배 · 적어도 1000) 둬 수렴이 어려우면 더 잘게
     나누게 한다 — 최대를 먼저 넣어야 처음 값이 범위를 넘지 않는다.
+
+    `nodal_forces` 면 요소 절점력을 결과에 남긴다(`outres,nloa`). 탄성 지지는 면 요소의 기초
+    강성이라 묶인 절점이 없어 반력이 0 이고, 그 요소의 절점력으로만 읽힌다
+    (`dpf.probes.foundation_on`). 결과 파일이 커지므로 그때만 켠다.
     """
     static = app.Model.AddStaticStructuralAnalysis()
     if steps > 1:
@@ -985,6 +995,9 @@ def _add_static(
         return static
     settings = static.AnalysisSettings
     settings.LargeDeflection = bool(large_deflection)
+    if nodal_forces:
+        enums = _global("Ansys").Mechanical.DataModel.Enums
+        settings.NodalForces = enums.OutputControlsNodalForcesType.Yes
     if substeps:
         enums = _global("Ansys").Mechanical.DataModel.Enums
         for step in range(1, steps + 1):
@@ -1242,6 +1255,8 @@ def _check_input_complete(dat: Path) -> None:
 
 #: 변위로 당긴 영역 → 메시 절점 번호. 추출이 그 절점의 반력을 더한다(`dpf/static.py`).
 REACTION_NODES_NAME = "reaction_nodes.json"
+#: 탄성 지지 영역 → 그 면 요소(SURF154) 번호. 추출이 그 요소의 절점력을 더한다.
+FOUNDATION_ELEMENTS_NAME = "foundation_elements.json"
 
 
 def _write_reaction_nodes(
@@ -1250,7 +1265,7 @@ def _write_reaction_nodes(
     given: condition_model.Conditions,
     places: dict[str, Any],
     topology: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, frozenset[int]]:
     """반력을 읽는 구속 영역마다 **메시 절점 번호**를 남긴다 — 추출이 그 절점의 반력만 더한다.
 
     전에는 추출이 그 영역 **첫 면의 평면 위** 절점의 반력을 더했다. 같은 평면에 다른 구속이
@@ -1266,10 +1281,18 @@ def _write_reaction_nodes(
     절점으로 읽고(`_write_remote_reaction_nodes`), 그것도 못 찾으면 추출이 모델 전체 반력으로
     대신한다(`dpf/static._rigid_hold`). 면 절점을 적어 두면 그 길을 막고 0 에 가까운 값을
     낸다.
+
+    **탄성 지지**는 그 면의 절점을 돌려준다 — 묶인 절점이 없어 반력이 아니라 면 요소의
+    절점력으로 읽는다. 요소 번호는 입력 파일을 써야 생겨서 그 뒤에 고른다
+    (`_write_foundation_elements`).
     """
     regions = (topology or {}).get("regions") or {}
     wanted: list[tuple[str, int, Axes]] = []
+    foundations: list[str] = []
     for one in given.constraints:
+        if one.kind == "elastic_support" and one.region in places:
+            foundations.append(one.region)
+            continue
         rows = regions.get(one.region) or []
         normal = rows[0].get("normal") if rows and isinstance(rows[0], dict) else None
         axes = held_axes(one, normal)
@@ -1279,25 +1302,33 @@ def _write_reaction_nodes(
         if given.rigid and bodies and bodies <= given.rigid:
             continue
         wanted.append((one.region, held_directions(one), axes))
-    if not wanted:
-        return
+    if not wanted and not foundations:
+        return {}
     try:
         model = app.ExtAPI.DataModel
         data = model.MeshDataByName(model.MeshDataNames[0])
     except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
         logger.warning("반력 절점을 못 남겼습니다", exc_info=True)
-        return
-    rows_: list[tuple[str, int, Axes, frozenset[int]]] = []
-    for region, rank, axes in wanted:
+        return {}
+
+    def nodes_of(region: str) -> frozenset[int]:
         try:
             ids: set[int] = set()
             for face in places[region].Location.Ids:
                 ids.update(int(one) for one in data.MeshRegionById(int(face)).NodeIds)
         except Exception:  # pragma: no cover - Ansys 없이는 안 돈다
             logger.warning("영역 %s 의 반력 절점을 못 얻었습니다", region, exc_info=True)
-            continue
+            return frozenset()
+        return frozenset(ids)
+
+    faces = {region: nodes_of(region) for region in foundations}
+    if not wanted:
+        return faces
+    rows_: list[tuple[str, int, Axes, frozenset[int]]] = []
+    for region, rank, axes in wanted:
+        ids = nodes_of(region)
         if ids:
-            rows_.append((region, rank, axes, frozenset(ids)))
+            rows_.append((region, rank, axes, ids))
     found: dict[str, Any] = {}
     for region, own in separate_reactions(rows_).items():
         if own[0] == own[1] == own[2]:
@@ -1307,6 +1338,62 @@ def _write_reaction_nodes(
     # 추출은 이 파일이 있으면 평면으로 찾지 않는다 — 빈 파일도 남긴다(다 다른 구속의 몫).
     (workdir / REACTION_NODES_NAME).write_text(json.dumps(found), encoding="utf-8")
     logger.info("반력 절점 %s", sorted(found))
+    return faces
+
+
+_ELASTIC_BLOCK = "/com,*********** Create Elastic Support"
+
+
+def foundation_elements(dat: Path, faces: dict[str, frozenset[int]]) -> dict[str, list[int]]:
+    """입력 파일에서 **탄성 지지마다 면 요소 번호**를 찾는다 → 영역 → 요소들.
+
+    Mechanical 은 탄성 지지마다 「Create Elastic Support」 뒤에 SURF154 요소 블록(`eblock` —
+    줄마다 요소 번호 + 절점 여덟)을 쓰고 기초 강성을 실상수로 준다(실측 2026-10-30). 이름이 안
+    적히므로 요소의 절점이 모두 든 면으로 짝짓는다. DPF 는 이 요소를 메시에 안 싣고 절점력만
+    실어서, 추출에서는 번호로만 고를 수 있다.
+    """
+    found: dict[str, list[int]] = {}
+    state = ""
+    try:
+        with dat.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                text = line.strip()
+                if text.startswith(_ELASTIC_BLOCK):
+                    state = "head"
+                elif state == "head" and text.lower().startswith("eblock"):
+                    state = "format"
+                elif state == "format":
+                    state = "rows"
+                elif state == "rows":
+                    if text == "-1":
+                        state = ""
+                        continue
+                    row = [int(one) for one in text.split()]
+                    nodes = set(row[1:])
+                    for region, face in faces.items():
+                        if nodes <= face:
+                            found.setdefault(region, []).append(row[0])
+                            break
+    except (OSError, ValueError):  # pragma: no cover - 방금 쓴 파일이다
+        logger.warning("탄성 지지 요소를 못 읽었습니다 — 반력 없이 갑니다", exc_info=True)
+        return {}
+    return found
+
+
+def _write_foundation_elements(
+    workdir: Path, dat: Path, faces: dict[str, frozenset[int]]
+) -> None:
+    """탄성 지지 영역 → 면 요소 번호를 `foundation_elements.json` 에 남긴다."""
+    if not faces:
+        return
+    found = foundation_elements(dat, faces)
+    missing = sorted(set(faces) - set(found))
+    if missing:
+        logger.warning("면 요소를 못 찾은 탄성 지지: %s — 그 반력은 비어 나갑니다", missing)
+    (workdir / FOUNDATION_ELEMENTS_NAME).write_text(
+        json.dumps(found, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info("탄성 지지 요소 %s", {region: len(ids) for region, ids in found.items()})
 
 
 #: 원격 변위에 붙이는 이름표의 머리 — 입력 파일의 「Remote Point Used by "…"」 에 그대로

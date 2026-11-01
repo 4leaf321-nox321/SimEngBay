@@ -148,31 +148,75 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert len(result["modes"]) == 6
 
 
-def test_능력표에_없는_구속은_까닭을_달아_거절한다(ready: None, tmp_path: Path) -> None:
-    """압축 전용 지지는 아직 못 건다 — **조용히 완전 고정으로 바꾸지 않는다.**
+def _tipping(work: Path, support: str) -> None:
+    """측면가진을 기울인다 — 바닥 `support` · 기둥 끝은 수평만 잡고 아래로 100 N · y 축
+    3000 N·mm.
 
-    고정으로 바꿔 풀면 떨어져야 할 면이 붙어 있는 모델이 되는데, 결과만 보면 알 수 없다.
-    능력표(`calculix/deck.py` 의 `SUPPORTED_CONSTRAINTS`)에 없으면 멈추고, **어떻게 하면
-    되는지**까지 말한다.
+    편심 30 mm 가 판(80 mm)의 핵(13.3 mm)을 넘어 한쪽이 들린다. 하중을 작게 둔다 — 간극은
+    비선형 단계(NLGEOM)로만 풀리는데, 기둥이 눌린 채 휘는 증폭(1000 N 이면 약 5 %)이 Ansys(큰
+    변형 끔)와 갈라진다. 100 N 이면 0.5 % 아래다. 판 바닥 두 모서리에 측정점을 단다.
     """
-    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", tmp_path / "input.step")
     payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
-    payload["conditions"]["constraints"][0]["type"] = "compression_only"
-    (tmp_path / "topology.json").write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    conditions = payload["conditions"]
+    base = conditions["constraints"][0]
+    hold = {"type": "displacement", "on": "기둥 끝", "x": 0.0, "y": 0.0, "z": None}
+    push = conditions["loads"][0]
+    bend = {"type": "moment", "magnitude": 3000.0, "unit": "N*mm", "direction": [0, 1, 0]}
+    for name, point in (("오른 모서리", [40.0, 40.0, 0.0]), ("왼 모서리", [-40.0, 40.0, 0.0])):
+        select = {"near": point, "what": "vertices", "limit": 1}
+        conditions["named_selections"].append(
+            {"name": name, "entity": "vertex", "select": select}
+        )
+        payload["regions"][name] = [{"point": point, "body": "받침판"}]
+    source = work / "source.json"
+    source.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    _side_shake_conditions(
+        work,
+        "static",
+        constraints=[
+            {**base, "name": "바닥 받침", "type": support},
+            {**base, "name": "끝 잡기", **hold},
+        ],
+        loads=[
+            {**push, "name": "누름", "magnitude": 100.0, "direction": [0, 0, -1]},
+            {**push, "name": "굽힘", **bend},
+        ],
+        source=source,
     )
 
-    with pytest.raises(StageFailure) as caught:
-        _run(tmp_path, SPEC)
 
-    assert "compression_only" in str(caught.value)
-    assert "ansys" in str(caught.value).lower(), "어떻게 하면 되는지까지 말해야 한다"
+def test_압축_전용_지지는_당기는_쪽이_들린다(ready: None, tmp_path: Path) -> None:
+    """바닥이 압축 전용이면 모멘트 쪽 모서리는 눌리고 반대 모서리가 들린다 — 마찰 없는 지지는
+    둘 다 바닥에 묶인다. Ansys(실측 2026-10-30, 요소 3 mm): 최대 변위 0.16957 mm · 들린
+    모서리 Z 0.0016336 mm · 눌린 모서리 -3.7e-7 mm. CalculiX 0.17066 · 0.0016107 mm."""
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec = {**spec, "recipe": "static", "mesh": {"element_size_mm": 3}}
+    found: dict[str, dict[str, Any]] = {}
+    for support in ("compression_only", "frictionless"):
+        work = tmp_path / support
+        work.mkdir()
+        _tipping(work, support)
+        _run(work, spec)
+        found[support] = json.loads((work / "result.json").read_text(encoding="utf-8"))
+
+    lifted = found["compression_only"]
+    corner = {row["name"]: row["vector"][2] for row in lifted["probes"]}
+    assert lifted["reactions"]["바닥"][2] == pytest.approx(100.0, rel=1e-3)
+    assert corner["왼 모서리"] == pytest.approx(0.0016336, rel=0.03)
+    assert abs(corner["오른 모서리"]) < 1e-5
+    assert lifted["max_displacement"] == pytest.approx(0.16957, rel=0.02)
+    held = {row["name"]: row["vector"][2] for row in found["frictionless"]["probes"]}
+    assert abs(held["왼 모서리"]) < 1e-6
 
 
-def _side_shake_conditions(work: Path, recipe: str, **changes: Any) -> None:
-    """`조건_측면가진` p0001 의 조건 칸을 바꿔 둔다(레시피도 조건의 해석 종류에 맞춘다)."""
+def _side_shake_conditions(
+    work: Path, recipe: str, *, source: Path | None = None, **changes: Any
+) -> None:
+    """`조건_측면가진` p0001(또는 `source`)의 조건 칸을 바꿔 둔다(레시피도 조건의 해석 종류에
+    맞춘다)."""
     shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
-    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    origin = source or SIDE_SHAKE / "points" / "p0001.json"
+    payload = json.loads(origin.read_text(encoding="utf-8"))
     payload["conditions"].update(changes)
     payload["conditions"].setdefault("analysis", {})["type"] = recipe
     (work / "topology.json").write_text(
@@ -223,9 +267,32 @@ def test_회전_속도의_원심력이_반력에_든다(ready: None, tmp_path: P
     assert result["max_displacement"] == pytest.approx(1.971e-3, rel=0.03)
 
 
+def test_탄성_지지의_반력은_하중을_기둥과_나눠_받은_몫(ready: None, tmp_path: Path) -> None:
+    """바닥 고정 · 기둥 끝 탄성 지지 1000 N/mm³ · 기둥 끝 아래로 1000 N — 스프링(1000 x 100 mm²
+    = 1e5 N/mm)과 알루미늄 기둥(EA/L ≈ 8.75e4 N/mm)이 나란히 받아 끝이 절반 남짓을 진다. 두
+    반력의 합이 하중이다. Ansys 는 535.66 · 464.34 N(실측 2026-10-30, 요소 3 mm)."""
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    fixed = payload["conditions"]["constraints"][0]
+    support = {**fixed, "name": "끝 받침", "type": "elastic_support", "on": "기둥 끝"}
+    push = {**payload["conditions"]["loads"][0], "magnitude": 1000.0, "direction": [0, 0, -1]}
+    _side_shake_conditions(
+        tmp_path,
+        "static",
+        constraints=[fixed, {**support, "stiffness": 1000.0}],
+        loads=[push],
+    )
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+
+    _run(tmp_path, {**spec, "recipe": "static", "mesh": {"element_size_mm": 3}})
+
+    reactions = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))["reactions"]
+    assert reactions["기둥 끝"][2] + reactions["바닥"][2] == pytest.approx(1000.0, rel=1e-3)
+    assert reactions["기둥 끝"][2] == pytest.approx(535.66, rel=0.01)
+
+
 def _bolt_deck(work: Path, folder: str) -> str:
-    """볼트 폴더 1번 점의 덱까지만 쓴다 — 이 조립(판 사이 마찰 + 볼트)은 CalculiX 로 끝까지
-    풀기에 아직 너무 무겁다(`docs/해석-연동-계획.md` 「CompCore 볼트 예압 픽스처」)."""
+    """볼트 폴더 1번 점의 덱까지만 쓴다 — 단면 자리만 견줄 때는 풀 까닭이 없다(마찰 조립은
+    CAD 메시 그대로 점마다 20분쯤 — `docs/해석-연동-계획.md` 「마찰판 볼트 조립」)."""
     source = FIXTURES / "doe" / folder
     work.mkdir(parents=True)
     shutil.copy(next(iter((source / "shapes").glob("*.step"))), work / "input.step")
@@ -301,6 +368,41 @@ def test_판까지_본딩한_볼트는_Ansys_와_같은_힘을_낸다(ready: Non
         assert found[point]["tightened_n"] == pytest.approx(early, rel=0.05)
         assert found[point]["force_n"] == pytest.approx(final, rel=0.05)
         assert grown[point - 1] == pytest.approx(final - early, rel=0.05)
+
+
+#: 판 사이 마찰 0.2 · 본딩 둘인 볼트 폴더(CompCore f500bcd).
+BOLTED = FIXTURES / "doe" / "조건_볼트예압_정적"
+
+
+def test_판_사이_마찰인_볼트_조립을_끝까지_푼다(ready: None, tmp_path: Path) -> None:
+    """전에는 접촉 셋을 다 접촉 쌍으로 걸어 첫 증분조차 12분에 못 넘었다. 이제 메시를 나눠
+    본딩은 절점 공유로 붙이고 마찰면만 갈라 절점-면으로 건다(`build._open_interfaces`).
+
+    CompCore 판정: 점 1 의 끝은 1.05 ~ 1.2 kN(정확히 1000 이면 차례가 틀림), 점 2 의 1단계는
+    1.0 ~ 1.2 kN 이고 2단계는 점 1 꼴이다. 요소 4 mm 로 푼다 — CAD 메시 그대로(절점 5.1만)는
+    점마다 20분쯤이다. 실측(2026-10-30): 점 1 1000 → 1066.19 N(Ansys 1066.21 — CAD 메시
+    그대로), 점 2 1068.25 → 1126.40 N(Ansys 1011.7 → 1076.7 — 조임량으로 조이면 굵은 메시가
+    단단해 힘이 더 난다). 떨어진 뒤의 인장을 비우면 본딩처럼 붙어 점 1 이 1010.6 N 이었다.
+    """
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec = {**spec, "recipe": "static", "mesh": {"element_size_mm": 4}}
+    found: dict[int, dict[str, float]] = {}
+    for point in (1, 2):
+        work = tmp_path / f"p{point}"
+        work.mkdir()
+        shutil.copy(next(iter((BOLTED / "shapes").glob("*.step"))), work / "input.step")
+        shutil.copy(BOLTED / "points" / f"p{point:04d}.json", work / "topology.json")
+        _run(work, spec)
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        assert result["reactions"]["바닥"][2] == pytest.approx(-600.0, rel=0.01)
+        found[point] = result["bolts"]["볼트 예압"]
+
+    assert found[1]["tightened_n"] == pytest.approx(1000.0)
+    assert found[1]["force_n"] == pytest.approx(1066.2, rel=0.02)
+    assert found[2]["adjustment_mm"] == pytest.approx(0.0025)
+    assert 1000 < found[2]["tightened_n"] < 1200
+    grown = [found[one]["force_n"] - found[one]["tightened_n"] for one in (1, 2)]
+    assert grown[1] == pytest.approx(grown[0], rel=0.2), f"증가분 {grown}"
 
 
 #: `조건_원통_SI` 를 Ansys 로 돌린 값(실측 2026-10-03 · 요소 4 mm · 물성은 스펙).

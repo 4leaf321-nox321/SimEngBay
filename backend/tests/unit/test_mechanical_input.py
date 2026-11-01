@@ -111,3 +111,49 @@ def test_원격_변위마다_원격점_절점을_찾는다(tmp_path: Path) -> No
     dat.write_text(REMOTE_DECK, encoding="utf-8")
     tags = {"SEB_RD_1": "핀 끝면", "SEB_RD_2": "지지 롤러", "SEB_RD_3": "지지 롤러"}
     assert remote_pilots(dat, tags) == {"핀 끝면": [31809], "지지 롤러": [31811, 31813]}
+
+
+#: 실제 입력 파일의 탄성 지지 자리(측면가진, 2025 R2) — 「Create Elastic Support」 뒤의 SURF154
+#: 블록이 그 면 요소이고, 압력도 같은 SURF154 블록으로 온다(그것은 안 집는다).
+ELASTIC_DECK = """\
+/com,*********** Create Elastic Support ***********
+et,5,154
+MAT,5 $ TYPE,5 $ REAL,5 $ SECNUM,5 $ ESYS,0
+eblock,11,COMPACT,,2
+(11i9)
+     3511     1248      672     1148     1149     3340     3339     4304     4306
+     3512      672      648     1147     1148     3290     3291     4303     3339
+-1
+secnum,1    ! reset the section ID to default
+esel,s,type,,5
+r,5,,,,10000.
+esel,all
+/com,*********** Create Elastic Support ***********
+et,6,154
+eblock,11,COMPACT,,1
+(11i9)
+     3600       11       12       13       14       15       16       17       18
+-1
+/com,*********** Define Pressure Using Surface Effect Elements "__" ***********
+et,7,154
+eblock,11,COMPACT,,1
+(11i9)
+     3886     1248      672     1148     1149     3340     3339     4304     4306
+-1
+"""
+
+
+def test_탄성_지지마다_면_요소를_그_면의_절점으로_짝짓는다(tmp_path: Path) -> None:
+    """탄성 지지는 이름이 안 적혀 요소의 절점이 모두 든 면으로 짝짓는다. 같은 면의 압력 요소는
+    탄성 지지 블록이 아니라 안 집는다 — 그 합은 준 하중이다(실측 2026-10-30)."""
+    from app.core.mechanical.build import foundation_elements
+
+    dat = tmp_path / "model.dat"
+    dat.write_text(ELASTIC_DECK, encoding="utf-8")
+    faces = {
+        "끝": frozenset(
+            {1248, 672, 1148, 1149, 3340, 3339, 4304, 4306, 648, 1147, 3290, 3291, 4303}
+        ),
+        "옆": frozenset(range(11, 19)),
+    }
+    assert foundation_elements(dat, faces) == {"끝": [3511, 3512], "옆": [3600]}

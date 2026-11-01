@@ -51,12 +51,15 @@ def locate(
     nodes: dict[int, tuple[float, float, float]],
     *,
     body_nodes: dict[str, set[int]] | None = None,
+    renamed: dict[str, dict[int, int]] | None = None,
 ) -> list[Spot]:
     """측정점마다 가장 가까운 절점. 점 그룹이 없으면 빈 목록.
 
     `body_nodes` 를 주면 **그 측정점의 바디 안에서만** 찾는다(지문의 `body`). 같은 자리에 두
     바디의 꼭짓점이 겹치는 이음 입구에서, 안 가르면 두 측정점이 같은 절점을 잡아 미끄럼이 늘 0
-    으로 나온다.
+    으로 나온다. `renamed` 는 모델링이 맞닿은 마찰면을 가르며 그 바디에 준 새 번호다
+    (`build._open_interfaces`) — 메시를 나눠 두 바디가 같은 절점을 쥐었다가 갈랐으므로, 고른
+    절점을 그 바디의 것으로 바꾼다.
     """
     found: list[Spot] = []
     for name, point in wanted(topology).items():
@@ -69,7 +72,8 @@ def locate(
         hit = nearest(pool, point)
         if hit is None:
             continue
-        found.append(Spot(name=name, point=point, node=hit[0], distance_mm=hit[1], body=kept))
+        node = (renamed or {}).get(kept or "", {}).get(hit[0], hit[0])
+        found.append(Spot(name=name, point=point, node=node, distance_mm=hit[1], body=kept))
     return found
 
 
@@ -113,15 +117,31 @@ def read(
     vectors: dict[int, list[float]] | None = None,
     body_nodes: dict[str, set[int]] | None = None,
     strains: dict[int, list[float]] | None = None,
+    renamed: dict[str, dict[int, int]] | None = None,
 ) -> list[dict[str, Any]]:
     """측정점마다 `{이름, 좌표, 값, 절점, 떨어진 거리}` — `locate` 와 `rows` 를 한 번에."""
     return rows(
-        locate(topology, nodes, body_nodes=body_nodes),
+        locate(topology, nodes, body_nodes=body_nodes, renamed=renamed),
         values,
         unit=unit,
         vectors=vectors,
         strains=strains,
     )
+
+
+def renamed_nodes(workdir: Path) -> dict[str, dict[int, int]]:
+    """바디 → {원래 절점: 새 절점} — 모델링이 가른 마찰면(`boundary.json` 의 `renamed`)."""
+    path = workdir / "boundary.json"
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8")).get("renamed") or {}
+        return {
+            str(name): {int(old): int(new) for old, new in pairs.items()}
+            for name, pairs in loaded.items()
+        }
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
 
 
 def body_nodes(

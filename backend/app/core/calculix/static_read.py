@@ -144,6 +144,7 @@ def _probe(
         vectors=vectors,
         body_nodes=probes.body_nodes(workdir, mesh.solids),
         strains=strains,
+        renamed=probes.renamed_nodes(workdir),
     )
 
 

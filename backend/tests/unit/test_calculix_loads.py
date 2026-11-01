@@ -677,6 +677,68 @@ def test_탄성_지지는_면_절점마다_법선_스프링을_땅에_잇는다(
     assert [one.why for one in plan.refused] == ["기초 강성이 없습니다."]
 
 
+def test_압축_전용_지지는_정적에서_바깥_법선으로_밀_때만_닫히는_간극이다() -> None:
+    """면 절점마다 간극(GAPUNI)을 **같은 자리**의 땅 절점에 잇고 방향은 바깥 법선이다 —
+    떨어뜨려 두고 방향을 비우면 ccx 가 수렴하지 못한다(실측 2.21). 강성은 접촉 벌칙 강성(10 x
+    E / 요소 크기 = 1e6 N/mm³) x 넓이이고, 간극은 비선형이라 증분으로 푼다. 모달은 닿은 채인
+    스프링이고 그렇다고 적는다 — Ansys 도 선형 해석은 처음 닿은 상태로 푼다."""
+    lifted = condition_model.Constraint(
+        name="바닥 받침", kind="compression_only", region="바닥"
+    )
+    down = (0.0, 0.0, -1.0)
+    springs = {"바닥": {1: (10.0, down), 2: (10.0, down), 3: (30.0, down)}}
+    plan = _static(
+        condition_model.Conditions(constraints=[lifted], loads=[PUSH]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+        springs=springs,
+        element_size_mm=2.0,
+    )
+    assert plan.refused == []
+    text = plan.text
+    assert "*NODE, NSET=GROUND0\n6, 0.000000, 0.000000, 0.000000" in text
+    assert "*ELEMENT, TYPE=GAPUNI, ELSET=GAP0G1\n3, 1, 6\n4, 2, 7" in text
+    assert "*GAP, ELSET=GAP0G1\n0., 0.000000, 0.000000, -1.000000, , 1.000000e+07" in text
+    assert "*GAP, ELSET=GAP0G2\n0., 0.000000, 0.000000, -1.000000, , 3.000000e+07" in text
+    assert "*STEP, NLGEOM\n*STATIC\n0.1, 1.0" in text
+    assert plan.reaction_sets == {"바닥": "GROUND0"}
+
+    modal = deck.write_modal(
+        nodes=NODES,
+        solids=SOLIDS,
+        body_of={"부품": 1, "지그": 2},
+        materials=[_material("부품", "지그")],
+        held_nodes={"바닥": {1, 2, 3}},
+        given=condition_model.Conditions(constraints=[lifted]),
+        modes=6,
+        second_order=False,
+        springs=springs,
+        element_size_mm=2.0,
+    )
+    assert modal.refused == []
+    assert "*ELEMENT, TYPE=SPRINGA, ELSET=SPRING0G1" in modal.text
+    assert "GAPUNI" not in modal.text
+    assert any("닿은 채로" in one.why for one in modal.skipped)
+
+
+def test_능력표에_없는_구속은_고정으로_바꾸지_않고_까닭을_달아_거절한다(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """조용히 완전 고정으로 바꿔 풀면 떨어지거나 미끄러져야 할 면이 붙은 모델이 되는데, 결과만
+    보면 알 수 없다. 지금은 모든 종류를 걸어 능력표에서 하나를 빼 본다."""
+    without = tuple(one for one in deck.SUPPORTED_CONSTRAINTS if one != "frictionless")
+    monkeypatch.setattr(deck, "SUPPORTED_CONSTRAINTS", without)
+    slide = condition_model.Constraint(name="바닥 미끄럼", kind="frictionless", region="바닥")
+    plan = _static(
+        condition_model.Conditions(constraints=[slide], loads=[PUSH]),
+        loads={"끝": {5}},
+        load_areas={"끝": {5: 1.0}},
+    )
+    assert [one.why for one in plan.refused] == [
+        "CalculiX 경로가 아직 못 거는 구속입니다 — Ansys 로 돌리세요."
+    ]
+
+
 def test_회전_속도는_좌표계_원점을_지나는_축으로_원심력을_건다() -> None:
     """축은 좌표계 원점을 지나고 방향은 그 좌표계의 성분이다(CompCore 계약). ccx 는 ω² 를
     받는다 — 60 rpm 은 2π rad/s 다. SI 폴더의 좌표계 원점은 m 로 온다(`length_mm`)."""

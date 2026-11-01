@@ -37,12 +37,18 @@ logger = logging.getLogger(__name__)
 #: **탄성 지지는 면 절점마다 법선 스프링**(`SPRINGA`)을 땅에 붙인다 — 강성은 기초 강성(응력/
 #: 길이) x 그 절점이 맡은 넓이다. Ansys 의 탄성 지지(면 법선의 기초 강성)와 같은 뜻이다
 #: (2026-10-26 — 전에는 「못 거는 구속」 이었다).
+#:
+#: **압축 전용 지지는 면 절점마다 간극 요소**(`GAPUNI`)를 같은 자리의 땅 절점에 잇는다 — 바깥
+#: 법선 쪽으로 밀 때만 닫혀 받치고, 당기면 열려 떨어진다. 정적은 비선형 단계로 푼다. 모달 ·
+#: 조화는 닿은 채로(같은 강성의 법선 스프링) 푼다 — Ansys 도 선형 해석은 처음 닿은 상태로 푼다
+#: (2026-10-30 — 전에는 「못 거는 구속」 이었다).
 SUPPORTED_CONSTRAINTS = (
     "fixed_support",
     "cylindrical",
     "displacement",
     "frictionless",
     "elastic_support",
+    "compression_only",
 )
 #: 원격 변위는 따로 건다 — 강체 파트 면이면 그 기준점, 변형체 면이면 원격점에 묶는다(`_holds`).
 REMOTE_CONSTRAINTS = ("remote_displacement",)
@@ -125,7 +131,8 @@ class Plan:
     bolt_report: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-#: 탄성 지지 영역 → 절점마다 (맡은 넓이 mm², 면의 단위 법선) — 모델링이 메시에서 셈한다.
+#: 탄성 · 압축 전용 지지 영역 → 절점마다 (맡은 넓이 mm², 면의 바깥 단위 법선) — 모델링이
+#: 메시에서 셈한다.
 Springs = dict[str, dict[int, tuple[float, tuple[float, float, float]]]]
 
 
@@ -331,6 +338,7 @@ def write_modal(
         springs,
         stress_mpa,
         _top_element(solids, shells),
+        penalty=contact_stiffness(materials, element_size_mm),
     )
 
     if contact_faces is None:
@@ -535,6 +543,8 @@ def write_static(
     springs: Springs | None = None,
     stress_mpa: float = 1.0,
     bolts: dict[str, BoltSection | str] | None = None,
+    pairing: str = "SURFACE TO SURFACE",
+    average_force: float | None = None,
 ) -> Plan:
     """정적 덱. **하중이 답을 만든다** — 하나도 못 걸면 전부 0 이 나오고, 그 그림은
     「해석이 됐다」 처럼 보인다. 그래서 하중이 없으면 거절한다.
@@ -546,6 +556,10 @@ def write_static(
     Ansys 의 `LargeDeflection` 과 같은 자리다. 기본 솔버가 CalculiX 가 된 뒤(2026-10-08)로는
     이것을 안 받으면 그 체크가 조용히 무시된다. `substeps`(CAD 의 「초기 부단계 수」)가 있으면
     비선형 단계의 첫 증분을 1/그 수로 잡는다 — 없으면 0.1(열 걸음).
+
+    `pairing` 은 접촉 쌍의 꼴이다 — 마찰면을 갈라 요소면이 짝 맞으면 절점-면이 잘 수렴한다
+    (`build._open_interfaces`). `average_force`(N)를 주면 비선형 단계마다 수렴 판정의 평균 힘을
+    그 값으로 둔다(`*CONTROLS` 의 넷째 칸 — `build._average_force`).
     """
     plan = Plan()
     lines = _head(nodes, solids, body_of, materials, plan, second_order, rigid, shells, ties)
@@ -561,10 +575,15 @@ def write_static(
         springs,
         stress_mpa,
         _top_element(solids, shells),
+        penalty=contact_stiffness(materials, element_size_mm),
+        unilateral=True,
     )
     lines += _separate_reactions(plan)
     lines += _bolt_blocks(given, bolts, plan, nodes, rigid)
-    nonlinear = large_deflection
+    # 압축 전용 지지의 간극은 열리고 닫힌다 — 접촉처럼 증분으로 푼다.
+    nonlinear = large_deflection or any(
+        one.startswith("compression_only:") for one in plan.applied
+    )
     if contact_faces is not None:
         nonlinear = nonlinear or any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
         lines += contact_block(
@@ -574,6 +593,7 @@ def write_static(
             nonlinear=True,
             stiffness=contact_stiffness(materials, element_size_mm),
             masters=masters,
+            pairing=pairing,
         )
     else:
         # 접촉 쌍을 안 쓰면 절점 공유로 붙였다. 접촉 쌍을 쓰면(위) 마찰은 마찰대로 걸렸으니
@@ -598,6 +618,13 @@ def write_static(
     step = ["*STEP, NLGEOM" if nonlinear else "*STEP", "*STATIC"]
     if nonlinear:
         step.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
+        if average_force:
+            # R_n · C_n · q_0 · **q_u** · R_p · ε · C_ε · R_l — 넷째만 바꾸고 나머지는 ccx 의
+            # 기본값이다.
+            step[1:1] = [
+                "*CONTROLS, PARAMETERS=FIELD",
+                f"0.005, 0.01, , {average_force:.6g}, 0.02, 1e-5, 1e-3, 1e-8",
+            ]
     applied_loads = sum(1 for one in plan.applied if one.startswith("bolt_pretension:"))
     pull = [0.0, 0.0, 0.0]
     spins: list[Spin] = []
@@ -841,6 +868,9 @@ def _holds(
     springs: Springs | None = None,
     stress_mpa: float = 1.0,
     top_element: int = 0,
+    *,
+    penalty: float = 0.0,
+    unilateral: bool = False,
 ) -> list[str]:
     """구속 — 레시피가 달라도 같은 부분이다.
 
@@ -853,6 +883,9 @@ def _holds(
 
     **강제 변위는 선언된 단위계의 길이로 온다**(`length_mm`) — SI 폴더의 0.001 은 1 mm 다.
     덱은 mm 라 옮겨 적는다. 회전(도)은 단위계와 상관없다.
+
+    압축 전용 지지는 `penalty`(N/mm³ — 접촉 강성과 같은 값)로 받친다. `unilateral` 이면(정적)
+    떨어질 수 있는 간극 요소, 아니면 닿은 채인 스프링이다.
     """
     lines: list[str] = []
     remote = _remote_points(held_nodes, given, rigid, nodes or {}, centers or {})
@@ -870,6 +903,19 @@ def _holds(
                 _top_node(nodes or {}, rigid, list(remote.values()), plan),
                 top_element,
                 stress_mpa / length_mm,
+            )
+            continue
+        if rule.kind == "compression_only":
+            lines += _compression(
+                index,
+                rule,
+                (springs or {}).get(rule.region),
+                nodes or {},
+                plan,
+                _top_node(nodes or {}, rigid, list(remote.values()), plan),
+                top_element,
+                penalty,
+                unilateral=unilateral,
             )
             continue
         on_rigid = next(
@@ -1077,44 +1123,118 @@ def _elastic(
     """탄성 지지 — 면 절점마다 **법선 스프링 하나**(`SPRINGA`)를 땅 절점에 잇는다.
 
     강성은 기초 강성(응력/길이, `to_n_mm3` 로 N/mm³) x 그 절점이 맡은 넓이(mm²)다 — 합하면
-    「면 전체를 단위 길이 누르는 데 드는 힘」 이 기초 강성 x 면적이 된다. 땅 절점은 법선 쪽으로
-    1 mm 떨어진 자리에 두고 묶는다. ccx 의 스프링은 강성 하나를 요소 묶음에 주므로 같은 강성
-    (유효숫자 4자리)끼리 묶음을 나눈다. **반력은 땅 절점의 합**이다 — 지지가 몸에 준 힘이다.
+    「면 전체를 단위 길이 누르는 데 드는 힘」 이 기초 강성 x 면적이 된다. **반력은 땅 절점의
+    합**이다 — 지지가 몸에 준 힘이다.
     """
     what = f"구속 「{rule.name}」({rule.kind})"
     if rule.stiffness is None or rule.stiffness <= 0:
         plan.refused.append(condition_model.Note(what, "기초 강성이 없습니다."))
         return []
+    return _to_ground(
+        index, rule, springs, nodes_of, plan, top_node, top_element, rule.stiffness * to_n_mm3
+    )
+
+
+def _compression(
+    index: int,
+    rule: condition_model.Constraint,
+    springs: dict[int, tuple[float, tuple[float, float, float]]] | None,
+    nodes_of: dict[int, tuple[float, float, float]],
+    plan: Plan,
+    top_node: int,
+    top_element: int,
+    penalty: float,
+    *,
+    unilateral: bool,
+) -> list[str]:
+    """압축 전용 지지 — 면 절점마다 **바깥 법선 쪽으로만 받치는** 간극 요소(`GAPUNI`).
+
+    Ansys 의 압축 전용 지지(움직이지 않는 강체 면과의 마찰 없는 접촉)와 같은 뜻이다 — 면 안으로
+    미끄러지는 것은 막지 않고, 당기면 떨어진다. 강성은 접촉 쌍의 벌칙 강성(`penalty`, N/mm³) x
+    맡은 넓이다. 선형 해석(`unilateral` 이 거짓)은 닿은 채로 푼다 — 그렇다고 적는다.
+    """
+    lines = _to_ground(
+        index,
+        rule,
+        springs,
+        nodes_of,
+        plan,
+        top_node,
+        top_element,
+        penalty,
+        unilateral=unilateral,
+    )
+    if lines and not unilateral:
+        plan.skipped.append(
+            condition_model.Note(
+                f"구속 「{rule.name}」({rule.kind})",
+                "선형 해석이라 닿은 채로(법선만 받치는 마찰 없는 지지처럼) 풀었습니다 — "
+                "떨어지는 것은 정적 해석에서만 풉니다(Ansys 도 처음 닿은 상태로 풉니다).",
+            )
+        )
+    return lines
+
+
+def _to_ground(
+    index: int,
+    rule: condition_model.Constraint,
+    springs: dict[int, tuple[float, tuple[float, float, float]]] | None,
+    nodes_of: dict[int, tuple[float, float, float]],
+    plan: Plan,
+    top_node: int,
+    top_element: int,
+    per_area: float,
+    *,
+    unilateral: bool = False,
+) -> list[str]:
+    """면 절점마다 요소 하나를 땅 절점에 잇는다 — 강성은 `per_area`(N/mm³) x 맡은 넓이.
+
+    **스프링**(`SPRINGA`)은 두 절점을 잇는 선이 방향이라 땅 절점을 법선 쪽 1 mm 에 둔다.
+    **간극**(`GAPUNI`, `unilateral`)은 방향을 따로 적고 땅 절점을 같은 자리에 둔다 — 떨어뜨려
+    두고 방향을 비우면 ccx 가 수렴하지 못한다(실측 2.21). 간극은 「바깥 법선 · 면 절점의
+    변위」 가 양수일 때(땅으로 밀 때) 닫힌다. ccx 는 강성 · 방향 하나를 요소 묶음에 주므로 같은
+    강성(유효숫자 4자리) · 방향끼리 묶음을 나눈다 — 굽은 면의 간극은 절점마다 한 묶음이다.
+    간극은 비선형이라 정적 단계가 증분으로 돈다(`write_static`). **반력은 땅 절점의 합**이다.
+    """
+    what = f"구속 「{rule.name}」({rule.kind})"
     if not springs:
         plan.refused.append(
             condition_model.Note(what, f"영역 「{rule.region}」 의 면을 못 찾았습니다.")
         )
         return []
-    foundation = rule.stiffness * to_n_mm3
     ground = f"GROUND{index}"
     nodes_rows = [f"*NODE, NSET={ground}"]
-    groups: dict[float, list[tuple[int, int]]] = {}
+    groups: dict[tuple[float, tuple[float, ...]], list[tuple[int, int]]] = {}
     made: list[int] = []
     for offset, (node, (area, normal)) in enumerate(sorted(springs.items()), start=1):
         if area <= 0:
             continue
         number = top_node + offset
         made.append(number)
-        x, y, z = (one + along for one, along in zip(nodes_of[node], normal, strict=True))
+        shift = (0.0, 0.0, 0.0) if unilateral else normal
+        x, y, z = (one + along for one, along in zip(nodes_of[node], shift, strict=True))
         nodes_rows.append(f"{number}, {x:.6f}, {y:.6f}, {z:.6f}")
-        stiffness = float(f"{foundation * area:.4g}")
-        groups.setdefault(stiffness, []).append((node, number))
+        stiffness = float(f"{per_area * area:.4g}")
+        direction = tuple(round(one, 6) for one in normal) if unilateral else ()
+        groups.setdefault((stiffness, direction), []).append((node, number))
     if not made:
         plan.refused.append(condition_model.Note(what, "면적이 0 입니다."))
         return []
     lines = nodes_rows
     element = max(top_element, plan.last_element)
-    for group, (stiffness, pairs) in enumerate(sorted(groups.items()), start=1):
-        name = f"SPRING{index}G{group}"
-        lines.append(f"*ELEMENT, TYPE=SPRINGA, ELSET={name}")
+    kind, tag = ("GAPUNI", "GAP") if unilateral else ("SPRINGA", "SPRING")
+    for group, ((stiffness, direction), pairs) in enumerate(sorted(groups.items()), start=1):
+        name = f"{tag}{index}G{group}"
+        lines.append(f"*ELEMENT, TYPE={kind}, ELSET={name}")
         for node, number in pairs:
             element += 1
             lines.append(f"{element}, {node}, {number}")
+        if unilateral:
+            # 틈 0 · 바깥 법선 · (안 쓰는 칸) · 닫혔을 때의 강성.
+            nx, ny, nz = direction
+            gap = f"0., {nx:.6f}, {ny:.6f}, {nz:.6f}, , {stiffness:.6e}"
+            lines += [f"*GAP, ELSET={name}", gap]
+            continue
         # **둘째 줄은 「비움」 이다** — 그런데 ccx 는 빈 줄을 건너뛰므로 칸 하나를 둔다.
         # 강성은 **소수점을 꼭 붙인다** — 「70」 처럼 적으면 ccx 가 자유도 번호로 읽고
         # 「SPRING1 이 없다」 며 멈춘다(실측 ccx 2.21).
@@ -1124,7 +1244,7 @@ def _elastic(
     plan.printed_sets[ground] = frozenset(made)
     plan.reaction_sets[rule.region] = ground
     plan.reaction_nodes[rule.region] = frozenset(made)
-    plan.applied.append(f"elastic_support:{rule.region}")
+    plan.applied.append(f"{rule.kind}:{rule.region}")
     plan.last_element = element
     return lines
 
@@ -1541,6 +1661,7 @@ def write_harmonic(
     length_mm: float = 1.0,
     springs: Springs | None = None,
     stress_mpa: float = 1.0,
+    element_size_mm: float = 1.0,
 ) -> Plan:
     """조화 응답 덱 — **한 파일에 두 단계다.**
 
@@ -1566,6 +1687,7 @@ def write_harmonic(
         springs,
         stress_mpa,
         _top_element(solids, shells),
+        penalty=contact_stiffness(materials, element_size_mm),
     )
 
     # ① 모드를 푸고 남긴다.
@@ -1941,7 +2063,7 @@ def _inertia_offsets(
 
 
 #: C3D10 의 모서리 → 중간 절점 자리(0부터) — `TET_FACES` 의 면에서 중간 절점을 찾는다.
-_TET_MIDDLES = {(0, 1): 4, (1, 2): 5, (0, 2): 6, (0, 3): 7, (1, 3): 8, (2, 3): 9}
+TET_MIDDLES = {(0, 1): 4, (1, 2): 5, (0, 2): 6, (0, 3): 7, (1, 3): 8, (2, 3): 9}
 
 
 def _load_offsets(
@@ -2004,7 +2126,7 @@ def _load_offsets(
         elif label in TET_FACES:
             corners = TET_FACES[label]
             middles = (
-                [ids[_TET_MIDDLES[(min(pair), max(pair))]] for pair in _face_edges(corners)]
+                [ids[TET_MIDDLES[(min(pair), max(pair))]] for pair in face_edges(corners)]
                 if len(ids) >= 10
                 else []
             )
@@ -2033,7 +2155,7 @@ def _load_offsets(
     return out
 
 
-def _face_edges(corners: tuple[int, int, int]) -> list[tuple[int, int]]:
+def face_edges(corners: tuple[int, int, int]) -> list[tuple[int, int]]:
     return [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])]
 
 
@@ -2208,6 +2330,10 @@ NONLINEAR_CONTACTS = ("frictional", "frictionless", "rough")
 #: 요소 크기로 나누는 것은 차원 때문이다(E 는 N/mm², 강성은 N/mm³). 계수가 크면 수렴이
 #: 어려워지므로 10 에서 시작한다.
 STIFFNESS_FACTOR = 10.0
+#: 절점-면 접촉이 떨어진 뒤 남기는 인장(ccx 의 sigma_inf) — 접촉 강성(N/mm³)에 곱하는
+#: 길이(mm). 설명서는 「작게, 예상 최대 응력의 0.25 % 쯤」 이라 한다. 예상 응력을 모르므로
+#: 강성에 견준다.
+SEPARATION_TENSION = 1e-9
 
 
 def contact_stiffness(materials: list[Material], element_size_mm: float) -> float:
@@ -2226,6 +2352,7 @@ def contact_block(
     nonlinear: bool,
     stiffness: float,
     masters: set[str] | frozenset[str] = frozenset(),
+    pairing: str = "SURFACE TO SURFACE",
 ) -> list[str]:
     """접촉 쌍 — `*SURFACE` 둘 + `*SURFACE INTERACTION` + `*CONTACT PAIR`.
 
@@ -2270,7 +2397,15 @@ def contact_block(
             lines.append(f"{stiffness:g}")
         else:
             lines[-1] = "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR"
-            lines.append(f"{stiffness:g}")
+            if pairing == "NODE TO SURFACE":
+                # **절점-면은 떨어진 뒤의 인장(sigma_inf)을 꼭 준다** — 비우면 ccx 가 큰 값을
+                # 써 면이 본딩처럼 붙는다(실측 2026-10-30: 볼트 힘 +10.6 N, 본딩 +12.5 ·
+                # Ansys 마찰 +66.2 N). 0 이면 열리는 경계가 출렁여 수렴하지 못한다. K x 1e-9
+                # mm(강성 1e6 이면 0.001 MPa)로 두면 Ansys 와 0.06 % 다. 면-면은 이 칸을 안
+                # 쓴다.
+                lines.append(f"{stiffness:g}, {stiffness * SEPARATION_TENSION:g}")
+            else:
+                lines.append(f"{stiffness:g}")
             if pair.kind == "frictional" and pair.friction:
                 # 미끄러짐 강성은 마찰계수와 접촉 강성에서 잡는다(CalculiX 의 두 번째 칸).
                 lines += ["*FRICTION", f"{pair.friction:g}, {stiffness / 10:g}"]
@@ -2278,7 +2413,7 @@ def contact_block(
             (f"{name}S", f"{name}T") if pair.target in masters else (f"{name}T", f"{name}S")
         )
         lines += [
-            f"*CONTACT PAIR, INTERACTION={name}I, TYPE=SURFACE TO SURFACE",
+            f"*CONTACT PAIR, INTERACTION={name}I, TYPE={pairing}",
             f"{slave}, {master}",
         ]
         plan.applied.append(f"{'bonded' if tied else pair.kind}:{pair.source}↔{pair.target}")

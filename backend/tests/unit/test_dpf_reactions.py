@@ -66,3 +66,32 @@ def test_파일이_없던_옛_작업은_변위를_평면으로_찾는다(
     found = dpf_static._reactions(object(), object(), TOPOLOGY, tmp_path)
     assert set(found) == {"끝", "옆"}
     assert len(fake["plane"]) == 2 and fake["on"] == []
+
+
+def test_탄성_지지는_모델링이_남긴_면_요소의_절점력으로_읽는다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """탄성 지지는 묶인 절점이 없어 반력이 0 이다 — 면 요소 번호(`foundation_elements.json`)를
+    넘겨 그 절점력 합을 그 영역의 반력으로 낸다."""
+    asked: list[list[int]] = []
+
+    def foundation_on(model: Any, elements: list[int]) -> list[float]:
+        asked.append(elements)
+        return [0.0, 0.0, 535.66]
+
+    monkeypatch.setattr(probes, "foundation_on", foundation_on)
+    topology = {
+        "regions": {"끝": [{"centroid": [0, 0, 90], "area": 100.0, "normal": [0, 0, 1]}]},
+        "conditions": {
+            "constraints": [
+                {"name": "끝 받침", "type": "elastic_support", "on": "끝", "stiffness": 1e3}
+            ]
+        },
+    }
+    (tmp_path / "reaction_nodes.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "foundation_elements.json").write_text(
+        json.dumps({"끝": [3511, 3512]}), encoding="utf-8"
+    )
+    found = dpf_static._reactions(object(), object(), topology, tmp_path)
+    assert found == {"끝": [0.0, 0.0, 535.66]}
+    assert asked == [[3511, 3512]]

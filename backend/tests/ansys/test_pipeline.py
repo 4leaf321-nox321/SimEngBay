@@ -746,6 +746,100 @@ def test_구속이_여럿이어도_원격_변위의_반력을_낸다(workdir: Pa
     assert abs(pull[1]) < 0.01 * pull[0] and abs(pull[2]) < 0.01 * pull[0]
 
 
+def test_탄성_지지의_반력을_면_요소의_절점력으로_읽는다_Ansys(workdir: Path) -> None:
+    """측면가진 — 바닥 고정 · 기둥 끝 탄성 지지 1000 N/mm³ · 기둥 끝 아래로 1000 N.
+
+    Mechanical 은 탄성 지지를 면 요소(SURF154)의 기초 강성으로 건다 — 묶인 절점이 없어 반력이
+    0 이라 전에는 비어 나갔다. 그 요소의 절점력이 받친 힘이다(`dpf.probes.foundation_on`).
+    실측(2026-10-30, 요소 3 mm): 끝 535.66 · 바닥 464.34 N — CalculiX 537.94 · 462.06 N.
+    """
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    conditions = payload["conditions"]
+    fixed = conditions["constraints"][0]
+    support = {**fixed, "name": "끝 받침", "type": "elastic_support", "on": "기둥 끝"}
+    conditions["constraints"].append({**support, "stiffness": 1e3})
+    conditions["loads"][0].update(magnitude=1000.0, direction=[0, 0, -1])
+    conditions.setdefault("analysis", {})["type"] = "static"
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", workdir / "input.step")
+    (workdir / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    spec = {
+        "recipe": "static",
+        "solver": "ansys",
+        "material": SPEC["material"],
+        "mesh": {"element_size_mm": 3},
+    }
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    runner = _executor()
+    for stage in STAGES:
+        runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+
+    reactions = json.loads((workdir / "result.json").read_text(encoding="utf-8"))["reactions"]
+    assert reactions["기둥 끝"][2] + reactions["바닥"][2] == pytest.approx(1000.0, rel=1e-3)
+    assert reactions["기둥 끝"][2] == pytest.approx(537.94, rel=0.01)
+
+
+def test_압축_전용_지지는_당기는_쪽이_들린다_Ansys(workdir: Path) -> None:
+    """측면가진 — 바닥 압축 전용 · 기둥 끝은 수평만 잡고 아래로 100 N · y 축 3000 N·mm. 편심
+    30 mm 가 판의 핵(13.3 mm)을 넘어 한쪽 모서리가 들린다.
+
+    실측(2026-10-30, 요소 3 mm): 최대 변위 0.16957 mm · 들린 모서리 Z 0.0016336 mm —
+    CalculiX(간극 요소) 0.17066 · 0.0016107 mm. Ansys 는 선형이라 하중 10배면 정확히 10배다.
+    Ansys 의 압축 전용 반력은 읽지 않는다 — 강체 목표면의 파일럿 반력이 112.6 N(하중
+    100 N)으로, 느슨한 힘 수렴(잔차 3.85 · 기준 4.28)의 평형 오차가 그대로 실린다.
+    """
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    conditions = payload["conditions"]
+    base = conditions["constraints"][0]
+    conditions["constraints"] = [
+        {**base, "name": "바닥 받침", "type": "compression_only"},
+        {
+            **base,
+            "name": "끝 잡기",
+            "type": "displacement",
+            "on": "기둥 끝",
+            "x": 0.0,
+            "y": 0.0,
+        },
+    ]
+    push = conditions["loads"][0]
+    bend = {"type": "moment", "magnitude": 3000.0, "unit": "N*mm", "direction": [0, 1, 0]}
+    conditions["loads"] = [
+        {**push, "name": "누름", "magnitude": 100.0, "direction": [0, 0, -1]},
+        {**push, "name": "굽힘", **bend},
+    ]
+    conditions.setdefault("analysis", {})["type"] = "static"
+    for name, point in (("오른 모서리", [40.0, 40.0, 0.0]), ("왼 모서리", [-40.0, 40.0, 0.0])):
+        select = {"near": point, "what": "vertices", "limit": 1}
+        conditions["named_selections"].append(
+            {"name": name, "entity": "vertex", "select": select}
+        )
+        payload["regions"][name] = [{"point": point, "body": "받침판"}]
+    shutil.copy(SIDE_SHAKE / "points" / "p0001.step", workdir / "input.step")
+    (workdir / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    spec = {
+        "recipe": "static",
+        "solver": "ansys",
+        "material": SPEC["material"],
+        "mesh": {"element_size_mm": 3},
+    }
+    parse_spec(spec)
+    (workdir / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    runner = _executor()
+    for stage in STAGES:
+        runner.run(StageContext(stage=stage, spec=spec, workdir=workdir))
+
+    result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
+    corner = {row["name"]: row["vector"][2] for row in result["probes"]}
+    assert corner["왼 모서리"] == pytest.approx(0.0016107, rel=0.03)
+    assert abs(corner["오른 모서리"]) < 1e-5
+    assert result["max_displacement"] == pytest.approx(0.17066, rel=0.02)
+
+
 def test_같은_형상은_두_번_임포트하지_않는다(workdir: Path) -> None:
     """**형상 캐시** — STEP 임포트가 모델링 시간의 거의 전부다(실측: 임포트 18.9초 · 메시
     1.7초 · 캐시 다시 열기 0.7초).

@@ -288,6 +288,32 @@ def reaction_on(model: Any, node_ids: list[int] | dict[str, list[int]]) -> list[
     ]
 
 
+def foundation_on(model: Any, element_ids: list[int]) -> list[float] | None:
+    """탄성 지지가 몸을 받친 힘 `[Fx, Fy, Fz]` — 그 면 요소(SURF154)의 **요소 절점력 합**.
+
+    Mechanical 은 탄성 지지를 면 요소의 기초 강성(`r,<번호>,,,,<강성>`)으로 건다. 묶인 절점이
+    없어 반력(RF)은 0 이다. 면 요소의 절점력(ENFO — 모델링이 켠다,
+    `mechanical.build._add_static`)이 요소가 몸에 준 힘이라 그 합이 고정 지지의 반력과 같은
+    뜻이다 — 압력 면 요소의 합은 준 하중 그대로 나온다(실측 2026-10-30: 압력 -2,400 N, 바닥
+    고정 2,018.09 + 탄성 지지 381.91 N).
+    DPF 는 이 요소를 메시에 안 실어 절점으로는 못 고르고, 모델링이 덱에서 찾은 번호로 고른다
+    (`mechanical.build.foundation_elements`).
+    """
+    if not element_ids:
+        return None
+    try:
+        import numpy as np
+        from ansys.dpf import core as dpf
+
+        scoping = dpf.Scoping(ids=element_ids, location=dpf.locations.elemental)
+        field = model.results.element_nodal_forces.on_mesh_scoping(scoping).eval()[0]
+        data = np.asarray(field.data, dtype=float).reshape(-1, 3)
+    except Exception:  # pragma: no cover - DPF 없이는 안 돈다
+        logger.warning("탄성 지지의 요소 절점력을 못 읽었습니다", exc_info=True)
+        return None
+    return [significant(float(one)) for one in data.sum(axis=0)]
+
+
 def total_reaction(model: Any) -> list[float] | None:
     """모델 전체의 **반력 합** `[Fx, Fy, Fz]` — 구속이 하나일 때 그 구속이 버틴 힘이다."""
     try:

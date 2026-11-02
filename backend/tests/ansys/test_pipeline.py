@@ -20,6 +20,7 @@ L 브래킷 — 절점 1,976 · 3315.2 Hz. 둘 다 강체 모드 6개.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import time
@@ -1251,3 +1252,55 @@ def test_쉘_브래킷을_중간면과_두께로_푼다(workdir: Path) -> None:
     assert t2["max_displacement"] == pytest.approx(0.3236, rel=0.03)
     assert 3.2 < t2["max_displacement"] / t3["max_displacement"] < 3.7
     assert t2["max_von_mises"] > 60
+
+
+#: 반쪽 둘로 갈린 원통면 · 처음부터 반쪽인 모서리 구멍(CompCore faeede1).
+HALF_HOLES = FIXTURES / "doe" / "조건_반쪽구멍"
+
+
+def test_갈린_원통면과_모서리_반쪽_구멍을_축에서_돌린다_Ansys(workdir: Path) -> None:
+    """원통 지지(접선 자유) · 원격 변위(좌표계 원점, rz 0.5°, 변형체)가 같은 면을 잡는다.
+
+    모서리 쪽은 구속 둘을 모서리 반쪽 구멍으로 옮기고 그 축 (60, 25, 5) 에 좌표계를 세운
+    변형이다(하중 없음) — 그룹 중심 (60, 21.817)이 축 밖이라, 원격점이 좌표계 원점에 서는지
+    가른다(Mechanical 의 자리 칸이 고른 계의 좌표인지도). 축 밖이면 x = y = 0 인 채 돌아 반지름
+    고정과 맞서 응력이 수백 MPa 다(CompCore 판정). CalculiX 와 같은 손셈을 본다
+    (`tests/opensolver`).
+
+    실측(2026-11-01, 2025 R2, 요소 4 mm): 갈린 구멍 0.56631 mm · 7.68 MPa, 모서리 구멍
+    0.681573 mm · 0.0006 MPa · 원격점 절점 (60, 25, 5). 「구멍」 반력 Y 800.97 N 은 원격 변위의
+    몫뿐이다 — 원통 지지의 반력은 읽지 않는다(CalculiX 는 둘을 한 강체 묶음으로 받아 1100 N).
+    """
+    turn = math.radians(0.5)
+    spec = {
+        "recipe": "static",
+        "solver": "ansys",
+        "material": SPEC["material"],
+        "mesh": {"element_size_mm": 4},
+    }
+    parse_spec(spec)
+    runner = _executor()
+    for edge, reach in ((False, 65.0), (True, math.hypot(60.0, 50.0))):
+        work = workdir / ("edge" if edge else "split")
+        work.mkdir()
+        payload = json.loads(
+            (HALF_HOLES / "points" / "p0001.json").read_text(encoding="utf-8")
+        )
+        if edge:
+            frame = {**payload["coordinate_systems"][0], "name": "홈 축"}
+            payload["coordinate_systems"].append({**frame, "origin": [60.0, 25.0, 5.0]})
+            for rule in payload["conditions"]["constraints"]:
+                rule["on"] = "모서리 반쪽 구멍"
+                if "cs" in rule:
+                    rule["cs"] = "홈 축"
+            payload["conditions"]["loads"] = []
+        shutil.copy(HALF_HOLES / "points" / "p0001.step", work / "input.step")
+        (work / "topology.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        for stage in STAGES:
+            runner.run(StageContext(stage=stage, spec=spec, workdir=work))
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        assert result["max_displacement"] == pytest.approx(turn * reach, rel=0.01)
+        assert result["max_von_mises"] < (1.0 if edge else 20.0)

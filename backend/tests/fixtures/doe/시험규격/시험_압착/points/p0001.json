@@ -31,7 +31,7 @@
       {
         "centroid": [
           50.0,
-          -0.0,
+          0.0,
           6.0
         ],
         "area": 720.0,
@@ -46,7 +46,7 @@
       {
         "centroid": [
           -50.0,
-          -0.0,
+          0.0,
           6.0
         ],
         "area": 720.0,
@@ -98,7 +98,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "fc3cd967-e20f-499f-8f18-7b05b1a9eed5",
+      "id": "811443ec-d1ae-4d7c-b84a-afd178d1d4a5",
       "name": "시험_압착",
       "method": "factorial",
       "seed": 1

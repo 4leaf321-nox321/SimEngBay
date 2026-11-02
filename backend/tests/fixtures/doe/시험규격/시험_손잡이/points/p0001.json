@@ -30,7 +30,7 @@
     "시험 고정 자리": [
       {
         "centroid": [
-          -0.0,
+          0.0,
           0.0,
           12.0
         ],
@@ -83,7 +83,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "9862e985-f6f7-4b44-a7db-196b0db1a467",
+      "id": "82e7a122-7256-4e89-9ab1-a07abc55bb79",
       "name": "시험_손잡이",
       "method": "factorial",
       "seed": 1

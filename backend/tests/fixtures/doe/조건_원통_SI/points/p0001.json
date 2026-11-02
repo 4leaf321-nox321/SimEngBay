@@ -40,6 +40,11 @@
           0.0,
           0.0,
           1.0
+        ],
+        "axis_at": [
+          20.0,
+          0.0,
+          5.0
         ]
       }
     ],
@@ -99,7 +104,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "8d743b99-9ddf-4af5-b93f-bc8f2c393a96",
+      "id": "e74aefbf-726f-4f9b-adf0-8951ac35515c",
       "name": "조건_원통_SI",
       "method": "factorial",
       "seed": 1

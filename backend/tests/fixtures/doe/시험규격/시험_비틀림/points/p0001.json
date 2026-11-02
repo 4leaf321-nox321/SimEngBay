@@ -31,7 +31,7 @@
       {
         "centroid": [
           -50.0,
-          -0.0,
+          0.0,
           6.0
         ],
         "area": 720.0,
@@ -46,7 +46,7 @@
       {
         "centroid": [
           50.0,
-          -0.0,
+          0.0,
           6.0
         ],
         "area": 720.0,
@@ -98,7 +98,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "8ef2d723-703f-449e-b868-07edb5d90a05",
+      "id": "4a353711-5fb9-46f3-98d1-a63bbdacb33b",
       "name": "시험_비틀림",
       "method": "factorial",
       "seed": 1

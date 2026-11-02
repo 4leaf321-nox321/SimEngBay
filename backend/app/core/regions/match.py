@@ -4,7 +4,8 @@
 
     { "units": "mm",
       "bodies":  [{ "name", "step_product", "volume", "centroid", "bbox" }],
-      "regions": { "<이름>": [{ "centroid", "area", "normal"? , "radius"?, "axis"? }] },
+      "regions": { "<이름>": [{ "centroid", "area", "normal"? , "radius"?, "axis"?,
+                                 "axis_at"? }] },
       "unresolved": ["<CAD 가 못 푼 이름>"] }
 
 ## 평면과 원통을 다르게 잰다 — **다르게 어긋나기 때문이다**
@@ -19,6 +20,13 @@
 둘 다 남은 면 쪽으로 치우치지만 **치우친 양이 다르다.** 평면에 쓰는 좁은 허용오차(모델 크기의
 0.2%)로 원통을 재면 반쪽 구멍이 통째로 안 잡히고, 반대로 원통 허용오차로 평면을 재면 나란한
 면 둘이 서로 바뀐다. 그래서 **원통은 반지름을 먼저 맞추고 중심은 반지름에 견주어** 본다.
+
+CompCore faeede1(2026-11-01)부터 곡면의 중심도 넓이 무게중심이라 위 어긋남이 0 이 됐다. 그 전에
+내보낸 폴더가 있으므로 원통의 넉넉한 허용오차는 그대로 둔다.
+
+**반지름이 없는 곡면**(원뿔 · 토러스)은 `axis` 로 곡면인 줄 안다(faeede1 부터 원뿔에도
+실린다). 반지름으로 거를 수 없어 평면처럼 중심 · 넓이로 좁게 본다 — 중심이 넓이 무게중심이라
+그럴 수 있다.
 
 ## 못 찾으면 **즉시 실패한다**
 
@@ -126,6 +134,20 @@ def _triple(value: Any) -> tuple[float, float, float] | None:
     return (float(value[0]), float(value[1]), float(value[2]))
 
 
+def axis_point(row: dict[str, Any]) -> list[float] | None:
+    """회전면 지문의 **축 위의 점**(mm) — `axis_at`(CompCore 5ed967f), 없으면 `centroid`.
+
+    `centroid` 는 경계상자 중심이라 통짜 원통면이면 축 위지만, 반쪽으로 갈린 원통면이면 축에서
+    r/2 벗어난다(상용 CAD 의 STEP 이 흔히 그렇게 가른다). 거기를 축으로 삼으면 원통 지지의
+    반경 · 접선이 틀어진다. `axis_at` 이 없는 옛 지문은 `centroid` 로 물러선다.
+    """
+    for key in ("axis_at", "centroid"):
+        value = _triple(row.get(key))
+        if value is not None:
+            return list(value)
+    return None
+
+
 def model_scale(topology: dict[str, Any]) -> float:
     """모델의 크기(경계상자 대각선). 허용오차를 여기에 견준다 — 100mm 부품과 2m 지그에
     같은 mm 값을 쓰면 한쪽은 너무 좁고 한쪽은 너무 넓다."""
@@ -153,6 +175,16 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
     if owner and face.body and face.body != owner:
         return False, distance, f"다른 파트(「{face.body}」)의 면입니다"
 
+    # **축까지 본다**(둘 다 알 때만). 반지름과 중심이 같은데 축이 다른 면은 다른 면이다 —
+    # 구멍 둘이 직각으로 만나는 자리에서 그런 일이 생긴다. 부호는 따지지 않는다(축의 방향은
+    # CAD 와 메시에서 뒤집힐 수 있다).
+    wanted_axis = _triple(wanted.get("axis"))
+    twisted = ""
+    if wanted_axis is not None and face.axis is not None:
+        angle = _angle_degrees(wanted_axis, face.axis)
+        if min(angle, 180 - angle) > NORMAL_TOLERANCE_DEGREES:
+            twisted = f"축이 {angle:.0f}도 틀어져 있습니다"
+
     radius = wanted.get("radius")
     if radius is not None:
         if not face.is_cylinder:
@@ -167,18 +199,13 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
                 distance,
                 f"중심이 {distance:.2f}mm 떨어져 있습니다(한계 {limit:.2f})",
             )
-        # **축까지 본다**(둘 다 알 때만). 반지름과 중심이 같은데 축이 다른 면은 다른 면이다 —
-        # 구멍 둘이 직각으로 만나는 자리에서 그런 일이 생긴다. 부호는 따지지 않는다(축의 방향은
-        # CAD 와 메시에서 뒤집힐 수 있다).
-        wanted_axis = _triple(wanted.get("axis"))
-        if wanted_axis is not None and face.axis is not None:
-            angle = _angle_degrees(wanted_axis, face.axis)
-            if min(angle, 180 - angle) > NORMAL_TOLERANCE_DEGREES:
-                return False, distance, f"축이 {angle:.0f}도 틀어져 있습니다"
-        return True, distance, ""
+        return not twisted, distance, twisted
 
-    if face.is_cylinder:
+    # 축이 있는 지문은 곡면이다(원뿔 · 토러스 — 반지름이 없다).
+    if face.is_cylinder and wanted_axis is None:
         return False, distance, "평면이 아닙니다"
+    if twisted:
+        return False, distance, twisted
     limit = max(PLANE_TOLERANCE_RATIO * scale, PLANE_TOLERANCE_MIN)
     if distance > limit:
         return False, distance, f"중심이 {distance:.2f}mm 떨어져 있습니다(한계 {limit:.2f})"

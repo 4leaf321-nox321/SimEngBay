@@ -984,3 +984,111 @@ def test_볼트_힘은_단면_앞쪽_내력의_합이고_조임량은_기준점�
     # DOE 비교는 끝의 힘으로 견준다.
     found = read_values({"recipe": "static", "units": {}, "bolts": bolts})
     assert found.bolts_n == {"힘": 1012.48, "조임": 1024.0}
+
+
+#: 반쪽 원통면(r=5, 축 z, y ≥ 0) 하나의 지문 — 경계상자 중심은 축에서 r/2 비켜 있다. 닫힌
+#: 원통면이 반쪽 둘로 갈린 STEP 이면 첫 항목이 이 모양이다(CompCore 5ed967f 가 `axis_at` 을
+#: 더했다).
+HALF_HOLE = {"centroid": [0.0, 2.5, 0.0], "radius": 5.0, "axis": [0.0, 0.0, 1.0]}
+
+
+def test_반쪽_원통면의_원통_지지는_축_위의_점으로_좌표계를_세운다() -> None:
+    """`*TRANSFORM, TYPE=C` 는 축 위의 두 점이다. 경계상자 중심을 쓰면 축이 2.5 mm 비켜 서고,
+    거기서 잰 반경 · 접선이 틀어진다. `axis_at` 이 없는 옛 지문은 중심으로 물러선다."""
+    rule = condition_model.Constraint(
+        name="핀", kind="cylindrical", region="구멍", tangential="free"
+    )
+    rows, why, frame = deck._cylindrical(
+        "HOLD0", rule, {1, 2}, {**HALF_HOLE, "axis_at": [0.0, 0.0, 0.0]}
+    )
+    assert why is None
+    assert "0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 1.000000" in rows
+    assert frame == ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    rows, _, _ = deck._cylindrical("HOLD0", rule, {1, 2}, HALF_HOLE)
+    assert "0.000000, 2.500000, 0.000000, 0.000000, 2.500000, 1.000000" in rows
+
+
+def test_반쪽_원통면의_베어링_하중은_축에서_잰_방향으로_나눈다() -> None:
+    """30 · 90 · 150 도의 절점에 +y 로 민다 — 축에서 재면 겹침이 0.5 · 1 · 0.5 다. 비켜 선
+    중심(y=2.5)에서 재면 30 · 150 도 절점이 하중에 수직으로 읽혀 빠진다."""
+    nodes = {
+        1: (5 * math.cos(math.radians(30)), 2.5, 0.0),
+        2: (0.0, 5.0, 0.0),
+        3: (-5 * math.cos(math.radians(30)), 2.5, 0.0),
+    }
+    pin = condition_model.Load(name="핀", kind="bearing", region="구멍", magnitude=100.0)
+    areas = {1: 1.0, 2: 1.0, 3: 1.0}
+    shares, why = deck._bearing_shares(
+        pin, areas, (0.0, 1.0, 0.0), nodes, {"구멍": {**HALF_HOLE, "axis_at": [0, 0, 0]}}
+    )
+    assert why is None
+    assert shares == pytest.approx({1: 0.5, 2: 1.0, 3: 0.5})
+    shares, _ = deck._bearing_shares(pin, areas, (0.0, 1.0, 0.0), nodes, {"구멍": HALF_HOLE})
+    assert set(shares) == {2}
+
+
+def test_원격점은_좌표계_원점에_세울_수_있고_같은_면의_원통_지지는_기준점에_옮긴다() -> None:
+    """`location: cs_origin` — 원격점이 좌표계 원점(선언된 계의 길이)에 선다. 축이 전역과
+    나란한 계는 성분이 전역 성분과 같아 받는다. 원격 변위가 강체로 묶은 면의 원통 지지는 빈
+    집합으로 빠지지 않고 기준점에 걸린다: 반경 · 축 고정이 이동 셋과 기울기 둘, 접선 자유라 축
+    둘레 회전만 남는다(「조건_반쪽구멍」 — 빠지면 판이 축 방향으로 떴다)."""
+    frame = condition_model.Frame(
+        name="구멍 축",
+        origin=(0.005, 0.005, 0.0),
+        x_axis=(1.0, 0.0, 0.0),
+        y_axis=(0.0, 1.0, 0.0),
+        z_axis=(0.0, 0.0, 1.0),
+    )
+    pin = condition_model.Constraint(
+        name="핀", kind="cylindrical", region="끝", tangential="free"
+    )
+    turn = condition_model.Constraint(
+        name="축 돌림",
+        kind="remote_displacement",
+        region="끝",
+        cs="구멍 축",
+        components=(0.0, 0.0, None),
+        rotations=(None, None, 0.5),
+        location="cs_origin",
+    )
+    shape = {"centroid": [5.0, 8.0, 5.0], "radius": 3.0, "axis": [0.0, 0.0, 1.0]}
+    plan = _static(
+        condition_model.Conditions(constraints=[pin, turn], frames=[frame]),
+        held={"끝": {4, 5}},
+        shapes={"끝": {**shape, "axis_at": [5.0, 5.0, 5.0]}},
+        length_mm=1000.0,
+    )
+    assert plan.refused == []
+    assert "6, 5.000000, 5.000000, 0.000000" in plan.text
+    pinned = plan.text.split("*BOUNDARY")[-1].split("*STEP")[0].strip().splitlines()
+    assert pinned == [
+        "6, 1, 1, 0.0",
+        "6, 2, 2, 0.0",
+        "6, 3, 3, 0.0",
+        "7, 1, 1, 0.0",
+        "7, 2, 2, 0.0",
+    ]
+    assert {"cylindrical:끝", "remote_displacement:끝"} <= set(plan.applied)
+
+    # 원격점이 축 밖이면(원점이 축에서 3 mm) 같은 구속이 아니라 까닭을 달아 거절한다.
+    plan = _static(
+        condition_model.Conditions(constraints=[pin, turn], frames=[frame]),
+        held={"끝": {4, 5}},
+        shapes={"끝": {**shape, "axis_at": [5.0, 8.0, 5.0]}},
+        length_mm=1000.0,
+    )
+    assert "원통 축에서 3.000 mm 비켜" in plan.refused[0].why
+    # 축이 돌아간 계는 아직 못 건다.
+    tilted = condition_model.Frame(
+        name="구멍 축",
+        origin=(0.005, 0.005, 0.0),
+        x_axis=(0.0, 1.0, 0.0),
+        y_axis=(-1.0, 0.0, 0.0),
+        z_axis=(0.0, 0.0, 1.0),
+    )
+    plan = _static(
+        condition_model.Conditions(constraints=[turn], frames=[tilted]),
+        held={"끝": {4, 5}},
+        length_mm=1000.0,
+    )
+    assert "축이 전역과 달라" in plan.refused[0].why

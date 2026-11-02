@@ -515,3 +515,20 @@ def test_바디에_건_볼트_예압은_좌표계가_단면이고_바디_그룹�
     assert [one.why for one in refused] == [
         "「볼트」 은 바디(body) 그룹입니다 — 지금은 면 그룹만 걸 수 있습니다"
     ]
+
+
+def test_원격점은_그룹_중심이나_좌표계_원점에_선다() -> None:
+    """`조건_반쪽구멍` — 원격 변위가 좌표계 「구멍 축」 의 원점에 원격점을 세운다(그 원점이
+    갈린 원통면의 `axis_at` 이다). 모르는 자리 · 전역 원점은 까닭을 달아 막는다."""
+    payload = _point("조건_반쪽구멍")
+    found = conditions.read(payload)
+    turn = next(one for one in found.constraints if one.kind == "remote_displacement")
+    assert (turn.location, turn.cs) == ("cs_origin", "구멍 축")
+    assert found.frames[0].origin == (20.0, 0.0, 5.0)
+    assert found.refused == []
+
+    rows = payload["conditions"]["constraints"]
+    rows[1] = {**rows[1], "location": "node"}
+    assert "모르는 원격점 자리" in conditions.read(payload).refused[0].why
+    rows[1] = {**rows[1], "location": "cs_origin", "cs": "global"}
+    assert "좌표계가 있어야" in conditions.read(payload).refused[0].why

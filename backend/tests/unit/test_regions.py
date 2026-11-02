@@ -181,3 +181,25 @@ def test_조립의_지문은_그_파트의_면만_집는다() -> None:
     # 파트를 모르는 면(메시에서 되찾은 CalculiX 의 면)은 자리로만 고른다 — 전과 같다.
     unknown = [FaceRecord(id=3, centroid=(0.0, 0.0, 5.0), area=200.0, radius=3.0)]
     assert match_regions(topology, unknown, wanted_regions=["구멍면"]).faces == {"구멍면": [3]}
+
+
+def test_반지름_없는_곡면은_축으로_곡면인_줄_알고_중심으로_좁게_본다() -> None:
+    """원뿔 · 토러스 지문에는 반지름이 없다. CompCore faeede1 부터 `axis` 가 실리고 중심이 넓이
+    무게중심이라(원뿔대 R10 → 5, 높이 20 은 z -1.111), Mechanical 의 곡면 중심과 그대로 맞는다.
+    축이 없는 옛 지문은 전처럼 평면으로만 짝짓는다."""
+    cone = FaceRecord(
+        id=1, centroid=(0.0, 0.0, -1.111), area=530.0, surface="GeoSurfaceTypeCone"
+    )
+    side = FaceRecord(id=2, centroid=(0.0, 0.0, 5.0), area=530.0, surface="GeoSurfaceTypeCone")
+    wanted = {"centroid": [0.0, 0.0, -1.111], "area": 530.0, "axis": [0.0, 0.0, 1.0]}
+    found = match_regions({"regions": {"원뿔": [wanted]}}, [side, cone])
+    assert found.faces == {"원뿔": [1]}
+    old = {"centroid": [0.0, 0.0, -1.111], "area": 530.0}
+    found = match_regions({"regions": {"원뿔": [old]}}, [cone])
+    assert found.failures[0].reason == "평면이 아닙니다"
+    # 메시에서 되맞춘 축이 있으면 축도 본다.
+    tilted = FaceRecord(
+        id=3, centroid=(0.0, 0.0, -1.111), area=530.0, surface="cone", axis=(1, 0, 0)
+    )
+    found = match_regions({"regions": {"원뿔": [wanted]}}, [tilted])
+    assert found.failures[0].reason == "축이 90도 틀어져 있습니다"

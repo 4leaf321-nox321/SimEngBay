@@ -1,5 +1,5 @@
 {
-  "id": "d27f0009-5c01-43d1-9a6a-0ac832e51ae2",
+  "id": "ca2ef3ce-7856-4ce8-ae37-9b628f314d28",
   "name": "조건_볼트예압_정적",
   "description": "",
   "method": "table",
@@ -589,7 +589,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-dda1a3cd@example.local"
+    "email": "member-ac028c04@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

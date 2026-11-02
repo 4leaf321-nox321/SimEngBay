@@ -315,9 +315,9 @@ def measure(
 def with_geometry(mesh: Mesh, measured: Probe) -> Mesh:
     """메시로 잰 면 · 바디 지문을 **형상으로 잰 값으로** 바꾼다.
 
-    면은 넓이를 늘 바꾸고, 무게중심은 평면만 바꾼다 — 곡면은 CAD 와 같은 정의(경계상자 중심)로
-    맞추고 있고, 반지름 · 축은 메시에서 되맞춘 그대로다(`_classify`). 바디는 부피 · 무게중심을
-    바꾼다. 형상에 없는 번호(그럴 일은 없다)는 메시 값 그대로 둔다.
+    면은 넓이 · 무게중심을 바꾼다 — 곡면도 넓이 무게중심이다(CompCore faeede1 부터 CAD 지문이
+    그렇고, Mechanical 도 그것을 낸다). 반지름 · 축은 메시에서 되맞춘 그대로다(`_classify`).
+    바디는 부피 · 무게중심을 바꾼다. 형상에 없는 번호(그럴 일은 없다)는 메시 값 그대로 둔다.
     """
     areas = {one.index: one for one in measured.surfaces}
     volumes = {one.index: one for one in measured.volumes}
@@ -325,7 +325,7 @@ def with_geometry(mesh: Mesh, measured: Probe) -> Mesh:
         replace(
             face,
             area=areas[face.id].volume,
-            centroid=face.centroid if face.is_cylinder else areas[face.id].centroid,
+            centroid=areas[face.id].centroid,
         )
         if face.id in areas and areas[face.id].volume > 0
         else face
@@ -545,17 +545,11 @@ CYLINDER_SPREAD = 0.05
 
 @dataclass(frozen=True)
 class Shape:
-    """그 면이 무엇인가 — 종류 · 반지름 · 축, 그리고 **CAD 식 중심**.
-
-    CompCore 는 곡면의 중심을 **bbox 중심**으로 보낸다(평면만 면적 중심이다 —
-    `backend/app/core/recipe/topology.py`). 반쪽 원통처럼 잘린 면에서는 그 둘이 다르므로,
-    곡면은 bbox 중심으로 맞춰야 지문이 풀린다.
-    """
+    """그 면이 무엇인가 — 종류 · 반지름 · 축."""
 
     kind: str = ""
     radius: float | None = None
     axis: tuple[float, float, float] | None = None
-    centroid: tuple[float, float, float] | None = None
 
 
 def _classify(
@@ -604,12 +598,11 @@ def _classify(
         if worst <= PLANE_DEGREES:
             return Shape(kind="plane")
 
-    box = _bbox_center(nodes, members)
     # **구가 먼저다** — 구는 법선이 모든 방향을 향하므로 「가장 안 퍼진 축」 이 뜻을 갖지 않고,
     # 원통으로 잘못 읽힐 수 있다. 중심에서의 거리가 고르면 구다.
     ball = _sphere(nodes, members)
     if ball is not None:
-        return Shape(kind="sphere", radius=ball, centroid=box)
+        return Shape(kind="sphere", radius=ball)
 
     # 원통 · 원뿔이면 법선이 **축에 수직**이다 — 그래서 축은 법선들이 가장 안 퍼진 방향이다.
     matrix = [[sum(one[i] * one[j] for one in normals) for j in range(3)] for i in range(3)]
@@ -630,32 +623,18 @@ def _classify(
             kind="cylinder",
             radius=radius,
             axis=(axis[0], axis[1], axis[2]),
-            centroid=box,
         )
     # **원뿔은 축을 따라 반지름이 변한다.** 그 기울기가 뚜렷하고 잔차가 작으면 원뿔이다.
     # 반지름은 적지 않는다 — CAD 가 보내는 원뿔의 `radius` 가 어느 자리의 것인지 계약에 없어서,
     # 맞춰 보는 척하면 **엉뚱한 면에 붙는다.** 종류만 적어 평면 지문이 붙는 것을 막는다.
     if _is_cone(nodes, members, axis):
-        return Shape(kind="cone", axis=(axis[0], axis[1], axis[2]), centroid=box)
+        return Shape(kind="cone", axis=(axis[0], axis[1], axis[2]))
     return Shape()
 
 
 def _angle(first: tuple[float, float, float], second: list[float]) -> float:
     dot = max(-1.0, min(1.0, sum(first[axis] * second[axis] for axis in range(3))))
     return math.degrees(math.acos(dot))
-
-
-def _bbox_center(
-    nodes: dict[int, tuple[float, float, float]], members: set[int]
-) -> tuple[float, float, float] | None:
-    """절점들의 **경계상자 중심** — CAD 가 곡면의 중심으로 쓰는 정의다."""
-    points = [nodes[node] for node in members if node in nodes]
-    if not points:
-        return None
-    return tuple(  # type: ignore[return-value]
-        (min(one[axis] for one in points) + max(one[axis] for one in points)) / 2
-        for axis in range(3)
-    )
 
 
 def _sphere(nodes: dict[int, tuple[float, float, float]], members: set[int]) -> float | None:
@@ -932,8 +911,8 @@ def _faces(
         records.append(
             FaceRecord(
                 id=entity,
-                # 곡면은 **CAD 와 같은 정의**(bbox 중심)로 맞춘다 — 평면은 면적 중심 그대로.
-                centroid=shape.centroid or middle,
+                # 곡면도 **넓이 무게중심**이다 — CAD 지문 · Mechanical 과 같은 정의.
+                centroid=middle,
                 area=area,
                 surface=shape.kind,
                 normal=(

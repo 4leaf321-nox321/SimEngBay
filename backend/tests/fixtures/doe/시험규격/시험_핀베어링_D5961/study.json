@@ -1,5 +1,5 @@
 {
-  "id": "7bd487d7-0b3d-4cb6-8c93-a34b63c8e385",
+  "id": "a451a2ff-f887-4dca-9cf5-8bf781da7dcf",
   "name": "시험_핀베어링_D5961",
   "description": "",
   "method": "factorial",
@@ -374,7 +374,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-8c6774fd@example.local"
+    "email": "member-be8c6117@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import math
 
-from app.core.calculix.mesh import _classify
+from app.core.bodies import BodyRecord
+from app.core.calculix.mesh import Mesh, Probe, _classify, with_geometry
+from app.core.regions import FaceRecord
 
 Point = tuple[float, float, float]
 
@@ -77,9 +79,6 @@ def test_원통은_반지름과_축을_낸다() -> None:
     assert shape.axis is not None
     # 축은 z — 부호는 따지지 않는다(CAD 와 메시에서 뒤집힐 수 있다).
     assert abs(abs(shape.axis[2]) - 1.0) < 0.01
-    # 곡면의 중심은 **bbox 중심**이다(CAD 와 같은 정의 — 반쪽 원통에서 둘이 갈린다).
-    assert shape.centroid is not None
-    assert abs(shape.centroid[2] - 5.0) < 0.01
 
 
 def test_구는_구로_읽는다() -> None:
@@ -129,3 +128,30 @@ def test_원뿔은_종류만_말하고_반지름은_안_적는다() -> None:
 
     assert shape.kind == "cone"
     assert shape.radius is None
+
+
+def test_곡면의_중심도_형상으로_잰_넓이_무게중심이다() -> None:
+    """CompCore faeede1 부터 곡면 지문의 중심이 넓이 무게중심이라(Mechanical 과 같다) 우리도
+    형상으로 잰 값으로 바꾼다 — 반쪽 원통면(r 6)이면 축에서 2r/π = 3.820. 전에는 곡면만
+    경계상자 중심(r/2 = 3.0)을 흉내 냈다."""
+    half = FaceRecord(
+        id=1, centroid=(20.0, 3.7, 5.0), area=187.0, surface="cylinder", radius=6.0
+    )
+    mesh = Mesh(
+        nodes={},
+        solids={},
+        faces=[half],
+        bodies=[],
+        face_nodes={},
+        triangles=[],
+        face_triangles={},
+        face_rings={},
+        second_order=True,
+    )
+    measured = Probe(
+        volumes=[], surfaces=[BodyRecord(index=1, volume=188.5, centroid=(20.0, 3.82, 5.0))]
+    )
+    face = with_geometry(mesh, measured).faces[0]
+    assert face.centroid == (20.0, 3.82, 5.0)
+    assert face.area == 188.5
+    assert face.radius == 6.0

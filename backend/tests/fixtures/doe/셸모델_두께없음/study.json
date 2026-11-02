@@ -1,5 +1,5 @@
 {
-  "id": "88d289e3-ea25-499d-903f-f5a4603aa4cc",
+  "id": "2582d317-73a2-424a-97b6-f3b2d40aa141",
   "name": "셸모델_두께없음",
   "description": "",
   "method": "factorial",
@@ -20,7 +20,7 @@
       {
         "id": "imported",
         "op": "import_step",
-        "file": "44ab1c83-d1b4-4a68-b865-79d9f44482c2",
+        "file": "4acf1b3e-32e9-4fe8-a8e2-94d372218d67",
         "label": "sheet_no_thickness.step"
       }
     ],
@@ -220,7 +220,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-b6eb3d42@example.local"
+    "email": "member-673ba1a0@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

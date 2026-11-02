@@ -73,6 +73,9 @@ _INERT_IN_MODAL = (
     "rotational_velocity",
 )
 
+#: 원격 변위의 원격점 자리 — 그룹 중심 · 좌표계 원점(CompCore 계약, 전역 좌표계면 막는다).
+REMOTE_LOCATIONS = ("centroid", "cs_origin")
+
 #: 파트 거동 · 표현 · 메시 — CompCore `BodySetting` · `BodyMesh` 의 값 그대로.
 BODY_BEHAVIORS = ("deformable", "rigid")
 BODY_REPRESENTATIONS = ("solid", "shell")
@@ -588,19 +591,31 @@ def _constraint(row: dict[str, Any], regions: set[str], made: Conditions) -> Non
         )
         return
 
+    location = str(row.get("location") or "centroid")
+    cs = str(row.get("cs") or "global")
+    if kind == "remote_displacement" and location not in REMOTE_LOCATIONS:
+        made.refused.append(Note(f"구속 「{name}」", f"모르는 원격점 자리입니다: {location}"))
+        return
+    if location == "cs_origin" and cs.lower() in GLOBAL_FRAMES:
+        # 전역 원점은 형상과 상관없는 자리라 거의 늘 실수다 — CompCore 도 저장할 때 막는다.
+        made.refused.append(
+            Note(f"구속 「{name}」", "원격점을 좌표계 원점에 세우려면 좌표계가 있어야 합니다")
+        )
+        return
+
     made.constraints.append(
         Constraint(
             name=name,
             kind=kind,
             region=region,
-            cs=str(row.get("cs") or "global"),
+            cs=cs,
             components=tuple(_number(row.get(axis)) for axis in ("x", "y", "z")),
             rotations=tuple(_number(row.get(axis)) for axis in ("rx", "ry", "rz")),
             radial=_hold(row.get("radial")),
             axial=_hold(row.get("axial")),
             tangential=_hold(row.get("tangential")),
             stiffness=_number(row.get("stiffness")),
-            location=str(row.get("location") or "centroid"),
+            location=location,
             behavior=str(row.get("behavior") or "deformable"),
         )
     )

@@ -1,5 +1,5 @@
 {
-  "id": "24a7722e-b088-49d6-a906-4380c51c9445",
+  "id": "8b3772f2-ed0f-49f3-8f62-314f5a12ef8a",
   "name": "조건_볼트예압_바디",
   "description": "",
   "method": "table",
@@ -607,7 +607,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-ff758fc0@example.local"
+    "email": "member-b87e7f0c@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

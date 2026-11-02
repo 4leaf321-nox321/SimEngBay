@@ -14,6 +14,7 @@ Ansys 시험(`tests/ansys/`)과 다른 점은 **라이선스가 없다는 것**�
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -1199,3 +1200,61 @@ def test_쉘_브래킷의_고유진동수가_솔리드와_맞는다(ready: None,
     for kind in ("shell", "solid"):
         result = json.loads((tmp_path / kind / "result.json").read_text(encoding="utf-8"))
         assert result["parts"] == ["지그블록", "브래킷"], kind
+
+
+#: 반쪽 둘로 갈린 원통면 · 처음부터 반쪽인 모서리 구멍(CompCore faeede1).
+HALF_HOLES = FIXTURES / "doe" / "조건_반쪽구멍"
+#: (20, 0) 둘레 0.5° — 모서리 (80, ±25) 가 축에서 65 mm 라 0.567 mm.
+TURN = math.radians(0.5)
+
+
+def _half_holes(work: Path, *, edge: bool = False) -> None:
+    """「조건_반쪽구멍」 한 점을 풀 폴더. `edge` 면 구속 둘(원통 지지 · 원격 변위)을 모서리
+    반쪽 구멍으로 옮기고 그 축 (60, 25, 5) 에 좌표계를 세운다 — 처음부터 반쪽인 면 하나라 그룹
+    중심 (60, 21.817)이 축 밖이다. 원격점이 좌표계 원점에 서야 판이 그 축을 돈다. 하중은 뺀다 —
+    남기면 판이 그 작은 면에 매달린 외팔보라 축 자리와 상관없는 국부 응력이 난다(166 MPa)."""
+    payload = json.loads((HALF_HOLES / "points" / "p0001.json").read_text(encoding="utf-8"))
+    if edge:
+        frame = {
+            **payload["coordinate_systems"][0],
+            "name": "홈 축",
+            "origin": [60.0, 25.0, 5.0],
+        }
+        payload["coordinate_systems"].append(frame)
+        for rule in payload["conditions"]["constraints"]:
+            rule["on"] = "모서리 반쪽 구멍"
+            if "cs" in rule:
+                rule["cs"] = "홈 축"
+        payload["conditions"]["loads"] = []
+    shutil.copy(HALF_HOLES / "points" / "p0001.step", work / "input.step")
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_갈린_원통면과_모서리_반쪽_구멍을_축에서_돌린다(ready: None, tmp_path: Path) -> None:
+    """원통 지지(접선 자유) · 원격 변위(좌표계 원점, rz 0.5°)가 같은 면을 잡는다. CalculiX 는
+    원격 변위의 면을 강체로 묶으므로 원통 지지를 그 기준점에 옮겨 건다(`deck._on_remote`) —
+    전에는 원통 지지가 빈 집합으로 빠져 판이 축 방향으로 떴다(457만 mm).
+
+    CompCore 손셈: 반력 합 +1100 N(Y), 판이 강체로 0.5° 돌아 가장 먼 모서리가 θ x 거리, 응력은
+    수 MPa. 원격점이 축 밖이면 그 축을 돌아 거리가 달라진다(모서리 구멍: 76.10 대신 78.10 mm).
+    실측(2026-11-01, 요소 4 mm): 갈린 구멍 1100.0 N · 0.5663 mm · 3.67 MPa, 모서리 구멍(하중
+    없음) 0 N · 0.681573 mm(θ x 78.10 — 축 밖이면 0.6641) · 1e-9 MPa."""
+    spec = {key: value for key, value in SPEC.items() if key != "modes"}
+    spec = {**spec, "recipe": "static", "mesh": {"element_size_mm": 4}}
+    for edge, reach, total in ((False, 65.0, 1100.0), (True, math.hypot(60.0, 50.0), 0.0)):
+        work = tmp_path / ("edge" if edge else "split")
+        work.mkdir()
+        _half_holes(work, edge=edge)
+        summary = _run(work, spec)
+        assert (
+            "cylindrical:" + ("모서리 반쪽 구멍" if edge else "구멍")
+            in summary["constrained_regions"]
+        )
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        held = result["reactions"]["모서리 반쪽 구멍" if edge else "구멍"]
+        assert held == pytest.approx([0.0, total, 0.0], abs=0.5)
+        assert result["max_displacement"] == pytest.approx(TURN * reach, rel=0.01)
+        # 하중이 없으면 강체로 돌기만 한다 — 축 밖에서 돌리면 응력이 오른다(Ansys).
+        assert result["max_von_mises"] < (1.0 if edge else 20.0)

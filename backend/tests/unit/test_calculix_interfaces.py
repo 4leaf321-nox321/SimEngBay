@@ -13,7 +13,7 @@ import pytest
 
 from app.core import conditions as condition_model
 from app.core.calculix import deck
-from app.core.calculix.build import _average_force, _open_interfaces, _touching
+from app.core.calculix.build import _average_force, _on_surface, _open_interfaces, _touching
 
 #: 사면체 둘이 z=0 의 면 1-2-3 을 나눠 쓴다 — 위(4)는 「위」, 아래(5)는 「아래」 바디.
 NODES = {
@@ -128,3 +128,13 @@ def test_평균_힘을_주면_비선형_단계마다_그_값으로_판정한다(
         "*STEP, NLGEOM\n*CONTROLS, PARAMETERS=FIELD\n"
         "0.005, 0.01, , 10, 0.02, 1e-5, 1e-3, 1e-8\n*STATIC\n0.1, 1.0"
     ) in plan.text
+
+
+def test_반쪽_원통_접촉면은_축_위의_점에서_반지름을_잰다() -> None:
+    """원통 접촉면의 절점은 축까지의 거리가 반지름인 것이다. 반쪽 원통면의 경계상자 중심은
+    축에서 r/2 비켜 있어, 거기서 재면 면 위의 절점이 하나도 안 잡힌다(`axis_at`)."""
+    shape = {"centroid": [0.0, 2.5, 0.0], "radius": 5.0, "axis": [0.0, 0.0, 1.0]}
+    on = _on_surface({**shape, "axis_at": [0.0, 0.0, 0.0]}, 0.01)
+    assert on((5.0, 0.0, 3.0)) and on((0.0, 5.0, -2.0))
+    assert not on((0.0, 2.5, 0.0))
+    assert not _on_surface(shape, 0.01)((5.0, 0.0, 3.0))

@@ -24,6 +24,7 @@ from app.core import conditions as condition_model
 from app.core import units
 from app.core.harmonic import HarmonicPlan
 from app.core.materials import Material
+from app.core.regions.match import axis_point
 from app.core.statics import Axes, held_axes, held_directions, separate_reactions
 
 logger = logging.getLogger(__name__)
@@ -743,12 +744,12 @@ def _bearing_shares(
     당기는 모델이 되어, 구멍 주변 응력과 변형 모양이 달라진다. 그래서 분담 면적에 **반경 방향과
     하중 방향의 겹침**(cos)을 곱한다 — 고전적인 베어링 분포다.
 
-    축은 CAD 지문의 `axis` 를 쓴다(선언이 정본). 없으면 거절한다 — 짐작해서 반쪽을 고르면
-    그 결과는 오류 없이 그럴듯하게 나온다.
+    축은 CAD 지문의 `axis` 와 그 위의 점(`axis_at`)이다(선언이 정본). 없으면 거절한다 —
+    짐작해서 반쪽을 고르면 그 결과는 오류 없이 그럴듯하게 나온다.
     """
     shape = (shapes or {}).get(load.region) or {}
-    centroid, axis = shape.get("centroid"), shape.get("axis")
-    if nodes is None or not (isinstance(centroid, list) and isinstance(axis, list)):
+    origin, axis = axis_point(shape), shape.get("axis")
+    if nodes is None or not (origin is not None and isinstance(axis, list)):
         return {}, condition_model.Note(
             f"하중 「{load.name}」",
             f"영역 「{load.region}」 에 원통 축이 없습니다 — 베어링 하중은 축이 필요합니다.",
@@ -766,7 +767,7 @@ def _bearing_shares(
         point = nodes.get(node)
         if point is None:
             continue
-        offset = [point[index] - centroid[index] for index in range(3)]
+        offset = [point[index] - origin[index] for index in range(3)]
         along = sum(offset[index] * unit_axis[index] for index in range(3))
         radial = [offset[index] - along * unit_axis[index] for index in range(3)]
         length = math.sqrt(sum(one * one for one in radial))
@@ -874,7 +875,7 @@ def _holds(
 ) -> list[str]:
     """구속 — 레시피가 달라도 같은 부분이다.
 
-    `shapes` 는 영역 이름 → **CAD 가 보낸 지문**이다(원통이면 `axis` · `centroid`). 축은
+    `shapes` 는 영역 이름 → **CAD 가 보낸 지문**이다(원통이면 `axis` · `axis_at`). 축은
     메시에서 되맞출 수도 있지만 **선언이 정본이다** — 그쪽이 사람이 의도한 축이다.
 
     **강체 파트의 면**이면 그 기준점을 묶는다 — 강체가 쥔 절점에 따로 `*BOUNDARY` 를 걸면
@@ -888,7 +889,8 @@ def _holds(
     떨어질 수 있는 간극 요소, 아니면 닿은 채인 스프링이다.
     """
     lines: list[str] = []
-    remote = _remote_points(held_nodes, given, rigid, nodes or {}, centers or {})
+    deferred: list[str] = []
+    remote = _remote_points(held_nodes, given, rigid, nodes or {}, centers or {}, length_mm)
     # 원격점에 묶인 면의 절점도 그 묶음이 쥔다 — 다른 구속을 따로 걸면 두 번 묶인다.
     bound = _bound(rigid) | _bound(list(remote.values()))
     for index, rule in enumerate(given.constraints):
@@ -924,16 +926,15 @@ def _holds(
         )
         if index in remote:
             face = remote[index]
-            if rule.location not in ("", "centroid"):
+            if rule.location not in ("", *condition_model.REMOTE_LOCATIONS):
                 plan.refused.append(
                     condition_model.Note(
                         f"구속 「{rule.name}」({rule.kind})",
-                        f"원격점 자리 「{rule.location}」 는 아직 못 겁니다 — 그룹 중심만 "
-                        "받습니다.",
+                        f"모르는 원격점 자리입니다: {rule.location}",
                     )
                 )
                 continue
-            rows, why = _rigid_hold(index, rule, face, length_mm)
+            rows, why = _rigid_hold(index, rule, face, length_mm, given.frames)
             if why is not None:
                 plan.refused.append(why)
                 continue
@@ -990,7 +991,11 @@ def _holds(
             failed: condition_model.Note | None = None
             for order, owner in enumerate(spread):
                 rows, why = _rigid_hold(
-                    index if len(spread) == 1 else f"{index}R{order}", rule, owner, length_mm
+                    index if len(spread) == 1 else f"{index}R{order}",
+                    rule,
+                    owner,
+                    length_mm,
+                    given.frames,
                 )
                 if why is not None:
                     failed = why
@@ -1033,6 +1038,36 @@ def _holds(
             continue
         members = members - bound
         name = f"HOLD{index}"
+        if not members:
+            # **그 면을 원격 변위가 강체로 다 묶었다** — 빈 집합에 걸면 구속이 조용히 빠지고,
+            # 막을 것을 못 막은 모델이 쓰레기 변위로 끝까지 돈다(2026-11-01 「조건_반쪽구멍」:
+            # 원통 지지가 빠져 판이 축 방향으로 떠 457만 mm). 묶음의 기준점에 옮겨 건다.
+            holder = next(
+                (
+                    (spot, face)
+                    for spot, face in remote.items()
+                    if (held_nodes.get(rule.region) or set()) <= face.nodes
+                ),
+                None,
+            )
+            rows, why = (
+                _on_remote(index, rule, holder[1], given.constraints[holder[0]], shapes)
+                if holder is not None
+                else (
+                    [],
+                    condition_model.Note(
+                        f"구속 「{rule.name}」({rule.kind})",
+                        f"영역 「{rule.region}」 의 절점을 다른 구속이 다 묶었습니다.",
+                    ),
+                )
+            )
+            if why is not None:
+                plan.refused.append(why)
+                continue
+            # 기준점은 그 원격 변위 차례에 세운다 — 덱 끝에 둬야 앞에서 가리키지 않는다.
+            deferred += rows
+            plan.applied.append(f"{rule.kind}:{rule.region}")
+            continue
         if rule.kind == "cylindrical":
             rows, why, frame = _cylindrical(
                 name, rule, members, (shapes or {}).get(rule.region)
@@ -1079,7 +1114,69 @@ def _holds(
         # 없다 — 읽지 않는다.
         _hold_reaction(plan, rule, name, members)
         plan.applied.append(f"{rule.kind}:{rule.region}")
-    return lines
+    return lines + deferred
+
+
+def _on_remote(
+    index: int,
+    rule: condition_model.Constraint,
+    owner: RigidBody,
+    remote: condition_model.Constraint,
+    shapes: dict[str, dict[str, Any]] | None,
+) -> tuple[list[str], condition_model.Note | None]:
+    """원격 변위가 강체로 묶은 면의 다른 구속 → **그 묶음의 기준점 · 회전 절점**에 건다.
+
+    고정 지지는 여섯 자유도를 다 막는다. 원통 지지는 기준점이 **원통 축 위**이고 축이 전역 축과
+    나란할 때만 옮길 수 있다 — 강체 원통면의 반경 고정은 축에 수직인 이동과 기울기를, 축 고정은
+    축 방향 이동과 기울기를, 접선 고정은 축 둘레 회전을 막는다. 기준점이 축 밖이면 같은 구속이
+    아니다(Ansys 는 그 둘이 맞서 응력이 수백 MPa 로 오른다 — CompCore 「조건_반쪽구멍」 판정).
+    """
+    what = f"구속 「{rule.name}」({rule.kind})"
+    held: list[tuple[int, int]] = []
+    if rule.kind == "fixed_support":
+        held = [(node, dof) for node in (owner.ref, owner.rot) for dof in (1, 2, 3)]
+    elif rule.kind == "cylindrical":
+        shape = (shapes or {}).get(rule.region) or {}
+        origin, axis = axis_point(shape), shape.get("axis")
+        if origin is None or not isinstance(axis, list):
+            return [], condition_model.Note(
+                what, f"영역 「{rule.region}」 에 원통 축이 없습니다."
+            )
+        size = math.sqrt(sum(float(one) ** 2 for one in axis)) or 1.0
+        unit = [float(one) / size for one in axis]
+        along = next((at for at in range(3) if abs(abs(unit[at]) - 1.0) < 1e-6), None)
+        offset = [owner.point[at] - origin[at] for at in range(3)]
+        lift = sum(offset[at] * unit[at] for at in range(3))
+        away = math.sqrt(max(sum(one * one for one in offset) - lift * lift, 0.0))
+        if along is None or away > 1e-2:
+            why = (
+                "원통 축이 전역 축과 나란하지 않아"
+                if along is None
+                else (f"원격점이 원통 축에서 {away:.3f} mm 비켜 있어")
+            )
+            return [], condition_model.Note(
+                what,
+                f"원격 변위 「{remote.name}」 가 그 면을 강체로 묶었는데, {why} 원통 지지를 "
+                "그 묶음에 옮겨 걸 수 없습니다 — 원격점을 축 위의 좌표계 원점(`cs_origin`)에 "
+                "두거나 솔버를 ansys 로 바꾸세요.",
+            )
+        across = [dof for dof in (1, 2, 3) if dof != along + 1]
+        tilt = rule.radial == "fixed" or rule.axial == "fixed"
+        held = [(owner.ref, dof) for dof in across if rule.radial == "fixed"]
+        held += [(owner.ref, along + 1)] if rule.axial == "fixed" else []
+        held += [(owner.rot, dof) for dof in across if tilt]
+        held += [(owner.rot, along + 1)] if rule.tangential == "fixed" else []
+        if not held:
+            return [], condition_model.Note(
+                what, "반경 · 접선 · 축이 모두 자유라 구속이 아닙니다."
+            )
+    else:
+        return [], condition_model.Note(
+            what,
+            f"원격 변위 「{remote.name}」 가 그 면을 강체로 묶어 이 구속을 따로 걸 수 "
+            "없습니다 — 솔버를 ansys 로 바꾸세요.",
+        )
+    return ["*BOUNDARY"] + [f"{node}, {dof}, {dof}, 0.0" for node, dof in held], None
 
 
 def _top_node(
@@ -1436,11 +1533,15 @@ def _remote_points(
     rigid: tuple[RigidBody, ...] | list[RigidBody],
     nodes: dict[int, tuple[float, float, float]],
     centers: dict[str, tuple[float, float, float]] | None = None,
+    length_mm: float = 1.0,
 ) -> dict[int, RigidBody]:
     """**변형체 면의 원격 변위** → 구속 번호마다 면을 원격점 하나에 묶는 묶음.
 
-    원격점은 그룹 중심에 둔다 — 회전이 거기를 지나는 축으로 돈다(비틀림 시험이 끝면 중심을
-    축으로 돌린다). **중심은 CAD 가 잰 면적 중심이다**(`centers`, Ansys 의 원격점과 같은
+    `location: cs_origin` 이면 원격점은 그 좌표계의 원점이다(선언된 계의 길이 — `length_mm`).
+    갈린 원통면 그룹이면 좌표계가 축 위(`axis_at`)에 서서, 핀을 축으로 돌리는 구속이 된다.
+
+    그 밖에는 원격점을 그룹 중심에 둔다 — 회전이 거기를 지나는 축으로 돈다(비틀림 시험이 끝면
+    중심을 축으로 돌린다). **중심은 CAD 가 잰 면적 중심이다**(`centers`, Ansys 의 원격점과 같은
     자리). 절점 평균은 메시가 고르지 않은 만큼 비켜나고, 축이 비켜나면 6도 돌릴 때 면이 옆으로
     밀려 옆 반력이 생긴다(실측 2026-10-08 비틀림, 요소 3 mm: 절점 평균 Fy 408 N · 면적 중심
     4 N — 순수 비틀림이라 0 언저리여야 한다). 지문이 없을 때만 절점 평균으로 둔다. 면은 그
@@ -1466,9 +1567,13 @@ def _remote_points(
         if not free:
             continue
         taken |= free
-        point = (centers or {}).get(rule.region) or tuple(
-            sum(nodes[node][axis] for node in free) / len(free) for axis in range(3)
-        )
+        frame = next((one for one in given.frames if one.name == rule.cs), None)
+        if rule.location == "cs_origin" and frame is not None:
+            point = tuple(one * length_mm for one in frame.origin)
+        else:
+            point = (centers or {}).get(rule.region) or tuple(
+                sum(nodes[node][axis] for node in free) / len(free) for axis in range(3)
+            )
         made[index] = RigidBody(
             part=rule.region,
             name=f"REMOTE{len(made) + 1}",
@@ -1485,23 +1590,30 @@ def _rigid_hold(
     rule: condition_model.Constraint,
     owner: RigidBody,
     length_mm: float = 1.0,
+    frames: list[condition_model.Frame] | None = None,
 ) -> tuple[list[str], condition_model.Note | None]:
     """강체 파트 면의 구속 — **기준점 · 회전 절점**에 건다.
 
     고정 지지는 여섯 자유도를 다 막는다. 원격 변위는 성분마다(`None` 자유 · 0 고정 · 그 밖은
     그만큼) — 이동은 기준점, 회전은 회전 절점의 이동 자유도(라디안)다. 그 밖의 구속은 강체 면에
     뜻이 없어 막는다(Ansys 도 같다).
+
+    좌표계는 **축이 전역과 나란할 때만** 받는다 — 원점만 옮긴 계(구멍 축에 세운 계 등)는 성분이
+    전역 성분과 같다. 돌아간 계는 성분마다 자유 · 고정이 섞여 전역으로 풀 수 없다.
     """
     what = f"구속 「{rule.name}」({rule.kind})"
     if rule.kind == "fixed_support":
         moves: tuple[float | None, ...] = (0.0, 0.0, 0.0)
         turns: tuple[float | None, ...] = (0.0, 0.0, 0.0)
     elif rule.kind == "remote_displacement":
-        if rule.cs not in condition_model.GLOBAL_FRAMES:
+        frame = next((one for one in frames or [] if one.name == rule.cs), None)
+        if rule.cs not in condition_model.GLOBAL_FRAMES and not (
+            frame is not None and _aligned(frame)
+        ):
             return [], condition_model.Note(
                 what,
-                f"좌표계 「{rule.cs}」 의 원격 변위는 아직 못 겁니다 — 솔버를 ansys 로 "
-                "바꾸세요.",
+                f"좌표계 「{rule.cs}」 의 축이 전역과 달라 원격 변위를 아직 못 겁니다 — "
+                "솔버를 ansys 로 바꾸세요.",
             )
         moves, turns = rule.components[:3], rule.rotations[:3]
     else:
@@ -1525,6 +1637,12 @@ def _rigid_hold(
     lines = ["*NSET, NSET=" + name, str(owner.ref), "*BOUNDARY"]
     lines += [f"{node}, {dof}, {dof}, {value:.8g}" for node, dof, value in held]
     return lines, None
+
+
+def _aligned(frame: condition_model.Frame) -> bool:
+    """좌표계의 축이 전역 X · Y · Z 와 나란한가(원점만 옮긴 계)."""
+    axes = (frame.x_axis, frame.y_axis, frame.z_axis)
+    return all(abs(axis[index] - 1.0) < 1e-6 for index, axis in enumerate(axes))
 
 
 def _displacement(
@@ -1601,9 +1719,9 @@ def _cylindrical(
     2 가 접선, 3 이 축이다(CalculiX 설명서). 셋 다 자유면 구속이 아니므로 거절한다 — 조용히
     넘기면 그 모델은 떠 있고, 0 Hz 모드가 줄줄이 나온다.
     """
-    centroid = (shape or {}).get("centroid")
+    origin = axis_point(shape or {})
     axis = (shape or {}).get("axis")
-    if not (isinstance(centroid, list) and isinstance(axis, list)):
+    if not (origin is not None and isinstance(axis, list)):
         return (
             [],
             condition_model.Note(
@@ -1626,12 +1744,12 @@ def _cylindrical(
             ),
             None,
         )
-    second = [centroid[index] + axis[index] for index in range(3)]
+    second = [origin[index] + axis[index] for index in range(3)]
     lines = _nset(name, members)
-    frame = ([float(one) for one in centroid], [float(one) for one in axis])
+    frame = (origin, [float(one) for one in axis])
     lines += [
         f"*TRANSFORM, NSET={name}, TYPE=C",
-        ", ".join(f"{one:.6f}" for one in (*centroid, *second)),
+        ", ".join(f"{one:.6f}" for one in (*origin, *second)),
         "*BOUNDARY",
     ]
     # 자유도 번호가 **국부 계의 것**이다: 1 반경 · 2 접선 · 3 축.

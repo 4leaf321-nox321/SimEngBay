@@ -2398,6 +2398,12 @@ def _one_constraint(
                         f"「{constraint.cs}」 가 없습니다",
                     )
                 support.CoordinateSystem = found
+                if kind == "remote_displacement" and constraint.location == "cs_origin":
+                    # 원격점을 그 계의 원점에 세운다 — 자리 칸은 고른 계의 좌표다. 안 적으면
+                    # 그룹 중심이다(반쪽 원통면 하나면 축에서 2r/π 비켜 선다).
+                    quantity = _global("Quantity")
+                    for name in ("XCoordinate", "YCoordinate", "ZCoordinate"):
+                        setattr(support, name, quantity(f"0 [{system.length_label}]"))
             _components(support, constraint, system, rotations=kind == "remote_displacement")
         return support
     except StageFailure:

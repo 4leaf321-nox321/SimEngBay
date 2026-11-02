@@ -32,6 +32,7 @@ from app.core.regions.match import (
     PLANE_TOLERANCE_MIN,
     PLANE_TOLERANCE_RATIO,
     RADIUS_TOLERANCE,
+    axis_point,
     model_scale,
 )
 from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
@@ -1311,9 +1312,10 @@ def _on_surface(shape: dict[str, Any], near: float) -> Any:
             raise StageFailure("internal", "원통 접촉면의 지문에 축이 없습니다.")
         unit = [one / size for one in axis]
         radius = float(shape["radius"])
+        origin = axis_point(shape) or center
 
         def on_cylinder(point: tuple[float, float, float]) -> bool:
-            offset = [point[at] - center[at] for at in range(3)]
+            offset = [point[at] - origin[at] for at in range(3)]
             along = sum(offset[at] * unit[at] for at in range(3))
             away = math.sqrt(max(sum(one * one for one in offset) - along * along, 0.0))
             return abs(away - radius) <= near + 1e-3 * radius
@@ -1598,8 +1600,9 @@ def _cut_bolts(
 ) -> tuple[dict[str, deck_writer.BoltSection | str], Nodes, Solids]:
     """볼트 예압 하중 → **볼트를 가른 단면**(못 세우면 까닭)과 **갈라진 메시**(절점 · 솔리드).
 
-    - **원통면에 건 예압**: 축과 단면 자리는 CAD 가 잰 원통면 지문(`axis` · `centroid`)이다 —
-      원통면의 가운데를 지나 축에 수직인 평면. 그 원통면 절점을 가장 많이 가진 솔리드가 볼트다.
+    - **원통면에 건 예압**: 축과 단면 자리는 CAD 가 잰 원통면 지문(`axis` · `axis_at`)이다 —
+      원통면의 가운데를 지나 축에 수직인 평면. 기준점이 그 축 위에 선다. 그 원통면 절점을 가장
+      많이 가진 솔리드가 볼트다.
     - **바디에 건 예압**(CompCore 2f402f2 — 우리가 고른 (가)): 바디 그룹의 지문은 그 바디의
       `bodies[]` 줄이고, 단면은 **하중의 좌표계**다 — Z 축이 볼트 축, 원점이 단면 자리(Ansys 의
       바디 예압과 같은 뜻). 원점은 선언된 계의 길이로 온다(`length_mm`).
@@ -1643,7 +1646,7 @@ def _cut_bolts(
             if entity is None:
                 out[load.name] = f"원통면 「{load.region}」 을 메시에서 못 찾았습니다."
                 continue
-            point = [float(one) for one in shape["centroid"]]
+            point = axis_point(shape) or [float(one) for one in shape["centroid"]]
             axis = [float(one) for one in shape["axis"]]
         else:
             out[load.name] = (

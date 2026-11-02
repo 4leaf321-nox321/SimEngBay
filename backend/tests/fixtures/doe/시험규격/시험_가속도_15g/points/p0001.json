@@ -30,7 +30,7 @@
     "시험 받침면": [
       {
         "centroid": [
-          -0.0,
+          0.0,
           0.0,
           0.0
         ],
@@ -83,7 +83,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "f9aa3fbd-78db-423d-8041-dfc8d1c96d98",
+      "id": "b72e69ba-1fec-422f-aa5f-93074df2f5f1",
       "name": "시험_가속도_15g",
       "method": "factorial",
       "seed": 1

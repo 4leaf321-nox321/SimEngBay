@@ -1,5 +1,5 @@
 {
-  "id": "0d939072-bfa7-4d32-acd5-a0ab7bb51ae6",
+  "id": "248ca375-fb9b-4b13-bc87-7b256a2382f4",
   "name": "기준정보_태그_적용모델",
   "description": "",
   "method": "factorial",
@@ -463,21 +463,21 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-9e747108@example.local"
+    "email": "member-d0521403@example.local"
   },
   "requested_by": null,
   "cloned_from": null,
   "ontology": {
     "tags": [
       {
-        "object_id": "412f0761-cb20-4a53-9f10-655830230f85",
+        "object_id": "3bcc6e41-6374-4198-9667-1de372e48068",
         "key": null,
         "label": "본딩",
         "type_slug": "cc_tag",
         "type_label": "일반 태그"
       },
       {
-        "object_id": "3d1f44f2-a6a9-40f6-8aec-3954f1263ad5",
+        "object_id": "a9e13622-083d-42fb-9935-96feaaffc005",
         "key": null,
         "label": "강성 검토",
         "type_slug": "test_purpose",
@@ -488,12 +488,12 @@
       {
         "on": {
           "kind": "part",
-          "id": "25c49496-a8f3-49df-9841-88ec8e045fc0",
+          "id": "ad5fbf60-252a-455b-8814-9ccff359adc7",
           "name": "두바디 본딩 조립"
         },
         "relation": "model_parts",
         "relation_label": "적용 모델",
-        "object_id": "d1e220fb-423f-4d93-9876-9a0af310f3a2",
+        "object_id": "eb92d827-0245-4ca7-88fc-e64744aa5321",
         "key": "SM-P500",
         "label": "P5 플립",
         "type_slug": "base_model",

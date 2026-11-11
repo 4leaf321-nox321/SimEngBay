@@ -16,17 +16,23 @@ export async function copyText(text: string): Promise<void> {
       // 아래 폴백으로
     }
   }
+  // 포커스를 옮겨야 선택이 잡히는 브라우저가 있다 — 끝나면 누른 단추로 돌려준다.
+  const before = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const area = document.createElement('textarea')
   area.value = text
   area.setAttribute('readonly', '')
   area.style.position = 'fixed'
+  area.style.top = '0'
   area.style.opacity = '0'
   document.body.appendChild(area)
+  area.focus()
   area.select()
+  area.setSelectionRange(0, text.length)
   try {
     if (!document.execCommand('copy')) throw new Error('copy failed')
   } finally {
     document.body.removeChild(area)
+    before?.focus()
   }
 }
 

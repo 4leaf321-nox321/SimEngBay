@@ -12,6 +12,7 @@ import { workspaceApi } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isManagerOf } from '@/shared/auth/roles'
+import { CopyMailAddresses } from '@/shared/components/CopyMailAddresses'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -42,6 +43,19 @@ export default function MembersPage() {
   const list = useResource(() => workspaceApi.members(slug), [slug])
   const [email, setEmail] = useState('')
   const [error, setError] = useState<ApiError | Error | null>(null)
+  // 메일 주소를 복사할 멤버 — 목록이 다시 와도 남은 멤버만 센다.
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set())
+  const rows = list.data ?? []
+  const chosenRows = rows.filter((one) => chosen.has(one.user_id))
+  const allChosen = rows.length > 0 && chosenRows.length === rows.length
+
+  function toggle(id: string) {
+    setChosen((now) => {
+      const next = new Set(now)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
 
   // **고칠 수 없는 사람에게 단추를 보이지 않는다.** 판정은 서버가 하지만, 눌러
   // 보고 403 을 아는 화면은 "할 수 있는 일" 을 알려 주지 못한다.
@@ -93,63 +107,87 @@ export default function MembersPage() {
           hint="계정을 만들 때 부서를 정하거나, 위에서 아이디로 추가하세요."
         />
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>이름</TableHead>
-              <TableHead>아이디</TableHead>
-              <TableHead>계정 상태</TableHead>
-              <TableHead>역할</TableHead>
-              <TableHead>합류</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(list.data ?? []).map((one) => (
-              <TableRow key={one.user_id}>
-                <TableCell>{one.display_name}</TableCell>
-                <TableCell className="font-mono text-xs">{one.email}</TableCell>
-                <TableCell>
-                  <StatusBadge kind="account" value={one.status} />
-                </TableCell>
-                <TableCell>
-                  {canEdit ? (
-                    <Select
-                      value={one.role}
-                      onValueChange={(role) =>
-                        act(() => workspaceApi.setRole(slug, one.user_id, role))
-                      }
-                    >
-                      <SelectTrigger className="h-8 w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="member">멤버</SelectItem>
-                        <SelectItem value="manager">부서 관리자</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <span className="text-sm">
-                      {one.role === 'manager' ? '부서 관리자' : '멤버'}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell>{shownDate(one.joined_at)}</TableCell>
-                <TableCell className="text-right">
-                  {canEdit && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => act(() => workspaceApi.removeMember(slug, one.user_id))}
-                    >
-                      빼기
-                    </Button>
-                  )}
-                </TableCell>
+        <div className="space-y-3">
+          <CopyMailAddresses ids={chosenRows.map((one) => one.email)} />
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="모든 멤버 고르기"
+                    checked={allChosen}
+                    ref={(box) => {
+                      if (box) box.indeterminate = chosenRows.length > 0 && !allChosen
+                    }}
+                    onChange={() =>
+                      setChosen(allChosen ? new Set() : new Set(rows.map((one) => one.user_id)))
+                    }
+                  />
+                </TableHead>
+                <TableHead>이름</TableHead>
+                <TableHead>아이디</TableHead>
+                <TableHead>계정 상태</TableHead>
+                <TableHead>역할</TableHead>
+                <TableHead>합류</TableHead>
+                <TableHead />
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {rows.map((one) => (
+                <TableRow key={one.user_id}>
+                  <TableCell>
+                    <input
+                      type="checkbox"
+                      aria-label={`${one.display_name} 고르기`}
+                      checked={chosen.has(one.user_id)}
+                      onChange={() => toggle(one.user_id)}
+                    />
+                  </TableCell>
+                  <TableCell>{one.display_name}</TableCell>
+                  <TableCell className="font-mono text-xs">{one.email}</TableCell>
+                  <TableCell>
+                    <StatusBadge kind="account" value={one.status} />
+                  </TableCell>
+                  <TableCell>
+                    {canEdit ? (
+                      <Select
+                        value={one.role}
+                        onValueChange={(role) =>
+                          act(() => workspaceApi.setRole(slug, one.user_id, role))
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="member">멤버</SelectItem>
+                          <SelectItem value="manager">부서 관리자</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span className="text-sm">
+                        {one.role === 'manager' ? '부서 관리자' : '멤버'}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>{shownDate(one.joined_at)}</TableCell>
+                  <TableCell className="text-right">
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => act(() => workspaceApi.removeMember(slug, one.user_id))}
+                      >
+                        빼기
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   )

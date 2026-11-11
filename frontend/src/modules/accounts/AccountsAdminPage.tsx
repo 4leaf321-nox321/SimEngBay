@@ -13,6 +13,7 @@ import type { Account } from '@/modules/accounts/api'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { CopyMailAddresses } from '@/shared/components/CopyMailAddresses'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -49,6 +50,19 @@ export default function AccountsAdminPage() {
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
   const [newWorkspace, setNewWorkspace] = useState('')
+  // 메일 주소를 복사할 계정 — 목록이 다시 와도 남은 계정만 센다.
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set())
+  const rows = list.data ?? []
+  const chosenRows = rows.filter((one) => chosen.has(one.id))
+  const allChosen = rows.length > 0 && chosenRows.length === rows.length
+
+  function toggle(id: string) {
+    setChosen((now) => {
+      const next = new Set(now)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
 
   async function act(run: () => Promise<unknown>) {
     setError(null)
@@ -159,108 +173,132 @@ export default function AccountsAdminPage() {
           hint="설치 스크립트로 만든 관리자 계정만 있는 상태일 수 있습니다."
         />
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>아이디</TableHead>
-              <TableHead>이름</TableHead>
-              <TableHead>상태</TableHead>
-              <TableHead>소속</TableHead>
-              <TableHead>신청/승인</TableHead>
-              <TableHead className="text-right">처리</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(list.data ?? []).map((one) => (
-              <TableRow key={one.id}>
-                <TableCell className="font-mono text-xs">{one.email}</TableCell>
-                <TableCell>
-                  {one.display_name}
-                  {one.is_system_admin && (
-                    <span className="text-muted-foreground ml-2 text-xs">시스템 관리자</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge kind="account" value={one.status} />
-                </TableCell>
-                <TableCell className="text-sm">
-                  {one.memberships.join(', ') ||
-                    one.requested_workspace_slug ||
-                    (one.status === 'pending' ? '희망 부서 없음 — 승인할 때 선택' : '—')}
-                </TableCell>
-                <TableCell className="text-sm">
-                  {shownDate(one.decided_at ?? one.created_at)}
-                </TableCell>
-                <TableCell className="space-x-1 text-right">
-                  {one.status === 'pending' ? (
-                    <>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          if (one.requested_workspace_slug) {
-                            void act(() => accountApi.approve(one.id, {}))
-                            return
-                          }
-                          setApproveTo('')
-                          setApproving(one)
-                        }}
-                      >
-                        승인
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setNote('')
-                          setRejecting({ id: one.id, email: one.email })
-                        }}
-                      >
-                        거절
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          act(async () => {
-                            const body = await accountApi.resetPassword(one.id)
-                            setIssued({ email: one.email, password: body.temporary_password })
-                          })
-                        }
-                      >
-                        비밀번호 초기화
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          act(() => accountApi.setSystemAdmin(one.id, !one.is_system_admin))
-                        }
-                      >
-                        {one.is_system_admin ? '관리자 해제' : '관리자 지정'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          act(() =>
-                            one.status === 'active'
-                              ? accountApi.suspend(one.id)
-                              : accountApi.activate(one.id),
-                          )
-                        }
-                      >
-                        {one.status === 'active' ? '정지' : '활성화'}
-                      </Button>
-                    </>
-                  )}
-                </TableCell>
+        <div className="space-y-3">
+          <CopyMailAddresses ids={chosenRows.map((one) => one.email)} />
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="모든 계정 고르기"
+                    checked={allChosen}
+                    ref={(box) => {
+                      if (box) box.indeterminate = chosenRows.length > 0 && !allChosen
+                    }}
+                    onChange={() =>
+                      setChosen(allChosen ? new Set() : new Set(rows.map((one) => one.id)))
+                    }
+                  />
+                </TableHead>
+                <TableHead>아이디</TableHead>
+                <TableHead>이름</TableHead>
+                <TableHead>상태</TableHead>
+                <TableHead>소속</TableHead>
+                <TableHead>신청/승인</TableHead>
+                <TableHead className="text-right">처리</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {rows.map((one) => (
+                <TableRow key={one.id}>
+                  <TableCell>
+                    <input
+                      type="checkbox"
+                      aria-label={`${one.display_name} 고르기`}
+                      checked={chosen.has(one.id)}
+                      onChange={() => toggle(one.id)}
+                    />
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{one.email}</TableCell>
+                  <TableCell>
+                    {one.display_name}
+                    {one.is_system_admin && (
+                      <span className="text-muted-foreground ml-2 text-xs">시스템 관리자</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge kind="account" value={one.status} />
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {one.memberships.join(', ') ||
+                      one.requested_workspace_slug ||
+                      (one.status === 'pending' ? '희망 부서 없음 — 승인할 때 선택' : '—')}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {shownDate(one.decided_at ?? one.created_at)}
+                  </TableCell>
+                  <TableCell className="space-x-1 text-right">
+                    {one.status === 'pending' ? (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (one.requested_workspace_slug) {
+                              void act(() => accountApi.approve(one.id, {}))
+                              return
+                            }
+                            setApproveTo('')
+                            setApproving(one)
+                          }}
+                        >
+                          승인
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setNote('')
+                            setRejecting({ id: one.id, email: one.email })
+                          }}
+                        >
+                          거절
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            act(async () => {
+                              const body = await accountApi.resetPassword(one.id)
+                              setIssued({ email: one.email, password: body.temporary_password })
+                            })
+                          }
+                        >
+                          비밀번호 초기화
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            act(() => accountApi.setSystemAdmin(one.id, !one.is_system_admin))
+                          }
+                        >
+                          {one.is_system_admin ? '관리자 해제' : '관리자 지정'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            act(() =>
+                              one.status === 'active'
+                                ? accountApi.suspend(one.id)
+                                : accountApi.activate(one.id),
+                            )
+                          }
+                        >
+                          {one.status === 'active' ? '정지' : '활성화'}
+                        </Button>
+                      </>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
 
       {/* **사유를 반드시 받는다.** 메일이 없어 통보가 앱 안에서만 되므로, 안 적으면

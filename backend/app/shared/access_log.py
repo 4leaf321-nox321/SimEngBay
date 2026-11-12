@@ -95,6 +95,13 @@ class AccessLogMiddleware:
             return
 
         path = str(scope.get("path", ""))
+        # **접두어를 떼고 본다** — 접두어 설치(운영 `/simengbay`)에서는 바깥의
+        # `PrefixMiddleware` 가 경로에 접두어를 붙여 넘긴다. `/api/` 로 시작하는지만 보던
+        # 동안 그런 설치에서는 로그인 · 고치기 · 게이트웨이 위임이 한 줄도 안 남았다
+        # (StandardPlatform 2026-10-08 과 같다).
+        root = str(scope.get("root_path") or "")
+        if root and (path == root or path.startswith(root + "/")):
+            path = path[len(root) :] or "/"
         method = str(scope.get("method", ""))
         status_holder = {"status": 0}
 

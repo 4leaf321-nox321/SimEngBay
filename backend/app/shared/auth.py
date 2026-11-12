@@ -39,6 +39,29 @@ def _bearer(request: Request) -> str | None:
     return header[7:].strip() or None
 
 
+def scope_path(request: Request) -> str:
+    """범위 표와 견줄 경로 — **접두어를 뺀다.**
+
+    ⚠️ 이것이 없어서 접두어 설치(운영 `/simengbay`)에서는 **어떤 범위를 켜도 모든 쓰기가
+       막혔다** — `simulations:write` 토큰의 `doe/import` · 작업 제출 · 재시도, 게이트웨이 위임
+       토큰의 쓰기가 다 「이 경로를 고칠 수 없습니다」(AUTH 105)였다(2026-11-12 운영 —
+       StandardPlatform 은 2026-09-30 에 같은 것을 고쳤다). 경로에는 접두어가 붙어
+       있고(앞의 nginx 가 떼고 넘겨도 `PrefixMiddleware` 가 다시 붙인다), 범위 표는 `/api/…`
+       라 앞머리가 맞을 수 없어 「모르는 경로」 로 막혔다.
+
+    ASGI 의 `root_path` 가 그 접두어다 — 라우팅도 같은 값을 떼고 길을 찾는다.
+
+    **`request.url.path` 가 아니라 `scope["path"]` 다** — 라우팅이 보는 바로 그 값. `url` 은
+    디코딩된 경로로 주소를 다시 지어 쪼개므로 `%3F`(?) · `%23`(#) 에서 잘려, 범위는 잘린
+    앞쪽을 보고 라우팅은 다른 곳으로 갈 수 있다(StandardPlatform 실측, 2026-10-08).
+    """
+    path = str(request.scope.get("path") or "/")
+    root = str(request.scope.get("root_path") or "")
+    if root and (path == root or path.startswith(root + "/")):
+        return path[len(root) :] or "/"
+    return path
+
+
 def _enforce_token_scope(request: Request, token_scopes: list[str], path: str) -> None:
     """기계 자격의 쓰기를 범위로 막는다.
 
@@ -92,7 +115,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
             # 적는다. 통로는 서버가 정한다(머리의 X-Client 는 믿지 않는다).
             set_actor_client(delegation.CLIENT)
             request.scope[ACTION_SCOPE_KEY] = GATEWAY_API
-        _enforce_token_scope(request, list(pat.scopes or []), request.url.path)
+        _enforce_token_scope(request, list(pat.scopes or []), scope_path(request))
         # 한 요청이 **범위 둘**을 요구할 때(정의가 든 묶음) 라우트가 더 물을 수 있게 남긴다.
         # 사람 세션에는 없다 — 범위는 기계 자격에만 있는 개념이다.
         request.state.token_scopes = list(pat.scopes or [])

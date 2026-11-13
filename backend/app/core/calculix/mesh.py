@@ -74,6 +74,9 @@ class Mesh:
     second_order: bool
     #: 쉘 면(중간면의 기하 면 번호) → [(요소 번호, 절점들)]. 삼각형 — 2차면 6절점(`S6`).
     shells: dict[int, list[tuple[int, list[int]]]] = field(default_factory=dict)
+    #: 메시를 고친 것 — 곡률 크기로 다시 만들었다 · 뒤집힌 2차 요소를 폈다. 사람에게 그대로
+    #: 간다.
+    repairs: tuple[str, ...] = ()
 
     @property
     def element_count(self) -> int:
@@ -88,6 +91,14 @@ PROBE_MARK = "SEB_VOLUME"
 SURFACE_MARK = "SEB_SURFACE"
 #: 메시가 쓰는 형상의 면 하나 — 넓이 · 무게중심(`measure`).
 FACE_MARK = "SEB_FACE"
+#: 부피 하나의 상자 — 겹칠 수 있는 바디 쌍을 고른다(`probe_volumes`).
+BOX_MARK = "SEB_BOX"
+#: 두 부피가 겹친 곳 — 부피 · 무게중심(`overlaps`).
+OVERLAP_MARK = "SEB_OVERLAP"
+
+#: 메시가 안 서면 곡률 크기를 켜고 다시 만든다 — 원 하나를 이만큼으로 나눈다(`build_mesh`).
+#: 6 이 Ansys 의 기본 곡률 포착(약 70도, 원 하나에 다섯 남짓)과 비슷하다. 그래도 안 서면 12.
+CURVATURE_TRIES = (6, 12)
 
 
 @dataclass(frozen=True)
@@ -96,6 +107,8 @@ class Probe:
 
     volumes: list[BodyRecord]
     surfaces: list[BodyRecord] = field(default_factory=list)
+    #: 부피 번호 → 상자(xmin, ymin, zmin, xmax, ymax, zmax).
+    boxes: dict[int, tuple[float, ...]] = field(default_factory=dict)
 
 
 def probe_volumes(
@@ -106,9 +119,10 @@ def probe_volumes(
     timeout_seconds: int = 300,
     shell_step: Path | None = None,
     sheets: bool = False,
+    tolerance: float = 0.0,
 ) -> Probe:
-    """메시 없이 **gmsh 부피 번호마다 부피 · 무게중심**(mm)을 잰다 — 파트와 짝짓는 데 쓴다.
-    중간면이 있으면 **면 번호마다 넓이 · 무게중심**도 잰다(쉘 파트에 나눠 준다).
+    """메시 없이 **gmsh 부피 번호마다 부피 · 무게중심 · 상자**(mm)를 잰다 — 파트와 짝짓는 데
+    쓴다. 중간면이 있으면 **면 번호마다 넓이 · 무게중심**도 잰다(쉘 파트에 나눠 준다).
 
     `build_mesh` 와 **같은 머리**(형상 읽기 · 쪼개기)를 지나야 번호가 같다.
     """
@@ -117,13 +131,16 @@ def probe_volumes(
         "\n".join(
             [
                 # 쪼개기 없이 잰다 — 지우기는 쪼개기 전에 하므로 그때의 번호가 필요하다.
-                *_head_lines(step, False, shell_step, sheets=sheets),
+                *_head_lines(step, False, shell_step, sheets=sheets, tolerance=tolerance),
                 "vols() = Volume{:};",
                 "For i In {0:#vols()-1}",
                 "  m = Mass Volume{vols(i)};",
                 "  c() = CenterOfMass Volume{vols(i)};",
                 f'  Printf("{PROBE_MARK} %g %.12g %.12g %.12g %.12g", vols(i), m, c(0), c(1), '
                 "c(2));",
+                "  b() = BoundingBox Volume{vols(i)};",
+                f'  Printf("{BOX_MARK} %g %.12g %.12g %.12g %.12g %.12g %.12g", vols(i), '
+                "b(0), b(1), b(2), b(3), b(4), b(5));",
                 "EndFor",
                 *(
                     [
@@ -156,7 +173,24 @@ def probe_volumes(
     if not found and not surfaces:
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
         raise StageFailure("mesh_failed", f"gmsh 가 형상의 부피를 읽지 못했습니다:\n{tail}")
-    return Probe(volumes=found, surfaces=surfaces)
+    return Probe(volumes=found, surfaces=surfaces, boxes=parse_boxes(done.stdout or ""))
+
+
+def parse_boxes(text: str) -> dict[int, tuple[float, ...]]:
+    """`SEB_BOX 번호 xmin ymin zmin xmax ymax zmax` 줄들 → 부피 번호 → 상자."""
+    found: dict[int, tuple[float, ...]] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if BOX_MARK not in parts:
+            continue
+        values = parts[parts.index(BOX_MARK) + 1 :]
+        if len(values) < 7:
+            continue
+        try:
+            found[int(float(values[0]))] = tuple(float(one) for one in values[1:7])
+        except ValueError:
+            continue
+    return found
 
 
 def parse_probe(text: str, *, mark: str = PROBE_MARK) -> list[BodyRecord]:
@@ -193,6 +227,7 @@ def build_mesh(
     shell_step: Path | None = None,
     shell_sizes: dict[int, float] | None = None,
     sheets: bool = False,
+    tolerance: float = 0.0,
 ) -> Mesh:
     """gmsh 를 불러 메시를 만들고 읽는다. `.geo` 와 `.msh` 가 작업 폴더에 남는다.
 
@@ -201,42 +236,78 @@ def build_mesh(
     빠르다): 힌트는 영역 **이름**으로 오고, 그 이름을 면 번호로 바꾸려면 면 지문이 필요한데
     그 지문이 메시에서 나온다(닭과 달걀). 그 순서는 `build.py` 가 쥔다.
 
-    `removed` 는 **해석에서 뺄 부피 번호**, `volume_sizes` 는 **부피 번호 → 파트 요소
-    크기(mm)** 다 — 둘 다 `probe_volumes` 로 파트와 짝지은 번호다.
+    `removed` 는 **해석에서 뺄 부피 번호**다 — `probe_volumes` 로 파트와 짝지은(쪼개기 전)
+    번호다. `volume_sizes` 는 **부피 번호 → 파트 요소 크기(mm)** 인데, 쪼개기 **뒤의** 번호다
+    (`build._sizes_after_fragment` — 겹친 바디는 쪼개며 번호가 밀린다).
+
+    **요소 크기가 작은 곡면보다 크면 부피 메시가 안 선다**(R60 원통에 R4 구멍, 크기 15 —
+    「No elements in volume」, 2026-11-13). 그때는 곡률 크기를 켜고 다시 만든다
+    (`CURVATURE_TRIES`) — 처음부터 켜지 않는 것은 서는 모델의 메시 밀도와 결과를 바꾸지
+    않으려고다.
     """
     geo = workdir / ("surface.geo" if surface_only else "model.geo")
     msh = workdir / ("surface.msh" if surface_only else "model.msh")
-    geo.write_text(
-        _geo(
-            step,
-            element_size_mm,
-            second_order,
-            local_sizes or {},
-            fragment,
-            removed=removed,
-            volume_sizes=volume_sizes or {},
-            shell_step=shell_step,
-            shell_sizes=shell_sizes or {},
-            sheets=sheets,
-        ),
-        encoding="utf-8",
-    )
-    done = tools.run(
-        tools.gmsh_bin(),
-        [str(geo), "-2" if surface_only else "-3", "-o", str(msh), "-nopopup", "-v", "2"],
-        cwd=workdir,
-        timeout_seconds=timeout_seconds,
-        what="gmsh",
-    )
-    if not msh.is_file():
+    shell_surfaces = frozenset(shell_sizes or {}) if shell_step is not None else frozenset()
+    repairs: list[str] = []
+    failure: StageFailure | None = None
+    mesh: Mesh | None = None
+    for curvature in (0, *CURVATURE_TRIES):
+        msh.unlink(missing_ok=True)
+        geo.write_text(
+            _geo(
+                step,
+                element_size_mm,
+                second_order,
+                local_sizes or {},
+                fragment,
+                removed=removed,
+                volume_sizes=volume_sizes or {},
+                shell_step=shell_step,
+                shell_sizes=shell_sizes or {},
+                sheets=sheets,
+                tolerance=tolerance,
+                curvature=curvature,
+            ),
+            encoding="utf-8",
+        )
+        done = tools.run(
+            tools.gmsh_bin(),
+            [str(geo), "-2" if surface_only else "-3", "-o", str(msh), "-nopopup", "-v", "2"],
+            cwd=workdir,
+            timeout_seconds=timeout_seconds,
+            what="gmsh",
+        )
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
-        raise StageFailure("mesh_failed", f"gmsh 가 메시를 못 만들었습니다:\n{tail}")
-    # 1차 통과는 **면만** 만든다 — 사면체가 없는 것이 정상이다.
-    mesh = read_mesh(
-        msh,
-        require_solid=not surface_only,
-        shell_surfaces=frozenset(shell_sizes or {}) if shell_step is not None else frozenset(),
-    )
+        if not msh.is_file():
+            failure = StageFailure("mesh_failed", f"gmsh 가 메시를 못 만들었습니다:\n{tail}")
+            continue
+        try:
+            # 1차 통과는 **면만** 만든다 — 사면체가 없는 것이 정상이다.
+            mesh = read_mesh(
+                msh,
+                require_solid=not surface_only,
+                shell_surfaces=shell_surfaces,
+                straighten=not surface_only,
+            )
+        except StageFailure as caught:
+            failure = StageFailure(caught.code, f"{caught.message}\n{tail}")
+            continue
+        if curvature:
+            repairs.append(
+                f"요소 크기({element_size_mm:g} mm)로는 부피 메시가 안 서서 곡률 크기(원 "
+                f"하나를 {curvature}개로)를 켜고 다시 만들었습니다 — 작은 곡면 · 구멍 "
+                "둘레가 전역 크기보다 촘촘합니다."
+            )
+        break
+    if mesh is None:
+        raise StageFailure(
+            failure.code if failure else "mesh_failed",
+            f"요소 크기({element_size_mm:g} mm)로 메시를 만들지 못했습니다 — 곡률 크기를 켜고 "
+            "다시 해도 안 됐습니다. 요소 크기를 줄이거나 형상의 작은 면 · 틈을 보세요.\n"
+            f"{failure.message if failure else ''}",
+        )
+    if repairs:
+        mesh = replace(mesh, repairs=(*repairs, *mesh.repairs))
     try:
         measured = measure(
             step,
@@ -245,6 +316,7 @@ def build_mesh(
             removed=removed,
             shell_step=shell_step,
             sheets=sheets,
+            tolerance=tolerance,
             timeout_seconds=min(timeout_seconds, 300),
         )
     except (StageFailure, OSError):
@@ -265,6 +337,7 @@ def measure(
     shell_step: Path | None = None,
     sheets: bool = False,
     timeout_seconds: int = 300,
+    tolerance: float = 0.0,
 ) -> Probe:
     """**형상에서** 면마다 넓이 · 무게중심, 부피마다 부피 · 무게중심(mm)을 잰다.
 
@@ -280,7 +353,9 @@ def measure(
     geo.write_text(
         "\n".join(
             [
-                *_head_lines(step, fragment, shell_step, removed, sheets=sheets),
+                *_head_lines(
+                    step, fragment, shell_step, removed, sheets=sheets, tolerance=tolerance
+                ),
                 "faces() = Surface{:};",
                 "For i In {0:#faces()-1}",
                 "  a = Mass Surface{faces(i)};",
@@ -340,6 +415,160 @@ def with_geometry(mesh: Mesh, measured: Probe) -> Mesh:
     return replace(mesh, faces=faces, bodies=bodies)
 
 
+def overlaps(
+    step: Path,
+    workdir: Path,
+    pairs: list[tuple[int, int]],
+    *,
+    removed: frozenset[int] = frozenset(),
+    shell_step: Path | None = None,
+    sheets: bool = False,
+    tolerance: float = 0.0,
+    timeout_seconds: int = 300,
+) -> dict[tuple[int, int], BodyRecord]:
+    """**쪼개기 전** 두 부피가 겹친 곳 — 쌍마다 부피 · 무게중심(mm). 안 겹치면 빠진다.
+
+    상자가 겹치는 쌍만 묻는다(맞닿기만 한 쌍은 부피 0 이라 빠진다). 쪼갠 뒤 조각을 원래 바디와
+    짝짓는 데 쓴다(`fragment_owners`).
+    """
+    lines = [
+        *_head_lines(step, False, shell_step, removed, sheets=sheets, tolerance=tolerance)
+    ]
+    for first, second in pairs:
+        lines += [
+            f"r() = BooleanIntersection{{ Volume{{{first}}}; }}{{ Volume{{{second}}}; }};",
+            "If (#r() > 0)",
+            "  mm = 0; mx = 0; my = 0; mz = 0;",
+            "  For j In {0:#r()-1}",
+            "    m = Mass Volume{r(j)};",
+            "    c() = CenterOfMass Volume{r(j)};",
+            "    mm += m; mx += m * c(0); my += m * c(1); mz += m * c(2);",
+            "  EndFor",
+            "  If (mm > 0)",
+            f'    Printf("{OVERLAP_MARK} {first} {second} %.12g %.12g %.12g %.12g", mm, '
+            "mx / mm, my / mm, mz / mm);",
+            "  EndIf",
+            "  Recursive Delete { Volume{r()}; }",
+            "EndIf",
+        ]
+    geo = workdir / "overlap.geo"
+    geo.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    done = tools.run(
+        tools.gmsh_bin(),
+        [str(geo), "-0", "-o", str(workdir / "overlap.geo_unrolled"), "-nopopup", "-v", "3"],
+        cwd=workdir,
+        timeout_seconds=timeout_seconds,
+        what="gmsh",
+    )
+    found: dict[tuple[int, int], BodyRecord] = {}
+    for line in (done.stdout or "").splitlines():
+        parts = line.split()
+        if OVERLAP_MARK not in parts:
+            continue
+        values = parts[parts.index(OVERLAP_MARK) + 1 :]
+        try:
+            first, second = int(values[0]), int(values[1])
+            volume, x, y, z = (float(one) for one in values[2:6])
+        except (ValueError, IndexError):
+            continue
+        found[(first, second)] = BodyRecord(index=0, volume=volume, centroid=(x, y, z))
+    return found
+
+
+def boxes_meet(
+    first: tuple[float, ...], second: tuple[float, ...], margin: float = 0.0
+) -> bool:
+    """두 상자가 (여유만큼 넓혀) 겹치나."""
+    return all(
+        first[axis] - margin <= second[axis + 3] and second[axis] - margin <= first[axis + 3]
+        for axis in range(3)
+    )
+
+
+def _same_body(
+    one: BodyRecord, other: BodyRecord | tuple[float, tuple[float, float, float]]
+) -> bool:
+    """부피 · 무게중심이 같은가 — 허용오차로 맞춘 자리만큼은 흔들려도 같다고 본다."""
+    volume, centroid = (
+        (other.volume, other.centroid) if isinstance(other, BodyRecord) else other
+    )
+    scale = max(abs(volume), abs(one.volume), 1e-12)
+    reach = max(scale ** (1 / 3), 1e-6)
+    return (
+        abs(one.volume - volume) <= 1e-3 * scale
+        and math.dist(one.centroid, centroid) <= 1e-3 * reach
+    )
+
+
+def fragment_owners(
+    before: list[BodyRecord],
+    after: list[BodyRecord],
+    met: dict[tuple[int, int], BodyRecord] | None = None,
+    boxes: dict[int, tuple[float, ...]] | None = None,
+) -> tuple[dict[int, frozenset[int]], list[int]]:
+    """쪼갠 뒤 부피 번호 → **그 조각이 속한 원래 부피 번호들**(겹친 조각은 둘). 못 맞춘
+    조각도 준다.
+
+    ⚠️ 쪼개기 전 번호를 쪼갠 뒤에도 쓰던 때, 0.01 mm 겹친 블록에 준 2 mm 가 겹친 조각(세 번째
+       부피)에 붙고 블록은 3.69 mm 가 됐다(운영 보고, 2026-11-13). 쪼개기는 겹친 곳을 따로 떼어
+       번호를 민다.
+
+    겹침이 없으면 조각과 바디가 하나씩 같다(부피 · 무게중심). 있으면 질량 성질로 셈한다 — 겹친
+    곳(`met`, 쌍마다)은 그대로 조각이고, 바디에서 겹친 곳을 뺀 나머지는 부피 `V - Σv`, 무게중심
+    `(V·c - Σv·c_o) / (V - Σv)` 의 조각이다. 셋이 함께 겹치거나 나머지가 둘로 갈리면 안
+    맞는다 — 그 조각은 무게중심이 상자 안에 드는 바디로, 그것도 없으면 못 맞춘 채 돌려준다.
+    """
+    owners: dict[int, frozenset[int]] = {}
+    left = list(after)
+    for piece in after:
+        same = [body for body in before if _same_body(piece, body)]
+        if len(same) == 1:
+            owners[piece.index] = frozenset({same[0].index})
+            left.remove(piece)
+    if not left:
+        return owners, []
+
+    expected: list[tuple[frozenset[int], float, tuple[float, float, float]]] = []
+    for (first, second), shared in (met or {}).items():
+        expected.append((frozenset({first, second}), shared.volume, shared.centroid))
+    for body in before:
+        taken = [shared for pair, shared in (met or {}).items() if body.index in pair]
+        if not taken:
+            continue
+        volume = body.volume - sum(one.volume for one in taken)
+        if volume <= 1e-9 * body.volume:
+            continue
+        centroid = tuple(
+            (
+                body.volume * body.centroid[axis]
+                - sum(o.volume * o.centroid[axis] for o in taken)
+            )
+            / volume
+            for axis in range(3)
+        )
+        expected.append((frozenset({body.index}), volume, centroid))  # type: ignore[arg-type]
+
+    unmatched: list[int] = []
+    for piece in left:
+        hits = [
+            owner
+            for owner, volume, centroid in expected
+            if _same_body(piece, (volume, centroid))
+        ]
+        if len(hits) != 1:
+            point = (*piece.centroid, *piece.centroid)
+            hits = [
+                frozenset({body.index})
+                for body in before
+                if body.index in (boxes or {}) and boxes_meet((boxes or {})[body.index], point)
+            ]
+        if len(hits) == 1:
+            owners[piece.index] = hits[0]
+        else:
+            unmatched.append(piece.index)
+    return owners, unmatched
+
+
 def _head_lines(
     step: Path,
     fragment: bool,
@@ -347,9 +576,16 @@ def _head_lines(
     removed: frozenset[int] = frozenset(),
     *,
     sheets: bool = False,
+    tolerance: float = 0.0,
 ) -> list[str]:
     """형상 읽기 · 지우기 · 쪼개기 — **부피 · 면 번호가 여기서 정해진다**(모든 통과가 같이
     지난다).
+
+    **허용오차(`tolerance`, mm)는 형상을 읽기 전에 준다**(`Geometry.ToleranceBoolean`).
+    0.01 mm 겹친 블록은 두께 0.01 조각 부피와 「ill-shaped tets」 를, 0.005 mm 뜬 블록은 공유
+    절점 0개(떠 있는 블록)를 냈다 — 0.02 를 주면 둘 다 꼭 맞닿은 것과 같다(부피 2 · 공유
+    절점 144, 2026-11-13).
+    끼워 맞춤 틈새까지 닫을 수 있으므로 작게 둔다(`build._boolean_tolerance`).
 
     중간면(쉘)은 **먼저** 읽는다 — 그래야 그 면 번호가 형상 쪽 지우기 · 쪼개기에 흔들리지
     않는다. 중간면은 솔리드와 쪼개지 않는다 — 두께의 절반만큼 떨어져 있어 닿지 않고, 잇는 것은
@@ -357,11 +593,13 @@ def _head_lines(
 
     **뺄 부피(해석 제외 · 쉘 파트의 솔리드)는 쪼개기 전에 지운다.** 쪼갠 뒤에 지우면 이웃 면에
     맞닿았던 자국이 남아 면이 둘로 갈라지고, 그 면을 가리키는 조건이 「중심이 떨어져 있다」 로
-    멈춘다(실측 2026-10-04: 쉘 브래킷을 지운 강체 블록의 윗면). 쪼개기는 부피 번호를 바꾸지
-    않으므로(실측) 쪼개기 없이 잰 번호(`probe_volumes`)로 지우고 크기를 준다.
+    멈춘다(실측 2026-10-04: 쉘 브래킷을 지운 강체 블록의 윗면). 그래서 쪼개기 없이 잰
+    번호(`probe_volumes`)로 지운다. **크기는 쪼갠 뒤 번호로 준다** — 맞닿기만 하면 쪼개기가
+    번호를 안 바꾸지만, 겹친 바디는 겹친 곳이 따로 떨어져 번호가 밀린다(`fragment_owners`).
     """
     return [
         'SetFactory("OpenCASCADE");',
+        *([f"Geometry.ToleranceBoolean = {tolerance:g};"] if tolerance > 0 else []),
         *([f'sh() = ShapeFromFile("{shell_step.resolve()}");'] if shell_step else []),
         # **절대경로로 적는다** — gmsh 는 `.geo` 가 있는 폴더를 기준으로 찾으므로
         # 상대경로를 주면 「파일을 못 읽는다」 로 끝난다(실측 2026-10-03).
@@ -405,6 +643,8 @@ def _geo(
     shell_step: Path | None = None,
     shell_sizes: dict[int, float] | None = None,
     sheets: bool = False,
+    tolerance: float = 0.0,
+    curvature: int = 0,
 ) -> str:
     """gmsh 에게 줄 쪽지. **`.geo` 파일이 경계다** — 파이썬 API 를 안 쓴다(`tools` 참고)."""
     parts = dict(volume_sizes or {})
@@ -416,10 +656,18 @@ def _geo(
     return (
         "\n".join(
             [
-                *_head_lines(step, fragment, shell_step, removed, sheets=sheets),
+                *_head_lines(
+                    step, fragment, shell_step, removed, sheets=sheets, tolerance=tolerance
+                ),
                 f"Mesh.MeshSizeMax = {largest:g};",
                 f"Mesh.MeshSizeMin = {smallest / 4:g};",
                 f"Mesh.ElementOrder = {2 if second_order else 1};",
+                # **휜 2차 요소를 바로잡는다.** 중간 절점을 곡면에 올리면 작은 구멍 둘레의
+                # 요소가 뒤집힌다 — R60 원통의 R4 구멍, 크기 8 에서 det J ≤ 0 이 27개였고
+                # ccx 가 멈췄다. 켜면 0 개(요소 수는 그대로, 2026-11-13). 남는 것은 읽을 때
+                # 편다(`_straighten`).
+                *(["Mesh.HighOrderOptimize = 2;"] if second_order else []),
+                *([f"Mesh.MeshSizeFromCurvature = {curvature};"] if curvature else []),
                 # 물리 그룹을 안 만들어도 전부 저장한다 — 우리는 기하 번호로 찾는다.
                 "Mesh.SaveAll = 1;",
                 "Mesh.MshFileVersion = 2.2;",
@@ -451,12 +699,19 @@ def _geo(
 
 
 def read_mesh(
-    msh: Path, *, require_solid: bool = True, shell_surfaces: frozenset[int] = frozenset()
+    msh: Path,
+    *,
+    require_solid: bool = True,
+    shell_surfaces: frozenset[int] = frozenset(),
+    straighten: bool = False,
 ) -> Mesh:
     """`.msh`(2.2) 를 읽어 절점 · 요소 · 면 지문 · 바디 지문을 낸다.
 
     `require_solid` 를 끄면 **면만 있는 메시**도 받는다(면 번호를 알아내는 1차 통과). 켜 두면
     사면체가 없을 때 멈춘다 — 그대로 풀면 요소가 없는 해석이 끝까지 돌 수 있다.
+
+    `straighten` 을 켜면 **뒤집힌 2차 사면체의 중간 절점을 곧게 편다**(`_straighten`) — 면
+    지문을 재기 전에 해야 지문이 덱과 같은 절점을 본다.
     """
     nodes, elements = _parse(msh)
     if not nodes:
@@ -471,6 +726,16 @@ def read_mesh(
         number += 1
         second_order = second_order or kind == 11
         solids[entity].append((number, [ids[one] for one in order]))
+    repairs: list[str] = []
+    if straighten and second_order:
+        nodes, fixed, everything = _straighten(nodes, solids)
+        if everything:
+            repairs.append(
+                "뒤집힌 2차 요소가 남아 모든 요소의 중간 절점을 곧게 폈습니다(곡면을 모서리로 "
+                "근사합니다)."
+            )
+        elif fixed:
+            repairs.append(f"뒤집힌 2차 요소 {fixed}개의 중간 절점을 곧게 폈습니다.")
     # **쉘 요소** — 중간면의 삼각형. 번호는 사면체 다음부터(덱에서 한 줄 번호다).
     shells: dict[int, list[tuple[int, list[int]]]] = defaultdict(list)
     for kind, entity, ids in elements:
@@ -499,7 +764,126 @@ def read_mesh(
         face_rings=rings,
         second_order=second_order,
         shells=dict(shells),
+        repairs=tuple(repairs),
     )
+
+
+#: C3D10 의 네 적분점(자연 좌표) — **ccx 가 야코비안을 재는 자리**다. 여기서 0 이하이면 ccx 가
+#: 「nonpositive jacobian」 으로 멈춘다. 꼭짓점도 함께 본다(응력을 그리로 옮기므로).
+_TET10_POINTS = (
+    (0.1381966011250105, 0.1381966011250105, 0.1381966011250105),
+    (0.5854101966249685, 0.1381966011250105, 0.1381966011250105),
+    (0.1381966011250105, 0.5854101966249685, 0.1381966011250105),
+    (0.1381966011250105, 0.1381966011250105, 0.5854101966249685),
+    (0.0, 0.0, 0.0),
+    (1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (0.0, 0.0, 1.0),
+)
+#: C3D10 중간 절점 5 ~ 10 이 놓인 모서리(꼭짓점 번호).
+_TET10_EDGES = ((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3))
+
+
+def _tet10_gradients(r: float, s: float, t: float) -> tuple[tuple[float, ...], ...]:
+    """C3D10 형상함수의 (r, s, t) 미분 — 꼭짓점 넷, 그다음 중간 절점 여섯."""
+    lam = (1 - r - s - t, r, s, t)
+    grad = ((-1.0, -1.0, -1.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    corners = tuple(
+        tuple((4 * lam[i] - 1) * grad[i][axis] for axis in range(3)) for i in range(4)
+    )
+    middles = tuple(
+        tuple(4 * (grad[i][axis] * lam[j] + lam[i] * grad[j][axis]) for axis in range(3))
+        for i, j in _TET10_EDGES
+    )
+    return corners + middles
+
+
+_TET10_TABLES = tuple(_tet10_gradients(*point) for point in _TET10_POINTS)
+
+
+def _inverted(points: list[tuple[float, float, float]]) -> bool:
+    """2차 사면체가 뒤집혔나 — 적분점 · 꼭짓점 중 한 곳이라도 det J ≤ 0 이면."""
+    for table in _TET10_TABLES:
+        j = [
+            [sum(points[n][a] * table[n][b] for n in range(10)) for b in range(3)]
+            for a in range(3)
+        ]
+        det = (
+            j[0][0] * (j[1][1] * j[2][2] - j[1][2] * j[2][1])
+            - j[0][1] * (j[1][0] * j[2][2] - j[1][2] * j[2][0])
+            + j[0][2] * (j[1][0] * j[2][1] - j[1][1] * j[2][0])
+        )
+        if det <= 0:
+            return True
+    return False
+
+
+def _curved(points: list[tuple[float, float, float]]) -> bool:
+    """중간 절점이 모서리 가운데서 비켜 있나 — 곧은 2차 사면체는 1차와 같아 안 뒤집힌다."""
+    for offset, (a, b) in enumerate(_TET10_EDGES):
+        middle = points[4 + offset]
+        reach = math.dist(points[a], points[b])
+        if math.dist(middle, tuple((points[a][x] + points[b][x]) / 2 for x in range(3))) > (
+            1e-9 * reach
+        ):
+            return True
+    return False
+
+
+def _straighten(
+    nodes: dict[int, tuple[float, float, float]],
+    solids: dict[int, list[tuple[int, list[int]]]],
+    rounds: int = 3,
+) -> tuple[dict[int, tuple[float, float, float]], int, bool]:
+    """뒤집힌 2차 사면체의 **중간 절점을 모서리 가운데로** 옮긴다 — (절점, 편 요소 수,
+    다 폈나).
+
+    곧은 2차 사면체는 꼭짓점 사면체(gmsh 가 양으로 만든다)와 야코비안이 같아 안 뒤집힌다. 중간
+    절점은 이웃 요소와 함께 쓰므로 편 뒤 이웃을 다시 본다. 몇 번 돌아도 남으면 **모든** 요소를
+    편다(`Mesh.SecondOrderLinear` 와 같다 — 곡면을 모서리로 근사한다). 휜 요소만 재므로
+    빠르다(휜 요소 2만 개에 1.3초).
+    """
+    moved = dict(nodes)
+    rows = [ids for entries in solids.values() for _, ids in entries if len(ids) == 10]
+
+    def points(ids: list[int]) -> list[tuple[float, float, float]]:
+        return [moved[one] for one in ids]
+
+    bad = [ids for ids in rows if _curved(points(ids)) and _inverted(points(ids))]
+    fixed: set[int] = set()
+    touching: dict[int, list[list[int]]] | None = None
+    for _ in range(rounds):
+        if not bad:
+            return moved, len(fixed), False
+        fixed.update(id(ids) for ids in bad)
+        changed: set[int] = set()
+        for ids in bad:
+            for offset, (a, b) in enumerate(_TET10_EDGES):
+                first, second = moved[ids[a]], moved[ids[b]]
+                moved[ids[4 + offset]] = (
+                    (first[0] + second[0]) / 2,
+                    (first[1] + second[1]) / 2,
+                    (first[2] + second[2]) / 2,
+                )
+                changed.add(ids[4 + offset])
+        if touching is None:
+            touching = defaultdict(list)
+            for ids in rows:
+                for node in ids[4:]:
+                    touching[node].append(ids)
+        around = {id(ids): ids for node in changed for ids in touching.get(node, [])}
+        bad = [ids for ids in around.values() if _inverted(points(ids))]
+    if not bad:
+        return moved, len(fixed), False
+    for ids in rows:
+        for offset, (a, b) in enumerate(_TET10_EDGES):
+            first, second = moved[ids[a]], moved[ids[b]]
+            moved[ids[4 + offset]] = (
+                (first[0] + second[0]) / 2,
+                (first[1] + second[1]) / 2,
+                (first[2] + second[2]) / 2,
+            )
+    return moved, len(fixed), True
 
 
 def _parse(

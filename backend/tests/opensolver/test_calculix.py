@@ -1258,3 +1258,36 @@ def test_갈린_원통면과_모서리_반쪽_구멍을_축에서_돌린다(read
         assert result["max_displacement"] == pytest.approx(TURN * reach, rel=0.01)
         # 하중이 없으면 강체로 돌기만 한다 — 축 밖에서 돌리면 응력이 오른다(Ansys).
         assert result["max_von_mises"] < (1.0 if edge else 20.0)
+
+
+def test_반복_솔버는_구속_방정식이_없는_정적만_같게_푼다(
+    ready: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """메모리가 모자랄 것 같으면 정적을 반복 솔버(`ITERATIVE CHOLESKY`)로 푼다
+    (`solve.plan_solver`). 고정 지지 · 압력뿐인 「조건_두바디_두재료」 는 직접 솔버와 같은 답을
+    낸다(반력 2,400 N). **구속 방정식이 든 덱은 반복 솔버를 시켜도 직접 솔버로 남는다** —
+    「조건_반쪽구멍」(강체 묶음 · 국부 좌표계)을 반복 솔버로 풀면 수렴했다고 끝나는데 반력이
+    [553, 983, -307] N 이었다(직접 솔버 [0, 1100, 0], 2026-11-13)."""
+    monkeypatch.setenv("CALCULIX_LINEAR_SOLVER", "iterative")
+    static = {key: value for key, value in SPEC.items() if key != "modes"}
+    static["recipe"] = "static"
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    two_bodies = FIXTURES / "doe" / "조건_두바디_두재료"
+    shutil.copy(two_bodies / "points" / "p0001.step", plain / "input.step")
+    shutil.copy(two_bodies / "points" / "p0001.json", plain / "topology.json")
+    summary = _run(plain, {**static, "mesh": {"element_size_mm": 8}})
+    assert summary["linear_solver"] == "iterative"
+    assert "ITERATIVE CHOLESKY" in (plain / "model.inp").read_text(encoding="utf-8")
+    result = json.loads((plain / "result.json").read_text(encoding="utf-8"))
+    assert result["reactions"]["바닥"] == pytest.approx([0.0, 0.0, 2400.0], abs=0.5)
+    assert result["max_displacement"] == pytest.approx(5.204e-4, rel=0.05)
+
+    held = tmp_path / "held"
+    held.mkdir()
+    _half_holes(held)
+    summary = _run(held, {**static, "mesh": {"element_size_mm": 4}})
+    assert summary["linear_solver"] == "spooles"
+    result = json.loads((held / "result.json").read_text(encoding="utf-8"))
+    assert result["reactions"]["구멍"] == pytest.approx([0.0, 1100.0, 0.0], abs=0.5)

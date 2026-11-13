@@ -115,14 +115,26 @@ const SUMMARY_LABELS: Record<string, string> = {
   recipe: '해석 종류',
   mode_shapes: '모드 그림',
   tidied_bytes: '정리한 중간 파일',
+  // **메시를 사람이 준 것과 다르게 만든 것** — 겹침 · 틈을 붙였다 · 곡률 크기로 다시 만들었다 ·
+  // 뒤집힌 2차 요소를 폈다(CalculiX 경로). 안 보이면 「요소 수가 왜 늘었지」 를 설명할 길이 없다.
+  boolean_tolerance_mm: '형상 맞춤 허용오차',
+  mesh_repairs: '메시 보정',
+  // 정적은 메모리가 모자랄 것 같으면 반복 솔버로 푼다 — 무엇으로 풀었고 얼마를 어림했나.
+  linear_solver: '선형 솔버',
+  memory_estimate_mb: '메모리 어림',
+  memory_warning: '메모리 경고',
+  solver_retry: '다시 푼 까닭',
 }
 
 /** 한 줄을 다 쓰고 접어 보이는 요약 칸 — 바디마다 늘어서는 값. */
-const WIDE_SUMMARY = new Set(['mass_by_body'])
+const WIDE_SUMMARY = new Set(['mass_by_body', 'mesh_repairs', 'memory_warning', 'solver_retry'])
 
 /** 요약 묶음 — 메시 · 모델 · 해석 · 실행. 모르는 열쇠는 「기타」 로. */
 const SUMMARY_GROUPS: [string, string[]][] = [
-  ['메시', ['nodes', 'elements', 'element_size_mm', 'mesh_order', 'contact_pairs']],
+  [
+    '메시',
+    ['nodes', 'elements', 'element_size_mm', 'mesh_order', 'contact_pairs', 'boolean_tolerance_mm', 'mesh_repairs'],
+  ],
   [
     '모델',
     [
@@ -163,7 +175,18 @@ const SUMMARY_GROUPS: [string, string[]][] = [
   ],
   [
     '실행',
-    ['solver', 'ansys_version', 'solver_unit_system', 'solver_seconds', 'shape_reused', 'tidied_bytes'],
+    [
+      'solver',
+      'ansys_version',
+      'solver_unit_system',
+      'linear_solver',
+      'solver_seconds',
+      'memory_estimate_mb',
+      'memory_warning',
+      'solver_retry',
+      'shape_reused',
+      'tidied_bytes',
+    ],
   ],
 ]
 
@@ -191,7 +214,10 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'solver') return SOLVER_LABELS[String(value)] ?? String(value)
   if (key === 'damping_ratio' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
-  if (key === 'element_size_mm' && typeof value === 'number') return `${value} mm`
+  if ((key === 'element_size_mm' || key === 'boolean_tolerance_mm') && typeof value === 'number')
+    return `${value} mm`
+  if (key === 'linear_solver') return value === 'iterative' ? '반복 (ITERATIVE CHOLESKY)' : '직접 (SPOOLES)'
+  if (key === 'memory_estimate_mb' && typeof value === 'number') return `${value.toLocaleString()} MB`
   if (key === 'contact_pairs') return value ? '있음' : '없음'
   if (key === 'large_deflection') return value ? '켬 (기하 비선형)' : '끔'
   if (key === 'shape_reused') return value ? '다시 씀' : '새로 만듦'

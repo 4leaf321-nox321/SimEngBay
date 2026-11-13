@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,17 @@ from app.core import materials as material_model
 from app.core import units
 from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import deck as deck_writer
-from app.core.calculix.mesh import build_mesh, element_faces, probe_volumes, tributary_areas
+from app.core.calculix.mesh import (
+    Probe,
+    boxes_meet,
+    build_mesh,
+    element_faces,
+    fragment_owners,
+    measure,
+    overlaps,
+    probe_volumes,
+    tributary_areas,
+)
 from app.core.harmonic import harmonic_plan
 from app.core.regions import match_regions
 from app.core.regions.match import (
@@ -55,6 +66,11 @@ MESH_LIMIT = (
 )
 TOPOLOGY_NAME = "topology.json"
 DECK_NAME = "model.inp"
+#: 형상 맞춤 허용오차 = 모델 대각선 x 이 비(`_boolean_tolerance`). 판 100 x 100 x 20 + 블록이면
+#: 0.015 mm — 0.01 mm 겹침 · 0.005 mm 틈을 닫고, 끼워 맞춤 틈새(0.1 mm 남짓)는 남긴다.
+BOOLEAN_TOLERANCE_RATIO = 1e-4
+#: 허용오차를 서버가 정할 때(mm). 0 이면 끈다 — 비우면 위의 비로 셈한다.
+BOOLEAN_TOLERANCE_ENV = "CALCULIX_BOOLEAN_TOLERANCE_MM"
 
 
 def build(
@@ -115,6 +131,10 @@ def build(
     # **큰 변형은 사람이 적었으면 그것, 비웠으면 CAD 가 적은 것이다**(`statics.static_plan`).
     statics = static_plan(spec, given) if isinstance(spec, StaticSpec) else None
     large = statics.large_deflection if statics is not None else False
+    fragment = not use_contact or opened
+    # **형상 맞춤 허용오차** — 겹침 · 틈이 허용오차 안이면 쪼개기가 맞닿은 것으로 붙인다. 모든
+    # 통과가 같은 값을 써야 번호가 같다(`mesh._head_lines`).
+    tolerance = _boolean_tolerance(topology)
     # 1차 통과도 **같은 쪼개기 규칙**을 따른다 — 안 그러면 접합면 두 장이 하나로 합쳐져서 한쪽
     # 면에 걸린 메시 힌트가 「법선이 180도 틀어져 있다」 로 빠진다(실측 2026-10-03).
     # **파트별 설정** — 뺄 파트 · 파트 크기는 메시 전에 정한다(`mesh.py` 머리말).
@@ -126,9 +146,12 @@ def build(
         system,
         second_order,
         timeout_seconds,
-        fragment=not use_contact or opened,
+        fragment=fragment,
         size=size,
+        tolerance=tolerance,
     )
+    if fragment:
+        layout.notes += _contact_notes(topology, tolerance)
     local = _local_sizes(
         step,
         workdir,
@@ -138,8 +161,9 @@ def build(
         size,
         second_order,
         timeout_seconds,
-        fragment=not use_contact or opened,
+        fragment=fragment,
         layout=layout,
+        tolerance=tolerance,
     )
     mesh = build_mesh(
         step,
@@ -148,12 +172,13 @@ def build(
         second_order=second_order,
         timeout_seconds=timeout_seconds,
         local_sizes=local,
-        fragment=not use_contact or opened,
+        fragment=fragment,
         removed=layout.removed,
         volume_sizes=layout.sizes,
         shell_step=layout.shell_step,
         shell_sizes=layout.shell_sizes,
         sheets=layout.sheets,
+        tolerance=tolerance,
     )
     logger.info(
         "메시: 절점 %s · 요소 %s · 면 %s · 솔리드 %s",
@@ -437,6 +462,17 @@ def build(
             "mesh_order": "quadratic" if mesh.second_order else "linear",
             # **실제로 쓴 전역 요소 크기**(mm) — 메시 수렴 점검이 이것을 기준으로 줄인다.
             "element_size_mm": round(size, 6),
+            # 형상 맞춤 허용오차(mm) — 이보다 작은 겹침 · 틈은 맞닿은 것으로 붙였다.
+            **(
+                {"boolean_tolerance_mm": round(tolerance, 6)} if tolerance and fragment else {}
+            ),
+            # **메시를 고친 것** — 곡률 크기로 다시 만들었다 · 뒤집힌 2차 요소를 폈다 · 겹침 ·
+            # 틈을 붙였다. 사람이 준 크기 · 형상과 다르게 풀었으므로 숨기지 않는다.
+            **(
+                {"mesh_repairs": " · ".join([*layout.notes, *mesh.repairs])}
+                if layout.notes or mesh.repairs
+                else {}
+            ),
             # 비선형 접촉을 넣었나 — **그때 접촉 강성이 요소 크기를 따라간다**
             # (`contact_stiffness`). 크기를 바꾸면 메시와 접촉 모델이 함께 바뀐다 — 수렴
             # 점검이 그 사실을 적는다.
@@ -665,6 +701,8 @@ class _Layout:
     """본 형상에 시트 파트가 있다 — 메시 전에 지운다(`mesh._head_lines`)."""
     skipped: list[condition_model.Note] = field(default_factory=list)
     """CalculiX 가 못 따르는 파트 메시 칸 — 바람이므로 멈추지 않고 적는다."""
+    notes: list[str] = field(default_factory=list)
+    """메시를 사람이 준 것과 다르게 만든 것(겹침 · 틈 · 크기를 못 준 조각) — 결과에 적는다."""
 
 
 def _layout(
@@ -678,6 +716,7 @@ def _layout(
     *,
     fragment: bool = True,
     size: float = 5.0,
+    tolerance: float = 0.0,
 ) -> _Layout:
     """파트별 설정 → **뺄 부피 · 부피별 크기**. 메시 전에 gmsh 로 부피를 재서 짝짓는다
     (`probe_volumes`). 뺄 것도 크기도 없으면 그 통과를 건너뛴다."""
@@ -736,6 +775,7 @@ def _layout(
         timeout_seconds=min(timeout_seconds, 300),
         shell_step=made.shell_step,
         sheets=made.sheets,
+        tolerance=tolerance,
     )
     records = probe.volumes
     placed, failures = place_settings(wanted, topology, records)
@@ -756,6 +796,10 @@ def _layout(
         for tag, one in placed.items()
         if not (one.suppressed or one.shell) and one.element_size is not None
     }
+    if made.sizes and fragment:
+        made.sizes = _sizes_after_fragment(
+            step, workdir, made, probe, tolerance, min(timeout_seconds, 300)
+        )
     if shells:
         made.shell_parts = _shell_parts(probe.surfaces, topology, set(shells))
         wished = {
@@ -769,6 +813,135 @@ def _layout(
     for tag, one in sorted(placed.items()):
         logger.info("파트 %s → 부피 %s · %s", one.name, tag, one.describe())
     return made
+
+
+def _boolean_tolerance(topology: dict[str, Any]) -> float:
+    """형상 맞춤 허용오차(mm) — 서버가 정했으면 그것, 아니면 **모델 대각선 x 1e-4**.
+
+    ⚠️ 없던 동안 0.01 mm 겹친 블록은 두께 0.01 조각 부피와 「ill-shaped tets」 를, 0.005 mm 뜬
+       블록은 공유 절점 0개(떠 있는 블록)를 냈다(운영 보고, 2026-11-13). CAD 의 메이트가 남긴
+       이 정도 어긋남은 흔하다.
+
+    끼워 맞춤 틈새(의도한 틈)까지 닫을 수 있으므로 **모델 크기에 비례한 작은 값**이다. 모델
+    크기는 점 파일 바디의 상자(mm)로 잰다 — 점 파일이 없으면 끈다(전과 같다).
+    """
+    given = os.environ.get(BOOLEAN_TOLERANCE_ENV, "").strip()
+    if given:
+        try:
+            return max(0.0, float(given))
+        except ValueError:
+            logger.warning(
+                "%s 가 수가 아닙니다(%r) — 모델 크기로 셈합니다", BOOLEAN_TOLERANCE_ENV, given
+            )
+    boxes = [
+        one["bbox"]
+        for one in (topology or {}).get("bodies") or []
+        if isinstance(one.get("bbox"), list) and len(one["bbox"]) == 2
+    ]
+    if not boxes:
+        return 0.0
+    low = [min(float(box[0][axis]) for box in boxes) for axis in range(3)]
+    high = [max(float(box[1][axis]) for box in boxes) for axis in range(3)]
+    return math.dist(low, high) * BOOLEAN_TOLERANCE_RATIO
+
+
+def _contact_notes(topology: dict[str, Any], tolerance: float) -> list[str]:
+    """CompCore 가 잰 바디끼리 겹침 · 틈(`quality.contacts`, f9a073c) — 허용오차로 붙였나
+    남겼나.
+
+    붙인 것은 형상과 다르게 푼 것이고, 남긴 겹침은 따로 떨어진 조각 · 남긴 틈은 떨어진 바디가
+    된다 — 어느 쪽이든 사람이 알아야 한다. 자리(`at`)는 말이 길어 바디 이름 · 크기만 적는다.
+    """
+    rows = ((topology or {}).get("quality") or {}).get("contacts") or []
+    kinds = {"overlap": "겹침", "gap": "틈"}
+    closed: list[str] = []
+    kept: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            size = float(row.get("size"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        shown = (
+            f"「{row.get('a')}」 · 「{row.get('b')}」 "
+            f"{kinds.get(str(row.get('kind')), '어긋남')} {size:g} mm"
+        )
+        (closed if size <= tolerance else kept).append(shown)
+    notes: list[str] = []
+    if closed:
+        notes.append(
+            f"바디 사이 {', '.join(closed)} 는 형상 맞춤 허용오차({tolerance:g} mm) 안이라 "
+            "맞닿은 것으로 붙여 메시했습니다."
+        )
+    if kept:
+        notes.append(
+            f"바디 사이 {', '.join(kept)} 는 허용오차({tolerance:g} mm)보다 커서 그대로 "
+            "둡니다 — "
+            "겹침은 따로 떨어진 조각, 틈은 떨어진 바디로 메시됩니다. 서버의 "
+            f"{BOOLEAN_TOLERANCE_ENV} 로 허용오차를 넓힐 수 있습니다."
+        )
+    return notes
+
+
+def _sizes_after_fragment(
+    step: Path,
+    workdir: Path,
+    made: _Layout,
+    probe: Probe,
+    tolerance: float,
+    timeout_seconds: int,
+) -> dict[int, float]:
+    """쪼개기 전 번호의 파트 크기 → **쪼갠 뒤 번호의 크기**(`mesh.fragment_owners`).
+
+    겹친 조각은 두 바디의 것이라 작은 크기를 준다(맞닿은 점에서 작은 쪽이 이기는 것과 같다).
+    겹침이 없으면 번호가 그대로라 한 번 재고 끝난다.
+    """
+    after = measure(
+        step,
+        workdir,
+        fragment=True,
+        removed=made.removed,
+        shell_step=made.shell_step,
+        sheets=made.sheets,
+        tolerance=tolerance,
+        timeout_seconds=timeout_seconds,
+    ).volumes
+    before = [one for one in probe.volumes if one.index not in made.removed]
+    owners, unmatched = fragment_owners(before, after, boxes=probe.boxes)
+    if unmatched:
+        tags = sorted(one.index for one in before)
+        pairs = [
+            (first, second)
+            for at, first in enumerate(tags)
+            for second in tags[at + 1 :]
+            if first in probe.boxes
+            and second in probe.boxes
+            and boxes_meet(probe.boxes[first], probe.boxes[second], tolerance)
+        ]
+        met = overlaps(
+            step,
+            workdir,
+            pairs,
+            removed=made.removed,
+            shell_step=made.shell_step,
+            sheets=made.sheets,
+            tolerance=tolerance,
+            timeout_seconds=timeout_seconds,
+        )
+        owners, unmatched = fragment_owners(before, after, met, probe.boxes)
+        logger.info("쪼개며 겹친 곳 %s — 조각의 주인 %s", sorted(met), owners)
+    sizes = {
+        piece: min(made.sizes[one] for one in owner if one in made.sizes)
+        for piece, owner in owners.items()
+        if owner & made.sizes.keys()
+    }
+    if unmatched:
+        made.notes.append(
+            f"겹친 바디를 쪼갠 조각 {len(unmatched)}개는 어느 파트의 것인지 못 가려 전역 요소 "
+            "크기로 메시했습니다."
+        )
+    return sizes
 
 
 def _shell_parts(
@@ -1085,6 +1258,7 @@ def _local_sizes(
     *,
     fragment: bool = True,
     layout: _Layout | None = None,
+    tolerance: float = 0.0,
 ) -> dict[int, float]:
     """영역별 메시 힌트 → **면 번호 → 크기(mm)**.
 
@@ -1114,6 +1288,7 @@ def _local_sizes(
             removed=layout.removed if layout else frozenset(),
             shell_step=layout.shell_step if layout else None,
             sheets=layout.sheets if layout else False,
+            tolerance=tolerance,
         )
         if layout and layout.shell_parts:
             # 쉘 면에 그 파트 이름을 단다 — 같은 자리의 솔리드 면(시트를 얹은 받침 윗면)과

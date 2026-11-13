@@ -291,4 +291,23 @@ describe('해석 작업 화면', () => {
     await userEvent.click(await screen.findByRole('button', { name: /전체 다운로드/ }))
     expect(simulationApi.downloadAll).toHaveBeenCalledWith('sim', '측면가진_파일.zip')
   })
+
+  it('메시를 고친 것과 고른 선형 솔버를 요약에 이름을 붙여 보인다', async () => {
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('done'),
+      summary: {
+        nodes: 29890,
+        boolean_tolerance_mm: 0.0147,
+        mesh_repairs: '뒤집힌 2차 요소 28개의 중간 절점을 곧게 폈습니다.',
+        linear_solver: 'iterative',
+        memory_estimate_mb: 2370,
+      },
+    } as Simulation)
+    show('/simulations/sim?tab=progress')
+    expect(await screen.findByText('메시 보정')).toBeInTheDocument()
+    expect(screen.getByText('뒤집힌 2차 요소 28개의 중간 절점을 곧게 폈습니다.')).toBeInTheDocument()
+    expect(screen.getByText('0.0147 mm')).toBeInTheDocument()
+    expect(screen.getByText('반복 (ITERATIVE CHOLESKY)')).toBeInTheDocument()
+    expect(screen.getByText('2,370 MB')).toBeInTheDocument()
+  })
 })

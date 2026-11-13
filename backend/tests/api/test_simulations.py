@@ -555,6 +555,46 @@ def test_DOE_를_CalculiX_로_가져오면_점마다_그_솔버가_적힌다(
     assert next(row for row in listed if row["id"] == first)["solver"] == "calculix"
 
 
+def test_DOE_를_가져오면_스터디의_형상_점검_기준이_점_파일에_실린다(
+    client: TestClient,
+    member: Signed,
+    db: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CalculiX 경로가 `checks.contact_gap`(CompCore 의 「바디 사이 틈」)을 형상 맞춤
+    허용오차로 쓴다 — 그 값은 `study.json` 에만 있고 모델링은 작업 폴더만 보므로, 가져올 때 점
+    파일에 덧붙인다. 나머지 칸은 손대지 않는다."""
+    from app.modules.simulations.services import TOPOLOGY_NAME, work_root
+
+    # 새 스터디 id 로 — 다른 시험이 같은 폴더의 점을 이미 가져갔으면 「이미 가져온 점」 이다.
+    folder = tmp_path / MATERIAL_SWEEP_FOLDER.name
+    shutil.copytree(MATERIAL_SWEEP_FOLDER, folder)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["id"] = uuid.uuid4().hex
+    (folder / "study.json").write_text(json.dumps(study, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "static", "solver": "calculix", "material": MODAL["material"]},
+            "workspace_slug": member.workspace,
+            "numbers": [1],
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    row = db.get(Simulation, uuid.UUID(created.json()["created"][0]))
+    assert row is not None and row.work_dir is not None
+    stored = json.loads(
+        (work_root() / row.work_dir / TOPOLOGY_NAME).read_text(encoding="utf-8")
+    )
+    original = json.loads((folder / "points" / "p0001.json").read_text(encoding="utf-8"))
+    assert stored["checks"] == study["checks"]
+    assert {key: value for key, value in stored.items() if key != "checks"} == original
+
+
 def test_CAD_점_파일을_걸기_전에_읽어_준다(client: TestClient, member: Signed) -> None:
     """**새 작업 창이 점 파일을 따로 해석하지 않는다** — 작업을 거는 길과 같은 코드가 읽어,
     무엇이 들었고(영역 · 물성 · 해석 설정) 그 해석 종류에서 조건이 어떻게 다뤄지나를 준다."""

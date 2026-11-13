@@ -104,37 +104,37 @@ def test_쪼갠_조각을_원래_바디와_짝짓는다() -> None:
     assert fragment_owners(before, after) == ({1: frozenset({1}), 3: frozenset({2})}, [2])
 
 
-def test_허용오차는_모델_크기에_비례하고_서버가_덮어쓸_수_있다(
+def test_허용오차는_CompCore_의_바디_사이_틈을_따르고_서버가_덮어쓸_수_있다(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """핸드폰 부품의 설계 틈새(0.05 ~ 0.2 mm)를 닫으면 안 된다 — CompCore 가 「CAD 가 남긴 틈」
+    으로 보는 값(`checks.contact_gap`, 기본 0.001)과 같게 둔다."""
     monkeypatch.delenv(build_module.BOOLEAN_TOLERANCE_ENV, raising=False)
-    topology = {
-        "bodies": [
-            {"bbox": [[0, 0, 0], [100, 100, 20]]},
-            {"bbox": [[40, 40, 20], [60, 60, 40]]},
-        ]
-    }
-    assert build_module._boolean_tolerance(topology) == pytest.approx(0.014697, rel=1e-4)
-    assert build_module._boolean_tolerance({}) == 0.0
+    assert build_module._boolean_tolerance({"checks": {"contact_gap": 0.002}}) == 0.002
+    # 옛 폴더(contact_gap 없음) · 점 파일 없는 작업은 CompCore 의 기본.
+    assert build_module._boolean_tolerance({"checks": {"min_wall": 0.5}}) == 0.001
+    assert build_module._boolean_tolerance({}) == 0.001
     monkeypatch.setenv(build_module.BOOLEAN_TOLERANCE_ENV, "0.05")
-    assert build_module._boolean_tolerance(topology) == 0.05
+    assert build_module._boolean_tolerance({"checks": {"contact_gap": 0.002}}) == 0.05
     monkeypatch.setenv(build_module.BOOLEAN_TOLERANCE_ENV, "0")
-    assert build_module._boolean_tolerance(topology) == 0.0
+    assert build_module._boolean_tolerance({}) == 0.0
 
 
 def test_CompCore_가_잰_겹침_틈을_붙였는지_남겼는지_적는다() -> None:
     topology = {
         "quality": {
             "contacts": [
+                {"kind": "gap", "a": "프레임", "b": "커버", "size": 0.0005, "at": [0, 0, 0]},
                 {"kind": "overlap", "a": "판", "b": "블록", "size": 0.01, "at": [50, 50, 20]},
-                {"kind": "gap", "a": "판", "b": "핀", "size": 0.2, "at": [0, 0, 0]},
+                {"kind": "gap", "a": "판", "b": "버튼", "size": 0.1, "at": [0, 0, 0]},
             ]
         }
     }
-    closed, kept = build_module._contact_notes(topology, 0.0147)
-    assert "「판」 · 「블록」 겹침 0.01 mm" in closed and "붙여" in closed
-    assert "「판」 · 「핀」 틈 0.2 mm" in kept and build_module.BOOLEAN_TOLERANCE_ENV in kept
-    assert build_module._contact_notes({}, 0.0147) == []
+    closed, overlapped, gaps = build_module._contact_notes(topology, 0.001)
+    assert "「프레임」 · 「커버」 틈 0.0005 mm" in closed and "붙여" in closed
+    assert "「판」 · 「블록」 겹침 0.01 mm" in overlapped and "CAD 에서 고치세요" in overlapped
+    assert "「판」 · 「버튼」 틈 0.1 mm" in gaps and "설계 틈새" in gaps
+    assert build_module._contact_notes({}, 0.001) == []
 
 
 STATIC_DECK = (

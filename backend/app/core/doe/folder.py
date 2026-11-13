@@ -125,6 +125,11 @@ class DoeFolder:
     """대상 작업에 이은 **기준정보**(`study.json` 의 `ontology`, CompCore 2026-10-26) —
     `{"tags": [...], "links": [...]}`. 「어느 모델의 부품 해석인가」 를 폴더만 보고 안다.
     그 전에 내보낸 폴더에는 없다 — 빈 두 목록이다(`read_ontology`)."""
+    checks: dict[str, Any] = field(default_factory=dict)
+    """CompCore 형상 점검의 기준(`study.json` 의 `checks`, mm) — `min_wall` · `short_edge` ·
+    `narrow_face` · `contact_gap`(바디 사이 틈 — 이 아래는 「CAD 가 남긴 틈」). 점 파일에는
+    없어서 가져올 때 점 파일에 덧붙인다 — CalculiX 경로가 `contact_gap` 을 형상 맞춤 허용오차로
+    쓴다(`calculix.build._boolean_tolerance`)."""
 
     @property
     def usable(self) -> list[DoePoint]:
@@ -189,6 +194,7 @@ def read_folder(path: Path) -> DoeFolder:
         method=str(study.get("method") or ""),
         single=isinstance(study.get("factors"), list) and not study["factors"],
         ontology=read_ontology(study),
+        checks=dict(study["checks"]) if isinstance(study.get("checks"), dict) else {},
     )
 
 

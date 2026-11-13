@@ -24,8 +24,9 @@ pytestmark = pytest.mark.opensolver
 __import__("app.core.calculix.build")
 build_module = sys.modules["app.core.calculix.build"]
 
-#: 판 100 x 100 x 20 + 블록이면 모델 대각선 x 1e-4 가 이만큼이다(`_boolean_tolerance`).
-TOLERANCE = 0.0147
+#: 보고의 0.01 mm 겹침 · 0.005 mm 틈을 닫는 허용오차. 기본은 CompCore 의 「바디 사이 틈」
+#: 0.001 mm 라(`_boolean_tolerance`) 이 형상의 어긋남은 남는다 — 그때는 CompCore 가 알린다.
+TOLERANCE = 0.02
 
 
 @pytest.fixture
@@ -92,7 +93,8 @@ def _mean_edge(mesh: Mesh, solid: int) -> float:
 
 def test_허용오차_안의_겹침과_틈은_맞닿은_것으로_붙는다(ready: None, tmp_path: Path) -> None:
     """0.01 mm 겹침은 두께 0.01 조각 부피를, 0.005 mm 틈은 떠 있는 블록(공유 절점 0)을 냈다.
-    형상 맞춤 허용오차를 형상 읽기 전에 주면 둘 다 꼭 맞닿은 것처럼 부피 둘이 절점을 나눈다."""
+    그보다 큰 형상 맞춤 허용오차를 형상 읽기 전에 주면 둘 다 꼭 맞닿은 것처럼 부피 둘이 절점을
+    나눈다."""
     for lift in (-0.01, 0.005):
         work = tmp_path / f"lift{lift:+g}"
         work.mkdir()

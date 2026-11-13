@@ -1652,6 +1652,24 @@ def _doe_materials(doe: DoeFolder) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+def _with_checks(topology: bytes, checks: dict[str, Any]) -> bytes:
+    """점 파일에 스터디의 형상 점검 기준(`checks`)을 덧붙인다 — 점 파일에 이미 있으면 그대로.
+
+    모델링은 작업 폴더만 본다. CalculiX 경로가 `checks.contact_gap`(바디 사이 틈 — CompCore 가
+    「CAD 가 남긴 틈」 으로 보는 상한)을 형상 맞춤 허용오차로 쓰는데, 그 값은 `study.json` 에만
+    있다. 핸드폰 부품의 설계 틈새(0.05 ~ 0.2 mm)를 닫지 않으려면 두 쪽이 같은 값을 봐야 한다
+    (2026-11-13). 못 읽는 점 파일은 그대로 둔다 — 뒤의 점검이 그 까닭을 말한다.
+    """
+    try:
+        payload = json.loads(topology)
+    except ValueError:
+        return topology
+    if not isinstance(payload, dict) or "checks" in payload:
+        return topology
+    payload["checks"] = checks
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
 def import_doe(
     db: Session,
     *,
@@ -1721,6 +1739,8 @@ def import_doe(
             continue
         assert point.step is not None  # usable 이 보장한다
         topology = point.point_file.read_bytes() if point.point_file else None
+        if topology is not None and doe.checks:
+            topology = _with_checks(topology, doe.checks)
         # **물성이 빠지거나 못 거는 조건이 있는 점은 걸지 않는다** — 재료를 훑는 DOE 는 점마다
         # 붙는 재료가 다르고, 걸어 봐야 모델링에서 멈춘다.
         payload = parse_topology(topology) if topology is not None else None

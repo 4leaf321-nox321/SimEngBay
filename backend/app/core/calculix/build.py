@@ -66,10 +66,11 @@ MESH_LIMIT = (
 )
 TOPOLOGY_NAME = "topology.json"
 DECK_NAME = "model.inp"
-#: 형상 맞춤 허용오차 = 모델 대각선 x 이 비(`_boolean_tolerance`). 판 100 x 100 x 20 + 블록이면
-#: 0.015 mm — 0.01 mm 겹침 · 0.005 mm 틈을 닫고, 끼워 맞춤 틈새(0.1 mm 남짓)는 남긴다.
-BOOLEAN_TOLERANCE_RATIO = 1e-4
-#: 허용오차를 서버가 정할 때(mm). 0 이면 끈다 — 비우면 위의 비로 셈한다.
+#: 형상 맞춤 허용오차의 기본(mm) — CompCore 형상 점검의 「바디 사이 틈」 기본값과 같다
+#: (`checks.contact_gap`, 2026-11-13). 그 아래가 「CAD 가 남긴 틈」 이다(`_boolean_tolerance`).
+BOOLEAN_TOLERANCE_MM = 0.001
+#: 허용오차를 서버가 정할 때(mm). 0 이면 끈다 — 비우면 점 파일의 `checks.contact_gap`, 그것도
+#: 없으면 위의 기본.
 BOOLEAN_TOLERANCE_ENV = "CALCULIX_BOOLEAN_TOLERANCE_MM"
 
 
@@ -816,14 +817,17 @@ def _layout(
 
 
 def _boolean_tolerance(topology: dict[str, Any]) -> float:
-    """형상 맞춤 허용오차(mm) — 서버가 정했으면 그것, 아니면 **모델 대각선 x 1e-4**.
+    """형상 맞춤 허용오차(mm) — 서버가 정했으면 그것, 아니면 **CompCore 형상 점검의 「바디
+    사이 틈」**(점 파일의 `checks.contact_gap` — 가져올 때 `study.json` 에서 덧붙인다), 그것도
+    없으면 0.001 mm.
 
     ⚠️ 없던 동안 0.01 mm 겹친 블록은 두께 0.01 조각 부피와 「ill-shaped tets」 를, 0.005 mm 뜬
-       블록은 공유 절점 0개(떠 있는 블록)를 냈다(운영 보고, 2026-11-13). CAD 의 메이트가 남긴
-       이 정도 어긋남은 흔하다.
+       블록은 공유 절점 0개(떠 있는 블록)를 냈다(운영 보고, 2026-11-13).
 
-    끼워 맞춤 틈새(의도한 틈)까지 닫을 수 있으므로 **모델 크기에 비례한 작은 값**이다. 모델
-    크기는 점 파일 바디의 상자(mm)로 잰다 — 점 파일이 없으면 끈다(전과 같다).
+    **설계 틈새를 닫으면 안 된다** — 대상이 핸드폰 부품이라 틈새가 0.05 ~ 0.2 mm 다. 처음에는
+    모델 대각선 x 1e-4 로 셈했는데(판 100 mm 면 0.015) CompCore 가 「CAD 가 남긴 틈」 으로 보는
+    0.001 과 어긋났다 — 두 쪽이 같은 값을 봐야 「CompCore 는 틈이라는데 해석은 붙였다」 가 안
+    생긴다. 그보다 큰 겹침 · 틈은 CompCore 가 `quality.contacts` 로 알린다(`_contact_notes`).
     """
     given = os.environ.get(BOOLEAN_TOLERANCE_ENV, "").strip()
     if given:
@@ -831,31 +835,32 @@ def _boolean_tolerance(topology: dict[str, Any]) -> float:
             return max(0.0, float(given))
         except ValueError:
             logger.warning(
-                "%s 가 수가 아닙니다(%r) — 모델 크기로 셈합니다", BOOLEAN_TOLERANCE_ENV, given
+                "%s 가 수가 아닙니다(%r) — 점 파일의 기준을 씁니다",
+                BOOLEAN_TOLERANCE_ENV,
+                given,
             )
-    boxes = [
-        one["bbox"]
-        for one in (topology or {}).get("bodies") or []
-        if isinstance(one.get("bbox"), list) and len(one["bbox"]) == 2
-    ]
-    if not boxes:
-        return 0.0
-    low = [min(float(box[0][axis]) for box in boxes) for axis in range(3)]
-    high = [max(float(box[1][axis]) for box in boxes) for axis in range(3)]
-    return math.dist(low, high) * BOOLEAN_TOLERANCE_RATIO
+    checks = (topology or {}).get("checks")
+    if isinstance(checks, dict):
+        try:
+            return max(0.0, float(checks["contact_gap"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return BOOLEAN_TOLERANCE_MM
 
 
 def _contact_notes(topology: dict[str, Any], tolerance: float) -> list[str]:
-    """CompCore 가 잰 바디끼리 겹침 · 틈(`quality.contacts`, f9a073c) — 허용오차로 붙였나
-    남겼나.
+    """CompCore 가 잰 바디끼리 겹침 · 틈(`quality.contacts`, f9a073c · c4fd87f) — 허용오차로
+    붙였나 남겼나.
 
-    붙인 것은 형상과 다르게 푼 것이고, 남긴 겹침은 따로 떨어진 조각 · 남긴 틈은 떨어진 바디가
-    된다 — 어느 쪽이든 사람이 알아야 한다. 자리(`at`)는 말이 길어 바디 이름 · 크기만 적는다.
+    붙인 것은 형상과 다르게 푼 것이다. 남긴 **틈**은 설계 틈새로 보고 떨어진 채 푼다(핸드폰
+    부품의 틈새 0.05 ~ 0.2 mm). 남긴 **겹침**은 따로 떨어진 조각이 되므로 고칠 거리다 —
+    CompCore 도 겹침은 크기와 상관없이 늘 알린다. 자리(`at`)는 말이 길어 바디 이름 · 크기만
+    적는다.
     """
     rows = ((topology or {}).get("quality") or {}).get("contacts") or []
-    kinds = {"overlap": "겹침", "gap": "틈"}
     closed: list[str] = []
-    kept: list[str] = []
+    gaps: list[str] = []
+    overlaps: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -863,23 +868,28 @@ def _contact_notes(topology: dict[str, Any], tolerance: float) -> list[str]:
             size = float(row.get("size"))  # type: ignore[arg-type]
         except (TypeError, ValueError):
             continue
-        shown = (
-            f"「{row.get('a')}」 · 「{row.get('b')}」 "
-            f"{kinds.get(str(row.get('kind')), '어긋남')} {size:g} mm"
-        )
-        (closed if size <= tolerance else kept).append(shown)
+        overlap = row.get("kind") == "overlap"
+        kind = "겹침" if overlap else "틈"
+        shown = f"「{row.get('a')}」 · 「{row.get('b')}」 {kind} {size:g} mm"
+        if size <= tolerance:
+            closed.append(shown)
+        else:
+            (overlaps if overlap else gaps).append(shown)
     notes: list[str] = []
     if closed:
         notes.append(
             f"바디 사이 {', '.join(closed)} 는 형상 맞춤 허용오차({tolerance:g} mm) 안이라 "
             "맞닿은 것으로 붙여 메시했습니다."
         )
-    if kept:
+    if overlaps:
         notes.append(
-            f"바디 사이 {', '.join(kept)} 는 허용오차({tolerance:g} mm)보다 커서 그대로 "
-            "둡니다 — "
-            "겹침은 따로 떨어진 조각, 틈은 떨어진 바디로 메시됩니다. 서버의 "
-            f"{BOOLEAN_TOLERANCE_ENV} 로 허용오차를 넓힐 수 있습니다."
+            f"바디 사이 {', '.join(overlaps)} 는 허용오차({tolerance:g} mm)보다 커서 겹친 "
+            "곳이 따로 떨어진 조각으로 메시됐습니다 — CAD 에서 고치세요."
+        )
+    if gaps:
+        notes.append(
+            f"바디 사이 {', '.join(gaps)} 는 허용오차({tolerance:g} mm)보다 커서 설계 틈새로 "
+            "보고 떨어진 채 풀었습니다."
         )
     return notes
 

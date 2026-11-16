@@ -264,8 +264,9 @@ def _side_shake_conditions(
     analysis = payload["conditions"].setdefault("analysis", {})
     analysis["type"] = recipe
     if recipe != "harmonic" and "analysis" not in changes:
-        # 측면가진의 200 ~ 2000 Hz 는 **조화의 훑을 범위**다. 종류만 모달로 바꾸고 남기면 모달의 찾을
-        # 범위로 읽혀(`modes.search`) 0 Hz 모드가 빠진다 — CompCore 가 내보낼 리 없는 조합이다.
+        # 측면가진의 200 ~ 2000 Hz 는 **조화의 훑을 범위**다. 종류만 모달로 바꾸고
+        # 남기면 모달의 찾을 범위로 읽혀(`modes.search`) 0 Hz 모드가 빠진다 —
+        # CompCore 가 내보낼 리 없는 조합이다.
         analysis.pop("frequency_range", None)
     (work / "topology.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"

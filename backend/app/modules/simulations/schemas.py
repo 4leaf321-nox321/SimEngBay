@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -518,6 +518,13 @@ class StudyPointOut(BaseModel):
     """조화 — 측정점 → 그 자리 곡선의 봉우리 주파수(Hz)."""
     relative_mm: dict[str, list[float]] = Field(default_factory=dict)
     """정적 — 같은 자리 · 다른 바디의 두 측정점 「A - B」 → 변위 차(mm). 전단 이음의 미끄럼."""
+    mode_mass: list[dict[str, float]] = Field(default_factory=list)
+    """모달 — `frequencies` 와 같은 차례로 모드마다 방향(X · Y · Z) → **유효질량비**(0~1). 표가
+    없으면 빈 칸이다(자유-자유는 탄성 모드의 값이 0 이다)."""
+    mode_probes: list[dict[str, float]] = Field(default_factory=list)
+    """모달 — `frequencies` 와 같은 차례로 모드마다 측정점 → **그 자리에서 얼마나 움직이나**
+    (그 측정점이 가장 크게 움직인 모드 대비 0~1 — 실측 맞추기와 같은 셈,
+    `core/measured.visibility`)."""
 
 
 class ModeTrackOut(BaseModel):
@@ -982,3 +989,170 @@ class StudyMeasurementOut(MeasurementOut):
     best_point: int | None = None
     """실측에 가장 가까운 설계점 번호 — 물성 · 감쇠를 훑은 DOE 면 그 값이 차이를 설명한다."""
     explanation: str = ""
+
+
+# --- 주파수 요구 조건 — 목표 주파수 · 회피 대역(`frequency.py`, 2026-11-16) ----------------
+
+
+class FrequencyTarget(BaseModel):
+    """**목표 주파수** — 추적한 모드 하나를 목표 ± 허용 안에 둔다."""
+
+    kind: Literal["target"] = "target"
+    label: str = Field(default="", max_length=120)
+    mode: int = Field(ge=1, le=50)
+    """맞출 모드 — 기준 설계점의 탄성 모드 차수(형상으로 이은 모드, 순번이 아니다)."""
+    target_hz: float = Field(gt=0, le=1e7)
+    tolerance_pct: float = Field(ge=0, le=100)
+
+
+class FrequencyBand(BaseModel):
+    """**회피 대역** — 판정 대상 모드가 대역(± 이격 여유) 밖에 있어야 한다.
+
+    판정 대상은 실제로 들뜨는 모드다 — 유효질량비(가진 방향) 또는 측정점 움직임이 문턱을
+    넘는 모드. 둘 다 끄면 모든 모드가 대상이다."""
+
+    kind: Literal["band"] = "band"
+    label: str = Field(default="", max_length=120)
+    low_hz: float = Field(gt=0, le=1e7)
+    high_hz: float = Field(gt=0, le=1e7)
+    margin_pct: float = Field(default=0, ge=0, le=100)
+    """이격 여유 — 대역 끝에서 이만큼(%) 더 떨어져야 한다."""
+    mass_filter: bool = True
+    mass_direction: Literal["X", "Y", "Z"] = "Z"
+    mass_min_pct: float = Field(default=5, ge=0, le=100)
+    probe_filter: bool = False
+    probe: str | None = Field(default=None, max_length=120)
+    """측정점 이름. 비우면 측정점 가운데 가장 크게 움직인 값으로 본다."""
+    probe_min_pct: float = Field(default=20, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> FrequencyBand:
+        if self.high_hz <= self.low_hz:
+            raise ValueError("회피 대역의 상한이 하한보다 커야 합니다.")
+        return self
+
+
+FrequencyRequirement = Annotated[FrequencyTarget | FrequencyBand, Field(discriminator="kind")]
+
+#: 판정 — 적합 · 대역 침범(목표 충족, 회피 대역에 걸림) · 목표 이탈(대역 회피, 목표 벗어남) ·
+#: 부적합(둘 다) · 판정 보류(끝나지 않았거나 그 모드를 잇지 못함).
+FrequencyVerdict = Literal[
+    "conform", "band_violation", "target_deviation", "nonconform", "pending"
+]
+
+
+class FrequencyRequirementsIn(BaseModel):
+    requirements: list[FrequencyRequirement] = Field(default_factory=list, max_length=20)
+
+
+class FrequencyModeOut(BaseModel):
+    """설계점의 모드 하나 — 주파수와 판정에서의 역할."""
+
+    index: int
+    """그 설계점의 탄성 모드 차례(1부터)."""
+    track: int | None = None
+    """형상으로 이은 기준 차수. 못 이었으면 None."""
+    frequency_hz: float
+    mass_pct: dict[str, float] = Field(default_factory=dict)
+    probe_pct: dict[str, float] = Field(default_factory=dict)
+    role: Literal["target", "judged", "excluded"]
+    """목표 주파수 대상 · 회피 대역 판정 대상 · 판정 제외."""
+    bands: list[int] = Field(default_factory=list)
+    """이 모드를 판정 대상으로 삼는 회피 대역(요구 조건의 차례). 대역마다 거르는 기준이 달라
+    — Z 가진 대역의 대상이 Y 가진 대역에서는 제외일 수 있다."""
+    in_band: bool = False
+    """**판정 대상으로 삼는 회피 대역** 안인가. 대상이 아닌 대역 안에 든 것은 세지 않는다
+    (그 대역의 판정에 들지 않으므로)."""
+    reason: str = ""
+
+
+class FrequencyTargetResultOut(BaseModel):
+    requirement: int
+    """요구 조건의 차례(0부터)."""
+    index: int | None = None
+    frequency_hz: float | None = None
+    error_pct: float | None = None
+    ok: bool = False
+    note: str | None = None
+    """판정하지 못한 까닭(그 모드를 잇지 못함 등)."""
+
+
+class FrequencyBandResultOut(BaseModel):
+    requirement: int
+    closest_index: int | None = None
+    closest_track: int | None = None
+    closest_hz: float | None = None
+    margin_pct: float | None = None
+    """대역 끝까지의 이격률(%). 대역 안이면 0."""
+    inside: bool = False
+    ok: bool = True
+    judged: int = 0
+    """판정 대상 모드 수."""
+
+
+class FrequencySensitivityOut(BaseModel):
+    """맞출 모드가 설계 변수에 얼마나 민감한가 — 이웃 설계점 사이의 기울기."""
+
+    factor: str
+    hz_per_unit: float
+    equivalent: float | None = None
+    """목표 허용 폭(± Hz)에 해당하는 변수 폭(±) — 이 공차 안이어야 목표를 지킨다."""
+
+
+class FrequencyPointOut(BaseModel):
+    simulation_id: uuid.UUID
+    number: int
+    params: dict[str, float | str]
+    status: str
+    verdict: FrequencyVerdict
+    mass_kg: float | None = None
+    targets: list[FrequencyTargetResultOut] = Field(default_factory=list)
+    bands: list[FrequencyBandResultOut] = Field(default_factory=list)
+    modes: list[FrequencyModeOut] = Field(default_factory=list)
+    sensitivity: list[FrequencySensitivityOut] = Field(default_factory=list)
+
+
+class FrequencyCrossingOut(BaseModel):
+    """한 설계 변수를 따라 이웃 설계점 사이를 곧게 이은 선이 기준을 지나는 자리."""
+
+    kind: Literal["target", "band_edge"]
+    requirement: int
+    track: int
+    factor: str
+    value: float
+    """그 변수의 값(보간)."""
+    fixed: dict[str, float | str]
+    """나머지 변수 — 이 값들을 둔 선 위다."""
+    level_hz: float
+    label: str
+
+
+class FrequencyEstimateOut(BaseModel):
+    """DOE 에 없는 자리의 보간 추정 — 모든 요구를 만족할 것으로 보이는 자리."""
+
+    params: dict[str, float | str]
+    margin_pct: float | None = None
+    closest: str | None = None
+    mass_kg: float | None = None
+    text: str
+
+
+class FrequencyCheckOut(BaseModel):
+    study_id: str
+    requirements: list[FrequencyRequirement] = Field(default_factory=list)
+    saved: bool = False
+    """저장된 요구 조건으로 셈했나(아니면 미리보기)."""
+    updated_at: datetime | None = None
+    updated_by_name: str | None = None
+    factors: list[str] = Field(default_factory=list)
+    probes: list[str] = Field(default_factory=list)
+    """스터디에 나온 측정점 — 회피 대역의 측정점 기준에 쓴다."""
+    tracks: list[int] = Field(default_factory=list)
+    """고를 수 있는 기준 차수(형상으로 이은 모드)."""
+    tracked: bool = True
+    """모드를 형상으로 이었나 — 아니면 차례로 셌다."""
+    counts: dict[str, int] = Field(default_factory=dict)
+    points: list[FrequencyPointOut] = Field(default_factory=list)
+    crossings: list[FrequencyCrossingOut] = Field(default_factory=list)
+    estimate: FrequencyEstimateOut | None = None
+    notes: list[str] = Field(default_factory=list)

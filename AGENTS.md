@@ -170,6 +170,25 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
   지킨다: **강체는 주(master) 쪽**(종 절점은 그 강체에 넣는다), **구속된 절점은 주 쪽에 두지 않는다**
   — 주 면의 구속 절점은 종에서 넘어온 힘을 반력(RF)에 안 넣어, 볼트 조립의 바닥 반력이 600 N 이 아니라
   428 N 이었다. 옛 방식(쪼개 절점 공유)은 `CALCULIX_BONDING=shared` 로 남아 있다(견줄 때).
+- **0 Hz 모드는 구속이 있어도 강체 모드로 센다**(`app/core/modes/rigid.py`, 두 솔버 공통, 2026-11-16) —
+  「1차 탄성」 · 설계점 비교 · 모드 추적이 0 Hz 를 탄성 모드로 읽으면 안 된다. 구속이 있는데 강체 모드가
+  있으면 움직인 바디와 까닭(모델링이 남긴 `boundary.json` 의 `connections`)을 경고로 단다. 묶지 않은
+  것(맞닿았는데 접촉이 없는 쌍 · 미끄럼 접촉)도 조용히 두지 않는다.
+- **주파수 요구 판정은 서버 한 곳에서 셈한다**(`app/modules/simulations/frequency.py`, 2026-11-16) —
+  화면의 「주파수 요구」 탭은 입력을 고칠 때마다 저장하지 않은 요구로 `POST …/frequency/check` 를 불러
+  미리 보고, MCP `study_frequency` 도 같은 셈을 받는다. 다변수 탭처럼 화면에 같은 셈을 한 벌 더 두지
+  않는다. 판정 이름(적합 · 대역 침범 · 목표 이탈 · 부적합 · 판정 보류)은 플랫폼의 정식 용어다.
+- **MCP 결과 화면(MCP Apps 패널)은 웹 화면 부품을 그대로 쓴다**(`frontend/src/panels`, 2026-11-17) — 결과
+  도구 여섯이 `_meta.ui.resourceUri` 로 `ui://<slug>/<화면>` 을 달고, HWAX 챗 · Claude 가 격리 창에 띄운다.
+  패널은 서버에 직접 못 닿아(CSP) API 클라이언트의 길(`setTransport`)만 MCP 도구 `panel_data` 로 바꾼다 —
+  그러니 **패널용 그림을 따로 그리지 않는다**(두 벌이면 어긋난다). 화면을 고치면 패널도 따라 바뀐다.
+  - `npm run build:panels` 가 화면마다 HTML 한 장(JS · CSS · 글꼴 인라인)을 굽고 **2 MiB(HWAX 상한)를 넘으면
+    실패한다** — 다변수(plotly 2D 묶음)가 그 근처다. 3D 형상 뷰어(vtk.js)는 `MeshNote` 로, plotly 는
+    `plotly.js-cartesian-dist-min` 으로 바꿔 끼운다(`__PLOT_KIT__`).
+  - `panel_data` 는 **읽기만** 한다 — `/simulations` 아래 GET 과 판정 미리 보기 POST 만 연다. 패널에서 고치는
+    단추는 숨긴다(`readOnly` · `previewOnly` · 사람 정보 없는 `NoUserProvider`).
+  - 확인은 HWAX 포털과 같은 호스트(srcdoc · `sandbox=allow-scripts` · CSP · 같은 JSON-RPC)에 띄워 본다 —
+    vitest 는 다리 · 요청 길만 본다.
 - **CompCore 시험 규격 폴더(`tests/fixtures/doe/시험규격/`, CompCore 6500479)는 CalculiX 로 끝까지
   풀린다**(`tests/opensolver/test_test_standards.py` 가 대표를 돈다) — 조건 하나를 고칠 때 그것이 깨지면
   시험 규격 하나가 다시 막힌 것이다.

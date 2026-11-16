@@ -54,13 +54,18 @@ MODAL: dict[str, Any] = {
 
 
 class _FakeFastMCP:
-    """`FastMCP` 의 자리 — 도구 등록을 **그냥 통과**시킨다. 여기서 보는 것은 등록이 아니라
-    도구가 백엔드에 무엇을 보내고 무엇을 돌려주는가다."""
+    """`FastMCP` 의 자리 — 도구 · 화면(자원) 등록을 **그냥 통과**시킨다. 여기서 보는 것은
+    등록이 아니라 도구가 백엔드에 무엇을 보내고 무엇을 돌려주는가다(등록 · 표지는
+    mcp_server 의 시험)."""
 
-    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+    def __init__(self, name: str, *_args: Any, **_kwargs: Any) -> None:
+        self.name = name
         self.settings = SimpleNamespace()
 
-    def tool(self) -> Callable[[Any], Any]:
+    def tool(self, **_kwargs: Any) -> Callable[[Any], Any]:
+        return lambda function: function
+
+    def resource(self, *_args: Any, **_kwargs: Any) -> Callable[[Any], Any]:
         return lambda function: function
 
 
@@ -68,9 +73,12 @@ def _load_server() -> Any:
     fake = types.ModuleType("mcp.server.fastmcp")
     fake.FastMCP = _FakeFastMCP  # type: ignore[attr-defined]
     fake.Context = object  # type: ignore[attr-defined]
+    fake_types = types.ModuleType("mcp.types")
+    fake_types.ToolAnnotations = lambda **kw: SimpleNamespace(**kw)  # type: ignore[attr-defined]
     for name in ("mcp", "mcp.server"):
         sys.modules.setdefault(name, types.ModuleType(name))
     sys.modules["mcp.server.fastmcp"] = fake
+    sys.modules["mcp.types"] = fake_types
     spec = importlib.util.spec_from_file_location("mcp_server_under_test", SERVER_PY)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -270,6 +278,54 @@ def test_수렴_점검과_실측을_도구로_건다(
     assert added["label"] == "1차 시험"
     compared = bot.call(server.measurements_get, study_id=made["study_id"])
     assert compared["total"] == 1 and compared["measurements"][0]["best_point"] in {1, 2, 3}
+
+
+def test_결과_화면은_웹과_같은_자료를_같은_권한으로_읽는다(
+    client: TestClient, member: Signed, other: Signed, folder: Path
+) -> None:
+    """대화 안 결과 화면(MCP Apps 패널)은 `panel_data` 로 웹 화면이 읽는 경로를 **그 사람의
+    토큰으로** 읽는다 — 답도 권한도 웹과 같다. 판정 미리 보기는 아무것도 남기지 않는다."""
+    bot = _bot(client, member, ["read", "simulations:write"])
+    made = bot.call(server.jobs_create, MODAL, path=str(folder), numbers=[1, 2])
+    job_id, study_id = made["created"][0], made["study_id"]
+
+    def panel(who: Bot, path: str, body: dict[str, Any] | None = None) -> Any:
+        return asyncio.run(server.panel_data(who.ctx, path, body))
+
+    web = client.get(f"/api/simulations/studies/{study_id}", headers=member.headers)
+    got = panel(bot, f"/simulations/studies/{study_id}")
+    assert got["status"] == 200 and got["body"] == web.json()
+    result = panel(bot, f"/simulations/{job_id}/result")
+    assert result["status"] == 200 and result["body"]["recipe"] == "modal"
+
+    target = {
+        "kind": "target",
+        "label": "1차",
+        "mode": 1,
+        "target_hz": 100,
+        "tolerance_pct": 5,
+    }
+    preview = panel(
+        bot, f"/simulations/studies/{study_id}/frequency/check", {"requirements": [target]}
+    )
+    assert preview["status"] == 200 and preview["body"]["requirements"][0]["target_hz"] == 100
+    stored = client.get(
+        f"/api/simulations/studies/{study_id}/frequency", headers=member.headers
+    )
+    assert stored.json()["saved"] is False and stored.json()["requirements"] == []
+
+    # 남의 것은 게시 전에는 못 읽는다 — 백엔드의 오류 봉투가 그대로 화면에 간다.
+    theirs = _bot(client, other, ["read"])
+    refused = panel(theirs, f"/simulations/{job_id}")
+    assert refused["status"] in (403, 404) and refused["body"]["error"]["code"]
+    # 저장(PUT 자리) · 다른 앱 경로는 패널 길로 열지 않는다.
+    assert (
+        panel(bot, f"/simulations/studies/{study_id}/frequency", {"requirements": []})[
+            "status"
+        ]
+        == 403
+    )
+    assert panel(bot, "/auth/me")["status"] == 403
 
 
 def test_토큰이_거절되면_게이트웨이가_다시_받는_신호로_실패한다(client: TestClient) -> None:

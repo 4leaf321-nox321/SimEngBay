@@ -226,3 +226,139 @@ def test_바디마다_요소_차수를_달리한다(ready: None, tmp_path: Path)
         "받침판 2차" in summary["mesh_order_by_body"]
         and "기둥 1차" in summary["mesh_order_by_body"]
     )
+
+
+#: CompCore 가 잰 맞닿은 쌍(`quality.touching`, CompCore `411247f`) — 모자를 얹은 조립.
+CAPPED_TOUCHING = [
+    {"a": "받침판", "b": "기둥", "area": 100.0, "at": [0.0, 0.0, 10.0]},
+    {"a": "기둥", "b": "모자", "area": 100.0, "at": [0.0, 0.0, 90.0]},
+]
+
+
+def _capped(work: Path, cap: dict[str, Any] | None, *, listed: bool = True) -> None:
+    """측면가진 기둥 끝에 「모자」(10 x 10 x 5)를 얹는다 — 바디 셋, 판-기둥은 본딩 그대로.
+    `cap` 은 「모자-기둥」 접촉의 덧씌울 칸이고, `None` 이면 그 접촉을 빠뜨린다(CompCore 의
+    조립 점검과 같은 꼴 — 판 · 받침 · 덮개에서 받침-덮개만 바꿨다). `listed` 면 점 파일에
+    CompCore 의 맞닿은 쌍 목록을 싣는다(없으면 그 전 점 파일)."""
+    work.mkdir(parents=True)
+    geo = work / "capped.geo"
+    geo.write_text(
+        'SetFactory("OpenCASCADE");\n'
+        "Box(1) = {-40, -40, 0, 80, 80, 10};\n"
+        "Rectangle(10) = {-5, -5, 10, 10, 10};\n"
+        "BooleanFragments{ Volume{1}; Delete; }{ Surface{10}; Delete; }\n"
+        "Box(2) = {-5, -5, 10, 10, 10, 80};\n"
+        "Box(3) = {-5, -5, 90, 10, 10, 5};\n",
+        encoding="utf-8",
+    )
+    tools.run(
+        tools.gmsh_bin(),
+        [str(geo), "-0", "-o", str(work / "input.step"), "-v", "1"],
+        cwd=work,
+        timeout_seconds=120,
+        what="gmsh",
+    )
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    payload["bodies"].append(
+        {
+            "name": "모자",
+            "step_product": "body_3",
+            "volume": 500.0,
+            "kind": "solid",
+            "area": 400.0,
+            "centroid": [0.0, 0.0, 92.5],
+            "bbox": [[-5.0, -5.0, 90.0], [5.0, 5.0, 95.0]],
+        }
+    )
+    payload["regions"]["모자 바닥"] = [
+        {
+            "centroid": [0.0, 0.0, 90.0],
+            "area": 100.0,
+            "normal": [0.0, 0.0, -1.0],
+            "body": "모자",
+        }
+    ]
+    conditions = payload["conditions"]
+    for row in conditions["materials"]:
+        if "기둥" in row["apply_to"]:
+            row["apply_to"] = [*row["apply_to"], "모자"]
+    conditions["loads"] = []
+    if listed:
+        payload["quality"]["touching"] = CAPPED_TOUCHING
+    else:
+        # 그 전 점 파일 — CompCore v0.26.0 픽스처에는 이미 목록이 있다(모자 없는 조립의 것).
+        payload["quality"].pop("touching", None)
+    if cap is not None:
+        conditions["contacts"].append(
+            {
+                **conditions["contacts"][0],
+                "name": "모자-기둥",
+                "source": "모자 바닥",
+                "target": "기둥 끝",
+                **cap,
+            }
+        )
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_조립에서_빠진_접촉과_미끄럼_접촉을_0_Hz_모드와_함께_말한다(
+    ready: None, tmp_path: Path
+) -> None:
+    """CompCore 의 조립 점검(2026-11-16): 바닥을 고정한 조립에서 한 쌍의 접촉을 빠뜨리면 그
+    바디가 떠서 0 Hz 가 나오는데 「강체 모드 0개 · 1차 탄성 0 Hz」 로 나왔고, 아무도 말하지
+    않았다. 미끄럼 접촉에도 말이 없었다.
+
+    - 접촉을 빠뜨리면: 요약 `unbonded_touching` 이 그 쌍과 자리를 말하고, 모자가 통째로 떠
+      0 Hz 6개가 **강체 모드**로 세어지며, 경고가 움직인 바디(모자)와 빠진 쌍을 짚는다. 쌍은
+      CompCore 의 목록(`quality.touching`)에서 고르고 — 두 쪽이 같은 쌍을 말한다 — 목록이 없는
+      옛 점 파일이면 메시에서 잰다.
+    - 분리 없음이면: 모자가 기둥 끝에서 미끄러져(두 방향 · 법선 둘레 회전) 0 Hz 가 셋, 조건
+      처리 말과 경고가 그 접촉을 짚는다.
+    - 본딩이면: 0 Hz 도 경고도 없다. 모자가 기둥 끝의 질량이 되어 1차 굽힘이 내려간다(실측
+      1,121.5 Hz). 빠뜨린 경우의 1차 탄성은 모자 없는 측면가진 기둥과 같다(1,263.5 Hz) —
+      떠 있는 모자의 0 Hz 를 탄성 모드에서 뺐다는 뜻이다."""
+    spec = {**SPEC, "modes": 8}
+    found: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for label, cap, listed in (
+        ("missing", None, True),
+        ("measured", None, False),
+        ("sliding", {"type": "no_separation"}, True),
+        ("bonded", {}, True),
+    ):
+        work = tmp_path / label
+        _capped(work, cap, listed=listed)
+        found[label] = (_run(work, spec), _result(work))
+
+    summary, result = found["missing"]
+    # CompCore 가 잰 것 그대로 — 넓이 · 자리.
+    assert summary["unbonded_touching"] == "기둥 ↔ 모자 (넓이 100 mm² · 자리 (0, 0, 90) mm)"
+    boundary = json.loads((tmp_path / "missing" / "boundary.json").read_text(encoding="utf-8"))
+    assert boundary["connections"]["untied"] == [{**CAPPED_TOUCHING[1]}]
+    assert result["rigid_body_modes"] == 6
+    assert summary["first_elastic_hz"] > 1.0
+    assert all(one["elastic_number"] is None for one in result["modes"][:6])
+    assert "움직이는 바디: 모자" in result["warning"]
+    assert "기둥 ↔ 모자" in result["warning"] and "접촉을 거세요" in result["warning"]
+    assert summary["result_warning"] == result["warning"]
+
+    # 목록이 없는 옛 점 파일 — 메시에서 잰 같은 쌍(절점 수 · 자리), 같은 경고.
+    measured, measured_result = found["measured"]
+    assert measured["unbonded_touching"].startswith("기둥 ↔ 모자 (절점 ")
+    assert measured_result["rigid_body_modes"] == 6
+    assert "기둥 ↔ 모자" in measured_result["warning"]
+
+    summary, result = found["sliding"]
+    assert "unbonded_touching" not in summary
+    assert "no_separation:모자-기둥" in summary["constrained_regions"]
+    assert "미끄러지게" in summary["conditions_skipped"]
+    assert result["rigid_body_modes"] == 3, [one["frequency_hz"] for one in result["modes"]]
+    assert "움직이는 바디: 모자" in result["warning"]
+    assert "「모자-기둥」" in result["warning"]
+
+    summary, result = found["bonded"]
+    assert "unbonded_touching" not in summary and "warning" not in result
+    assert result["rigid_body_modes"] == 0
+    assert found["missing"][0]["first_elastic_hz"] == pytest.approx(1263.5, rel=0.01)
+    assert 0.8 < summary["first_elastic_hz"] / found["missing"][0]["first_elastic_hz"] < 0.95

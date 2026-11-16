@@ -181,6 +181,18 @@
     "narrowest_face": 2.8913,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "시편",
+        "b": "체결구",
+        "area": 174.8041,
+        "at": [
+          4.762,
+          0.0,
+          4.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -209,7 +221,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "602acf1c-e5ec-4b5a-84d1-5eeeb0faa05e",
+      "id": "140a7a8a-07e5-4562-a5c9-ced1a73c8b12",
       "name": "시험_뽑힘_D7332",
       "method": "factorial",
       "seed": 1

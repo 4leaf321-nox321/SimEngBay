@@ -25,7 +25,8 @@ from app.core import surface_parts
 from app.core.bodies import BodyRecord
 from app.core.dpf import fields, participation, probes, shapes, signature
 from app.core.modes import metrics
-from app.core.spec import RIGID_BODY_MODES, ModalSpec
+from app.core.modes import rigid as rigid_modes
+from app.core.spec import ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
@@ -47,11 +48,6 @@ def _free_free(spec: ModalSpec, workdir: Path) -> bool:
         except (OSError, ValueError):
             logger.warning("%s 를 읽지 못했습니다 — 스펙으로 봅니다", BOUNDARY_NAME)
     return spec.is_free_free
-
-
-#: 이보다 낮으면 강체 모드로 본다. 수치 오차 때문에 0 이 정확히 0 으로 안 나온다
-#: (실측: 여섯 번째가 0.0023 Hz).
-RIGID_BODY_HZ = 1.0
 
 
 def extract(
@@ -79,7 +75,9 @@ def extract(
     modes: list[dict[str, Any]] = []
     elastic_index = 0
     for index, value in enumerate(frequencies):
-        rigid = free_free and value < RIGID_BODY_HZ and index < RIGID_BODY_MODES
+        # **구속이 있어도 0 Hz 는 강체 모드다**(2026-11-16, `modes.rigid`) — 전에는 자유-자유의
+        # 앞 6개만 세어, 구속된 조립에서 떠 있는 바디가 「1차 탄성 0 Hz」 로 나왔다.
+        rigid = rigid_modes.is_rigid(float(value))
         if not rigid:
             elastic_index += 1
         modes.append(
@@ -135,24 +133,16 @@ def extract(
         # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
         **({"parts": parts} if parts else {}),
     }
-    loose = [
-        one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
-    ]
-    if not free_free and loose:
-        # **구속이 있는데 0 Hz 모드가 있다** — 어느 방향이 자유라는 뜻이다(원통 지지의 접선
-        # 처럼 일부러 열어 둔 것일 수 있다). 구속을 잘못 걸어 통째로 떠 있는 경우도 똑같이
-        # 보이므로, 값만으로 가르지 않고 사람에게 묻는다.
-        result["warning"] = (
-            f"구속이 있는데 {len(loose)}개 모드가 0 Hz 입니다 — 자유로 둔 방향(원통 지지의 "
-            f"접선 등)이 있는지 보세요."
-        )
-    if free_free and rigid_found != RIGID_BODY_MODES:
-        # **세어 보고 다르면 적어 둔다.** 다중 바디에서 접촉이 빠지면 강체 모드가 6개가 아니라
-        # 12개(바디마다 6개)로 나온다 — 값은 그럴듯한데 모델이 붙어 있지 않은 상태다.
-        result["warning"] = (
-            f"자유-자유인데 강체 모드가 {rigid_found}개입니다(6개여야 합니다). "
-            f"바디가 여럿이면 접촉이 잡히지 않았을 수 있습니다."
-        )
+    # **구속이 있는데 0 Hz** — 열어 둔 방향(원통 지지의 접선 등)일 수도, 떠 있는 바디일 수도
+    # 있다. 값만으로 가르지 않고 움직이는 바디를 적어 사람에게 묻는다. 자유-자유는 강체 모드가
+    # 6개가 아니면 — 다중 바디에서 접촉이 빠지면 바디마다 6개씩 나온다.
+    said = rigid_modes.warning(
+        modes,
+        constrained=not free_free,
+        connections=rigid_modes.read_connections(workdir / BOUNDARY_NAME),
+    )
+    if said:
+        result["warning"] = said
 
     path = workdir / RESULT_NAME
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -164,6 +154,8 @@ def extract(
             "rigid_body_modes": rigid_found,
             "first_elastic_hz": first,
             "mode_shapes": sum(1 for one in artifacts if one.kind == "mode_vtp"),
+            # 요약만 읽는 쪽(MCP · 목록)도 경고를 보게.
+            **({"result_warning": said} if said else {}),
         },
         detail=f"모드 {len(modes)}개" + (f" · 1차 탄성 {first} Hz" if first else ""),
     )

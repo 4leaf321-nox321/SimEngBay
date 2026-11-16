@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('.', import.meta.url))
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@': path.resolve(root, 'src') } },
-  define: { __APP_VERSION__: JSON.stringify('v0.0.0-test') },
+  define: { __APP_VERSION__: JSON.stringify('v0.0.0-test'), __PLOT_KIT__: JSON.stringify('full') },
   test: {
     environment: 'happy-dom',
     globals: true,

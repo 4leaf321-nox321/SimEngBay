@@ -8,6 +8,7 @@
     "dev": "vite",
     "prebuild": "npm run api:types",
     "build": "tsc -b && vite build",
+    "build:panels": "node scripts/build-panels.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "api:types": "openapi-typescript ../backend/openapi.json -o src/shared/api/schema.d.ts",
@@ -52,6 +53,7 @@
     "happy-dom": "^20.11.12",
     "openapi-typescript": "^7.13.0",
     "oxlint": "^1.75.0",
+    "plotly.js-cartesian-dist-min": "^4.1.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.0",
     "vitest": "^3.2.7"

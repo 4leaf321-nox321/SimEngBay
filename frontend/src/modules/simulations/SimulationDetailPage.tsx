@@ -127,6 +127,13 @@ const SUMMARY_LABELS: Record<string, string> = {
   bonding: '본딩 방식',
   bonded_pairs: '쌍별 연결',
   bond_warning: '연결 경고',
+  // 접촉을 선언했으면 선언한 쌍만 묶는다 — 맞닿았는데 접촉이 없는 쌍은 떨어진 채로 풀렸다.
+  // CompCore 의 경고와 같은 말(「접촉 미정의: 인접 바디」, CompCore v0.26.0 다음 판).
+  unbonded_touching: '접촉 미정의: 인접 바디',
+  // 못 건 조건 · 다르게 푼 조건(붙은 것으로 · 미끄러지게)과 그 까닭.
+  conditions_skipped: '조건 처리 알림',
+  // 결과를 읽고 단 경고 — 모달이면 0 Hz 모드(움직인 바디 · 그럴 만한 까닭).
+  result_warning: '결과 경고',
   // 정적은 메모리가 모자랄 것 같으면 반복 솔버로 푼다 — 무엇으로 풀었고 얼마를 어림했나.
   linear_solver: '선형 솔버',
   memory_estimate_mb: '메모리 어림',
@@ -143,6 +150,9 @@ const WIDE_SUMMARY = new Set([
   'solver_retry',
   'bonded_pairs',
   'bond_warning',
+  'unbonded_touching',
+  'conditions_skipped',
+  'result_warning',
 ])
 
 /** 요약 묶음 — 메시 · 모델 · 해석 · 실행. 모르는 열쇠는 「기타」 로. */
@@ -160,6 +170,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'bonding',
       'bonded_pairs',
       'bond_warning',
+      'unbonded_touching',
       'boolean_tolerance_mm',
       'mesh_repairs',
     ],
@@ -178,6 +189,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'suppressed_bodies',
       'shell_bodies',
       'constrained_regions',
+      'conditions_skipped',
       'unit_system',
       'input_bytes',
     ],
@@ -193,6 +205,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'modes_requested',
       'rigid_body_modes',
       'first_elastic_hz',
+      'result_warning',
       'damping_ratio',
       'frequency_points',
       'max_displacement',

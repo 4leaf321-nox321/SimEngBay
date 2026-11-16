@@ -81,6 +81,7 @@
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -111,7 +112,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "bd0df4f9-ac27-4ed1-92fa-fa9f8403e5b7",
+      "id": "e4ec1ca9-ef8e-4189-acd3-39d6fd90cc51",
       "name": "셸모델_두께없음",
       "method": "factorial",
       "seed": 1

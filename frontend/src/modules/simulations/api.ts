@@ -25,6 +25,14 @@ export type Study = components['schemas']['StudyOut']
 export type StudyOntology = components['schemas']['StudyOntologyOut']
 export type StudyPoint = components['schemas']['StudyPointOut']
 export type ModeTrack = components['schemas']['ModeTrackOut']
+/** 주파수 요구 판정 — 목표 주파수 · 회피 대역(서버가 셈한다, `frequency.py`). */
+export type FrequencyCheck = components['schemas']['FrequencyCheckOut']
+export type FrequencyPoint = components['schemas']['FrequencyPointOut']
+export type FrequencyMode = components['schemas']['FrequencyModeOut']
+export type FrequencyCrossing = components['schemas']['FrequencyCrossingOut']
+export type FrequencyRequirementInput = NonNullable<
+  components['schemas']['FrequencyRequirementsIn']['requirements']
+>[number]
 export type WorkersOverview = components['schemas']['WorkersOut']
 export type WorkerRow = components['schemas']['WorkerOut']
 export type SolverAvailability = components['schemas']['SolverAvailabilityOut']
@@ -379,6 +387,16 @@ export const simulationApi = {
     if (label.trim()) form.append('label', label.trim())
     return api.postForm<Measurement>(`/simulations/${id}/measurements`, form)
   },
+  /** 저장된 주파수 요구로 판정한다. */
+  studyFrequency: (studyId: string) =>
+    api.get<FrequencyCheck>(`/simulations/studies/${encodeURIComponent(studyId)}/frequency`),
+  /** 저장하지 않은 요구로 판정한다(미리보기). */
+  checkStudyFrequency: (studyId: string, requirements: FrequencyRequirementInput[]) =>
+    api.post<FrequencyCheck>(`/simulations/studies/${encodeURIComponent(studyId)}/frequency/check`, {
+      requirements,
+    }),
+  saveStudyFrequency: (studyId: string, requirements: FrequencyRequirementInput[]) =>
+    api.put<FrequencyCheck>(`/simulations/studies/${encodeURIComponent(studyId)}/frequency`, { requirements }),
   studyMeasurements: (studyId: string) =>
     api.get<StudyMeasurement[]>(`/simulations/studies/${encodeURIComponent(studyId)}/measurements`),
   addStudyMeasurement: (studyId: string, file: File, label: string) => {

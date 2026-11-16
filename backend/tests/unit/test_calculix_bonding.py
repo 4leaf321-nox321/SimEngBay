@@ -75,9 +75,11 @@ def test_본딩이_아닌_접촉을_묶으면_무엇이_다른지_말한다() ->
     # 모달의 마찰은 붙여 푼다 — Ansys 는 벌칙 강성만큼 물러 조금 낮다(실측 5.3%).
     assert "5.3%" in str(_linearized(_contact("frictional"), modal=True))
     assert "정적" in str(_linearized(_contact("frictional"), modal=False))
-    # 미끄러짐으로 푼 무마찰 · no separation 은 Ansys 와 같다 — 할 말이 없다.
-    assert _linearized(_contact("frictionless"), modal=True, sliding=True) is None
-    assert _linearized(_contact("no_separation"), modal=False, sliding=True) is None
+    # 미끄러짐으로 푼 무마찰 · no separation 은 Ansys 와 같지만 **그렇다고 적는다** — 그
+    # 접촉으로만 이어진 바디는 0 Hz 모드가 나온다(마찰에는 말이 있는데 미끄럼에는 없었다).
+    assert "0 Hz" in str(_linearized(_contact("frictionless"), modal=True, sliding=True))
+    static = _linearized(_contact("no_separation"), modal=False, sliding=True)
+    assert "미끄러지게" in str(static)
     # 강체와의 접촉이라 강체에 붙였으면 미끄러지지 못한다.
     assert "강체" in str(_linearized(_contact("frictionless"), modal=True))
 

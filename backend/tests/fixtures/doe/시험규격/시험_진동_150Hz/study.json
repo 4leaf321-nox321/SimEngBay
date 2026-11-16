@@ -1,5 +1,5 @@
 {
-  "id": "6fd66032-2da8-4c24-957c-189cdd1257d0",
+  "id": "71f75d73-80b9-456f-99a3-5795d0c8418c",
   "name": "시험_진동_150Hz",
   "description": "",
   "method": "factorial",
@@ -275,7 +275,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-09742348@example.local"
+    "email": "member-784de317@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

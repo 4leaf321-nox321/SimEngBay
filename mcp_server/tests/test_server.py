@@ -46,6 +46,7 @@ TOOLS = {
     "study_get",
     "study_publish",
     "study_analyze",
+    "study_frequency",
     "study_cancel",
     "study_rerun",
     "server_status",
@@ -54,6 +55,17 @@ TOOLS = {
     "convergence_get",
     "measurements_get",
     "measurement_add",
+    "panel_data",
+}
+
+#: 결과 화면(MCP Apps 패널)을 여는 도구 → 화면.
+PANELS = {
+    "study_get": "study",
+    "study_analyze": "explore",
+    "study_frequency": "frequency",
+    "job_result": "result",
+    "convergence_get": "convergence",
+    "measurements_get": "measurements",
 }
 
 REQUEST_TEMPLATE = (
@@ -704,6 +716,107 @@ def test_분석은_조건을_여럿_보내고_결과를_안_고르면_주효과�
     assert "result" not in seen[0].url.params
     assert "effects" not in got
     assert "effects" in _run(server.study_analyze, "s1", result="max_mm")
+
+
+def test_주파수_요구_판정은_기본으로_모드별_줄을_뺀다() -> None:
+    """점마다 모드 열 개의 역할 · 까닭까지 실으면 점 200개에서 문맥을 다 먹는다 — 판정과
+    요약만, `detail` 이면 전부."""
+    body = {
+        "counts": {"conform": 1},
+        "crossings": [{"kind": "target"}],
+        "points": [{"number": 1, "verdict": "conform", "modes": [{}], "sensitivity": [{}]}],
+    }
+    seen = _serve(lambda _r: httpx.Response(200, json=body))
+    got = _run(server.study_frequency, "s1")
+    assert seen[0].url.path == "/api/simulations/studies/s1/frequency"
+    assert "crossings" not in got and "modes" not in got["points"][0]
+    assert got["points"][0]["verdict"] == "conform"
+    full = _run(server.study_frequency, "s1", detail=True)
+    assert "crossings" in full and "modes" in full["points"][0]
+
+
+def test_결과_도구는_화면을_달고_읽기로_표시한다() -> None:
+    """도구 정의의 `_meta.ui.resourceUri` 가 있어야 HWAX 챗 · Claude 가 결과 아래에 화면을
+    띄우고, `readOnlyHint` 가 있어야 HWAX 가 패널의 호출을 사람에게 묻지 않는다."""
+    listed = {one.name: one for one in asyncio.run(server.mcp.list_tools())}
+    for tool, view in PANELS.items():
+        assert listed[tool].meta == {"ui": {"resourceUri": f"ui://simengbay/{view}"}}, tool
+        assert listed[tool].annotations and listed[tool].annotations.readOnlyHint, tool
+    # 패널 전용 — 모델에게는 보이지 않게(visibility 에 model 이 없다).
+    data = listed["panel_data"]
+    assert data.meta == {"ui": {"visibility": ["app"]}}
+    assert data.annotations and data.annotations.readOnlyHint
+    # 쓰기 · 걸기 도구에는 화면도 읽기 표지도 없다.
+    for tool in ("jobs_create", "job_cancel", "study_publish", "files_tidy"):
+        assert not listed[tool].meta and not listed[tool].annotations, tool
+
+
+def test_화면은_HTML_한_장으로_읽히고_없으면_왜_없는지_말한다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resources = {str(one.uri): one for one in asyncio.run(server.mcp.list_resources())}
+    assert set(resources) == {f"ui://simengbay/{view}" for view in PANELS.values()}
+    assert {one.mimeType for one in resources.values()} == {"text/html;profile=mcp-app"}
+    monkeypatch.setattr(server, "_PANEL_DIRS", (str(tmp_path),))
+    (tmp_path / "frequency.html").write_text("<p>판정</p>", encoding="utf-8")
+    read = asyncio.run(server.mcp.read_resource("ui://simengbay/frequency"))
+    assert read[0].content == "<p>판정</p>"
+    assert read[0].mime_type == "text/html;profile=mcp-app"
+    missing = asyncio.run(server.mcp.read_resource("ui://simengbay/result"))[0].content
+    assert "해석 결과" in missing and "build:panels" in missing
+
+
+def test_패널_자료는_해석_경로를_읽기만_한다() -> None:
+    """패널이 웹 화면과 같은 자료를 읽는 길 — `/simulations` 아래 GET 과 판정 미리 보기 POST
+    만. 백엔드의 답(오류 봉투까지)을 그대로 건넨다."""
+    seen = _serve(
+        lambda r: httpx.Response(
+            404 if r.url.path.endswith("/gone") else 200,
+            json={"error": {"code": "X", "message": "없음"}}
+            if r.url.path.endswith("/gone")
+            else {"path": r.url.path},
+        )
+    )
+    got = _run(server.panel_data, "/simulations/studies/s1/frequency")
+    assert got == {"status": 200, "body": {"path": "/api/simulations/studies/s1/frequency"}}
+    assert seen[0].method == "GET" and seen[0].headers["authorization"] == "Bearer t"
+    _run(server.panel_data, "/simulations/studies?scope=mine")
+    assert seen[1].url.params["scope"] == "mine"
+    preview = _run(
+        server.panel_data, "/simulations/studies/s1/frequency/check", {"requirements": []}
+    )
+    assert preview["status"] == 200
+    assert seen[2].method == "POST" and json.loads(seen[2].content) == {"requirements": []}
+    assert _run(server.panel_data, "/simulations/gone") == {
+        "status": 404,
+        "body": {"error": {"code": "X", "message": "없음"}},
+    }
+    # 막는 것 — 백엔드에 닿지 않는다.
+    count = len(seen)
+    for path, body, status in (
+        ("/auth/me", None, 403),
+        (
+            "/simulations/studies/s1/frequency",
+            {"requirements": []},
+            403,
+        ),  # 저장(PUT)과 같은 자리
+        ("/simulations/j1/retry", {}, 403),
+        ("/simulations/../auth/me", None, 400),
+        ("/simulations/%2e%2e/auth/me", None, 400),
+        ("simulations/j1", None, 400),
+    ):
+        refused = _run(server.panel_data, path, body)
+        assert refused["status"] == status, path
+        assert refused["body"]["error"]["message"]
+    assert len(seen) == count
+
+
+def test_패널_자료도_401_이면_게이트웨이가_다시_받는_모양으로_실패한다() -> None:
+    _serve(lambda _r: httpx.Response(401, json={"error": {"code": "A", "message": "만료"}}))
+    with pytest.raises(
+        server.BackendUnauthorized, match=r"^GET /api/simulations/j1 → HTTP 401"
+    ):
+        _run(server.panel_data, "/simulations/j1")
 
 
 def test_서버_상태는_누구나_솔버_요약_관리자는_워커까지() -> None:

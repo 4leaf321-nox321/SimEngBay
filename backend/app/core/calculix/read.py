@@ -27,8 +27,9 @@ from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, tables, vtp
 from app.core.calculix.mesh import Mesh, read_mesh
 from app.core.modes import metrics, signature
+from app.core.modes import rigid as rigid_modes
 from app.core.numbers import significant
-from app.core.spec import RIGID_BODY_MODES, ModalSpec
+from app.core.spec import ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,6 @@ RESULT_NAME = "result.json"
 DATA_NAME = "model.dat"
 BOUNDARY_NAME = "boundary.json"
 
-#: 이보다 낮으면 강체 모드로 본다 — Ansys 쪽과 같은 문턱(수치 오차로 0 이 정확히 0 이 아니다).
-RIGID_BODY_HZ = 1.0
 #: 모드 형상을 몇 개까지 그릴까 — Ansys 쪽 `visual_modes` 와 같은 뜻이다.
 VISUAL_MODES = 6
 
@@ -60,10 +59,10 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
     modes: list[dict[str, Any]] = []
     elastic_index = 0
     for index, value in enumerate(values, start=1):
-        # **구속이 있으면 강체로 세지 않는다** — Ansys 쪽과 같은 규칙이다(`dpf/extract.py`).
-        # 구속된 모델의 0 Hz 는 「강체」 가 아니라 **자유로 둔 방향**이고(원통 지지의 접선 등),
-        # 그것은 아래에서 경고로 말한다. 두 솔버가 같은 표를 내야 설계점 비교가 성립한다.
-        rigid = not constrained and value < RIGID_BODY_HZ and index <= RIGID_BODY_MODES
+        # **구속이 있어도 0 Hz 는 강체 모드다**(2026-11-16, `modes.rigid`) — 떠 있는 바디 ·
+        # 열어 둔 방향 · 미끄럼 접촉의 움직임은 탄성 모드가 아니다. 전에는 구속이 있으면 세지
+        # 않아 「1차 탄성 0 Hz」 가 나왔다. Ansys 쪽과 같은 규칙이다(`dpf/extract.py`).
+        rigid = rigid_modes.is_rigid(value)
         if not rigid:
             elastic_index += 1
         modes.append(
@@ -86,11 +85,13 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
             one["effective_mass_ratio"] = round(ratios[direction][int(one["number"])], 4)
 
     # 그림 · 지문 · 측정점이 **같은 메시와 변위를 읽는다** — `.frd` 는 수십 MB 라 한 번만.
-    found = _read_shapes(workdir) if elastic else None
+    found = _read_shapes(workdir)
     shapes, parts = _draw_modes(
         workdir, found, [one["number"] for one in elastic[:VISUAL_MODES]], modes
     )
-    _describe_modes(workdir, found, elastic)
+    # 강체 모드도 성격을 잰다 — 0 Hz 모드에서 **어느 바디가 움직이나**(`part_share`)가 경고의
+    # 재료다. Ansys 쪽도 모든 모드를 잰다.
+    _describe_modes(workdir, found, modes)
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
     # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
@@ -113,24 +114,16 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
         **({"parts": parts} if parts else {}),
     }
-    loose = [
-        one for one in modes if one["frequency_hz"] < RIGID_BODY_HZ and not one["rigid_body"]
-    ]
-    if constrained and loose:
-        # **구속이 있는데 0 Hz 모드가 있다** — 어느 방향이 자유라는 뜻이다. 원통 지지의 접선
-        # 처럼 일부러 열어 둔 것일 수 있으나, 구속을 잘못 걸어 통째로 떠 있는 경우도 똑같이
-        # 보인다. 값만으로는 못 가르므로 **사람에게 묻는다.**
-        result["warning"] = (
-            f"구속이 있는데 {len(loose)}개 모드가 0 Hz 입니다 — 자유로 둔 방향(원통 지지의 "
-            f"접선 등)이 있는지 보세요."
-        )
-    if not constrained and rigid_found != RIGID_BODY_MODES:
-        # **세어 보고 다르면 적어 둔다.** 바디가 여럿인데 접합면이 안 붙었으면 강체 모드가
-        # 바디마다 6개씩 나온다 — 값은 그럴듯한데 모델이 떨어져 있는 상태다.
-        result["warning"] = (
-            f"자유-자유인데 강체 모드가 {rigid_found}개입니다(6개여야 합니다). "
-            f"맞닿은 면이 붙지 않았을 수 있습니다."
-        )
+    # **구속이 있는데 0 Hz** — 열어 둔 방향일 수도, 떠 있는 바디일 수도 있다. 값만으로는 못
+    # 가르므로 움직이는 바디와 그럴 만한 까닭(모델링이 남긴 연결)을 적어 **사람에게 묻는다.**
+    # 자유-자유는 강체 모드가 6개가 아니면 — 바디가 떨어져 있으면 바디마다 6개씩 나온다.
+    said = rigid_modes.warning(
+        modes,
+        constrained=constrained,
+        connections=rigid_modes.read_connections(workdir / BOUNDARY_NAME),
+    )
+    if said:
+        result["warning"] = said
 
     path = workdir / RESULT_NAME
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -146,6 +139,8 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
             "rigid_body_modes": rigid_found,
             "first_elastic_hz": first,
             "mode_shapes": len(shapes),
+            # 요약만 읽는 쪽(MCP · 목록)도 경고를 보게.
+            **({"result_warning": said} if said else {}),
         },
         detail=f"모드 {len(modes)}개" + (f" · 1차 탄성 {first} Hz" if first else ""),
     )

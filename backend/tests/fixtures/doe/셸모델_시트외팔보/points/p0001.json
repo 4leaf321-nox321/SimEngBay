@@ -138,6 +138,7 @@
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -168,7 +169,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "b9888904-f12d-48ad-92b3-13f91c1eaf7b",
+      "id": "c7201fd0-3792-4414-9aa3-797d22a272a1",
       "name": "셸모델_시트외팔보",
       "method": "factorial",
       "seed": 1

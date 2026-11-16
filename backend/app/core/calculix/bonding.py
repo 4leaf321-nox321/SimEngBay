@@ -28,15 +28,24 @@
 - **강체가 낀 묶음은 `*TIE` 를 쓰지 않고 상대 절점을 그 강체에 넣는다** — 강체 표면에 묶으면
   구속이 사슬이 되어 ccx 가 기준점 반력에 그 몫을 안 넣었다(쉘 묶음과 같은 까닭,
   `build._ties`).
-- **구속된 절점은 주(master) 쪽에 두지 않는다** — 고정 절점이 주 면에 있으면 종에서 넘어온 힘이
-  그 절점의 반력(RF)에 안 들어간다(강체 묶음의 「구속 사슬」 과 같다). 바닥까지 뚫린 나사
-  구멍을
-  주로 두었더니 볼트 조립의 바닥 반력이 600 N 이 아니라 428 N 이었다(2026-11-16). 구속 절점이
-  적은 쪽을 주로 고르고, 그래도 남으면 그 절점이 든 주 요소면을 뺀다. 종 쪽의 구속 절점은 ccx
-  가
-  묶지 않는다.
+- **구속된 절점은 주(master) 쪽에 두지 않는다** — 고정 절점이 주 면에 있으면 종에서 넘어온
+  힘이 그 절점의 반력(RF)에 안 들어간다(강체 묶음의 「구속 사슬」 과 같다). 바닥까지 뚫린
+  나사 구멍을 주로 두었더니 볼트 조립의 바닥 반력이 600 N 이 아니라 428 N 이었다
+  (2026-11-16). 구속 절점이 적은 쪽을 주로 고르고, 그래도 남으면 그 절점이 든 주 요소면을
+  뺀다. 종 쪽의 구속 절점은 ccx 가 묶지 않는다.
 - 한 절점은 한 묶음의 종이다 — 먼저 묶인 절점은 뒤 묶음의 종에서 뺀다(ccx 는 두 번째를 건너뛰며
   경고를 낸다).
+
+## 묶지 않은 것도 말한다(2026-11-16, CompCore 의 조립 점검)
+
+- 선언이 있을 때 **맞닿았는데 접촉이 없는 바디 쌍**은 떨어진 채로 풀린다(Ansys 와 같다).
+  묶지는 않고 자리와 함께 알린다(요약 `unbonded_touching`). 쌍은 CompCore 가 잰 목록
+  (`quality.touching` — `app/core/touching.py`, 두 솔버 공통)으로 고른다. 그 목록이 없는 옛 점
+  파일이면 메시에서 잰다(`Bonding.untied` — 자동 묶음과 같은 반경, 쉘이 낀 쌍은 못 잰다).
+- 미끄럼으로 푼 접촉(분리 없음 · 모달의 마찰 없음)은 면 방향을 잡지 않는다 — 그 접촉으로만
+  이어진 바디는 0 Hz 모드가 나온다. 그렇다고 적는다(`SLIDING_NOTE`).
+- 둘 다 `boundary.json` 의 `connections` 에 남는다 — 추출이 0 Hz 모드의 까닭을 짚는다
+  (`modes.rigid`).
 """
 
 from __future__ import annotations
@@ -53,6 +62,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
+from app.core import touching
 from app.core.calculix import deck as deck_writer
 from app.core.calculix.mesh import element_faces
 from app.core.regions import match_regions
@@ -73,6 +83,17 @@ AUTO_RATIO = 0.02
 #: CompCore 가 알린 틈이 있으면 자동 묶음의 반경을 그 틈 x 이것 아래로 — 후보는 두 배 반경에서
 #: 고르므로(`_automatic`) 그래도 틈보다 작다.
 GAP_SHARE = 0.4
+#: 미끄럼으로 푼 접촉의 말 — 모달 · 조화, 정적.
+SLIDING_NOTE = {
+    True: (
+        "법선으로만 묶어 **면 방향으로 미끄러지게** 풀었습니다(Ansys 도 선형 해석에서 "
+        "같습니다) — 이 접촉으로만 이어진 바디는 미끄러지는 방향이 0 Hz 모드로 나옵니다."
+    ),
+    False: (
+        "법선으로만 묶어 **면 방향으로 미끄러지게** 풀었습니다 — 이 접촉으로만 이어진 바디는 "
+        "그 방향을 다른 구속이 잡아야 풀립니다."
+    ),
+}
 
 
 def bonding_mode() -> str:
@@ -95,6 +116,10 @@ class Bonding:
     refused: list[condition_model.Note] = field(default_factory=list)
     applied: list[str] = field(default_factory=list)
     """강체에 넣은 묶음 · 자동 묶음의 이름(`*TIE` 는 덱이 적는다)."""
+    untied: list[dict[str, Any]] = field(default_factory=list)
+    """맞닿았는데 접촉이 없는 바디 쌍 — `{a, b, nodes, at}`(선언이 있을 때만 잰다)."""
+    sliding: list[dict[str, Any]] = field(default_factory=list)
+    """미끄럼으로 푼 접촉 — `{contact, kind, bodies}`."""
 
 
 def bond(
@@ -112,11 +137,14 @@ def bond(
     tolerance: float,
     taken: set[int] | None = None,
     held: set[int] | None = None,
+    find_untied: bool = True,
 ) -> Bonding:
     """선언한 접촉(`declared`) 또는 맞닿은 바디(선언이 없을 때)를 묶는다.
 
     `nonlinear` 면 마찰 · 무마찰 · rough 는 묶지 않는다 — 정적의 비선형 접촉 쌍으로 건다
     (`deck.contact_block`). `modal` 은 붙인 까닭을 고유치에 맞게 적으려고 받는다.
+    `find_untied` 면 선언이 있을 때 접촉 없이 맞닿은 쌍을 메시에서 잰다 — CompCore 가 그 목록을
+    보냈으면(`touching.uncovered`) 끈다.
     """
     made = Bonding(rigid=list(rigid))
     used = set(taken or set())
@@ -138,6 +166,17 @@ def bond(
             tolerance,
             fixed,
         )
+        if find_untied and len(faces_of) > 1:
+            made.untied = untied_pairs(
+                topology,
+                contacts,
+                mesh,
+                faces_of,
+                body_of,
+                made.rigid,
+                max(tolerance, AUTO_RATIO * size),
+                _reported_gaps(topology),
+            )
     elif len(faces_of) > 1:
         _automatic(
             mesh,
@@ -253,6 +292,13 @@ def _declared(
                 )
             )
             slaves = {row[0] for row in rows}
+            made.sliding.append(
+                {
+                    "contact": pair.name,
+                    "kind": pair.kind,
+                    "bodies": touching.contact_bodies(topology, pair),
+                }
+            )
             logger.info(
                 "접촉 %s → 법선 구속식 %s 개(떨어지지 않고 미끄러짐) · 반경 %.4g mm",
                 pair.name,
@@ -300,16 +346,12 @@ def _declared(
 
 def _sliding(pair: condition_model.Contact, modal: bool) -> bool:
     """법선으로만 묶나(떨어지지 않고 미끄러진다) — no separation 은 늘, 무마찰은 모달 ·
-    조화에서
-    (Ansys 가 선형 해석에서 무마찰을 no separation 으로 푼다).
+    조화에서(Ansys 가 선형 해석에서 무마찰을 no separation 으로 푼다).
 
-    ⚠️ **마찰은 미끄러지게 하지 않는다.** 「조건_조건훑기」 의 마찰 블록을 미끄러지게 했더니 0
-    Hz
-       모드가 셋(판 위에서 블록이 미끄러진다) 나왔는데 Ansys 는 26,472.8 Hz 였다 — Ansys 는
-       닫힌
-       마찰 접촉을 **붙여** 풀고, 벌칙 강성만큼 물러 접착(27,940.6)보다 5.3% 낮을
-       뿐이다(2026-11-16).
-       rough 도 미끄러지지 않는다."""
+    ⚠️ **마찰은 미끄러지게 하지 않는다.** 「조건_조건훑기」 의 마찰 블록을 미끄러지게 했더니
+    0 Hz 모드가 셋(판 위에서 블록이 미끄러진다) 나왔는데 Ansys 는 26,472.8 Hz 였다 — Ansys
+    는 닫힌 마찰 접촉을 **붙여** 풀고, 벌칙 강성만큼 물러 접착(27,940.6)보다 5.3% 낮을
+    뿐이다(2026-11-16). rough 도 미끄러지지 않는다."""
     return pair.kind == "no_separation" or (modal and pair.kind == "frictionless")
 
 
@@ -318,14 +360,18 @@ def _linearized(
 ) -> str | None:
     """본딩이 아닌 접촉을 풀었을 때의 말 — 무엇이 Ansys 와 다른가. 같으면 말하지 않는다.
 
-    - 미끄러짐으로 푼 무마찰 · no separation, 모달의 rough(미끄러지지 않는다)는 Ansys 와 같다.
+    - 미끄러짐으로 푼 무마찰 · no separation 은 Ansys 와 같지만 **그렇다고 적는다** — 그
+      접촉으로만 이어진 바디는 0 Hz 모드가 나온다(마찰에는 말이 있는데 미끄럼에는 없었다 —
+      CompCore 의 조립 점검, 2026-11-16). 모달의 rough(미끄러지지 않는다)는 Ansys 와 같다.
     - 모달의 마찰은 붙여 푼다 — Ansys 도 붙여 풀지만 벌칙 강성만큼 물러 조금 낮다.
     - 강체와의 접촉이라 강체에 넣었으면 미끄러지지 못한다.
     - 힘으로 미는 정적의 마찰 · 무마찰 · rough 는 붙은 것으로 풀었다(접촉 쌍은 변위로 당길
       때만).
     """
-    if pair.kind == "bonded" or sliding:
+    if pair.kind == "bonded":
         return None
+    if sliding:
+        return SLIDING_NOTE[modal]
     if _sliding(pair, modal):
         return "강체 파트와의 접촉이라 강체에 붙여 **미끄러짐 없이** 풀었습니다."
     if pair.kind == "rough" and modal:
@@ -400,21 +446,10 @@ def _automatic(
     안에 든 절점만. 촘촘한 쪽을 종으로 둔다(ccx 의 권고). 강체가 끼면 그 강체에 넣는다.
 
     정확한 거리는 ccx 가 잰다(`*TIE` 의 POSITION TOLERANCE — 2차 면에 투영한다). 여기서는
-    평평한
-    삼각형으로 두 배 반경 안의 후보만 고른다 — 맞닿았는지 알고, 덱을 작게 두려고."""
+    평평한 삼각형으로 두 배 반경 안의 후보만 고른다 — 맞닿았는지 알고, 덱을 작게 두려고."""
     name_of = {entity: name for name, entity in body_of.items()}
     lookup = element_faces(mesh)
-    surface: dict[int, tuple[set[int], list[tuple[int, int, int]], float]] = {}
-    for solid, faces in faces_of.items():
-        nodes: set[int] = set()
-        triangles: list[tuple[int, int, int]] = []
-        area = 0.0
-        for face in faces:
-            nodes |= mesh.face_nodes.get(face, set())
-            triangles += mesh.face_triangles.get(face, [])
-        for triangle in triangles:
-            area += _area(*(mesh.nodes[one] for one in triangle))
-        surface[solid] = (nodes, triangles, len(nodes) / area if area > 0 else 0.0)
+    surface = _surfaces(mesh, faces_of)
     boxes = {solid: _box(mesh.nodes, data[0]) for solid, data in surface.items()}
     solids = sorted(surface)
     count = 0
@@ -458,14 +493,14 @@ def _automatic(
                 for one in surface[master][1]
                 if any(_inside(mesh.nodes[n], reach) for n in one)
             ]
-            touching = near_nodes(mesh.nodes, candidates, triangles, 2 * reach_here)
-            if not touching:
+            near = near_nodes(mesh.nodes, candidates, triangles, 2 * reach_here)
+            if not near:
                 continue
             label = f"auto:{name_of.get(slave, slave)}↔{name_of.get(master, master)}"
             owner = owners[master]
             if owner is not None:
                 held = made.rigid[owner]
-                made.rigid[owner] = replace(held, nodes=held.nodes | frozenset(touching))
+                made.rigid[owner] = replace(held, nodes=held.nodes | frozenset(near))
                 made.applied.append(label)
             else:
                 count += 1
@@ -473,7 +508,7 @@ def _automatic(
                     deck_writer.Tie(
                         contact=label,
                         name=f"AUTO{count}",
-                        slave_nodes=frozenset(touching),
+                        slave_nodes=frozenset(near),
                         master_faces=_free_faces(
                             [
                                 (one, hit)
@@ -485,10 +520,108 @@ def _automatic(
                         tolerance=reach_here,
                     )
                 )
-            used |= touching
-            logger.info(
-                "자동 묶음 %s — 절점 %s · 반경 %.4g mm", label, len(touching), reach_here
+            used |= near
+            logger.info("자동 묶음 %s — 절점 %s · 반경 %.4g mm", label, len(near), reach_here)
+
+
+Surface = tuple[set[int], list[tuple[int, int, int]], float]
+
+
+def _surfaces(mesh: Any, faces_of: dict[int, list[int]]) -> dict[int, Surface]:
+    """솔리드마다 겉면 — (절점, 삼각형, 넓이당 절점 수)."""
+    surface: dict[int, Surface] = {}
+    for solid, faces in faces_of.items():
+        nodes: set[int] = set()
+        triangles: list[tuple[int, int, int]] = []
+        for face in faces:
+            nodes |= mesh.face_nodes.get(face, set())
+            triangles += mesh.face_triangles.get(face, [])
+        area = sum(_area(*(mesh.nodes[one] for one in triangle)) for triangle in triangles)
+        surface[solid] = (nodes, triangles, len(nodes) / area if area > 0 else 0.0)
+    return surface
+
+
+def untied_pairs(
+    topology: dict[str, Any],
+    contacts: list[condition_model.Contact],
+    mesh: Any,
+    faces_of: dict[int, list[int]],
+    body_of: dict[str, int],
+    rigid: list[deck_writer.RigidBody],
+    radius: float,
+    gaps: dict[frozenset[str], float] | None = None,
+) -> list[dict[str, Any]]:
+    """**맞닿았는데 접촉이 없는 바디 쌍** — 접촉을 선언했으면 나머지는 떨어진 채로 풀린다
+    (Ansys 경로도 선언한 쌍만 붙인다). 부품이 수십 개인 조립에서 한 쌍을 빠뜨리기 쉽고,
+    빠뜨리면 그 바디가 떠서 모달이 0 Hz 를 낸다 — 그런데 아무도 말하지 않았다(CompCore 의 조립
+    점검, 2026-11-16). 묶지는 않고 쌍마다 `{a, b, nodes, at}` 로 알린다.
+
+    맞닿음은 자동 묶음과 같은 반경으로 잰다(`_automatic` — 선언이 없었으면 묶였을 쌍이다).
+    선언한 접촉은 종류와 상관없이 그 두 바디를 덮는다. 강체끼리는 묶을 수 없어 세지 않는다.
+    """
+    solid_of = {face: solid for solid, faces in faces_of.items() for face in faces}
+    wanted = sorted({one.source for one in contacts} | {one.target for one in contacts})
+    found = match_regions(topology, mesh.faces, wanted_regions=wanted) if wanted else None
+    covered: set[frozenset[int]] = set()
+    for pair in contacts:
+        ends = [
+            {solid_of[face] for face in (found.faces.get(side) or []) if face in solid_of}
+            if found is not None
+            else set()
+            for side in (pair.source, pair.target)
+        ]
+        covered |= {frozenset({a, b}) for a in ends[0] for b in ends[1] if a != b}
+    name_of = {entity: name for name, entity in body_of.items()}
+    surface = _surfaces(mesh, faces_of)
+    boxes = {solid: _box(mesh.nodes, data[0]) for solid, data in surface.items() if data[0]}
+    rigid_solids = {
+        solid
+        for solid, data in surface.items()
+        if any(data[0] and data[0] <= one.nodes for one in rigid)
+    }
+    made: list[dict[str, Any]] = []
+    solids = sorted(boxes)
+    for at, first in enumerate(solids):
+        for second in solids[at + 1 :]:
+            if frozenset({first, second}) in covered:
+                continue
+            if first in rigid_solids and second in rigid_solids:
+                continue
+            names = (name_of.get(first, str(first)), name_of.get(second, str(second)))
+            reach = radius
+            if gaps and frozenset(names) in gaps:
+                reach = min(radius, GAP_SHARE * gaps[frozenset(names)])
+            if not _meet(boxes[first], boxes[second], 2 * reach):
+                continue
+            # 절점이 적은 쪽에서 잰다 — 셈이 가볍다.
+            slave, master = (
+                (first, second)
+                if len(surface[first][0]) <= len(surface[second][0])
+                else (second, first)
             )
+            near_box = _grow(boxes[master], 2 * reach)
+            candidates = {n for n in surface[slave][0] if _inside(mesh.nodes[n], near_box)}
+            grown = _grow(boxes[slave], 2 * reach)
+            triangles = [
+                one
+                for one in surface[master][1]
+                if any(_inside(mesh.nodes[n], grown) for n in one)
+            ]
+            near = near_nodes(mesh.nodes, candidates, triangles, 2 * reach)
+            if not near:
+                continue
+            points = [mesh.nodes[n] for n in near]
+            centre = [round(sum(p[k] for p in points) / len(points), 3) for k in range(3)]
+            made.append({"a": names[0], "b": names[1], "nodes": len(near), "at": centre})
+            logger.warning(
+                "바디 %s ↔ %s 가 맞닿았는데(절점 %s · 자리 %s mm) 접촉이 없습니다 — "
+                "떨어진 채로 풉니다",
+                names[0],
+                names[1],
+                len(near),
+                centre,
+            )
+    return made
 
 
 def write_ties(

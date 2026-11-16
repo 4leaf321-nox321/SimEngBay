@@ -3504,6 +3504,153 @@
         }
       }
     },
+    "/api/simulations/studies/{study_id}/frequency": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Study Frequency",
+        "description": "주파수 요구 판정 — 저장된 목표 주파수 · 회피 대역으로 설계점마다 적합 · 대역 침범 ·\n목표 이탈 · 부적합 · 판정 보류, 보간 자리와 추정(모달 DOE 만).",
+        "operationId": "study_frequency_api_simulations_studies__study_id__frequency_get",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyCheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Save Study Frequency",
+        "description": "요구 조건을 스터디에 저장한다(그 점들을 건 사람 · 시스템 관리자) — 같은 스터디를 여는\n사람과 MCP 가 같은 판정을 본다.",
+        "operationId": "save_study_frequency_api_simulations_studies__study_id__frequency_put",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrequencyRequirementsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyCheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulations/studies/{study_id}/frequency/check": {
+      "post": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Check Study Frequency",
+        "description": "저장하지 않은 요구로 판정한다(미리보기) — 화면이 입력을 고칠 때마다 부른다.",
+        "operationId": "check_study_frequency_api_simulations_studies__study_id__frequency_check_post",
+        "parameters": [
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Study Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrequencyRequirementsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrequencyCheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/studies/{study_id}/table": {
       "get": {
         "tags": [
@@ -7443,6 +7590,292 @@
         ],
         "title": "FolderRenameRequest"
       },
+      "FrequencyBand": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "band",
+            "title": "Kind",
+            "default": "band"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Label",
+            "default": ""
+          },
+          "low_hz": {
+            "type": "number",
+            "maximum": 10000000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Low Hz"
+          },
+          "high_hz": {
+            "type": "number",
+            "maximum": 10000000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "High Hz"
+          },
+          "margin_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Margin Pct",
+            "default": 0
+          },
+          "mass_filter": {
+            "type": "boolean",
+            "title": "Mass Filter",
+            "default": true
+          },
+          "mass_direction": {
+            "type": "string",
+            "enum": [
+              "X",
+              "Y",
+              "Z"
+            ],
+            "title": "Mass Direction",
+            "default": "Z"
+          },
+          "mass_min_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Mass Min Pct",
+            "default": 5
+          },
+          "probe_filter": {
+            "type": "boolean",
+            "title": "Probe Filter",
+            "default": false
+          },
+          "probe": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe"
+          },
+          "probe_min_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Probe Min Pct",
+            "default": 20
+          }
+        },
+        "type": "object",
+        "required": [
+          "low_hz",
+          "high_hz"
+        ],
+        "title": "FrequencyBand",
+        "description": "**회피 대역** — 판정 대상 모드가 대역(± 이격 여유) 밖에 있어야 한다.\n\n판정 대상은 실제로 들뜨는 모드다 — 유효질량비(가진 방향) 또는 측정점 움직임이 문턱을\n넘는 모드. 둘 다 끄면 모든 모드가 대상이다."
+      },
+      "FrequencyBandResultOut": {
+        "properties": {
+          "requirement": {
+            "type": "integer",
+            "title": "Requirement"
+          },
+          "closest_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closest Index"
+          },
+          "closest_track": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closest Track"
+          },
+          "closest_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closest Hz"
+          },
+          "margin_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Pct"
+          },
+          "inside": {
+            "type": "boolean",
+            "title": "Inside",
+            "default": false
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "judged": {
+            "type": "integer",
+            "title": "Judged",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "requirement"
+        ],
+        "title": "FrequencyBandResultOut"
+      },
+      "FrequencyCheckOut": {
+        "properties": {
+          "study_id": {
+            "type": "string",
+            "title": "Study Id"
+          },
+          "requirements": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FrequencyTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/FrequencyBand"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "kind",
+                "mapping": {
+                  "band": "#/components/schemas/FrequencyBand",
+                  "target": "#/components/schemas/FrequencyTarget"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Requirements"
+          },
+          "saved": {
+            "type": "boolean",
+            "title": "Saved",
+            "default": false
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "updated_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By Name"
+          },
+          "factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "probes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Probes"
+          },
+          "tracks": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Tracks"
+          },
+          "tracked": {
+            "type": "boolean",
+            "title": "Tracked",
+            "default": true
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencyPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "crossings": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencyCrossingOut"
+            },
+            "type": "array",
+            "title": "Crossings"
+          },
+          "estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrequencyEstimateOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_id"
+        ],
+        "title": "FrequencyCheckOut"
+      },
       "FrequencyComparisonOut": {
         "properties": {
           "matches": {
@@ -7496,6 +7929,454 @@
           "matches"
         ],
         "title": "FrequencyComparisonOut"
+      },
+      "FrequencyCrossingOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "target",
+              "band_edge"
+            ],
+            "title": "Kind"
+          },
+          "requirement": {
+            "type": "integer",
+            "title": "Requirement"
+          },
+          "track": {
+            "type": "integer",
+            "title": "Track"
+          },
+          "factor": {
+            "type": "string",
+            "title": "Factor"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "fixed": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Fixed"
+          },
+          "level_hz": {
+            "type": "number",
+            "title": "Level Hz"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "requirement",
+          "track",
+          "factor",
+          "value",
+          "fixed",
+          "level_hz",
+          "label"
+        ],
+        "title": "FrequencyCrossingOut",
+        "description": "한 설계 변수를 따라 이웃 설계점 사이를 곧게 이은 선이 기준을 지나는 자리."
+      },
+      "FrequencyEstimateOut": {
+        "properties": {
+          "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "margin_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Pct"
+          },
+          "closest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closest"
+          },
+          "mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mass Kg"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "params",
+          "text"
+        ],
+        "title": "FrequencyEstimateOut",
+        "description": "DOE 에 없는 자리의 보간 추정 — 모든 요구를 만족할 것으로 보이는 자리."
+      },
+      "FrequencyModeOut": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index"
+          },
+          "track": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track"
+          },
+          "frequency_hz": {
+            "type": "number",
+            "title": "Frequency Hz"
+          },
+          "mass_pct": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Mass Pct"
+          },
+          "probe_pct": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probe Pct"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "target",
+              "judged",
+              "excluded"
+            ],
+            "title": "Role"
+          },
+          "bands": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Bands"
+          },
+          "in_band": {
+            "type": "boolean",
+            "title": "In Band",
+            "default": false
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "frequency_hz",
+          "role"
+        ],
+        "title": "FrequencyModeOut",
+        "description": "설계점의 모드 하나 — 주파수와 판정에서의 역할."
+      },
+      "FrequencyPointOut": {
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Simulation Id"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "conform",
+              "band_violation",
+              "target_deviation",
+              "nonconform",
+              "pending"
+            ],
+            "title": "Verdict"
+          },
+          "mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mass Kg"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencyTargetResultOut"
+            },
+            "type": "array",
+            "title": "Targets"
+          },
+          "bands": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencyBandResultOut"
+            },
+            "type": "array",
+            "title": "Bands"
+          },
+          "modes": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencyModeOut"
+            },
+            "type": "array",
+            "title": "Modes"
+          },
+          "sensitivity": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencySensitivityOut"
+            },
+            "type": "array",
+            "title": "Sensitivity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_id",
+          "number",
+          "params",
+          "status",
+          "verdict"
+        ],
+        "title": "FrequencyPointOut"
+      },
+      "FrequencyRequirementsIn": {
+        "properties": {
+          "requirements": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FrequencyTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/FrequencyBand"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "kind",
+                "mapping": {
+                  "band": "#/components/schemas/FrequencyBand",
+                  "target": "#/components/schemas/FrequencyTarget"
+                }
+              }
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Requirements"
+          }
+        },
+        "type": "object",
+        "title": "FrequencyRequirementsIn"
+      },
+      "FrequencySensitivityOut": {
+        "properties": {
+          "factor": {
+            "type": "string",
+            "title": "Factor"
+          },
+          "hz_per_unit": {
+            "type": "number",
+            "title": "Hz Per Unit"
+          },
+          "equivalent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equivalent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "factor",
+          "hz_per_unit"
+        ],
+        "title": "FrequencySensitivityOut",
+        "description": "맞출 모드가 설계 변수에 얼마나 민감한가 — 이웃 설계점 사이의 기울기."
+      },
+      "FrequencyTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "target",
+            "title": "Kind",
+            "default": "target"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Label",
+            "default": ""
+          },
+          "mode": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Mode"
+          },
+          "target_hz": {
+            "type": "number",
+            "maximum": 10000000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Target Hz"
+          },
+          "tolerance_pct": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Tolerance Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "target_hz",
+          "tolerance_pct"
+        ],
+        "title": "FrequencyTarget",
+        "description": "**목표 주파수** — 추적한 모드 하나를 목표 ± 허용 안에 둔다."
+      },
+      "FrequencyTargetResultOut": {
+        "properties": {
+          "requirement": {
+            "type": "integer",
+            "title": "Requirement"
+          },
+          "index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index"
+          },
+          "frequency_hz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Hz"
+          },
+          "error_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Pct"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": false
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requirement"
+        ],
+        "title": "FrequencyTargetResultOut"
       },
       "FrfComparisonOut": {
         "properties": {
@@ -11320,6 +12201,26 @@
             },
             "type": "object",
             "title": "Relative Mm"
+          },
+          "mode_mass": {
+            "items": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Mode Mass"
+          },
+          "mode_probes": {
+            "items": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Mode Probes"
           }
         },
         "type": "object",

@@ -219,6 +219,7 @@
     "narrowest_face": 9.6873,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -247,7 +248,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "1fdbcf04-20a2-4bb6-8af2-8918de7809bd",
+      "id": "02aad899-54cb-4fe8-b6f4-2ae807c8e903",
       "name": "시험_수압_IPX7",
       "method": "factorial",
       "seed": 1

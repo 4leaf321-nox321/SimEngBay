@@ -147,6 +147,18 @@
     "narrowest_face": 5.0,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "받침판",
+        "b": "기둥",
+        "area": 100.0,
+        "at": [
+          0.0,
+          0.0,
+          10.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -175,7 +187,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "2284f315-490c-4bc1-adc2-03f29330207a",
+      "id": "084381fc-8ad5-4ba2-9c39-fdf6a992c373",
       "name": "조건_측면가진",
       "method": "factorial",
       "seed": 1

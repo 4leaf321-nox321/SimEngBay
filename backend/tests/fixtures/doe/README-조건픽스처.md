@@ -536,6 +536,18 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 
 ## 읽을 때 알아 둘 것
 
+- **2026-11-16 — 맞닿은 바디 쌍(`quality.touching`) · 셸모델 STEP 되돌림**(CompCore v0.26.0 `bb0c831` —
+  `411247f` · `d3aeed7`). 폴더는 v0.26.0 과 바이트까지 같다. 태그의 `fixtures/simengbay` 트리 해시는
+  `1734018`(파일 247개 + README)이다. 모든 폴더를 다시 옮겼다.
+  - 점 파일 53개의 `quality` 에 `touching[]`(`{a, b, area, at}` — 거리 0 · 맞닿은 넓이 mm² > 0, 모서리만
+    닿은 것은 뺀다)이 실렸다. 지금 폴더에는 접촉이 빠진 쌍이 없다.
+  - 셸모델 두께없음 · 시트외팔보의 `p0001.step` 이 v0.22.0 과 같은 구조로 돌아왔다(FILE_NAME 시각 줄만 다르다).
+  - 그 밖에는 스터디 id · 생성일 · STEP 머리의 시각 · 조립 일련번호만 다르다.
+
+  접촉을 건 점에서 `touching` 중 접촉이 덮지 않는 쌍은 요약 `unbonded_touching`(화면 「접촉 미정의: 인접
+  바디」)에 넓이 · 자리와 함께 적는다(`app/core/touching.py`, 두 솔버). 해석 제외 파트가 낀 쌍은 뺀다.
+  CompCore 의 `quality.warnings` 문구는 다음 판부터 「접촉 미정의: 인접 바디」 · 「바디 간섭」 · 「바디 간
+  미세 간극」 으로 바뀐다(키 · 형식은 그대로). 우리는 그 문구를 견주지 않는다.
 - **2026-11-16 — 형상 점검 기준이 핸드폰 부품 규모로, 점 파일 맨 위에 `checks`**(CompCore v0.25.0
   `d339186` · v0.25.1 `0154519`). 폴더는 v0.25.1 과 바이트까지 같다. 태그의 `fixtures/simengbay` 트리
   해시는 `e1a4751`(파일 247개 + README)이다. 모든 폴더를 다시 옮겼다.
@@ -543,7 +555,8 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
   - 점 파일 53개 맨 위에 `study.json` 과 같은 `checks` 가 실린다. 점검을 끈 스터디도 `enabled: false` 로 싣는다.
   - `quality.contacts: []` 가 늘었다. 지금 폴더에는 겹침 · 틈이 없다.
   - 「시험_겹치기이음_D1002」 의 접착층 벽 두께 경고가 빠졌다.
-  - `import_step` 노드에 `bodies: "leaf"` 가 실렸다(셸모델 셋 · 반쪽구멍). 셸모델 두 STEP 은 조립 구성이 바뀌었다.
+  - `import_step` 노드에 `bodies: "leaf"` 가 실렸다(셸모델 셋 · 반쪽구멍). 셸모델 두 STEP 이 한 겹 조립으로
+    싸였던 것은 CompCore v0.26.0 에서 되돌렸다(아래).
   - 그 밖에는 스터디 id · 생성일 · STEP 머리의 시각 · 조립 일련번호만 다르다.
 
   점 파일에 `checks` 가 있으면 가져올 때 `study.json` 의 것을 덧붙이지 않는다(`services._with_checks`).

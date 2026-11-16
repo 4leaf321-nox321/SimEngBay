@@ -28,6 +28,7 @@ from typing import Any
 
 from app.core import conditions as condition_model
 from app.core import materials, units
+from app.core import touching as touch
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
 from app.core.harmonic import HarmonicPlan, harmonic_plan
 from app.core.regions import FaceRecord, match_regions
@@ -235,8 +236,20 @@ def build(
             analysis = _add_modal(
                 app, spec, constrained=constrained, given=given_conditions, upstream=upstream
             )
+        # **묶지 않은 것** — 접촉 없이 맞닿은 쌍(CompCore 의 `quality.touching` 중), 미끄럼으로
+        # 푸는 접촉(모달 · 조화의 분리 없음 · 마찰 없음). 추출이 0 Hz 모드의 까닭으로 짚고,
+        # 요약 · 조건 처리 알림에도 싣는다 — CalculiX 경로와 같은 말(`app/core/touching.py`).
+        untied = touch.uncovered(topology or {}, given_conditions) or []
+        slid = touch.sliding(
+            topology or {}, given_conditions.contacts, modal=not isinstance(spec, StaticSpec)
+        )
         _write_boundary(
-            workdir, constrained=constrained, spec=spec, plan=plan, material=used.names
+            workdir,
+            constrained=constrained,
+            spec=spec,
+            plan=plan,
+            material=used.names,
+            connections={"untied": untied, "sliding": slid},
         )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -404,13 +417,23 @@ def build(
                     if given_conditions.loads
                     else {}
                 ),
+                # **접촉 없이 맞닿은 쌍** — 접촉을 건 점에서 Mechanical 은 자동 접촉을 지우므로
+                # 떨어진 채로 풀린다(`_apply_given_conditions`).
+                **({"unbonded_touching": touch.line(untied)} if untied else {}),
                 **(
                     {
                         "conditions_skipped": " · ".join(
-                            one.what for one in given_conditions.skipped
+                            [
+                                *(one.what for one in given_conditions.skipped),
+                                *(
+                                    f"접촉 「{one['contact']}」({one['kind']}): "
+                                    f"{touch.SLIDING_NOTE}"
+                                    for one in slid
+                                ),
+                            ]
                         )
                     }
-                    if given_conditions.skipped
+                    if given_conditions.skipped or slid
                     else {}
                 ),
                 "material": " · ".join(used.names),
@@ -1466,6 +1489,7 @@ def _write_boundary(
     spec: AnySpec,
     plan: HarmonicPlan | None = None,
     material: list[str] | None = None,
+    connections: dict[str, list[dict[str, Any]]] | None = None,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
@@ -1484,6 +1508,9 @@ def _write_boundary(
     }
     if material:
         payload["material"] = " · ".join(material)
+    if connections and any(connections.values()):
+        # 0 Hz 모드의 까닭 — 접촉 없이 맞닿은 쌍 · 미끄럼 접촉(`modes.rigid`).
+        payload["connections"] = connections
     if plan is not None:
         payload["damping_ratio"] = plan.damping_ratio
         payload["frequency_range_hz"] = [plan.low, plan.high]

@@ -202,6 +202,7 @@
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -232,7 +233,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "1531a0cd-aae3-4525-ad8e-f491be2a1d15",
+      "id": "5161a382-a3c8-49d4-8c09-e21c9588caf9",
       "name": "셸모델_시트받침조립",
       "method": "factorial",
       "seed": 1

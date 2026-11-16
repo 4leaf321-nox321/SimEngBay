@@ -69,6 +69,10 @@ jobs:
                    .env.example BUILD_INFO README.md 쉬운-설치.md; do
             grep -qx "$f" /tmp/have.txt || { echo "번들에 $f 가 없습니다"; exit 1; }
           done
+          # 결과 화면(MCP 패널) — 빠지면 챗의 결과 아래에 「화면이 없다」 가 뜬다.
+          for view in study explore frequency result convergence measurements; do
+            grep -qx "mcp_server/panels/$view.html" /tmp/have.txt || { echo "번들에 mcp_server/panels/$view.html 이 없습니다"; exit 1; }
+          done
           info=$(find release -name BUILD_INFO | head -1)
           for key in app_name app_slug port version; do
             grep -q "^$key=" "$info" || { echo "BUILD_INFO 에 $key 가 없습니다"; exit 1; }

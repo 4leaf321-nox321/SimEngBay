@@ -17,16 +17,17 @@
 
 import { useState } from 'react'
 import { ClipboardCopy, Eraser, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
-import type { StudyPoint } from '@/modules/simulations/api'
 import { RECIPE_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
 import { PublishControl, PublishedBadge } from '@/modules/simulations/Publishing'
 import { listPath } from '@/modules/simulations/SimulationsLayout'
 import { StudyMeasurements } from '@/modules/simulations/StudyMeasurements'
 import { StudyOntology } from '@/modules/simulations/StudyOntology'
+import { StudyPoints } from '@/modules/simulations/StudyPoints'
 import { StudyExplorer } from '@/modules/simulations/StudyExplorer'
+import { StudyFrequency } from '@/modules/simulations/StudyFrequency'
 import { StudyOverview } from '@/modules/simulations/StudyOverview'
 import { StudyValues } from '@/modules/simulations/StudyValues'
 import { ApiError } from '@/shared/api/client'
@@ -34,26 +35,16 @@ import { useAuth } from '@/shared/auth/AuthContext'
 import { ownsWork } from '@/shared/auth/roles'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { Input } from '@/shared/components/ui/input'
-import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
-import { StatusBadge } from '@/shared/components/StatusBadge'
 import { Button } from '@/shared/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/shared/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 import { copyText, toTsv } from '@/shared/lib/clipboard'
 
 /** DOE 화면의 탭 — 주소의 `?tab=` 이 정본이다. */
-type StudyTab = 'compare' | 'explore' | 'points' | 'checks'
-const STUDY_TABS: StudyTab[] = ['compare', 'explore', 'points', 'checks']
+type StudyTab = 'compare' | 'explore' | 'frequency' | 'points' | 'checks'
+const STUDY_TABS: StudyTab[] = ['compare', 'explore', 'frequency', 'points', 'checks']
 
 export default function StudyDetailPage() {
   const { id = '' } = useParams()
@@ -137,7 +128,11 @@ export default function StudyDetailPage() {
   const comparable = finishedPoints > 0
   const asked = params.get('tab') as StudyTab | null
   const tab: StudyTab =
-    asked && STUDY_TABS.includes(asked) && (asked !== 'compare' || comparable)
+    asked &&
+    STUDY_TABS.includes(asked) &&
+    (asked !== 'compare' || comparable) &&
+    // **주파수 요구는 모달 DOE 만** — 목표 주파수 · 회피 대역은 모드의 이야기다.
+    (asked !== 'frequency' || modal)
       ? asked
       : comparable
         ? 'compare'
@@ -416,6 +411,7 @@ export default function StudyDetailPage() {
           >
             다변수
           </TabsTrigger>
+          {modal && <TabsTrigger value="frequency">주파수 요구</TabsTrigger>}
           <TabsTrigger value="points">
             설계점 ({finishedPoints}/{points.length})
           </TabsTrigger>
@@ -436,6 +432,11 @@ export default function StudyDetailPage() {
           {/* 변수 하나 대 결과 하나를 넘어서 — 3D 산점도 · 2변수 영향 · 주효과 · 산점도 행렬 · 평행
               좌표 · 상관. 같은 표(끝난 점 · 추적한 모드)를 본다. */}
           {comparable && <StudyExplorer study={study.data} />}
+        </TabsContent>
+
+        <TabsContent value="frequency" className="space-y-6 pt-4">
+          {/* **목표 주파수 · 회피 대역** — 요구 조건은 스터디에 저장하고 판정은 서버가 셈한다. */}
+          {modal && tab === 'frequency' && <StudyFrequency studyId={id} readOnly={!mine} />}
         </TabsContent>
 
         <TabsContent value="points" className="space-y-3 pt-4">
@@ -461,52 +462,5 @@ export default function StudyDetailPage() {
         </TabsContent>
       </Tabs>
     </div>
-  )
-}
-
-/**
- * 설계점마다 **상태 · 오류 · 솔버 · 게시** — 작업 화면의 「진행」 에 해당한다. 결과 값은 비교
- * 탭의 행렬에 있다(여기는 「어느 점이 왜 안 끝났나」 를 보는 자리).
- */
-function StudyPoints({ points, factors }: { points: StudyPoint[]; factors: string[] }) {
-  if (points.length === 0) {
-    return <EmptyState title="설계점이 없습니다" hint="가져온 점이 여기에 표시됩니다." />
-  }
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>점</TableHead>
-          {factors.map((one) => (
-            <TableHead key={one}>{one}</TableHead>
-          ))}
-          <TableHead>상태</TableHead>
-          <TableHead>오류</TableHead>
-          <TableHead>솔버</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {points.map((point) => (
-          <TableRow key={point.simulation_id}>
-            <TableCell>
-              <Link to={`/simulations/${point.simulation_id}`} className="font-mono hover:underline">
-                p{String(point.number).padStart(4, '0')}
-              </Link>
-              {point.published && <PublishedBadge className="ml-1" />}
-            </TableCell>
-            {factors.map((one) => (
-              <TableCell key={one} className="font-mono">
-                {point.params[one] ?? '—'}
-              </TableCell>
-            ))}
-            <TableCell>
-              <StatusBadge kind="simulation" value={point.status} />
-            </TableCell>
-            <TableCell className="text-destructive font-mono text-xs">{point.error_code ?? ''}</TableCell>
-            <TableCell>{SOLVER_LABELS[point.solver] ?? point.solver}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
   )
 }

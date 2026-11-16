@@ -90,6 +90,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
+/**
+ * **사람 없이 읽기만 하는 화면**의 자리 — 대화 안 결과 화면(MCP 패널)은 로그인 세션이 없다(호스트가 그
+ * 사람의 토큰으로 도구를 부른다). `user` 가 없으므로 고치기 · 지우기 단추(`ownsWork`)는 스스로 숨는다.
+ */
+const NO_USER: AuthContextValue = {
+  status: 'anonymous',
+  user: null,
+  login: () => Promise.reject(new Error('이 화면에서는 로그인하지 않습니다.')),
+  logout: () => Promise.resolve(),
+  reload: () => Promise.resolve(),
+}
+
+export function NoUserProvider({ children }: { children: ReactNode }) {
+  return <AuthContext.Provider value={NO_USER}>{children}</AuthContext.Provider>
+}
+
 export function useAuth(): AuthContextValue {
   const value = useContext(AuthContext)
   if (!value) throw new Error('useAuth 는 AuthProvider 안에서만 쓸 수 있습니다')

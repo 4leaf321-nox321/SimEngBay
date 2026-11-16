@@ -177,6 +177,18 @@
     "narrowest_face": 3.0,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "시편",
+        "b": "핀",
+        "area": 75.3982,
+        "at": [
+          52.5,
+          0.0,
+          2.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -207,7 +219,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "90da40c7-7965-4e88-b3d0-315141c65ef1",
+      "id": "dbcac072-0257-4513-bd73-15fe8c286381",
       "name": "시험_핀베어링_D5961",
       "method": "factorial",
       "seed": 1

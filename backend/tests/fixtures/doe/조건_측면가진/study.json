@@ -1,5 +1,5 @@
 {
-  "id": "2284f315-490c-4bc1-adc2-03f29330207a",
+  "id": "084381fc-8ad5-4ba2-9c39-fdf6a992c373",
   "name": "조건_측면가진",
   "description": "",
   "method": "factorial",
@@ -492,7 +492,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-9638b2d5@example.local"
+    "email": "member-351c9be9@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

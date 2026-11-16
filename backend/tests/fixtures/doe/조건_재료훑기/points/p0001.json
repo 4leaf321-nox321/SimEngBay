@@ -137,6 +137,18 @@
     "narrowest_face": 4.6154,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "받침판",
+        "b": "블록",
+        "area": 1600.0,
+        "at": [
+          0.0,
+          0.0,
+          5.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -165,7 +177,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "d9007ad1-b6d1-472a-a7ed-dbe84e18dee7",
+      "id": "d1fc2f43-9c86-4f05-a5f0-fc8856ab565d",
       "name": "조건_재료훑기",
       "method": "factorial",
       "seed": 1

@@ -67,7 +67,7 @@ export default defineConfig({
   // **이 빌드가 몇 번인지 굽는다.** 서버가 다른 버전이면 화면이 그것을 말할 수
   // 있어야 한다 — 개발과 운영이 가까운 포트를 쓰는 동안, 프론트가 옛 서버에 붙어
   // 있어도 아무 데도 티가 안 난다.
-  define: { __APP_VERSION__: JSON.stringify(`v${pkg.version}`) },
+  define: { __APP_VERSION__: JSON.stringify(`v${pkg.version}`), __PLOT_KIT__: JSON.stringify('full') },
   resolve: {
     alias: { '@': path.resolve(root, 'src') },
   },

@@ -49,6 +49,19 @@ export class ApiError extends Error {
 let accessToken: string | null = null
 let onSessionLost: (() => void) | null = null
 
+/**
+ * 요청을 보내는 길 — 기본은 같은 출처 `fetch`. **대화 안의 결과 화면(MCP Apps 패널)** 은 서버에
+ * 직접 닿지 못하므로(격리 창 · CSP) 호스트를 거쳐 MCP 도구로 보낸다(`src/panels/transport.ts`).
+ * 화면 부품은 그대로 `simulationApi` 를 부르고, 이 한 자리만 갈아 끼운다 — 웹과 패널이 같은
+ * 부품 · 같은 자료로 그린다.
+ */
+export type Transport = (path: string, init?: RequestInit) => Promise<Response>
+let transport: Transport | null = null
+
+export function setTransport(next: Transport | null) {
+  transport = next
+}
+
 export const session = {
   setToken(token: string | null) {
     accessToken = token
@@ -103,6 +116,7 @@ async function parseError(response: Response): Promise<ApiError> {
 }
 
 async function send(path: string, init?: RequestInit): Promise<Response> {
+  if (transport) return transport(path, init)
   // FormData 일 때 Content-Type 을 직접 넣으면 **안 된다.** multipart 는 본문에
   // boundary 문자열이 필요한데, 브라우저가 헤더를 만들 때 그것을 붙여 준다.
   const isForm = init?.body instanceof FormData
@@ -187,7 +201,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // access 는 12시간이면 만료된다. 사용자가 그 순간 하던 일을 잃지 않도록 한 번만
   // 조용히 갱신하고 재시도한다. /auth/* 는 제외 — 갱신 자체가 실패한 상황에서
   // 무한 재귀가 된다.
-  if (response.status === 401 && !path.startsWith('/auth/')) {
+  // 패널의 길(transport)에는 갱신이 없다 — 토큰은 호스트(HWAX 게이트웨이)가 다시 받는다.
+  if (response.status === 401 && !transport && !path.startsWith('/auth/')) {
     if (await tryRefresh()) {
       response = await send(path, init)
     } else {

@@ -1,5 +1,5 @@
 {
-  "id": "a2e586af-7ec8-468e-b198-8694eacf00d5",
+  "id": "39e54670-24f9-4b15-9f9a-e4382245897c",
   "name": "조건_볼트예압_판본딩",
   "description": "",
   "method": "table",
@@ -589,7 +589,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-6a5a3b8f@example.local"
+    "email": "member-58e60c95@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

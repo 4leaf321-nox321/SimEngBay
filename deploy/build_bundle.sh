@@ -76,6 +76,10 @@ echo
 echo "==> [1/4] 프론트엔드 빌드"
 (cd frontend && npm ci && npm run build)
 [[ -f frontend/dist/index.html ]] || { echo "오류: frontend/dist/index.html 이 없습니다"; exit 1; }
+# 대화 안 결과 화면(MCP Apps 패널) — 화면마다 HTML 한 장(2 MiB 넘으면 여기서 멈춘다). MCP 서버가
+# `ui://<slug>/<화면>` 으로 낸다(3b 에서 mcp_server/panels/ 로 옮긴다).
+(cd frontend && npm run build:panels)
+ls frontend/dist-panels/*.html >/dev/null 2>&1 || { echo "오류: frontend/dist-panels/ 에 패널이 없습니다"; exit 1; }
 
 # 프론트는 API 절대주소를 굽지 않는다(항상 상대경로 /api). 굽는 방식이면 값이
 # 빠졌을 때 **사용자 브라우저가 자기 PC 를 부른다** — 흔적이 남았는지 본다.
@@ -165,6 +169,10 @@ cp mcp_server/requirements.txt "$STAGE/mcp_server/"
 # 안내서(get_guide 가 읽는 본문) — **서버가 쥔다.** 빠지면 get_guide 가 「읽을 수 없습니다」 를
 # 주고 AI 는 도구 설명만으로 헤맨다.
 cp -r mcp_server/guide "$STAGE/mcp_server/guide"
+# 결과 화면 — 빠지면 HWAX 챗 · Claude 의 결과 아래에 「화면이 이 설치에 없습니다」 가 뜬다(도구 결과는 그대로).
+mkdir -p "$STAGE/mcp_server/panels"
+cp frontend/dist-panels/*.html "$STAGE/mcp_server/panels/"
+echo "    결과 화면 $(ls "$STAGE/mcp_server/panels" | wc -l)개 동봉"
 # 빌드 머신(인터넷 O)에서 휠을 받아 둔다 — 운영 호스트가 폐쇄망이어도 설치되게. 빌드 · 운영의
 # 아키텍처 · 파이썬이 같다고 본다(둘 다 linux x86_64 · 3.12 — Standard Platform 과 같은 가정).
 if python3 -m pip download --only-binary=:all: \

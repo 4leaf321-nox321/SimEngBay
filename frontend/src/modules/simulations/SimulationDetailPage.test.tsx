@@ -303,6 +303,8 @@ describe('해석 작업 화면', () => {
         memory_estimate_mb: 2370,
         bonding: 'tie',
         bonded_pairs: '기둥-판 412/412 절점(반경 2.5 mm)',
+        unbonded_touching: '기둥 ↔ 모자 (절점 105 · 자리 (0, 0, 90) mm)',
+        result_warning: '구속이 있는데 0 Hz 모드가 6개입니다 — 움직이는 바디: 모자.',
       },
     } as Simulation)
     show('/simulations/sim?tab=progress')
@@ -313,5 +315,8 @@ describe('해석 작업 화면', () => {
     expect(screen.getByText('2,370 MB')).toBeInTheDocument()
     expect(screen.getByText('따로 메시 · 구속식 묶음 (*TIE)')).toBeInTheDocument()
     expect(screen.getByText('기둥-판 412/412 절점(반경 2.5 mm)')).toBeInTheDocument()
+    expect(screen.getByText('접촉 미정의: 인접 바디')).toBeInTheDocument()
+    expect(screen.getByText('기둥 ↔ 모자 (절점 105 · 자리 (0, 0, 90) mm)')).toBeInTheDocument()
+    expect(screen.getByText('결과 경고')).toBeInTheDocument()
   })
 })

@@ -79,6 +79,7 @@ from app.core.stages import (
 from app.modules.accounts.models import User
 from app.modules.ontology import services as ontology_services
 from app.modules.simulations import analysis as study_analysis
+from app.modules.simulations import frequency as study_frequency
 from app.modules.simulations.models import (
     FINAL_STATUSES,
     RUNNING_STATUSES,
@@ -86,6 +87,7 @@ from app.modules.simulations.models import (
     SimulationArtifact,
     SimulationMeasurement,
     SimulationWorker,
+    StudyFrequencyRequirement,
 )
 from app.modules.simulations.schemas import (
     ArtifactOut,
@@ -106,6 +108,9 @@ from app.modules.simulations.schemas import (
     DoeListingOut,
     DoePointPreview,
     DoePreviewOut,
+    FrequencyCheckOut,
+    FrequencyRequirement,
+    FrequencyRequirementsIn,
     ItemOut,
     LicenseHolderOut,
     MeasurementOut,
@@ -2152,6 +2157,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
             float(mode["frequency_hz"])
             for mode in core_values.elastic_modes(loaded)[:COMPARE_MODES]
         ],
+        **_mode_participation(loaded),
         max_displacement_mm=found.max_displacement_mm if found else None,
         max_von_mises_mpa=found.max_von_mises_mpa if found else None,
         peak_hz=found.peak_hz if found else None,
@@ -2163,6 +2169,113 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         probe_peaks_hz=found.probe_peaks_hz if found else {},
         relative_mm=found.relative_mm if found else {},
     )
+
+
+#: 회피 대역의 유효질량 기준이 보는 방향.
+_MASS_DIRECTIONS = ("X", "Y", "Z")
+
+
+def _mode_participation(loaded: dict[str, Any]) -> dict[str, list[dict[str, float]]]:
+    """탄성 모드마다 **유효질량비**(방향 → 0~1)와 **측정점 움직임**(측정점 → 0~1) —
+    `frequencies` 와 같은 차례. 표가 없는 결과면 빈 칸이다."""
+    if not loaded or (loaded.get("recipe") or "modal") != "modal":
+        return {}
+    modes = core_values.elastic_modes(loaded)[:COMPARE_MODES]
+    table = loaded.get("participation") or {}
+    shares = core_measured.visibility(loaded)
+    masses: list[dict[str, float]] = []
+    probes: list[dict[str, float]] = []
+    for mode in modes:
+        number = mode.get("number")
+        row: dict[str, float] = {}
+        for direction in _MASS_DIRECTIONS:
+            values = table.get(direction) if isinstance(table, dict) else None
+            if not isinstance(values, dict):
+                continue
+            value = values.get(str(number), values.get(number))
+            if isinstance(value, int | float):
+                row[direction] = round(float(value), 6)
+        masses.append(row)
+        probes.append(
+            {
+                name: round(found[number], 4)
+                for name, found in shares.items()
+                if isinstance(number, int) and number in found
+            }
+        )
+    return {
+        "mode_mass": masses if any(masses) else [],
+        "mode_probes": probes if any(probes) else [],
+    }
+
+
+# --- 주파수 요구 조건 — 목표 주파수 · 회피 대역(`frequency.py`) ---------------------------
+
+
+def _frequency_row(db: Session, study_id: str) -> StudyFrequencyRequirement | None:
+    return db.scalar(
+        select(StudyFrequencyRequirement).where(StudyFrequencyRequirement.study_id == study_id)
+    )
+
+
+def _modal_study(db: Session, user: User, study_id: str) -> StudyOut:
+    study = get_study(db, user=user, study_id=study_id)
+    if study.recipe != "modal":
+        raise AppError(
+            code("SIMULATIONS", 40),
+            f"주파수 요구 조건은 모달 DOE 에만 겁니다 — 이 스터디는 {study.recipe} 입니다.",
+            status=400,
+        )
+    return study
+
+
+def frequency_check(
+    db: Session,
+    *,
+    user: User,
+    study_id: str,
+    draft: FrequencyRequirementsIn | None = None,
+) -> FrequencyCheckOut:
+    """스터디의 주파수 요구 판정. `draft` 를 주면 **저장하지 않고** 그 요구로 셈한다(화면이
+    입력을 고칠 때마다 부르는 미리보기 — 같은 셈을 두 벌로 두지 않는다)."""
+    study = _modal_study(db, user, study_id)
+    row = _frequency_row(db, study_id)
+    if draft is not None:
+        requirements: list[FrequencyRequirement] = list(draft.requirements)
+    else:
+        stored = FrequencyRequirementsIn.model_validate(
+            {"requirements": row.rows if row else []}
+        )
+        requirements = list(stored.requirements)
+    out = study_frequency.evaluate(study, requirements)
+    out.saved = draft is None and row is not None
+    if row is not None:
+        out.updated_at = row.updated_at
+        out.updated_by_name = _user_name(db, row.updated_by_id)
+    return out
+
+
+def save_frequency(
+    db: Session, *, user: User, study_id: str, body: FrequencyRequirementsIn
+) -> FrequencyCheckOut:
+    """요구 조건을 스터디에 저장한다 — **그 점들을 건 사람이나 시스템 관리자만**(실측과
+    같다)."""
+    points = _study_points(db, user, study_id)
+    if not points:
+        raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    _require_study_owner(user, points)
+    _modal_study(db, user, study_id)
+    row = _frequency_row(db, study_id)
+    rows = [one.model_dump(mode="json") for one in body.requirements]
+    if row is None:
+        row = StudyFrequencyRequirement(study_id=study_id, rows=rows, updated_by_id=user.id)
+        db.add(row)
+    else:
+        row.rows = rows
+        row.updated_by_id = user.id
+        row.updated_at = datetime.now(UTC)
+    db.commit()
+    return frequency_check(db, user=user, study_id=study_id)
 
 
 # --- CSV ---------------------------------------------------------------------

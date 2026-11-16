@@ -27,6 +27,7 @@ Claude Code 등록(사용자별 토큰 — 화면의 「내 정보」 에서 발
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import re
 import time
@@ -34,6 +35,7 @@ from typing import Any
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import ToolAnnotations
 
 API_BASE = os.environ.get("PLATFORM_API_BASE", "http://127.0.0.1:8070").rstrip("/")
 
@@ -66,6 +68,7 @@ INSTRUCTIONS = (
     "  결과 숫자                         job_result      (늘 mm · MPa · N · Hz)\n"
     "  설계점끼리 견준다                 studies_list → study_get\n"
     "  DOE 를 분석한다(민감도 · 최적점)  study_analyze   (서버가 셈한다 — 손으로 안 셈한다)\n"
+    "  목표 주파수 · 회피 대역 판정      study_frequency (스터디에 저장된 요구로 — 모달 DOE)\n"
     "  메시가 충분한가                   convergence_start → convergence_get\n"
     "  실측과 견준다                     measurement_add → measurements_get\n"
     "  실패를 다시 · 멈춘다              job_retry · job_cancel · study_cancel\n"
@@ -106,6 +109,106 @@ DESTRUCTIVE_TOOLS = frozenset(
         "files_tidy",  # 중간 파일을 지운다 — 되살리려면 다시 풀어야 한다
     }
 )
+
+
+#: 읽기만 하는 도구의 표지 — HWAX 게이트웨이는 이것을 단 도구를 읽기로 본다(패널이 부를 때
+#: 사람에게 묻지 않는다 · 읽기 전용 토큰으로도 부른다).
+_READ = ToolAnnotations(readOnlyHint=True)
+
+
+# --------------------------------------------------------------------------- #
+# 대화 안의 결과 화면 — MCP Apps 패널
+# --------------------------------------------------------------------------- #
+
+#: 패널 HTML 의 형식 — MCP Apps 판(HWAX 포털은 이것과 그냥 `text/html` 을 받는다).
+PANEL_MIME = "text/html;profile=mcp-app"
+
+#: 도구가 여는 **결과 화면** → 제목. 도구 정의의 `_meta.ui.resourceUri` 가 `ui://<이름>/<화면>`
+#: 을 가리키면 HWAX 챗 · Claude 데스크톱 · 웹이 그 도구 결과 아래에 격리 창(sandbox · CSP)으로
+#: 띄운다. 화면은 **웹 화면과 같은 React 부품**을 HTML 한 장으로 묶은 것이다
+#: (`frontend/src/panels` → `npm run build:panels` → `frontend/dist-panels/<화면>.html`, 번들은
+#: `mcp_server/panels/`). 그래서 패널과 웹이 다른 그림을 그릴 일이 없다. 패널은 서버에 직접
+#: 닿지 못하고(CSP `connect-src 'none'`) 자료는 호스트를 거쳐 `panel_data` 로만 받는다.
+PANEL_VIEWS: dict[str, str] = {
+    "study": "DOE 비교",
+    "explore": "DOE 다변수",
+    "frequency": "주파수 요구 판정",
+    "result": "해석 결과",
+    "convergence": "메시 수렴",
+    "measurements": "실측 비교",
+}
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+#: 패널 HTML 을 찾는 차례 — 손으로 준 곳 · 번들(서버 옆) · 개발(프론트 빌드 산출물).
+_PANEL_DIRS = tuple(
+    one
+    for one in (
+        os.environ.get("PANEL_DIR"),
+        os.path.join(_HERE, "panels"),
+        os.path.join(_HERE, "..", "frontend", "dist-panels"),
+    )
+    if one
+)
+
+_PANEL_MISSING = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>{title}</title>
+<style>body{{font:14px/1.6 system-ui,sans-serif;margin:16px;color:#444}}</style></head>
+<body><p><b>{title}</b> 화면이 이 설치에 없습니다.</p>
+<p>결과는 도구의 글로는 그대로 받았습니다. 화면을 보려면 운영자가 화면 묶음을 넣어야 합니다
+(<code>frontend</code> 에서 <code>npm run build:panels</code> →
+<code>mcp_server/panels/</code>).</p>
+</body></html>"""
+
+
+def panel_uri(view: str) -> str:
+    return f"ui://{mcp.name}/{view}"
+
+
+def _panel_meta(view: str) -> dict[str, Any]:
+    """도구 정의에 다는 표지 — 이 도구의 결과는 그 화면으로 띄운다."""
+    return {"ui": {"resourceUri": panel_uri(view)}}
+
+
+def _panel_html(view: str) -> str:
+    """화면 HTML — **부를 때마다 읽는다**(서버를 다시 띄우지 않고 화면 묶음을 갈아 끼운다).
+    없으면 빈 창 대신 왜 없는지를 말하는 한 장."""
+    for folder in _PANEL_DIRS:
+        try:
+            with open(os.path.join(folder, f"{view}.html"), encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            continue
+    return _PANEL_MISSING.format(title=html.escape(PANEL_VIEWS.get(view, view)))
+
+
+def _register_panel(view: str, title: str) -> None:
+    @mcp.resource(
+        panel_uri(view),
+        name=f"panel-{view}",
+        title=f"{title} 화면",
+        description=f"{title} — 도구 결과를 웹 화면과 같은 모양으로 그리는 패널(MCP Apps).",
+        mime_type=PANEL_MIME,
+    )
+    def _read() -> str:
+        return _panel_html(view)
+
+
+for _view, _title in PANEL_VIEWS.items():
+    _register_panel(_view, _title)
+
+
+#: 패널이 읽는 백엔드 경로(`/api` 뒤) — 해석 화면이 쓰는 `/simulations` 아래와 서버 상태만.
+#: 권한은 백엔드가 그 사람의 토큰으로 본다(웹 화면과 같은 답).
+_PANEL_GET = re.compile(r"^/(simulations|health)(/[^?#\s\\]*)?(\?[^#\s]*)?$")
+#: **읽기인 POST** — 저장하지 않은 요구로 판정을 미리 본다(아무것도 남기지 않는다).
+_PANEL_POST = re.compile(r"^/simulations/studies/[^/?#\s\\]+/frequency/check$")
+
+
+def _panel_refusal(status: int, message: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "body": {"error": {"code": "MCP-PANEL-0001", "message": message}},
+    }
 
 
 def _forward_headers(ctx: Context) -> dict[str, str]:
@@ -754,7 +857,7 @@ async def job_get(ctx: Context, job_id: str, wait_seconds: int = 0) -> Any:
         await asyncio.sleep(_POLL_SECONDS)
 
 
-@mcp.tool()
+@mcp.tool(meta=_panel_meta("result"), annotations=_READ)
 async def job_result(ctx: Context, job_id: str, detail: bool = False) -> Any:
     """끝난 작업의 **결과 숫자** — 늘 mm · MPa · N · Hz(서버가 솔버마다 다른 단위를 맞춘다).
 
@@ -837,7 +940,7 @@ async def studies_list(ctx: Context, scope: str | None = None) -> Any:
     return _listed(await _get(ctx, "/api/simulations/studies", {"scope": scope}), "studies")
 
 
-@mcp.tool()
+@mcp.tool(meta=_panel_meta("study"), annotations=_READ)
 async def study_get(ctx: Context, study_id: str) -> Any:
     """스터디 하나의 **설계점 비교** — 점마다 바꾼 값(`params`)과 그 결과(1차 공진 · 질량 ·
     최대 변위 · 최대 응력 · 반력 · 측정점, 늘 mm · MPa · N · Hz), 그리고 모드 추적(치수가
@@ -858,7 +961,7 @@ async def study_publish(ctx: Context, study_id: str, unpublish: bool = False) ->
     return await _post(ctx, f"/api/simulations/studies/{study_id}/{action}")
 
 
-@mcp.tool()
+@mcp.tool(meta=_panel_meta("explore"), annotations=_READ)
 async def study_analyze(
     ctx: Context,
     study_id: str,
@@ -903,6 +1006,31 @@ async def study_analyze(
     # **결과를 안 고르면 주효과는 뺀다** — 변수 x 결과 x 수준이라 커지고, 요약은 민감도에 있다.
     if result is None and isinstance(got, dict):
         got.pop("effects", None)
+    return got
+
+
+@mcp.tool(meta=_panel_meta("frequency"), annotations=_READ)
+async def study_frequency(ctx: Context, study_id: str, detail: bool = False) -> Any:
+    """모달 DOE 의 **주파수 요구 판정** — 스터디에 저장된 요구 조건(화면 「주파수 요구」 탭에서
+    사람이 정한다)으로 서버가 셈한다. 손으로 판정하지 않는다.
+
+    - 요구: 목표 주파수(추적한 `mode` 차 모드를 `target_hz` ± `tolerance_pct` 안에) · 회피
+      대역(판정 대상 모드가 `low_hz` ~ `high_hz` ± 이격 여유 `margin_pct` 밖에). 판정 대상은
+      실제로 들뜨는 모드다 — 가진 방향 유효질량 또는 측정점 움직임이 문턱 이상.
+    - 점마다 `verdict`: `conform` 적합 · `band_violation` 대역 침범(목표는 충족) ·
+      `target_deviation` 목표 이탈(대역은 회피) · `nonconform` 부적합 · `pending` 판정 보류.
+      `targets[]`(오차 %) · `bands[]`(가장 가까운 판정 대상 모드 · 이격 여유 %).
+    - `counts` · `estimate`(DOE 에 없는 자리의 보간 추정 — CompCore 에서 그 점을 더해
+      확인한다) · `notes`. 요구가 없으면 모두 판정 보류다.
+    - `detail` 이면 점마다 모드별 역할(목표 · 판정 대상 · 판정 제외와 까닭) · 공차 민감도
+      (`sensitivity`)와 보간 자리(`crossings`)까지."""
+    got = await _get(ctx, f"/api/simulations/studies/{study_id}/frequency")
+    if not detail and isinstance(got, dict):
+        got.pop("crossings", None)
+        for point in got.get("points") or []:
+            if isinstance(point, dict):
+                point.pop("modes", None)
+                point.pop("sensitivity", None)
     return got
 
 
@@ -995,7 +1123,7 @@ async def convergence_start(
     return await _post(ctx, f"/api/simulations/{job_id}/convergence", body)
 
 
-@mcp.tool()
+@mcp.tool(meta=_panel_meta("convergence"), annotations=_READ)
 async def convergence_get(ctx: Context, job_id: str) -> Any:
     """메시 수렴 판정 — 크기마다 값과 값마다 판정(수렴 · 미수렴 · 판정 보류 · 발산 · 수준 부족,
     GCI). 원래 작업이나 수준 작업 어느 쪽 id 로 물어도 같다. **발산은 고장이 아니라** 그 값
@@ -1003,7 +1131,7 @@ async def convergence_get(ctx: Context, job_id: str) -> Any:
     return await _get(ctx, f"/api/simulations/{job_id}/convergence")
 
 
-@mcp.tool()
+@mcp.tool(meta=_panel_meta("measurements"), annotations=_READ)
 async def measurements_get(
     ctx: Context, job_id: str | None = None, study_id: str | None = None
 ) -> Any:
@@ -1046,6 +1174,40 @@ async def measurement_add(
     return await _post_file(
         ctx, path, (name, table.encode("utf-8"), "text/plain"), {"label": label}
     )
+
+
+# --------------------------------------------------------------------------- #
+# 패널 전용
+# --------------------------------------------------------------------------- #
+
+
+@mcp.tool(meta={"ui": {"visibility": ["app"]}}, annotations=_READ)
+async def panel_data(ctx: Context, path: str, body: dict[str, Any] | None = None) -> Any:
+    """**결과 화면(패널) 전용 — 모델은 부르지 않는다.** 대화 안에 뜬 화면이 웹 화면과 같은
+    자료를 읽는 길이다(패널은 서버에 직접 닿지 못한다). `path` 는 `/api` 뒤의 경로
+    (`/simulations/…`)이고, `body` 를 주면 읽기인 POST(저장하지 않은 요구의 판정 미리 보기)만
+    받는다. 답은 `{status, body}` — 백엔드의 답 그대로다."""
+    lowered = path.lower()
+    if not path.startswith("/") or ".." in path or "//" in path or "%2e" in lowered:
+        return _panel_refusal(400, f"패널이 읽을 수 없는 경로입니다: {path[:200]}")
+    allowed = _PANEL_POST if body is not None else _PANEL_GET
+    if not allowed.match(path):
+        return _panel_refusal(
+            403, f"패널은 해석 결과를 읽기만 합니다 — 이 경로는 열지 않습니다: {path[:200]}"
+        )
+    async with _client(90) as client:
+        response = await (
+            client.post(f"/api{path}", json=body, headers=_forward_headers(ctx))
+            if body is not None
+            else client.get(f"/api{path}", headers=_forward_headers(ctx))
+        )
+    if response.status_code == 401:
+        raise _rejected(response)  # 게이트웨이가 토큰을 다시 받는 신호 — 다른 도구와 같다
+    try:
+        parsed = response.json() if response.content else None
+    except ValueError:
+        parsed = None
+    return {"status": response.status_code, "body": parsed}
 
 
 if __name__ == "__main__":

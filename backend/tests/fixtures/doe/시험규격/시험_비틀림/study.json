@@ -1,5 +1,5 @@
 {
-  "id": "dbd03de8-9b6e-4d06-a9f6-01dc7d2e27bb",
+  "id": "552d5a8a-4a01-441d-8aa0-90d1db5de862",
   "name": "시험_비틀림",
   "description": "",
   "method": "factorial",
@@ -294,7 +294,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-228de16d@example.local"
+    "email": "member-7dbf397c@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

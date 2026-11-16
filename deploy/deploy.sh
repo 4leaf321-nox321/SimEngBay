@@ -801,6 +801,14 @@ setup_mcp() {
         as_op mkdir -p "$md/guide"
         as_op cp -r "$HERE/mcp_server/guide/." "$md/guide/"
     fi
+    # 결과 화면(MCP Apps 패널) — server.py 옆 panels/ 에 있어야 ui://<slug>/<화면> 이 화면을 낸다. 빠지면
+    # HWAX 챗 · Claude 의 결과 아래에 「화면이 이 설치에 없습니다」 가 뜬다(도구 결과 숫자는 그대로).
+    # 통째로 갈아 끼운다 — 없어진 화면이 옛 판으로 남지 않게. 서버는 부를 때마다 읽어 다시 띄울 일이 없다.
+    if [[ -d "$HERE/mcp_server/panels" ]]; then
+        as_op rm -rf "$md/panels"
+        as_op mkdir -p "$md/panels"
+        as_op cp -r "$HERE/mcp_server/panels/." "$md/panels/"
+    fi
     install -o "$OPERATOR" -g "$OPERATOR" -m 644 "$HERE/mcp_server/requirements.txt" "$md/requirements.txt"
     [[ -f "$HERE/mcp_server/README.md" ]] \
         && install -o "$OPERATOR" -g "$OPERATOR" -m 644 "$HERE/mcp_server/README.md" "$md/README.md" || true

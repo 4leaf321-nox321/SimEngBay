@@ -137,6 +137,18 @@
     "narrowest_face": 4.6154,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "받침판",
+        "b": "블록",
+        "area": 1600.0,
+        "at": [
+          0.0,
+          0.0,
+          5.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -165,7 +177,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "da32d446-dc18-4b61-911a-129713d99e11",
+      "id": "03d6832a-8cd8-4486-bb22-be912875f03f",
       "name": "기준정보_태그_적용모델",
       "method": "factorial",
       "seed": 1

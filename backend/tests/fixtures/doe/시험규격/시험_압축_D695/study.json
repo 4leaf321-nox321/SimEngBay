@@ -1,5 +1,5 @@
 {
-  "id": "3b13eb41-fdac-49de-a7db-97e9fd0dc36a",
+  "id": "3076a97c-b4da-4b49-90b1-dfed720daf8c",
   "name": "시험_압축_D695",
   "description": "",
   "method": "factorial",
@@ -216,7 +216,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-a0bf185f@example.local"
+    "email": "member-1192ff31@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

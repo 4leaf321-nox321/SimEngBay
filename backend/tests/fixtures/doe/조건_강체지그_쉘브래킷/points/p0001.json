@@ -256,6 +256,28 @@
     "narrowest_face": 0.9091,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "지그블록",
+        "b": "브래킷",
+        "area": 1020.0,
+        "at": [
+          27.0,
+          0.0,
+          20.0
+        ]
+      },
+      {
+        "a": "지그블록",
+        "b": "명판",
+        "area": 200.0,
+        "at": [
+          60.0,
+          -20.0,
+          10.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -288,7 +310,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "63990cda-61ac-49f7-a8cc-db56a20427ce",
+      "id": "3dc17d35-6b3b-49c1-8f4b-0e9f16ed79bb",
       "name": "조건_강체지그_쉘브래킷",
       "method": "factorial",
       "seed": 1

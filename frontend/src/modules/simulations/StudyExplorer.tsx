@@ -55,6 +55,14 @@ const VIEWS: { id: ExplorerView; label: string; hint: string }[] = [
   { id: 'correlation', label: '상관', hint: '피어슨 상관계수 r — 1 에 가까우면 함께 오르고 −1 이면 반대로' },
 ]
 
+/**
+ * 이 묶음의 plotly 로 못 그리는 그림 — 대화 안 결과 화면(패널)은 2D 묶음이라 3D · 산점도 행렬(WebGL) ·
+ * 평행 좌표가 없다(`__PLOT_KIT__`). 버튼을 감추고 웹 화면에서 보라고 말한다.
+ */
+const WEB_ONLY: ReadonlySet<ExplorerView> =
+  __PLOT_KIT__ === 'full' ? new Set() : new Set<ExplorerView>(['scatter3d', 'splom', 'parallel'])
+const SHOWN_VIEWS = VIEWS.filter((one) => !WEB_ONLY.has(one.id))
+
 /** 산점도 행렬에 한 번에 놓을 열 수 — 넘으면 칸이 너무 작아 읽히지 않는다. */
 const MAX_SPLOM = 6
 
@@ -120,7 +128,7 @@ export function StudyExplorer({ study }: { study: Study }) {
   const results = numeric.filter((one) => one.kind === 'result')
   const byKey = (key: string) => columns.find((one) => one.key === key)
 
-  const [view, setView] = useState<ExplorerView>('scatter3d')
+  const [view, setView] = useState<ExplorerView>(SHOWN_VIEWS[0].id)
   const [x, setX] = useState(factors[0]?.key ?? numeric[0]?.key ?? '')
   const [y, setY] = useState(factors[1]?.key ?? numeric[1]?.key ?? '')
   const [z, setZ] = useState(results[0]?.key ?? numeric[2]?.key ?? '')
@@ -385,11 +393,11 @@ export function StudyExplorer({ study }: { study: Study }) {
     }
   }
 
-  const current = VIEWS.find((one) => one.id === view)
+  const current = SHOWN_VIEWS.find((one) => one.id === view)
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="그림 고르기">
-        {VIEWS.map((one) => (
+        {SHOWN_VIEWS.map((one) => (
           <Button
             key={one.id}
             size="sm"
@@ -404,6 +412,10 @@ export function StudyExplorer({ study }: { study: Study }) {
       </div>
       <p className="text-muted-foreground text-sm">
         {current?.hint} · 끝난 설계점 {rows.length}개 · ◆ 는 설계 변수
+        {WEB_ONLY.size > 0 &&
+          ` · ${VIEWS.filter((one) => WEB_ONLY.has(one.id))
+            .map((one) => one.label)
+            .join(' · ')}는 SimEngBay 화면에서 봅니다`}
       </p>
 
       <div className="flex flex-wrap gap-3">

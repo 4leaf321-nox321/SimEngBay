@@ -109,6 +109,7 @@
     "narrowest_face": 6.0,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -137,7 +138,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "a592491f-b734-4c31-9dd9-16e5a4bd5325",
+      "id": "feb1499f-1a42-420b-ad7a-d81466b18dad",
       "name": "조건_반쪽구멍",
       "method": "factorial",
       "seed": 1

@@ -78,6 +78,7 @@
     "narrowest_face": 9.6873,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -106,7 +107,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "2e1e09fd-b16d-43a5-b620-7c804fc1b74b",
+      "id": "645727cc-708a-4603-9e35-1306a7ae2dfb",
       "name": "시험_적층압축",
       "method": "factorial",
       "seed": 1

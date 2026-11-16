@@ -294,6 +294,7 @@
     "narrowest_face": 0.5,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -327,7 +328,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "2db8fc5b-a640-419c-8165-b595517df5c7",
+      "id": "74b75f51-0812-4472-be00-0fc9d4f07127",
       "name": "시험_보드굽힘_JESD22",
       "method": "factorial",
       "seed": 1

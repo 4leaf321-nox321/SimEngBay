@@ -32,6 +32,8 @@ from app.modules.simulations.schemas import (
     DoeImportRequest,
     DoeListingOut,
     DoePreviewOut,
+    FrequencyCheckOut,
+    FrequencyRequirementsIn,
     ItemMoveRequest,
     ItemOut,
     MeasurementOut,
@@ -250,6 +252,40 @@ def analyze_study(
         x=x,
         y=y,
     )
+
+
+@router.get("/studies/{study_id}/frequency", response_model=FrequencyCheckOut)
+def study_frequency(
+    study_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FrequencyCheckOut:
+    """주파수 요구 판정 — 저장된 목표 주파수 · 회피 대역으로 설계점마다 적합 · 대역 침범 ·
+    목표 이탈 · 부적합 · 판정 보류, 보간 자리와 추정(모달 DOE 만)."""
+    return services.frequency_check(db, user=user, study_id=study_id)
+
+
+@router.post("/studies/{study_id}/frequency/check", response_model=FrequencyCheckOut)
+def check_study_frequency(
+    study_id: str,
+    body: FrequencyRequirementsIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FrequencyCheckOut:
+    """저장하지 않은 요구로 판정한다(미리보기) — 화면이 입력을 고칠 때마다 부른다."""
+    return services.frequency_check(db, user=user, study_id=study_id, draft=body)
+
+
+@router.put("/studies/{study_id}/frequency", response_model=FrequencyCheckOut)
+def save_study_frequency(
+    study_id: str,
+    body: FrequencyRequirementsIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FrequencyCheckOut:
+    """요구 조건을 스터디에 저장한다(그 점들을 건 사람 · 시스템 관리자) — 같은 스터디를 여는
+    사람과 MCP 가 같은 판정을 본다."""
+    return services.save_frequency(db, user=user, study_id=study_id, body=body)
 
 
 @router.get("/studies/{study_id}/table", response_model=StudyTableOut)

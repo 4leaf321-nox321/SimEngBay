@@ -32,6 +32,7 @@
 | 5 | 게이트웨이 MCP 백엔드 `{{ID}}` + 사람별 위임 `PER_USER_SSO_APPS` 의 `{{ID}}:{{PREFIX}}` |
 | 6 | `access.local.yaml` 의 플랫폼 `{{ID}}` |
 | 7 | 우리 위험 도구를 게이트웨이 `_INVOKE_DENY_EXACT` 에(한 번) |
+| 7-1 | 결과 화면(MCP Apps 패널) — **요청 없음**, 포털 패널 호스트가 그대로 띄운다(알림) |
 | 8 | B 전환 — 사람이 주소를 바꾸고 `update-all` 다시 |
 | 11 | 요청하지 않는 것 — `/{{ID}}/mcp` 라우트 · 포털 「연결」(PAT 등록부) · B 자동 전환 |
 
@@ -189,6 +190,19 @@ platforms:
 "files_tidy",
 ```
 <!-- 위험 도구: 끝 -->
+
+### 7-1. 결과 화면(MCP Apps 패널) — 요청 없음
+
+결과를 읽는 도구 여섯(`job_result` · `study_get` · `study_analyze` · `study_frequency` · `convergence_get` ·
+`measurements_get`)이 `_meta.ui.resourceUri = "ui://{{ID}}/<화면>"` 을 달고, `resources/read` 가 화면 HTML 한 장
+(`text/html;profile=mcp-app`, 한 장 2 MiB 아래 · 바깥 자원 없음)을 낸다. 포털 패널 호스트(`MCP_APPS_HOST` · `feat:panels`)가
+챗 · 전문가 챗 · 도크에 격리 창으로 띄운다 — 포털 · 게이트웨이에 더할 것은 없다.
+
+- 패널이 부르는 도구는 **`panel_data` 하나**다 — 웹 화면이 읽는 `/api/simulations/…` 를 그 사람의 토큰으로 읽는 읽기
+  도구(`readOnlyHint`, `_meta.ui.visibility: ["app"]` — 모델에게는 묶지 않는다). 쓰기 · 작업 제출은 부르지 않으므로 첫
+  쓰기 확인이 뜨지 않는다.
+- 게이트웨이가 이름에 접두를 붙여도 된다 — 패널은 `hostContext.toolInfo.tool.name` 에서 접두를 떼어 `panel_data` 에 붙인다.
+- 쓰지 않는 메서드: `ui/message` · `ui/update-model-context` · `ui/request-display-mode` · `ui/open-link`.
 
 ## 8. B 전환
 

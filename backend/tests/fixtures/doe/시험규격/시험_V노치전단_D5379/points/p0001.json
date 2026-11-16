@@ -104,6 +104,7 @@
     "narrowest_face": 1.3519,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -132,7 +133,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "d3277bbd-ffc1-41a5-8208-b478285ada0c",
+      "id": "e0ce1000-3600-435d-a165-c97c03ed5b08",
       "name": "시험_V노치전단_D5379",
       "method": "factorial",
       "seed": 1

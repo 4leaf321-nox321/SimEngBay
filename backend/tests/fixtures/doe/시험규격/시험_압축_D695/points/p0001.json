@@ -78,6 +78,7 @@
     "narrowest_face": 6.35,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [],
     "warnings": [],
     "notes": []
   },
@@ -106,7 +107,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "3b13eb41-fdac-49de-a7db-97e9fd0dc36a",
+      "id": "3076a97c-b4da-4b49-90b1-dfed720daf8c",
       "name": "시험_압축_D695",
       "method": "factorial",
       "seed": 1

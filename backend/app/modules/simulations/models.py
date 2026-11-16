@@ -264,3 +264,30 @@ class SimulationMeasurement(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+
+
+class StudyFrequencyRequirement(Base):
+    """스터디의 **주파수 요구 조건** — 목표 주파수 · 회피 대역(2026-11-16).
+
+    모달 DOE 를 「이 모드를 목표에 맞췄나」 · 「들뜨는 모드가 가진 대역을 피했나」 로 판정하는
+    기준이다. 스터디에 한 벌 저장해 같은 스터디를 여는 사람과 MCP 가 **같은 판정**을 본다.
+    판정은 저장하지 않고 읽을 때 셈한다(`frequency.py`) — 결과가 다시 돌면 판정도 따라 바뀐다.
+
+    스터디는 행이 아니다 — 작업의 `source_meta.study_id`(없으면 이름)와 같은 글자로 잇는다
+    (`SimulationMeasurement` 와 같다).
+    """
+
+    __tablename__ = "study_frequency_requirements"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    study_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    """요구 조건 줄들 — `schemas.FrequencyTarget` · `FrequencyBand` 의 덤프."""
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

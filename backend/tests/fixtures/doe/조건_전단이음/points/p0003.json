@@ -193,6 +193,18 @@
     "narrowest_face": 4.1667,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "아래판",
+        "b": "위판",
+        "area": 1000.0,
+        "at": [
+          80.0,
+          0.0,
+          5.0
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -221,7 +233,7 @@
   "point": {
     "number": 3,
     "study": {
-      "id": "cd9f23a0-9c81-4a2e-8638-e2aa6b1e4565",
+      "id": "307e8eed-d153-43ba-ba5b-5dd02e1b3a9f",
       "name": "조건_전단이음",
       "method": "table",
       "seed": 1

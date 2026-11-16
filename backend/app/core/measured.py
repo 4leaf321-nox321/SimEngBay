@@ -247,8 +247,9 @@ def _pct(analysis: float, measured: float) -> float | None:
     return (analysis - measured) / measured * 100 if measured else None
 
 
-def _visibility(result: dict[str, Any]) -> dict[str, dict[int, float]]:
-    """측정점 → 모드 번호 → **그 자리에서 얼마나 움직이나**(그 자리 최대에 대한 비)."""
+def visibility(result: dict[str, Any]) -> dict[str, dict[int, float]]:
+    """측정점 → 모드 번호 → **그 자리에서 얼마나 움직이나**(그 자리 최대에 대한 비). 스터디의
+    주파수 요구(회피 대역의 측정점 기준)도 이 셈을 쓴다."""
     by_probe: dict[str, dict[int, float]] = {}
     for row in result.get("probes") or []:
         mode = row.get("mode")
@@ -274,7 +275,7 @@ def _resonances(
         for one in elastic_modes(result)
         if isinstance(one.get("frequency_hz"), int | float)
     ]
-    shares = _visibility(result)
+    shares = visibility(result)
 
     candidates: list[tuple[float, int, int]] = []  # (|차이|, 실측 순번, 모드 번호)
     near: dict[int, int] = {}

@@ -250,6 +250,28 @@
     "narrowest_face": 0.1969,
     "narrow_faces": 0,
     "contacts": [],
+    "touching": [
+      {
+        "a": "피착재_1",
+        "b": "접착층",
+        "area": 322.58,
+        "at": [
+          6.35,
+          0.0,
+          1.62
+        ]
+      },
+      {
+        "a": "접착층",
+        "b": "피착재_2",
+        "area": 322.58,
+        "at": [
+          -6.35,
+          0.0,
+          1.82
+        ]
+      }
+    ],
     "warnings": [],
     "notes": []
   },
@@ -278,7 +300,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "93bdd8d3-5241-471e-816f-f314e1c24aff",
+      "id": "1b561149-74c4-47cc-a926-a5eab779e773",
       "name": "시험_겹치기이음_D1002",
       "method": "factorial",
       "seed": 1

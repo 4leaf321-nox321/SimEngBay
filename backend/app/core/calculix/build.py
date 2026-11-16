@@ -22,6 +22,7 @@ from typing import Any
 
 from app.core import conditions as condition_model
 from app.core import materials as material_model
+from app.core import touching as touch
 from app.core import units
 from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import bonding
@@ -240,6 +241,20 @@ def build(
         topology, given, mesh, shells, rigid, modal=not isinstance(spec, StaticSpec)
     )
     ties: list[deck_writer.Tie | deck_writer.Slide] = list(shell_ties)
+    # 미끄럼으로 푼 쉘 접촉 — 0 Hz 모드의 까닭을 짚는 재료(`boundary.json` 의 `connections`).
+    by_name = {one.name: one for one in given.contacts}
+    shell_sliding = [
+        {
+            "contact": one.contact,
+            "kind": by_name[one.contact].kind,
+            "bodies": touch.contact_bodies(topology, by_name[one.contact]),
+        }
+        for one in shell_ties
+        if isinstance(one, deck_writer.Slide) and one.contact in by_name
+    ]
+    # **접촉 없이 맞닿은 쌍** — CompCore 가 잰 목록(`quality.touching`)이 있으면 그것으로(두
+    # 솔버가 같은 쌍을 말한다), 없는 옛 점 파일이면 메시에서 잰다(`bonding.untied_pairs`).
+    listed = touch.uncovered(topology, given)
     if tied:
         # 쉘을 잇는 접촉은 따로 건다(`*TIE` · 강체) — 덱의 「절점 공유로 붙였다」 줄에서 뺀다.
         given = replace(
@@ -262,6 +277,7 @@ def build(
             tolerance=tolerance,
             taken={node for tie in ties for node in tie.slave_nodes},
             held=set().union(*held.values()) if held else set(),
+            find_untied=listed is None,
         )
         ties = [*ties, *bonded.ties]
         rigid = bonded.rigid
@@ -492,6 +508,15 @@ def build(
     # **요소 번호 → 바디** — ccx 가 「nonpositive jacobian … element N」 으로 멈추면 솔브가 그
     # 요소들이 어느 바디의 것인지 말한다(`solve._jacobian_failure`).
     boundary["element_owners"] = _element_owners(solids, mesh, body_of, layout.shell_parts)
+    untied = listed if listed is not None else (bonded.untied if bonded is not None else [])
+    connections = {
+        "untied": untied,
+        "sliding": [*shell_sliding, *(bonded.sliding if bonded is not None else [])],
+    }
+    if any(connections.values()):
+        # **묶지 않은 것** — 맞닿았는데 접촉이 없는 쌍 · 미끄럼으로 푼 접촉. 모달 추출이 0 Hz
+        # 모드에서 움직인 바디와 맞대어 까닭을 짚는다(`modes.rigid`).
+        boundary["connections"] = connections
     if isinstance(spec, HarmonicSpec):
         # **실제로 쓴 감쇠비 · 범위 · 점 수.** 결과가 스펙 값을 적으면 화면이 거짓말을 한다 —
         # 봉우리 높이는 1/2ζ 로 읽히기 때문이다(Ansys 쪽과 같은 규칙).
@@ -533,6 +558,8 @@ def build(
             # **바디를 어떻게 붙였나** — `tie`(따로 메시하고 구속식) · `shared`(쪼개 절점
             # 공유).
             **({"bonding": "tie" if tie_mode else "shared"} if len(mesh.solids) > 1 else {}),
+            # **맞닿았는데 접촉이 없는 바디 쌍** — 선언한 쌍만 묶으므로 떨어진 채로 풀었다.
+            **({"unbonded_touching": touch.line(untied)} if untied else {}),
             **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
             **_order_summary(mesh, body_of),
             # **실제로 쓴 전역 요소 크기**(mm) — 메시 수렴 점검이 이것을 기준으로 줄인다.
@@ -1348,6 +1375,11 @@ def _ties(
                     name=f"SLIDE{index}",
                     rows=tuple(rows),
                     tolerance=thickest,
+                )
+            )
+            notes.append(
+                condition_model.Note(
+                    f"접촉 「{pair.name}」({pair.kind})", bonding.SLIDING_NOTE[modal]
                 )
             )
             logger.info("접촉 %s → 쉘 절점 %s 를 법선으로만 묶었습니다", pair.name, len(rows))

@@ -30,6 +30,7 @@ from app.modules.simulations.models import (
     SimulationArtifact,
     SimulationMeasurement,
     SimulationWorker,
+    StudyFrequencyRequirement,
 )
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
@@ -52,6 +53,7 @@ __all__ = [
     "SimulationArtifact",
     "SimulationMeasurement",
     "SimulationWorker",
+    "StudyFrequencyRequirement",
     "User",
     "Workspace",
     "WorkspaceMember",

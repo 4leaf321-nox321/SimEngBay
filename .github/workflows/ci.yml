@@ -152,6 +152,11 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      # 대화 안 결과 화면(MCP Apps 패널) — 한 장이 HWAX 상한(2 MiB)을 넘거나 바깥 파일이 남으면 여기서 실패한다.
+      - name: 결과 화면 빌드 (패널 한 장씩 · 2 MiB)
+        working-directory: frontend
+        run: npm run build:panels
+
       - name: 테스트 (vitest)
         working-directory: frontend
         run: npm test

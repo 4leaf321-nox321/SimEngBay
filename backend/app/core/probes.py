@@ -137,5 +137,21 @@ def peaks(
             body=spot.body,
         )
         line["frequency_hz"] = frequency
+        # **가속도의 봉우리**(g)와 변위 봉우리에서의 위상 — 가속도는 ω² 에 실려 봉우리가 조금
+        # 위로
+        # 옮겨 갈 수 있어 따로 찾는다(가속도계 FRF 와 견줄 값).
+        accel = [
+            (float(one["frequency_hz"]), float(one["probes_accel_g"][spot.name]))
+            for one in points
+            if isinstance((one.get("probes_accel_g") or {}).get(spot.name), int | float)
+        ]
+        if accel:
+            hz, size = max(accel, key=lambda pair: pair[1])
+            line["acceleration_g"] = size
+            line["acceleration_hz"] = hz
+        at = next((one for one in points if float(one["frequency_hz"]) == frequency), None)
+        phase = (at or {}).get("probes_phase_deg", {}).get(spot.name)
+        if isinstance(phase, int | float):
+            line["phase_deg"] = phase
         made.append(line)
     return made

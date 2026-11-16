@@ -112,6 +112,10 @@ export interface ProbeRow {
   mode?: number
   /** 조화 — 그 자리 곡선의 봉우리 주파수. */
   frequency_hz?: number
+  /** 조화 — 그 자리 **가속도의 봉우리**(g)와 그 주파수 · 변위 봉우리에서의 위상(도). */
+  acceleration_g?: number
+  acceleration_hz?: number
+  phase_deg?: number
 }
 
 /** 조화 응답의 결과 — **주파수 점마다 최대 변위**, 곧 곡선이다. */
@@ -122,12 +126,27 @@ export interface HarmonicResult {
   mesh?: { nodes: number; elements: number }
   /** 감쇠비. **봉우리 높이를 거의 이 값이 정한다**(1/2ζ) — 그래서 곡선과 같이 보여 준다. */
   damping_ratio: number
-  /** `probes` 는 측정점 이름 → 그 주파수에서의 진폭(단위는 `units.displacement`). */
-  points: { frequency_hz: number; max_displacement: number; probes?: Record<string, number> }[]
+  /**
+   * `probes` 는 측정점 이름 → 그 주파수에서의 진폭(단위는 `units.displacement`). `probes_accel_g` 는
+   * 가속도(g — `acceleration` 이 기준), `probes_phase_deg` 는 위상(도, CalculiX 만).
+   */
+  points: {
+    frequency_hz: number
+    max_displacement: number
+    probes?: Record<string, number>
+    probes_accel_g?: Record<string, number>
+    probes_phase_deg?: Record<string, number>
+  }[]
   /** 가장 크게 흔들린 점. 창 끝에 붙어 있으면 공진의 옆구리만 본 것이다. */
   peak: { frequency_hz: number; max_displacement: number; probes?: Record<string, number> }
   /** 측정점마다 **그 자리 곡선의 봉우리** 한 줄(절점 거리 · 경고가 여기 실린다). 옛 결과엔 없다. */
   probes?: ProbeRow[]
+  /**
+   * 측정점 가속도의 기준 — 기저 가진(고정 지지 + 가속도 하중)이면 덱은 지지부 기준 **상대** 변위를 낸다.
+   * CalculiX 는 기저 가속도를 더해 **절대**(가속도계가 재는 값)로, Ansys 는 위상을 안 읽어 상대로 낸다.
+   */
+  acceleration?: 'absolute' | 'relative'
+  base_excitation?: boolean
   material?: string
   warning?: string
   fake?: boolean
@@ -183,6 +202,16 @@ export interface SimulationResult {
    */
   probes?: ProbeRow[]
   warning?: string
+  /**
+   * **찾을 주파수 범위**(Hz) — 있으면 `modes` 는 그 범위 안의 모드뿐이고 탄성 차수도 그 안에서 1 부터다
+   * (서버 `modes.search`). `range_from` 은 누가 정했나(CAD · 스펙).
+   */
+  frequency_range_hz?: [number, number]
+  range_from?: 'cad' | 'spec'
+  /** 범위 아래에서 뺀 탄성 모드 수(CalculiX — Ansys 는 범위 안만 찾아 모른다). */
+  modes_below_range?: number
+  /** 범위 찾기가 모자랐을 때의 말 — 범위 안에 모드가 없다 · 끝까지 못 훑었다. */
+  range_note?: string
   fake?: boolean
 }
 

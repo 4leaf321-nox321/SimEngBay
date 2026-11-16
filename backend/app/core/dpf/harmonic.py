@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core import boundary
+from app.core import boundary, excitation
 from app.core import probes as core_probes
 from app.core.dpf import probes
 from app.core.numbers import significant
@@ -107,9 +107,25 @@ def extract(
     if not points:
         raise StageFailure("solver_failed", "결과 파일에 주파수 점이 없습니다.")
 
+    # **측정점의 가속도(g)** — 위상을 읽지 않으므로 ω²·|u|. 기저 가진이면 **상대** 가속도다
+    # (절대는 위상이 있어야 기저를 더한다 — CalculiX 경로는 절대를 낸다).
+    to_mm = {"mm": 1.0, "m": 1000.0}.get(displacement_unit.strip().lower())
+    if to_mm is not None:
+        for row in points:
+            if row.get("probes"):
+                row["probes_accel_g"] = {
+                    name: significant(
+                        excitation.amplitude_g(row["frequency_hz"], float(size) * to_mm)
+                    )
+                    for name, size in row["probes"].items()
+                }
+    shaken = bool(boundary.read(workdir).get(excitation.KEY))
+
     worst = max(points, key=lambda one: one["max_displacement"])
     result: dict[str, Any] = {
         "recipe": "harmonic",
+        "acceleration": "relative" if shaken else "absolute",
+        **({"base_excitation": True} if shaken else {}),
         "units": {"frequency": unit, "displacement": displacement_unit, "system": system},
         "mesh": {"nodes": int(mesh.nodes.n_nodes), "elements": int(mesh.elements.n_elements)},
         "damping_ratio": damping,

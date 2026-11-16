@@ -160,6 +160,9 @@ class ConditionsPreviewOut(BaseModel):
     """CAD 가 「전체」 에 적은 요소 차수(`linear` · `quadratic`) — 창이 미리 채운다."""
     suggested_large_deflection: bool | None = None
     """CAD 가 정적에 적은 큰 변형 — 창이 미리 채운다(사람이 고칠 수 있다)."""
+    suggested_frequency_range_hz: list[float] | None = None
+    """CAD 가 모달에 적은 **찾을 주파수 범위**(Hz) — 그것이 먼저다(`modes.search`, 창은
+    보여만 준다)."""
     conditions: ConditionsOut
     """그 해석 종류에서 조건이 어떻게 다뤄지나 — 반영 · 넘김 · 막음."""
 
@@ -337,6 +340,9 @@ class DoePreviewOut(BaseModel):
     돈다** — 둘 다 없으면 설계점마다 메시 단계에서 멈춘다."""
     suggested_large_deflection: bool | None = None
     """CAD 가 정적에 적은 큰 변형 — 창이 미리 채운다(사람이 고칠 수 있다)."""
+    suggested_frequency_range_hz: list[float] | None = None
+    """CAD 가 모달에 적은 **찾을 주파수 범위**(Hz) — 그것이 먼저다(`modes.search`, 창은
+    보여만 준다)."""
     ontology: StudyOntologyOut = Field(default_factory=StudyOntologyOut)
     """대상 작업에 이은 기준정보(태그 · 적용 모델 …) — 걸기 전에 무엇의 해석인가를 본다."""
     conditions: ConditionsOut | None = None

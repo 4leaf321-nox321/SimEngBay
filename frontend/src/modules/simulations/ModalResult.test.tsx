@@ -123,6 +123,30 @@ describe('모달 결과', () => {
     expect(caption.textContent).toContain('질량')
   })
 
+  it('찾을 주파수 범위로 풀었으면 범위 · 누가 정했나 · 범위 아래에서 뺀 수를 말한다', () => {
+    render(
+      <ModalResult
+        simulationId="sim"
+        result={result({ frequency_range_hz: [2000, 5000], range_from: 'cad', modes_below_range: 3 })}
+        artifacts={[]}
+      />,
+    )
+    const line = screen.getByText(/찾을 범위/)
+    expect(line.textContent).toContain('2,000 – 5,000 Hz(CAD)')
+    expect(line.textContent).toContain('범위 아래 탄성 모드 3개는 뺐습니다')
+  })
+
+  it('범위 안에 모드가 없으면 알린다', () => {
+    render(
+      <ModalResult
+        simulationId="sim"
+        result={result({ frequency_range_hz: [9000, 9500], range_note: '범위 9000~9500 Hz 안에 모드가 없습니다.' })}
+        artifacts={[]}
+      />,
+    )
+    expect(screen.getByText('범위 9000~9500 Hz 안에 모드가 없습니다.')).toBeDefined()
+  })
+
   it('모의 결과는 그렇다고 말한다', () => {
     // **진짜와 구별되지 않으면 안 된다** — fake 로 돈 값이 보고서에 실릴 수 있다.
     render(<ModalResult simulationId="sim" result={result({ fake: true })} artifacts={[]} />)

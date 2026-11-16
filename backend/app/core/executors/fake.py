@@ -26,6 +26,7 @@ from typing import Any
 from app.core import conditions as condition_model
 from app.core import probes as core_probes
 from app.core.harmonic import harmonic_plan
+from app.core.modes import search as mode_search
 from app.core.spec import (
     RIGID_BODY_MODES,
     HarmonicSpec,
@@ -124,7 +125,15 @@ class FakeExecutor:
             return _harmonic(ctx, spec)
         modes: list[dict[str, Any]] = []
         elastic_index = 0
-        for index, value in enumerate(_fake_frequencies(spec)):
+        # **찾을 주파수 범위**(스펙) — 진짜 실행기처럼 범위 안을 최대 모드
+        # 수만큼(`modes.search`).
+        searched = (
+            mode_search.ModeSearch(*spec.frequency_range_hz, spec.modes, "spec")
+            if spec.frequency_range_hz is not None
+            else None
+        )
+        solved = _fake_frequencies(spec, mode_search.MAX_SOLVED if searched else None)
+        for index, value in enumerate(solved):
             rigid = spec.is_free_free and index < RIGID_BODY_MODES
             if not rigid:
                 elastic_index += 1
@@ -138,6 +147,9 @@ class FakeExecutor:
                     "rigid_body": rigid,
                 }
             )
+        below = 0
+        if searched is not None:
+            modes, below = mode_search.kept(modes, searched)
         result: dict[str, Any] = {
             "recipe": "modal",
             "boundary": "free-free" if spec.is_free_free else "constrained",
@@ -153,6 +165,11 @@ class FakeExecutor:
             "participation": {},
             "fake": True,
         }
+        if searched is not None:
+            result["frequency_range_hz"] = [searched.low, searched.high]
+            result["range_from"] = searched.source
+            if below:
+                result["modes_below_range"] = below
         result_path = ctx.workdir / "result.json"
         result_path.write_text(
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -197,9 +214,9 @@ def _stiffening(spec: AnySpec) -> float:
     return 1.0 + 0.02 * (_element_size(spec) / BASE_SIZE_MM) ** 2
 
 
-def _fake_frequencies(spec: ModalSpec | HarmonicSpec) -> list[float]:
+def _fake_frequencies(spec: ModalSpec | HarmonicSpec, count: int | None = None) -> list[float]:
     """지어낸 고유진동수. 강성/밀도 제곱근에 비례하게 만들어 물성을 바꾸면 값이 따라오게
-    한다. 성긴 메시일수록 조금 높다."""
+    한다. 성긴 메시일수록 조금 높다. `count` 는 탄성 모드 수(비우면 스펙의 `modes`)."""
     material = _material(spec)
     scale = (
         math.sqrt(material.youngs_modulus_gpa * 1e9 / material.density_kg_m3) / 1000
@@ -208,7 +225,7 @@ def _fake_frequencies(spec: ModalSpec | HarmonicSpec) -> list[float]:
     if isinstance(spec, ModalSpec) and spec.is_free_free:
         values.extend(0.0001 * (index + 1) for index in range(RIGID_BODY_MODES))
     # 1차가 250 Hz 남짓 — 실제 부품의 자릿수다(0.25 Hz 로 두면 반올림에 메시 차이가 묻힌다).
-    values.extend(scale * (50 * (index + 1) ** 1.5) for index in range(spec.modes))
+    values.extend(scale * (50 * (index + 1) ** 1.5) for index in range(count or spec.modes))
     return values
 
 

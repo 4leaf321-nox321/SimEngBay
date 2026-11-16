@@ -87,7 +87,8 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 | `mesh.order` | `quadratic` | 거의 안 바꾼다 |
 | `modes` | CAD 값(없으면 10) | 모달 · 조화 — 볼 탄성 모드 수(강체 6개는 따로 찾는다). DOE 는 **비교하는 6개보다 넉넉히**(10 권장) — 6개 이하면 치수에 따라 모드가 밀려나 비교 선이 끊긴다 |
 | `large_deflection` | CAD 값 | 정적 — 변형이 커서 모양이 바뀔 때(느리다) |
-| `frequency_range_hz` · `intervals` · `damping_ratio` | 0~2000 · 10 · 0.02 | 조화 — 감쇠가 없으면 거절 |
+| `frequency_range_hz` | CAD 값(없으면 비움) | **모달** — 찾을 주파수 범위 `[하한, 상한]`(Hz). 주면 그 범위 안의 모드만 `modes` 개까지 찾는다(낮은 모드에 밀려 보고 싶은 대역이 빠지지 않게). CAD 가 적었으면 그것이 먼저다 |
+| `frequency_range_hz` · `intervals` · `damping_ratio` | 0~2000 · 10 · 0.02 | 조화 — 훑을 범위 · 점 수 · 감쇠비. 감쇠가 없으면 거절 |
 
 `material_from` · `conditions_from` 은 `cad`(기본)로 둔다 — 물성 · 조건은 CAD 가 파트마다 보낸다.
 `spec` 으로 바꾸면 CAD 값을 일부러 무시한다(그때는 `material` · `constraints` 를 직접 준다).
@@ -173,6 +174,9 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
   `ROTY` · `ROTZ` — 유효질량이 가장 큰 방향, 전부 작으면 없다) · `effective_mass_ratio`. 「1차는
   Z 방향으로 떠는 모드」 처럼 말할 근거다.
 - 구속이 없으면 자유-자유 — 앞 6개가 0 Hz 근처(강체)로 나오는 것이 정상이다.
+- **찾을 범위로 풀었으면**(`frequency_range_hz` 가 결과에 있다) 모드는 그 범위 안뿐이고 `elastic_number`
+  도 그 안에서 1 부터다 — 「1차」 가 전체의 1차가 아니다. `modes_below_range` 는 범위 아래에서 뺀
+  탄성 모드 수(CalculiX), `range_note` 는 범위 안에 모드가 없거나 끝까지 못 훑었을 때의 말이다.
 
 ### 정적
 

@@ -28,6 +28,7 @@ import os
 import shutil
 import signal
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from app.core.stages import StageFailure, out_of_memory_message
@@ -97,6 +98,7 @@ def run(
     cwd: Path,
     timeout_seconds: int,
     what: str,
+    env_extra: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """한 번 부르고 그대로 돌려준다 — **판정은 부른 쪽이 한다.**
 
@@ -113,6 +115,7 @@ def run(
     extra = os.environ.get(LD_ENV)
     if extra:
         env["LD_LIBRARY_PATH"] = extra
+    env.update(env_extra or {})
     try:
         done = subprocess.run(
             [str(binary), *args],

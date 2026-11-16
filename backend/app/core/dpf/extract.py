@@ -26,6 +26,7 @@ from app.core.bodies import BodyRecord
 from app.core.dpf import fields, participation, probes, shapes, signature
 from app.core.modes import metrics
 from app.core.modes import rigid as rigid_modes
+from app.core.modes import search as mode_search
 from app.core.spec import ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -143,6 +144,16 @@ def extract(
     )
     if said:
         result["warning"] = said
+    # **찾을 주파수 범위** — Ansys 는 범위 안만 찾아 준다(`LimitSearchToRange`). CalculiX 쪽과
+    # 같은
+    # 열쇠로 적는다(`calculix/read._range_fields`). 범위 아래의 모드 수는 Ansys 가 모른다.
+    searched = mode_search.read(workdir / BOUNDARY_NAME)
+    if searched is not None:
+        result["frequency_range_hz"] = [searched.low, searched.high]
+        result["range_from"] = searched.source
+        empty = mode_search.note(searched, len(elastic))
+        if empty:
+            result["range_note"] = empty
 
     path = workdir / RESULT_NAME
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

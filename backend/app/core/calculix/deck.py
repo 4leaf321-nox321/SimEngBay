@@ -18,11 +18,11 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import units
+from app.core import excitation, units
 from app.core.harmonic import HarmonicPlan
 from app.core.materials import Material
 from app.core.regions.match import axis_point
@@ -548,16 +548,8 @@ MOMENT_UNITS = {
     "n.m": 1000.0,
     "nm": 1000.0,
 }
-#: 가속도 단위 → mm/s²(덱의 계).
-ACCELERATION_UNITS = {
-    "mm/s^2": 1.0,
-    "mm/s2": 1.0,
-    "mm/s²": 1.0,
-    "m/s^2": 1000.0,
-    "m/s2": 1000.0,
-    "m/s²": 1000.0,
-    "g": 9806.65,
-}
+#: 가속도 단위 → mm/s²(덱의 계) — 결과의 가속도(`excitation`)와 같은 표.
+ACCELERATION_UNITS = excitation.ACCELERATION_MM_S2
 #: 표준 중력(mm/s²).
 STANDARD_GRAVITY = 9806.65
 #: 몸 전체에 거는 하중 — 반력 절점에 얹힌 몫을 되돌려야 한다(`_inertia_offsets`).
@@ -1931,6 +1923,7 @@ def write_harmonic(
         f"{plan_of.low:.6g}, {plan_of.high:.6g}, {plan_of.intervals}, 1",
     ]
     applied_loads = 0
+    amplitudes: list[list[str]] = []
     for load in given.loads:
         if load.kind in ("rotational_velocity", "bolt_pretension"):
             # 흔드는 하중이 아니다 — 조화 응답은 모드 위의 가진만 본다(조이거나 돌린 상태는
@@ -1946,24 +1939,54 @@ def write_harmonic(
         if refused is not None:
             plan.refused.append(refused)
             continue
-        rows, why = _load_rows(
-            load,
-            load_faces,
-            load_areas,
-            load_nodes,
-            nodes,
-            shapes,
-            plan.local_frames,
-            _elsets(body_of, shells),
-            given.frames,
-            length_mm,
-        )
+        # **가진 프로파일**(CompCore 2026-11-17) — 주파수별 배율은 `*AMPLITUDE`(가로축이
+        # 주파수,
+        # 실측 2026-11-17: 200 · 296 · 499 Hz 에서 배율 0.571 · 0.640 · 0.785 그대로), 위상은
+        # 실수부 cos φ · 허수부 sin φ(`LOAD CASE=2`, 실측: 같은 크기를 실수 · 허수로 나누면 √2
+        # 배).
+        if not condition_model.table_covers(load.frequency_table, plan_of.low, plan_of.high):
+            table = load.frequency_table or ()
+            plan.refused.append(
+                condition_model.Note(
+                    f"하중 「{load.name}」 의 주파수별 배율",
+                    f"표({table[0][0]:g}~{table[-1][0]:g} Hz)가 해석 범위"
+                    f"({plan_of.low:g}~{plan_of.high:g} Hz)를 다 덮지 않습니다 — 표 밖을"
+                    " 어떻게"
+                    " 읽을지 솔버마다 달라 걸지 않습니다.",
+                )
+            )
+            continue
+        keys = []
+        if load.frequency_table:
+            name = f"SEBAMP{len(amplitudes) + 1}"
+            amplitudes.append(_amplitude_lines(name, load.frequency_table))
+            keys.append(f"AMPLITUDE={name}")
+        why = None
+        for part, case in _phased(load):
+            rows, why = _load_rows(
+                part,
+                load_faces,
+                load_areas,
+                load_nodes,
+                nodes,
+                shapes,
+                plan.local_frames,
+                _elsets(body_of, shells),
+                given.frames,
+                length_mm,
+            )
+            if why is not None:
+                break
+            lines += _keyed(rows, [*keys, *([case] if case else [])])
         if why is not None:
             plan.refused.append(why)
             continue
-        lines += rows
         plan.applied.append(f"{load.kind}:{load.region}")
         applied_loads += 1
+    if amplitudes:
+        # `*AMPLITUDE` 는 모델 줄이다 — 첫 단계 앞에 둔다.
+        at = lines.index("*STEP")
+        lines[at:at] = [row for block in amplitudes for row in block]
     if not applied_loads:
         plan.refused.append(
             condition_model.Note(
@@ -1987,6 +2010,52 @@ def write_harmonic(
         lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
     )
     return plan
+
+
+def _amplitude_lines(name: str, table: tuple[tuple[float, float], ...]) -> list[str]:
+    """`*AMPLITUDE` — 한 줄에 (주파수, 배율) 넷까지(ccx 의 줄 길이)."""
+    pairs = [f"{hz:.9g}, {factor:.9g}" for hz, factor in table]
+    return [f"*AMPLITUDE, NAME={name}"] + [
+        ", ".join(pairs[at : at + 4]) for at in range(0, len(pairs), 4)
+    ]
+
+
+def _phased(load: condition_model.Load) -> list[tuple[condition_model.Load, str]]:
+    """위상(도) — 실수부 cos φ 와 허수부 sin φ(`LOAD CASE=2`)로 나눈 하중들. 0 이면 그대로
+    하나.
+
+    크기에 곱한다 — 음수가 되면 방향을 뒤집는다(관성 하중은 크기 대신 방향으로 부호를
+    읽는다)."""
+    phase = load.phase or 0.0
+    if math.isclose(math.fmod(phase, 360.0), 0.0, abs_tol=1e-9):
+        return [(load, "")]
+    angle = math.radians(phase)
+    out = []
+    for factor, case in ((math.cos(angle), ""), (math.sin(angle), "LOAD CASE=2")):
+        if abs(factor) < 1e-12:
+            continue
+        out.append((_scaled(load, factor), case))
+    return out
+
+
+def _scaled(load: condition_model.Load, factor: float) -> condition_model.Load:
+    if load.magnitude is None:
+        return load
+    if factor < 0 and load.direction is not None:
+        flipped = (-load.direction[0], -load.direction[1], -load.direction[2])
+        return replace(load, magnitude=load.magnitude * -factor, direction=flipped)
+    return replace(load, magnitude=load.magnitude * factor)
+
+
+def _keyed(rows: list[str], keys: list[str]) -> list[str]:
+    """`*CLOAD` · `*DLOAD` 줄에 매개변수(`AMPLITUDE=…` · `LOAD CASE=2`)를 붙인다."""
+    if not keys:
+        return rows
+    tail = ", ".join(keys)
+    return [
+        f"{line}, {tail}" if line.upper().startswith(("*CLOAD", "*DLOAD")) else line
+        for line in rows
+    ]
 
 
 def _load_rows(

@@ -41,6 +41,7 @@ CompCore 는 점 파일에 조건 한 벌을 실어 보낸다: 구속 7종 · �
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -174,6 +175,15 @@ class Load:
     direction: tuple[float, float, float] | None = None
     normal: bool = False
     preload: float | None = None
+    frequency_table: tuple[tuple[float, float], ...] | None = None
+    """**조화 응답의 주파수별 배율**(CompCore 2026-11-17, 가진 프로파일) — `((Hz, 배율),
+    …)`, 그
+    주파수의 진폭 = `magnitude` x 배율, 사이는 주파수에 대해 선형 보간(CalculiX `*AMPLITUDE` 와
+    같은
+    뜻). `None` 이면 모든 주파수에서 1. 표는 해석의 주파수 범위를 다 덮는다(CompCore 가
+    막는다)."""
+    phase: float | None = None
+    """조화 응답의 위상각(도). `None` · 0 이면 실수부만."""
 
 
 @dataclass(frozen=True)
@@ -1019,6 +1029,17 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
     """
     name = str(row.get("name") or "이름 없는 하중")
     kind = str(row.get("type") or "")
+    if kind == "psd_acceleration" and recipe != "random":
+        # 랜덤 진동의 가진(CompCore 2026-11-17) — 다른 해석에서는 뜻이 없다. 막지 않고
+        # 알린다(같은
+        # 형상 · 조건을 모달로 먼저 보는 일이 흔하다).
+        made.skipped.append(
+            Note(
+                f"하중 「{name}」(가속도 PSD)",
+                "랜덤 진동의 가진이라 이 해석에서는 쓰지 않습니다",
+            )
+        )
+        return
     if kind not in _INERT_IN_MODAL:
         made.refused.append(Note(f"하중 「{name}」", f"모르는 하중입니다: {kind}"))
         return
@@ -1032,6 +1053,10 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
         return
 
     direction = row.get("direction")
+    table, broken = _frequency_table(row.get("frequency_table"))
+    if broken:
+        made.refused.append(Note(f"하중 「{name}」 의 주파수별 배율", broken))
+        return
     made.loads.append(
         Load(
             name=name,
@@ -1043,6 +1068,10 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
             direction=_triple(direction),
             normal=direction == "normal",
             preload=_number(row.get("preload")),
+            # 가진 프로파일 — 조화 응답에서만 뜻이 있다(다른 해석에서는 CompCore 가 비워
+            # 보낸다).
+            frequency_table=table if recipe == "harmonic" else None,
+            phase=_number(row.get("phase")) if recipe == "harmonic" else None,
         )
     )
 
@@ -1133,6 +1162,50 @@ def _dict(value: Any) -> dict[str, Any]:
 def _rows(block: dict[str, Any], key: str) -> list[dict[str, Any]]:
     rows = block.get(key)
     return [one for one in rows if isinstance(one, dict)] if isinstance(rows, list) else []
+
+
+def _frequency_table(value: Any) -> tuple[tuple[tuple[float, float], ...] | None, str]:
+    """`[[Hz, 배율], …]` → 표와 **틀렸으면 까닭**. 비었으면 표 없음(배율 1). 주파수는 커지는
+    차례, 배율은 0 이상(뒤집기는 위상으로) — CompCore 가 저장할 때 막는 것과 같은 규칙이다."""
+    if value is None:
+        return None, ""
+    if not isinstance(value, list) or len(value) < 2:
+        return None, "표는 [주파수, 배율] 두 줄 이상이어야 합니다."
+    rows: list[tuple[float, float]] = []
+    for one in value:
+        pair = one if isinstance(one, list | tuple) and len(one) == 2 else None
+        hz = _number(pair[0]) if pair else None
+        factor = _number(pair[1]) if pair else None
+        if hz is None or factor is None:
+            return None, f"표의 줄이 [주파수, 배율] 이 아닙니다: {one}"
+        if factor < 0:
+            return None, f"배율은 0 이상이어야 합니다(뒤집기는 위상으로): {factor:g}"
+        if rows and hz <= rows[-1][0]:
+            return None, "주파수가 커지는 차례가 아닙니다."
+        rows.append((hz, factor))
+    return tuple(rows), ""
+
+
+def table_factor(table: tuple[tuple[float, float], ...] | None, hz: float) -> float:
+    """그 주파수의 배율 — 선형 보간, 표 밖은 끝값(CalculiX `*AMPLITUDE` 가 그렇게 읽는다). 표가
+    없으면 1."""
+    if not table:
+        return 1.0
+    if hz <= table[0][0]:
+        return table[0][1]
+    for (f1, k1), (f2, k2) in itertools.pairwise(table):
+        if hz <= f2:
+            return k1 + (k2 - k1) * (hz - f1) / (f2 - f1)
+    return table[-1][1]
+
+
+def table_covers(
+    table: tuple[tuple[float, float], ...] | None, low: float, high: float
+) -> bool:
+    """표가 해석의 주파수 범위를 다 덮나 — 표 밖을 0 으로 읽을지 끝값으로 읽을지 솔버마다
+    달라서
+    덮지 않으면 걸지 않는다(CompCore 와 같은 규칙)."""
+    return table is None or (table[0][0] <= low and table[-1][0] >= high)
 
 
 def _number(value: Any) -> float | None:

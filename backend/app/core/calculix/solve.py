@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.core.calculix import bonding, tools
+from app.core.calculix import bonding, tables, tools
+from app.core.modes import search as mode_search
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
@@ -174,12 +175,55 @@ def with_iterative(text: str) -> str:
     ) + ("\n" if text.endswith("\n") else "")
 
 
+#: 고유치 덱(모달 · 선응력 모달 · 조화의 모드)은 **SPOOLES 를 한 스레드로** 푼다. 여러 스레드면
+# 같은
+#: 덱이 풀 때마다 다른 고유치를 낸다 — 외팔보 한 장을 4 스레드로 12번 풀었더니 6번이
+# 어긋났다(최대
+#: 3%, 한 번은 가짜 0 Hz 모드 · 1,421 Hz). SPOOLES 만 한 스레드로 두면 12번 모두 같았고(조립 ·
+#: 응력 계산은 그대로 여러 스레드), 시간도 거의 같았다(실측 2026-11-17, ccx 2.21). 기본 2
+# 스레드는
+#: 12번 모두 맞았지만 그것이 늘 맞는다는 증거는 아니다 — 운영자가 스레드를 늘리면 판정이
+# 흔들린다.
+EIGEN_ENV = {"CCX_NPROC_EQUATION_SOLVER": "1"}
+BOUNDARY_NAME = "boundary.json"
+_FREQUENCY_HEAD = re.compile(r"^\*FREQUENCY\b", re.IGNORECASE)
+
+
+def eigen_env(text: str) -> dict[str, str] | None:
+    """고유치를 푸는 덱이면 SPOOLES 를 한 스레드로(`EIGEN_ENV`)."""
+    return dict(EIGEN_ENV) if "*FREQUENCY" in text.upper() else None
+
+
+def asked_modes(text: str) -> int | None:
+    """`*FREQUENCY` 다음 줄의 모드 수."""
+    lines = text.splitlines()
+    for at, line in enumerate(lines[:-1]):
+        if _FREQUENCY_HEAD.match(line.strip()):
+            head = lines[at + 1].split(",")[0].strip()
+            return int(head) if head.isdigit() else None
+    return None
+
+
+def with_modes(text: str, count: int) -> str:
+    """`*FREQUENCY` 다음 줄의 모드 수를 바꾼다(나머지 칸은 그대로)."""
+    lines = text.splitlines()
+    for at, line in enumerate(lines[:-1]):
+        if _FREQUENCY_HEAD.match(line.strip()):
+            rest = lines[at + 1].split(",")[1:]
+            lines[at + 1] = ", ".join([str(count), *(one.strip() for one in rest)])
+            break
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
 def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> StageResult:
     """`model.inp` 를 푼다. 로그는 폴더에 남긴다 — 나중에 사람이 읽을 유일한 단서다.
 
     **메모리를 먼저 어림한다**(`plan_solver`). 정적이면 넘칠 것 같을 때 반복 솔버로 풀고,
     그래도 운영체제가 끊으면 반복 솔버로 한 번 더 돌린다. 고유치 · 조화는 반복 솔버를 못 쓰므로
     어림을 결과에 적고(넘칠 것 같다고) 그대로 푼다 — 끊기면 실패 글에 어림이 함께 간다.
+
+    모달에 **찾을 주파수 범위**가 있으면(`modes.search`) 범위 안이 모자랄 때 모드 수를 늘려
+    다시 푼다 — 덱에 범위를 주지 않으므로 낮은 것부터 구한다.
     """
     deck = workdir / DECK_NAME
     if not deck.is_file():
@@ -197,6 +241,7 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
         f"{plan.available_mb:.0f}" if plan.available_mb is not None else "?",
         "반복 솔버" if iterative else "직접 솔버",
     )
+    env_extra = eigen_env(text)
     retried = False
     started = time.perf_counter()
     try:
@@ -206,6 +251,7 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
             cwd=workdir,
             timeout_seconds=timeout_seconds,
             what="CalculiX",
+            env_extra=env_extra,
         )
     except StageFailure as failure:
         forced = os.environ.get(LINEAR_SOLVER_ENV, "").strip().lower() == "spooles"
@@ -222,13 +268,80 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
                 cwd=workdir,
                 timeout_seconds=timeout_seconds,
                 what="CalculiX",
+                env_extra=env_extra,
             )
         except StageFailure as again:
             raise _with_estimate(again, plan) from again
+    _judged(workdir, done)
+
+    # **찾을 주파수 범위** — 범위 안이 모자라고 범위 위쪽에 못 닿았으면 모드를 늘려 다시 푼다.
+    searched = mode_search.read(workdir / BOUNDARY_NAME)
+    passes = 1
+    solved: int | None = None
+    if searched is not None:
+        while passes < mode_search.MAX_PASSES:
+            current = deck.read_text(encoding="utf-8", errors="replace")
+            solved = asked_modes(current)
+            if solved is None:
+                break
+            report = (workdir / DATA_NAME).read_text(encoding="utf-8", errors="replace")
+            more = mode_search.next_count(tables.frequencies(report), solved, searched)
+            if more is None:
+                break
+            logger.info(
+                "범위 %s 안의 모드가 모자랍니다 — 모드 %d개로 다시 풉니다",
+                searched.label,
+                more,
+            )
+            deck.write_text(with_modes(current, more), encoding="utf-8")
+            done = tools.run(
+                tools.ccx_bin(),
+                [deck.stem],
+                cwd=workdir,
+                timeout_seconds=timeout_seconds,
+                what="CalculiX",
+                env_extra=env_extra,
+            )
+            _judged(workdir, done)
+            passes += 1
+            solved = more
+
     seconds = time.perf_counter() - started
+    artifacts = [ArtifactSpec("solve_out", workdir / LOG_NAME)]
+    if (workdir / RESULT_NAME).is_file():
+        artifacts.append(ArtifactSpec("frd", workdir / RESULT_NAME))
+    logger.info("CalculiX %.1f초", seconds)
+    summary: dict[str, object] = {
+        "solver_seconds": round(seconds, 1),
+        "solver": "calculix",
+        "memory_estimate_mb": round(plan.estimate_mb),
+    }
+    if plan.static:
+        summary["linear_solver"] = "iterative" if iterative else "spooles"
+    if retried:
+        summary["solver_retry"] = "직접 솔버가 메모리로 끊겨 반복 솔버로 다시 풀었습니다."
+    elif plan.tight and not plan.can_iterate:
+        summary["memory_warning"] = _tight_message(plan)
+    if searched is not None and solved is not None:
+        # 범위를 채우려고 몇 번 · 몇 개까지 풀었나 — 큰 모델이면 시간이 그만큼 든다.
+        summary["mode_search"] = f"{searched.label} · {passes}번 풀어 모드 {solved}개까지"
+    # **쌍마다 연결 결과** — 몇 절점이 묶였나(반경 밖이라 ccx 가 안 묶은 절점을 뺀다).
+    log = (workdir / LOG_NAME).read_text(encoding="utf-8", errors="replace")
+    summary.update(bonding.connection_report(workdir, log))
+    return StageResult(
+        artifacts=artifacts,
+        summary=summary,
+        detail=f"CalculiX {seconds:.1f}초"
+        + (" · 반복 솔버" if iterative else "")
+        + (f" · 범위 찾기 {passes}번" if passes > 1 else ""),
+    )
+
+
+def _judged(workdir: Path, done: Any) -> None:
+    """ccx 한 번의 끝 — 로그를 남기고 **실패면 까닭을 달아 올린다**(종료 코드만 믿지
+    않는다)."""
     log = (done.stdout or "") + (done.stderr or "")
     (workdir / LOG_NAME).write_text(log, encoding="utf-8")
-
     if "nonpositive jacobian" in log:
         raise _jacobian_failure(workdir, log)
     found = ERROR_MARK.search(log)
@@ -248,28 +361,6 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
             "solver_failed",
             f"결과 파일({DATA_NAME})이 안 나왔습니다 — {LOG_NAME} 를 보세요.",
         )
-    artifacts = [ArtifactSpec("solve_out", workdir / LOG_NAME)]
-    if (workdir / RESULT_NAME).is_file():
-        artifacts.append(ArtifactSpec("frd", workdir / RESULT_NAME))
-    logger.info("CalculiX %.1f초", seconds)
-    summary: dict[str, object] = {
-        "solver_seconds": round(seconds, 1),
-        "solver": "calculix",
-        "memory_estimate_mb": round(plan.estimate_mb),
-    }
-    if plan.static:
-        summary["linear_solver"] = "iterative" if iterative else "spooles"
-    if retried:
-        summary["solver_retry"] = "직접 솔버가 메모리로 끊겨 반복 솔버로 다시 풀었습니다."
-    elif plan.tight and not plan.can_iterate:
-        summary["memory_warning"] = _tight_message(plan)
-    # **쌍마다 연결 결과** — 몇 절점이 묶였나(반경 밖이라 ccx 가 안 묶은 절점을 뺀다).
-    summary.update(bonding.connection_report(workdir, log))
-    return StageResult(
-        artifacts=artifacts,
-        summary=summary,
-        detail=f"CalculiX {seconds:.1f}초" + (" · 반복 솔버" if iterative else ""),
-    )
 
 
 #: ccx 가 뒤집힌 요소에 찍는 말 — `nonpositive jacobian` · `determinant in element N`.

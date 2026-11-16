@@ -37,6 +37,23 @@ export const HARMONIC_DEFAULTS: HarmonicInput = {
   dampingPercent: '2',
 }
 
+/**
+ * 모달의 **찾을 주파수 범위**(Hz). 둘 다 비우면 낮은 차수부터 모드 수만큼, 주면 그 범위 안의 모드만
+ * 모드 수까지 찾는다(서버 `modes.search`). 하한을 비우면 0 이다. CAD 가 적었으면 그것이 먼저다.
+ */
+export interface RangeInput {
+  low: string
+  high: string
+}
+
+export const NO_RANGE: RangeInput = { low: '', high: '' }
+
+/** 입력 칸 → 범위. 둘 다 비었으면 `null`. */
+export function rangeOf(input: RangeInput): [number, number] | null {
+  if (!input.low.trim() && !input.high.trim()) return null
+  return [input.low.trim() ? Number(input.low) : 0, Number(input.high)]
+}
+
 export type MeshOrder = 'quadratic' | 'linear'
 
 export function isOrder(value: string | null | undefined): value is MeshOrder {
@@ -56,6 +73,8 @@ export interface SpecInput {
   constraints: string[]
   largeDeflection: boolean
   harmonic: HarmonicInput
+  /** 모달의 찾을 주파수 범위 — CAD 가 적었으면 화면이 비워 보낸다(CAD 것이 먼저다). */
+  modalRange: RangeInput
 }
 
 /** 화면의 입력 → 서버 스펙. 레시피가 받지 않는 칸은 싣지 않는다. */
@@ -68,7 +87,11 @@ export function buildSpec(input: SpecInput): Record<string, unknown> {
     mesh: { ...(size ? { element_size_mm: Number(size) } : {}), order: input.order },
     constraints: input.constraints.map((region) => ({ region, kind: 'fixed' })),
   }
-  if (input.recipe === 'modal') spec.modes = Number(input.modes)
+  if (input.recipe === 'modal') {
+    spec.modes = Number(input.modes)
+    const range = rangeOf(input.modalRange)
+    if (range) spec.frequency_range_hz = range
+  }
   if (input.recipe === 'static') spec.large_deflection = input.largeDeflection
   if (input.recipe === 'harmonic') {
     spec.modes = Number(input.modes)
@@ -84,6 +107,11 @@ export function specProblem(input: SpecInput): string | null {
   if (input.recipe !== 'static' && !(Number(input.modes) >= 1)) return '모드 수는 1 이상입니다.'
   if (input.elementSize.trim() && !(Number(input.elementSize) > 0))
     return '요소 크기는 0 보다 커야 합니다.'
+  if (input.recipe === 'modal') {
+    const range = rangeOf(input.modalRange)
+    if (range && (!input.modalRange.high.trim() || !(range[1] > range[0] && range[0] >= 0)))
+      return '찾을 주파수 범위가 올바르지 않습니다 — 0 ≤ 하한 < 상한이어야 합니다(비우면 낮은 차수부터).'
+  }
   if (input.recipe === 'harmonic') {
     const { low, high, intervals, dampingPercent } = input.harmonic
     if (!(Number(high) > Number(low) && Number(low) >= 0)) return '주파수 범위가 올바르지 않습니다.'

@@ -28,6 +28,7 @@ from app.core.calculix import probes, tables, vtp
 from app.core.calculix.mesh import Mesh, read_mesh
 from app.core.modes import metrics, signature
 from app.core.modes import rigid as rigid_modes
+from app.core.modes import search as mode_search
 from app.core.numbers import significant
 from app.core.spec import ModalSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -86,12 +87,28 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
 
     # 그림 · 지문 · 측정점이 **같은 메시와 변위를 읽는다** — `.frd` 는 수십 MB 라 한 번만.
     found = _read_shapes(workdir)
-    shapes, parts = _draw_modes(
-        workdir, found, [one["number"] for one in elastic[:VISUAL_MODES]], modes
-    )
     # 강체 모드도 성격을 잰다 — 0 Hz 모드에서 **어느 바디가 움직이나**(`part_share`)가 경고의
     # 재료다. Ansys 쪽도 모든 모드를 잰다.
     _describe_modes(workdir, found, modes)
+    # **구속이 있는데 0 Hz** — 열어 둔 방향일 수도, 떠 있는 바디일 수도 있다. 값만으로는 못
+    # 가르므로 움직이는 바디와 그럴 만한 까닭(모델링이 남긴 연결)을 적어 **사람에게 묻는다.**
+    # 자유-자유는 강체 모드가 6개가 아니면 — 바디가 떨어져 있으면 바디마다 6개씩 나온다.
+    # **범위로 거르기 전에 본다** — 범위 아래의 0 Hz 도 모델의 문제다.
+    said = rigid_modes.warning(
+        modes,
+        constrained=constrained,
+        connections=rigid_modes.read_connections(workdir / BOUNDARY_NAME),
+    )
+    # **찾을 주파수 범위** — 범위 안만 남기고 탄성 차수를 그 안에서 다시 센다(`modes.search`).
+    # 표 · 형상은 전체 차례(`number`)로 찾으므로 어긋나지 않는다.
+    searched = mode_search.read(workdir / BOUNDARY_NAME)
+    below = 0
+    if searched is not None:
+        modes, below = mode_search.kept(modes, searched)
+        elastic = [one for one in modes if not one["rigid_body"]]
+    shapes, parts = _draw_modes(
+        workdir, found, [one["number"] for one in elastic[:VISUAL_MODES]], modes
+    )
     # **측정점은 모드 형상 위에서 읽는다** — 질량 정규화된 값이라 절대 크기가 아니고,
     # 「그 자리가 이 모드에서 움직이나」 를 보는 데 쓴다(센서를 그 자리에 붙인다). **탄성 모드
     # 전부**에서 읽는다: 실측 공진과 짝을 지을 때 「센서 자리에서 안 움직이는 모드는 실측에
@@ -113,15 +130,8 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         **({"probes": spots} if spots else {}),
         # 그림의 셀 배열 `part` 번호의 이름 — 화면이 파트마다 보이고 숨긴다.
         **({"parts": parts} if parts else {}),
+        **(_range_fields(searched, len(elastic), below, values) if searched else {}),
     }
-    # **구속이 있는데 0 Hz** — 열어 둔 방향일 수도, 떠 있는 바디일 수도 있다. 값만으로는 못
-    # 가르므로 움직이는 바디와 그럴 만한 까닭(모델링이 남긴 연결)을 적어 **사람에게 묻는다.**
-    # 자유-자유는 강체 모드가 6개가 아니면 — 바디가 떨어져 있으면 바디마다 6개씩 나온다.
-    said = rigid_modes.warning(
-        modes,
-        constrained=constrained,
-        connections=rigid_modes.read_connections(workdir / BOUNDARY_NAME),
-    )
     if said:
         result["warning"] = said
 
@@ -144,6 +154,21 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         },
         detail=f"모드 {len(modes)}개" + (f" · 1차 탄성 {first} Hz" if first else ""),
     )
+
+
+def _range_fields(
+    searched: mode_search.ModeSearch, found: int, below: int, solved: list[float]
+) -> dict[str, Any]:
+    """결과에 적는 범위 찾기 — 범위 · 누가 정했나 · 범위 아래에서 뺀 탄성 모드 수 · 모자랐을
+    때의
+    말(두 솔버 같은 열쇠 — `dpf/extract.py`)."""
+    said = mode_search.note(searched, found, solved)
+    return {
+        "frequency_range_hz": [searched.low, searched.high],
+        "range_from": searched.source,
+        **({"modes_below_range": below} if below else {}),
+        **({"range_note": said} if said else {}),
+    }
 
 
 def _read_shapes(workdir: Path) -> tuple[Mesh, list[frd_reader.Block]] | None:

@@ -29,6 +29,7 @@ import { ModeCharts } from '@/modules/simulations/ModeCharts'
 import { ModalProbeTable } from '@/modules/simulations/ProbeTables'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { Pagination } from '@/shared/components/Pagination'
+import { rangeText } from '@/modules/simulations/format'
 import { Alert, AlertDescription, AlertTitle } from '@/shared/components/ui/alert'
 import { Button } from '@/shared/components/ui/button'
 import {
@@ -199,6 +200,13 @@ export function ModalResult({ simulationId, result, artifacts }: Props) {
         </Alert>
       )}
 
+      {result.range_note && (
+        <Alert>
+          <AlertTitle>찾을 주파수 범위</AlertTitle>
+          <AlertDescription>{result.range_note}</AlertDescription>
+        </Alert>
+      )}
+
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -209,6 +217,13 @@ export function ModalResult({ simulationId, result, artifacts }: Props) {
               {result.units.system ? ` · ${result.units.system}` : ''} · 변위 정규화{' '}
               {result.normalization === 'mass' ? '질량' : result.normalization}
             </p>
+            {result.frequency_range_hz && (
+              <p className="text-muted-foreground text-xs">
+                찾을 범위 {rangeText(result.frequency_range_hz)}({result.range_from === 'cad' ? 'CAD' : '작업 설정'}) — 범위
+                안의 모드만, 차수도 그 안에서 셉니다
+                {result.modes_below_range ? ` · 범위 아래 탄성 모드 ${result.modes_below_range}개는 뺐습니다` : ''}
+              </p>
+            )}
           </div>
           {/* **두 가지로 본다** — 하나씩 크게 · 여러 개(둘 다 3D). */}
           <div className="flex gap-1" role="group" aria-label="모드 보기">

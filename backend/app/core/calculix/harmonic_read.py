@@ -21,7 +21,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from app.core import boundary
+from app.core import boundary, excitation
 from app.core import probes as core_probes
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes
@@ -60,6 +60,8 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
     # (최대가 나는 자리가 주파수마다 옮겨 다닌다), 센서는 한 자리에 붙어 있다 — 실측과 견줄
     # 수 있는 것은 그쪽이다.
     spots = _spots(workdir)
+    # **기저 가진**(가속도 하중) — 측정점의 절대 가속도를 셈한다(`excitation`).
+    shaken = excitation.read(boundary.read(workdir))
     points: list[dict[str, Any]] = []
     for value in sorted(real):
         other = imaginary.get(value)
@@ -75,6 +77,23 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
                 spot.name: significant(_at_node(real[value], other, spot.node))
                 for spot in spots
             }
+            # 측정점의 **가속도(g) · 위상(도)** — 가속도계와 견줄 값. 기저 가진이면 절대
+            # 가속도.
+            accel: dict[str, float] = {}
+            phase: dict[str, float] = {}
+            for spot in spots:
+                got = excitation.response(
+                    value,
+                    real[value].values.get(spot.node) or [],
+                    other.values.get(spot.node) or [],
+                    shaken,
+                )
+                if got is not None:
+                    accel[spot.name] = significant(got[0])
+                    phase[spot.name] = round(got[1], 1)
+            if accel:
+                row["probes_accel_g"] = accel
+                row["probes_phase_deg"] = phase
         points.append(row)
     if not points:
         raise StageFailure(
@@ -94,6 +113,9 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
         "peak": worst,
         "material": boundary.used_material(workdir, spec),
         **({"mesh": _mesh(workdir)} if _mesh(workdir) else {}),
+        # 측정점 가속도의 기준 — 기저 가진이면 상대 변위에 기저 가속도를 더한 **절대** 값이다.
+        "acceleration": "absolute",
+        **({"base_excitation": True} if shaken else {}),
     }
     # **측정점마다 그 자리의 봉우리 한 줄** — 절점 거리와 「멀다」 경고가 여기 실린다.
     tops = core_probes.peaks(spots, points, unit="mm")

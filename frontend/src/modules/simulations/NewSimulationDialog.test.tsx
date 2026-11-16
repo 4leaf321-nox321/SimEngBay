@@ -365,6 +365,34 @@ describe('새 해석 작업', () => {
     expect(screen.queryByText(/밀려나 끊길 수 있습니다/)).toBeNull()
   })
 
+  it('모달의 찾을 주파수 범위 — 적으면 스펙에 싣고, CAD 가 적었으면 칸을 잠그고 그 범위를 말한다', async () => {
+    vi.mocked(simulationApi.previewDoePoint).mockResolvedValue({ ...SHEAR, recipe: 'modal', suggested_recipe: 'modal' })
+    openAt(DOE)
+    const low = await screen.findByLabelText('찾을 범위 하한 (Hz)')
+    await userEvent.type(low, '200')
+    await userEvent.type(screen.getByLabelText('찾을 범위 상한 (Hz)'), '3000')
+    await userEvent.click(screen.getByRole('button', { name: '3건 실행' }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.importDoe).mock.calls[0][0].spec as Record<string, unknown>
+    expect(spec.frequency_range_hz).toEqual([200, 3000])
+  })
+
+  it('CAD 가 모달에 찾을 범위를 적었으면 그것이 먼저다 — 칸을 잠그고 보내지 않는다', async () => {
+    vi.mocked(simulationApi.previewDoePoint).mockResolvedValue({
+      ...SHEAR,
+      recipe: 'modal',
+      suggested_recipe: 'modal',
+      suggested_frequency_range_hz: [500, 4000],
+    })
+    openAt(DOE)
+    await waitFor(() => expect(screen.getByText(/CAD 가 적은 범위 500 – 4,000 Hz 안의 모드를 찾습니다/)).toBeDefined())
+    expect(screen.getByLabelText('찾을 범위 하한 (Hz)')).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: '3건 실행' }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.importDoe).mock.calls[0][0].spec as Record<string, unknown>
+    expect('frequency_range_hz' in spec).toBe(false)
+  })
+
   it('해석 종류를 바꾸면 보는 점의 조건을 그 종류로 다시 읽는다', async () => {
     openAt(DOE)
     await waitFor(() => expect(screen.getByText('클램프')).toBeDefined())

@@ -9,6 +9,7 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HarmonicResult as HarmonicResultData } from '@/modules/simulations/api'
@@ -70,6 +71,48 @@ describe('조화 응답 결과', () => {
     render(<ResultPanel simulationId="sim" status="done" artifacts={[]} />)
     await waitFor(() => expect(screen.getByText('조화 응답 결과')).toBeDefined())
   })
+  it('기저 가진이면 측정점의 절대 가속도 · 위상을 곡선과 봉우리 줄로 보인다', async () => {
+    const shaken: HarmonicResultData = {
+      ...measured,
+      acceleration: 'absolute',
+      base_excitation: true,
+      points: [
+        { frequency_hz: 200, max_displacement: 1e-4, probes: { 끝: 1.4e-4 }, probes_accel_g: { 끝: 0.594 }, probes_phase_deg: { 끝: 0 } },
+        { frequency_hz: 1263, max_displacement: 6e-3, probes: { 끝: 6.07e-3 }, probes_accel_g: { 끝: 39.05 }, probes_phase_deg: { 끝: -88.5 } },
+      ],
+      peak: { frequency_hz: 1263, max_displacement: 6e-3 },
+      probes: [
+        {
+          name: '끝',
+          point: [5, 5, 90],
+          node: 7,
+          distance_mm: 0,
+          value: 6.07e-3,
+          unit: 'mm',
+          frequency_hz: 1263,
+          acceleration_g: 39.05,
+          acceleration_hz: 1263,
+          phase_deg: -88.5,
+        },
+      ],
+    }
+    render(<HarmonicResult result={shaken} />)
+    expect(screen.getByText(/가속도 봉우리 39\.05 g/)).toBeDefined()
+    expect(screen.getByText(/위상 -88\.5°/)).toBeDefined()
+    await userEvent.click(screen.getByRole('button', { name: '가속도 (g)' }))
+    expect(screen.getByText(/절대 가속도\(지지부 기준 상대 응답 \+ 기저 가속도\)/)).toBeDefined()
+    // 표도 고른 값으로 — 측정점 열이 가속도(g)다.
+    expect(screen.getByText('끝 (g)')).toBeDefined()
+    expect(screen.getByText('0.594')).toBeDefined()
+    await userEvent.click(screen.getByRole('button', { name: '위상 (°)' }))
+    expect(screen.getByText('끝 (°)')).toBeDefined()
+  })
+
+  it('옛 결과에는 가속도 · 위상 단추가 없다', () => {
+    render(<HarmonicResult result={measured} />)
+    expect(screen.queryByRole('button', { name: '가속도 (g)' })).toBeNull()
+  })
+
   it('측정점의 곡선 봉우리를 절점 거리와 함께 보여 준다', () => {
     // **센서 자리의 봉우리는 전체 봉우리와 다를 수 있다** — 실측 FRF 와 견줄 값은 이쪽이다.
     const withProbes: HarmonicResultData = {

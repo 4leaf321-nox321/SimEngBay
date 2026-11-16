@@ -59,6 +59,7 @@ from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_insi
 from app.core.doe.browse import OutsideRoots
 from app.core.doe.browse import find as find_studies
 from app.core.doe.folder import FolderProblem
+from app.core.modes import search as mode_search
 from app.core.modes import track_modes
 from app.core.spec import (
     RUNNABLE_RECIPES,
@@ -1303,6 +1304,9 @@ def preview_doe(
         suggested_element_size_basis=analysis.element_size_basis,
         suggested_order=analysis.order,
         suggested_large_deflection=analysis.large_deflection,
+        suggested_frequency_range_hz=(
+            list(analysis.frequency_range_hz) if analysis.frequency_range_hz else None
+        ),
         ontology=study_ontology(db, doe.ontology),
     )
 
@@ -1350,6 +1354,8 @@ class _DoeAnalysis:
     """「전체」 요소 차수(`linear` · `quadratic`) — 적혀 있을 때만."""
     large_deflection: bool | None = None
     """정적의 큰 변형 — CompCore 는 정적이면 늘 적는다(`statics.static_plan`)."""
+    frequency_range_hz: tuple[float, float] | None = None
+    """모달의 찾을 주파수 범위 — CAD 가 적었으면 그것이 먼저다(`modes.search`)."""
 
 
 def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
@@ -1375,6 +1381,7 @@ def _analysis_of(payload: dict[str, Any]) -> _DoeAnalysis:
     return _DoeAnalysis(
         recipe=kind if kind in RUNNABLE_RECIPES else None,
         modes=given.analysis.modes,
+        frequency_range_hz=mode_search.cad_range(given),
         element_size_mm=round(size[0], 6) if size is not None else None,
         element_size_from=size[1] if size is not None else None,
         element_size_basis=(
@@ -1468,6 +1475,9 @@ def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOu
         suggested_element_size_basis=analysis.element_size_basis,
         suggested_order=analysis.order,
         suggested_large_deflection=analysis.large_deflection,
+        suggested_frequency_range_hz=(
+            list(analysis.frequency_range_hz) if analysis.frequency_range_hz else None
+        ),
         conditions=conditions_out(payload, recipe=wanted),
     )
 

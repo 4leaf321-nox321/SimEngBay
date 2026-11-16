@@ -47,8 +47,9 @@ import type {
 } from '@/modules/simulations/api'
 import { ConditionList } from '@/modules/simulations/ConditionList'
 import { FolderBrowser } from '@/modules/simulations/FolderBrowser'
-import { buildSpec, HARMONIC_DEFAULTS, isOrder, isRecipe, specProblem } from '@/modules/simulations/spec'
-import type { HarmonicInput, MeshOrder, RecipeName } from '@/modules/simulations/spec'
+import { rangeText } from '@/modules/simulations/format'
+import { buildSpec, HARMONIC_DEFAULTS, isOrder, isRecipe, NO_RANGE, specProblem } from '@/modules/simulations/spec'
+import type { HarmonicInput, MeshOrder, RangeInput, RecipeName } from '@/modules/simulations/spec'
 import { HarmonicFields, MeshFields, RecipeSelect } from '@/modules/simulations/SpecFields'
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
 import { MAX_TRACKS } from '@/modules/simulations/studyTable'
@@ -132,6 +133,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
   const [modes, setModes] = useState('10')
   const [largeDeflection, setLargeDeflection] = useState(false)
   const [harmonic, setHarmonic] = useState<HarmonicInput>(HARMONIC_DEFAULTS)
+  const [modalRange, setModalRange] = useState<RangeInput>(NO_RANGE)
   const [elementSize, setElementSize] = useState('')
   const [order, setOrder] = useState<MeshOrder>('quadratic')
   // **CAD 가 보낸 조건이 먼저다** — 끄면 여기서 고른 영역만 완전 고정한다(conditions_from).
@@ -180,6 +182,11 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
         : null
   const cadSize = sizeFrom?.suggested_element_size_mm ?? null
   const suggested = preview ? (isRecipe(preview.suggested_recipe) ? preview.suggested_recipe : null) : undefined
+  /** CAD 가 모달에 적은 찾을 주파수 범위 — 있으면 그것이 먼저다. */
+  const cadRange =
+    preview?.suggested_frequency_range_hz?.length === 2
+      ? (preview.suggested_frequency_range_hz as [number, number])
+      : null
   // **정적 · 조화는 하중이 CAD 조건에서 온다** — 스펙에는 하중 칸이 없다. 정적은 강제 변위로
   // 당겨도 답이 있다(시편 시험 — `drives`).
   const hasLoads =
@@ -199,6 +206,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     constraints: useCadConditions ? [] : regions,
     largeDeflection,
     harmonic,
+    // CAD 가 범위를 적었으면 그것이 먼저다 — 칸은 잠그고 보내지 않는다(두 값이 갈리면 무엇으로 돌았는지 헷갈린다).
+    modalRange: cadRange ? NO_RANGE : modalRange,
   }
   const problem = specProblem(input)
   // **물성이 막는 자리** — 올린 점 파일, 물성을 안 보낸 폴더, 실행할 점 중 지금 보는 점에 빠진 재료.
@@ -839,6 +848,41 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                         </p>
                       )}
                     </div>
+                    {recipe === 'modal' && (
+                      // **찾을 주파수 범위** — 낮은 모드에 밀려 보고 싶은 대역이 모드 수 밖으로 나가지 않게.
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sim-range-low">찾을 주파수 범위 (Hz, 선택)</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            id="sim-range-low"
+                            aria-label="찾을 범위 하한 (Hz)"
+                            type="number"
+                            step="any"
+                            min={0}
+                            placeholder={cadRange ? String(cadRange[0]) : '0'}
+                            value={cadRange ? '' : modalRange.low}
+                            disabled={cadRange !== null}
+                            onChange={(event) => setModalRange({ ...modalRange, low: event.target.value })}
+                          />
+                          <span className="text-muted-foreground">~</span>
+                          <Input
+                            aria-label="찾을 범위 상한 (Hz)"
+                            type="number"
+                            step="any"
+                            min={0}
+                            placeholder={cadRange ? String(cadRange[1]) : '상한'}
+                            value={cadRange ? '' : modalRange.high}
+                            disabled={cadRange !== null}
+                            onChange={(event) => setModalRange({ ...modalRange, high: event.target.value })}
+                          />
+                        </div>
+                        <p className="text-muted-foreground text-xs">
+                          {cadRange
+                            ? `CAD 가 적은 범위 ${rangeText(cadRange)} 안의 모드를 찾습니다 — CAD 값이 먼저입니다.`
+                            : '비우면 낮은 차수부터 모드 수만큼. 주면 그 범위 안의 모드만 모드 수까지 찾습니다.'}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
                 {recipe === 'static' && (

@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { Convergence, Measurement, Simulation, Stage } from '@/modules/simulations/api'
-import { shownForce, shownMass, shownValue } from '@/modules/simulations/format'
+import { rangeText, shownForce, shownMass, shownValue } from '@/modules/simulations/format'
 import { STAGE_LABELS, shownDuration } from '@/modules/simulations/labels'
 import { isHarmonic, isStatic } from '@/modules/simulations/ResultPanel'
 import type { AnyResult } from '@/modules/simulations/ResultPanel'
@@ -110,9 +110,13 @@ export function headline(simulation: Simulation, result: AnyResult | null): Stat
         ? [{ label: '1차 고유진동수', value: `${first.frequency_hz.toLocaleString()} Hz`, hint: direction }]
         : []),
       {
-        label: '탄성 모드',
+        label: result.frequency_range_hz ? '범위 안 탄성 모드' : '탄성 모드',
         value: `${elastic.length}개`,
-        hint: result.rigid_body_modes ? `강체 ${result.rigid_body_modes}개` : undefined,
+        hint: result.frequency_range_hz
+          ? rangeText(result.frequency_range_hz)
+          : result.rigid_body_modes
+            ? `강체 ${result.rigid_body_modes}개`
+            : undefined,
       },
       ...common,
     ].slice(0, 4)

@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import materials, units
+from app.core import excitation, materials, units
 from app.core import touching as touch
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
 from app.core.harmonic import HarmonicPlan, harmonic_plan
+from app.core.modes import search as mode_search
 from app.core.regions import FaceRecord, match_regions
 from app.core.spec import (
     RIGID_BODY_MODES,
@@ -197,6 +198,16 @@ def build(
             # **조화 응답은 모달이 앞에 선다**(모드 중첩) — 그 모드로 응답을 쌓는다.
             upstream = _add_modal_for_harmonic(app, spec)
             plan = harmonic_plan(spec, given_conditions)
+            # **배율 표가 해석 범위를 다 덮어야 건다** — 표 밖을 0 으로 읽을지 끝값으로 읽을지
+            # 솔버마다
+            # 다르다(CompCore 와 CalculiX 경로와 같은 규칙).
+            for load in given_conditions.loads:
+                if not condition_model.table_covers(load.frequency_table, plan.low, plan.high):
+                    raise StageFailure(
+                        "internal",
+                        f"하중 「{load.name}」 의 주파수별 배율 표가 해석 범위"
+                        f"({plan.low:g}~{plan.high:g} Hz)를 다 덮지 않습니다.",
+                    )
             analysis = _add_harmonic(app, spec, upstream, plan)
         elif isinstance(spec, StaticSpec):
             # **정적 해석은 하중이나 강제 변위가 답을 만든다.** 둘 다 없으면 전부 0 이 나오는데
@@ -239,6 +250,12 @@ def build(
         # **묶지 않은 것** — 접촉 없이 맞닿은 쌍(CompCore 의 `quality.touching` 중), 미끄럼으로
         # 푸는 접촉(모달 · 조화의 분리 없음 · 마찰 없음). 추출이 0 Hz 모드의 까닭으로 짚고,
         # 요약 · 조건 처리 알림에도 싣는다 — CalculiX 경로와 같은 말(`app/core/touching.py`).
+        # 찾을 주파수 범위(모달) — 덱 · 결과 · 요약이 같은 것을 말하게 한 번 정한다.
+        searched = (
+            mode_search.mode_search(spec, given_conditions)
+            if isinstance(spec, ModalSpec)
+            else None
+        )
         untied = touch.uncovered(topology or {}, given_conditions) or []
         slid = touch.sliding(
             topology or {}, given_conditions.contacts, modal=not isinstance(spec, StaticSpec)
@@ -250,6 +267,10 @@ def build(
             plan=plan,
             material=used.names,
             connections={"untied": untied, "sliding": slid},
+            searched=searched,
+            shaken=excitation.bases(given_conditions)
+            if isinstance(spec, HarmonicSpec)
+            else None,
         )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -399,12 +420,10 @@ def build(
                 ),
                 **({"prestressed": True} if upstream is not None else {}),
                 **(
-                    {
-                        "frequency_range_hz": "~".join(
-                            f"{one:g}" for one in given_conditions.analysis.frequency_range
-                        )
-                    }
-                    if given_conditions.analysis.frequency_range
+                    {"frequency_range_hz": searched.label, "range_from": searched.source}
+                    if searched is not None
+                    else {"frequency_range_hz": f"{plan.low:g}~{plan.high:g} Hz"}
+                    if plan is not None
                     else {}
                 ),
                 **(
@@ -896,18 +915,14 @@ def _body_records(bodies: list[Any], system: units.UnitSystem) -> list[BodyRecor
     return found
 
 
-def _limit_range(analysis: Any, given: condition_model.Conditions) -> None:
-    """CAD 가 **찾을 주파수 범위**를 적었으면 그대로 건다(`LimitSearchToRange`, 실측 자리).
-
-    스펙에는 그 칸이 없다 — 범위는 「어디를 보고 싶은가」 라서 조건 쪽에 속한다. 안 걸면
-    낮은 것부터 세어 올라가므로 **보고 싶은 대역이 모드 수 밖으로 밀려날 수 있다.**
+def _limit_range(analysis: Any, searched: mode_search.ModeSearch | None) -> None:
+    """**찾을 주파수 범위**가 있으면 건다(`LimitSearchToRange`, 실측 자리) — CAD 가 먼저,
+    없으면 스펙(`modes.search`). 안 걸면 낮은 것부터 세어 올라가므로 **보고 싶은 대역이 모드
+    수 밖으로 밀려날 수 있다.** CalculiX 경로도 같은 뜻으로 푼다(범위 안을 최대 모드 수만큼).
     """
-    span = given.analysis.frequency_range
-    if span is None:
+    if searched is None:
         return
-    low, high = span
-    if high <= low:
-        return
+    low, high = searched.low, searched.high
     quantity = _global("Quantity")
     settings = analysis.AnalysisSettings
     try:
@@ -1050,10 +1065,13 @@ def _add_modal(
     `InitialConditions[0].PreStressICEnvironment`). 볼트를 조인 상태의 공진이 그 자리다.
     """
     analysis = app.Model.AddModalAnalysis()
+    searched = mode_search.mode_search(spec, given)
+    # 범위가 0 Hz 위에서 시작하면 강체 모드는 범위 밖이다 — 얹지 않는다.
+    rigid_inside = searched is None or searched.low < 1.0
     analysis.AnalysisSettings.MaximumModesToFind = spec.modes + (
-        0 if constrained else RIGID_BODY_MODES
+        0 if constrained or not rigid_inside else RIGID_BODY_MODES
     )
-    _limit_range(analysis, given)
+    _limit_range(analysis, searched)
     if upstream is None:
         return analysis
     try:
@@ -1122,6 +1140,9 @@ def _apply_loads(
                 moved = condition_model.in_global(load, given.frames)
                 if isinstance(moved, str):
                     raise StageFailure("internal", f"하중 「{load.name}」: {moved}")
+                if load.kind == "pressure" and load.region in (flipped or set()):
+                    # 법선이 뒤집힌 쉘 면 — 부호를 크기에 실어 표(주파수별 배율)와 함께 간다.
+                    moved = replace(moved, magnitude=-(moved.magnitude or 0.0))
                 _load_magnitude(made, moved, system, quantity, steps)
             if load.kind == "bolt_pretension" and load.cs not in condition_model.GLOBAL_FRAMES:
                 # **바디에 건 예압은 좌표계가 단면이다** — Z 축이 볼트 축, 원점이 단면 자리.
@@ -1132,12 +1153,6 @@ def _apply_loads(
                 )
             elif bolted and load.kind != "standard_earth_gravity":
                 made.SetActivateAtLoadStep(1, False)
-            if load.kind == "pressure" and load.region in (flipped or set()):
-                made.Magnitude.Output.DiscreteValues = [
-                    quantity(
-                        f"{-(load.magnitude or 0.0)} [{load.unit or system.length_label}]"
-                    )
-                ]
             made.Name = load.name
             logger.info("하중 %s(%s) ← %s", load.name, load.kind, load.region or "전체")
         except StageFailure:
@@ -1175,12 +1190,53 @@ def _load_magnitude(
         for axis, part in zip(
             ("XComponent", "YComponent", "ZComponent"), load.direction, strict=True
         ):
-            getattr(made, axis).Output.DiscreteValues = [
-                quantity(f"{size * part / length} [{unit}]")
-            ]
+            _profiled(getattr(made, axis), size * part / length, load, unit, quantity)
+        _phase(made, load, quantity, ("XPhaseAngle", "YPhaseAngle", "ZPhaseAngle"))
         return
     if load.magnitude is not None and hasattr(made, "Magnitude"):
-        made.Magnitude.Output.DiscreteValues = [quantity(f"{load.magnitude} [{unit}]")]
+        _profiled(made.Magnitude, load.magnitude, load, unit, quantity)
+        _phase(made, load, quantity, ("PhaseAngle",))
+
+
+def _profiled(
+    field: Any, size: float, load: condition_model.Load, unit: str, quantity: Any
+) -> None:
+    """크기 한 칸 — **주파수별 배율**(조화 응답의 가진 프로파일)이 있으면 Tabular Data(주파수 →
+    크기 x 배율)로, 없으면 값 하나. ⚠️ Ansys 가 없는 곳에서 짠 길이다(2026-11-17) — 표를 못
+    걸면 조용히 상수로 풀지 않고 멈춘다."""
+    table = load.frequency_table
+    if not table:
+        field.Output.DiscreteValues = [quantity(f"{size} [{unit}]")]
+        return
+    try:
+        field.Inputs[0].DiscreteValues = [quantity(f"{hz} [Hz]") for hz, _ in table]
+        field.Output.DiscreteValues = [quantity(f"{size * k} [{unit}]") for _, k in table]
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise StageFailure(
+            "internal",
+            f"하중 「{load.name}」 의 주파수별 배율을 Ansys 에 걸지 못했습니다 — CalculiX 로 "
+            f"돌리세요({failure})",
+        ) from failure
+
+
+def _phase(
+    made: Any, load: condition_model.Load, quantity: Any, names: tuple[str, ...]
+) -> None:
+    """조화 응답의 위상각(도). ⚠️ Ansys 없이 짠 길 — 칸이 없거나 못 걸면 멈춘다(위상을 빼고
+    풀면 하중이 둘 이상일 때 합이 틀린다)."""
+    if not load.phase:
+        return
+    angle = quantity(f"{load.phase} [deg]")
+    try:
+        for name in names:
+            setattr(made, name, angle)
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise StageFailure(
+            "internal",
+            f"하중 「{load.name}」 의 위상({load.phase:g}°)을 Ansys 에 걸지 못했습니다 — "
+            "CalculiX "
+            f"로 돌리세요({failure})",
+        ) from failure
 
 
 def _frame_named(app: Any, name: str) -> Any:
@@ -1490,6 +1546,8 @@ def _write_boundary(
     plan: HarmonicPlan | None = None,
     material: list[str] | None = None,
     connections: dict[str, list[dict[str, Any]]] | None = None,
+    searched: mode_search.ModeSearch | None = None,
+    shaken: list[excitation.Base] | None = None,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
@@ -1506,6 +1564,12 @@ def _write_boundary(
         ),
         "recipe": spec.recipe,
     }
+    if searched is not None:
+        # 찾을 주파수 범위 — 추출이 결과에 적는다(`dpf/extract.py`, CalculiX 와 같은 열쇠).
+        payload[mode_search.KEY] = searched.as_boundary()
+    if shaken:
+        # 기저 가진(조화의 가속도 하중) — 추출이 측정점 가속도의 기준(상대)을 적는다.
+        payload[excitation.KEY] = [one.as_boundary() for one in shaken]
     if material:
         payload["material"] = " · ".join(material)
     if connections and any(connections.values()):

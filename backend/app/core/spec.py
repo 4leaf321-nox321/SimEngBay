@@ -109,11 +109,22 @@ class ModalSpec(BaseModel):
 
     CAD 폴더(DOE)를 가져올 때 **비워 보내면 CAD 가 적은 값**이 들어간다
     (`services._with_cad_modes`) — 10 은 CAD 도 적지 않았을 때다."""
+    frequency_range_hz: tuple[float, float] | None = None
+    """**찾을 주파수 범위**(Hz, 하한 · 상한). 주면 그 범위 안의 모드만 `modes` 개까지 찾는다 —
+    낮은 차수부터 세지 않으므로, 보고 싶은 대역이 모드 수 밖으로 밀려나지 않는다. 비우면 낮은
+    차수부터 `modes` 개. **CAD 가 적어 보내면 그것이 먼저다**(`modes.search.mode_search`)."""
     constraints: list[Constraint] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _own_material(self) -> Self:
         return _needs_material(self)
+
+    @model_validator(mode="after")
+    def _range_order(self) -> Self:
+        span = self.frequency_range_hz
+        if span is not None and not 0 <= span[0] < span[1]:
+            raise ValueError("찾을 주파수 범위는 0 ≤ 하한 < 상한 이어야 합니다.")
+        return self
 
     @property
     def is_free_free(self) -> bool:

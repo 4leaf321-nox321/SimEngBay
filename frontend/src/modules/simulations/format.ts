@@ -77,3 +77,8 @@ export function shownOutcome(row: SimulationSummary): string | null {
   const first = number('first_elastic_hz')
   return first === null ? null : `1차 ${first.toFixed(1)} Hz`
 }
+
+/** 찾을 주파수 범위를 글로 — 「200 – 3,000 Hz」. */
+export function rangeText([low, high]: [number, number]): string {
+  return `${low.toLocaleString('ko-KR')} – ${high.toLocaleString('ko-KR')} Hz`
+}

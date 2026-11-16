@@ -280,6 +280,27 @@ def test_수렴_점검과_실측을_도구로_건다(
     assert compared["total"] == 1 and compared["measurements"][0]["best_point"] in {1, 2, 3}
 
 
+def test_모달은_찾을_주파수_범위_안의_모드만_낸다(
+    client: TestClient, member: Signed, folder: Path
+) -> None:
+    """스펙의 `frequency_range_hz` — 범위 안만 · 탄성 차수는 그 안에서 1 부터. 틀린 범위는
+    서버가
+    까닭을 달아 거절한다(`modes.search`)."""
+    bot = _bot(client, member, ["read", "simulations:write"])
+    ranged = {**MODAL, "modes": 3, "frequency_range_hz": [300, 5000]}
+    made = bot.call(server.jobs_create, ranged, path=str(folder), numbers=[1])
+    result = bot.call(server.job_result, made["created"][0], detail=True)["result"]
+    assert result["frequency_range_hz"] == [300, 5000]
+    elastic = [one for one in result["modes"] if not one["rigid_body"]]
+    assert 0 < len(elastic) <= 3
+    assert all(300 <= one["frequency_hz"] <= 5000 for one in elastic)
+    assert [one["elastic_number"] for one in elastic] == list(range(1, len(elastic) + 1))
+    said = bot.refused(
+        server.jobs_create, {**MODAL, "frequency_range_hz": [5000, 300]}, path=str(folder)
+    )
+    assert "하한 < 상한" in said
+
+
 def test_결과_화면은_웹과_같은_자료를_같은_권한으로_읽는다(
     client: TestClient, member: Signed, other: Signed, folder: Path
 ) -> None:

@@ -151,6 +151,46 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     assert len(result["modes"]) == 6
 
 
+def test_찾을_주파수_범위는_범위_안의_모드를_범위_없이_푼_값_그대로_낸다(
+    ready: None, tmp_path: Path
+) -> None:
+    """범위를 주면 그 안의 모드만 · 탄성 차수는 그 안에서 1 부터(`modes.search`).
+
+    ccx 의 범위 칸은 낮은 것부터 구해 거를 뿐이고 그때 유효질량 표가 어긋나므로(실측
+    2026-11-17) 범위 없이 풀고 거른다 — 그래서 **범위 없이 푼 것과 값 · 방향이 같아야 한다.**
+    처음 3개는
+    모두
+    범위 아래라 모드를 늘려 다시 푼다.
+    """
+    runs: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for name, spec in (
+        ("full", {**SPEC, "modes": 10}),
+        ("ranged", {**SPEC, "modes": 3}),
+    ):
+        work = tmp_path / name
+        work.mkdir()
+        shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
+        shutil.copy(SIDE_SHAKE / "points" / "p0001.json", work / "topology.json")
+        if name == "ranged":
+            full = runs["full"][1]["modes"]
+            low = (full[2]["frequency_hz"] + full[3]["frequency_hz"]) / 2
+            spec["frequency_range_hz"] = [low, full[-1]["frequency_hz"] * 2]
+        summary = _run(work, spec)
+        runs[name] = (summary, json.loads((work / "result.json").read_text(encoding="utf-8")))
+
+    full = runs["full"][1]["modes"]
+    summary, ranged = runs["ranged"]
+    assert [one["number"] for one in ranged["modes"]] == [4, 5, 6]
+    assert [one["elastic_number"] for one in ranged["modes"]] == [1, 2, 3]
+    for got, want in zip(ranged["modes"], full[3:6], strict=True):
+        assert got["frequency_hz"] == pytest.approx(want["frequency_hz"], rel=1e-3)
+        # 유효질량은 전체 차례로 붙는다 — 어긋나면 다른 모드의 방향이 붙는다.
+        assert got.get("dominant_direction") == want.get("dominant_direction")
+    assert ranged["modes_below_range"] == 3
+    assert ranged["range_from"] == "spec"
+    assert "2번 풀어" in summary["mode_search"]
+
+
 def _tipping(work: Path, support: str) -> None:
     """측면가진을 기울인다 — 바닥 `support` · 기둥 끝은 수평만 잡고 아래로 100 N · y 축
     3000 N·mm.
@@ -221,7 +261,12 @@ def _side_shake_conditions(
     origin = source or SIDE_SHAKE / "points" / "p0001.json"
     payload = json.loads(origin.read_text(encoding="utf-8"))
     payload["conditions"].update(changes)
-    payload["conditions"].setdefault("analysis", {})["type"] = recipe
+    analysis = payload["conditions"].setdefault("analysis", {})
+    analysis["type"] = recipe
+    if recipe != "harmonic" and "analysis" not in changes:
+        # 측면가진의 200 ~ 2000 Hz 는 **조화의 훑을 범위**다. 종류만 모달로 바꾸고 남기면 모달의 찾을
+        # 범위로 읽혀(`modes.search`) 0 Hz 모드가 빠진다 — CompCore 가 내보낼 리 없는 조합이다.
+        analysis.pop("frequency_range", None)
     (work / "topology.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
@@ -585,6 +630,37 @@ def test_구속면에_직접_걸린_압력도_반력에_든다(ready: None, tmp_
     _run(tmp_path, spec)
     result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert result["reactions"]["바닥"] == pytest.approx([0.0, 0.0, 1800.0], abs=0.01)
+
+
+SINE_SWEEP = FIXTURES / "doe" / "조건_사인스윕"
+
+
+def test_사인_스윕은_주파수별_배율로_흔들고_측정점의_절대_가속도가_손셈과_맞는다(
+    ready: None, tmp_path: Path
+) -> None:
+    """`조건_사인스윕`(CompCore 2026-11-17) — 바닥째 X 로 1 g, 배율 표 [[100, 0.5], [800, 1],
+    [2000, 1]].
+
+    CompCore 손셈: 공진에서 상대 응답이 Q = 25 배, 기둥 끝 참여계수(약 1.57)를 곱해 **약 39
+    g**. 200 Hz
+    에서는 배율 0.571 이라 끝은 거의 기저 그대로(0.57 g 남짓) 움직인다. 공진의 위상은 -90°.
+    """
+    shutil.copy(SINE_SWEEP / "points" / "p0001.step", tmp_path / "input.step")
+    shutil.copy(SINE_SWEEP / "points" / "p0001.json", tmp_path / "topology.json")
+    spec = {**SPEC, "recipe": "harmonic"}
+
+    _run(tmp_path, spec)
+
+    deck = (tmp_path / "model.inp").read_text(encoding="utf-8")
+    assert "*AMPLITUDE, NAME=SEBAMP1\n100, 0.5, 800, 1, 2000, 1" in deck
+    assert "*DLOAD, AMPLITUDE=SEBAMP1" in deck
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["base_excitation"] is True and result["acceleration"] == "absolute"
+    top = next(one for one in result["probes"] if one["name"] == "측정점")
+    assert top["acceleration_g"] == pytest.approx(39, rel=0.05)
+    assert top["phase_deg"] == pytest.approx(-90, abs=5)
+    low = min(result["points"], key=lambda one: abs(one["frequency_hz"] - 200))
+    assert low["probes_accel_g"]["측정점"] == pytest.approx(0.571, abs=0.05)
 
 
 def test_조화_응답이_공진에서_솟고_CAD_감쇠를_쓴다(ready: None, tmp_path: Path) -> None:

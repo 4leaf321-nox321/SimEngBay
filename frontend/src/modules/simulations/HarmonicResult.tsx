@@ -13,9 +13,12 @@
  * 「봉우리 31 kHz」 를 읽었다가 실제 공진이 60 kHz 였던 일을 그대로 겪었다.
  */
 
+import { useState } from 'react'
+
 import type { HarmonicResult as HarmonicResultData, ProbeRow } from '@/modules/simulations/api'
 import { shownValue as shown } from '@/modules/simulations/format'
 import { Chart } from '@/shared/charts'
+import { Button } from '@/shared/components/ui/button'
 
 type Props = {
   result: HarmonicResultData
@@ -23,6 +26,10 @@ type Props = {
 
 /** 표에 열로 세울 측정점 수 상한 — 그보다 많으면 곡선과 봉우리 줄로만 본다. */
 const TABLE_PROBES = 4
+
+/** 곡선으로 볼 값 — 변위(전체 최대 + 측정점) · 측정점의 가속도(g) · 위상(도). */
+type View = 'displacement' | 'acceleration' | 'phase'
+const VIEW_LABELS: Record<View, string> = { displacement: '변위', acceleration: '가속도 (g)', phase: '위상 (°)' }
 
 /**
  * 측정점마다 **그 자리 곡선의 봉우리**. 결과가 한 줄씩 적어 보내면(절점 거리 · 경고 포함) 그것을,
@@ -65,6 +72,26 @@ export function HarmonicResult({ result }: Props) {
   const names = [...new Set(points.flatMap((one) => Object.keys(one.probes ?? {})))]
   const peaks = probePeaks(result, names)
   const tabled = names.slice(0, TABLE_PROBES)
+  // **가속도 · 위상** — 가속도계와 견줄 값. 옛 결과 · 측정점이 없으면 변위만.
+  const views: View[] = [
+    'displacement',
+    ...(points.some((one) => one.probes_accel_g) ? (['acceleration'] as View[]) : []),
+    ...(points.some((one) => one.probes_phase_deg) ? (['phase'] as View[]) : []),
+  ]
+  const [view, setView] = useState<View>('displacement')
+  const shownView: View = views.includes(view) ? view : 'displacement'
+  const pick = (one: (typeof points)[number], name: string): number | null =>
+    (shownView === 'acceleration'
+      ? one.probes_accel_g?.[name]
+      : shownView === 'phase'
+        ? one.probes_phase_deg?.[name]
+        : one.probes?.[name]) ?? null
+  const basis =
+    result.acceleration === 'relative'
+      ? '지지부 기준 상대 가속도(기저 가진 — Ansys 결과는 위상을 읽지 않아 기저를 더하지 않았습니다)'
+      : result.base_excitation
+        ? '절대 가속도(지지부 기준 상대 응답 + 기저 가속도) — 가속도계가 재는 값'
+        : '가속도(−ω²·변위)'
 
   return (
     <section className="space-y-3">
@@ -116,6 +143,14 @@ export function HarmonicResult({ result }: Props) {
                 <span className="font-medium">{one.name}</span>{' '}
                 {one.frequency_hz !== undefined && shown(one.frequency_hz, frequency)} ·{' '}
                 {shown(one.value, displacement)}
+                {one.acceleration_g !== undefined && (
+                  <>
+                    {' '}
+                    · 가속도 봉우리 {shown(one.acceleration_g, 'g')}
+                    {one.acceleration_hz !== undefined && ` @ ${shown(one.acceleration_hz, frequency)}`}
+                  </>
+                )}
+                {one.phase_deg !== undefined && <> · 위상 {one.phase_deg.toFixed(1)}°</>}
                 {Number.isFinite(one.distance_mm) && (
                   <span className="text-muted-foreground"> · 절점 거리 {shown(one.distance_mm, 'mm')}</span>
                 )}
@@ -128,16 +163,39 @@ export function HarmonicResult({ result }: Props) {
         </div>
       )}
 
+      {views.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex gap-1" role="group" aria-label="곡선으로 볼 값">
+            {views.map((one) => (
+              <Button
+                key={one}
+                size="sm"
+                variant={shownView === one ? 'secondary' : 'ghost'}
+                aria-pressed={shownView === one}
+                onClick={() => setView(one)}
+              >
+                {VIEW_LABELS[one]}
+              </Button>
+            ))}
+          </div>
+          {shownView !== 'displacement' && (
+            <p className="text-muted-foreground text-xs">
+              {shownView === 'acceleration' ? basis : '측정점의 가장 크게 움직이는 축 성분의 위상 — 가진 기준'}
+            </p>
+          )}
+        </div>
+      )}
+
       <Chart
         kind="line"
         data={points.map((one) => ({
           frequency: one.frequency_hz,
-          최대변위: one.max_displacement,
-          ...Object.fromEntries(names.map((name, index) => [`p${index}`, one.probes?.[name] ?? null])),
+          ...(shownView === 'displacement' ? { 최대변위: one.max_displacement } : {}),
+          ...Object.fromEntries(names.map((name, index) => [`p${index}`, pick(one, name)])),
         }))}
         x="frequency"
         series={[
-          { key: '최대변위', label: '최대 변위' },
+          ...(shownView === 'displacement' ? [{ key: '최대변위', label: '최대 변위' }] : []),
           ...names.map((name, index) => ({ key: `p${index}`, label: `측정점: ${name}` })),
         ]}
         height={280}
@@ -153,6 +211,7 @@ export function HarmonicResult({ result }: Props) {
             {tabled.map((name) => (
               <th key={name} className="py-1 text-right font-normal">
                 {name}
+                {shownView === 'displacement' ? '' : ` ${shownView === 'acceleration' ? '(g)' : '(°)'}`}
               </th>
             ))}
           </tr>
@@ -167,7 +226,7 @@ export function HarmonicResult({ result }: Props) {
               <td className="py-1 text-right">{shown(one.max_displacement)}</td>
               {tabled.map((name) => (
                 <td key={name} className="py-1 text-right">
-                  {shown(one.probes?.[name])}
+                  {shown(pick(one, name) ?? undefined)}
                 </td>
               ))}
             </tr>

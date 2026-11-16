@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { SimulationSummary } from '@/modules/simulations/api'
 import { shownOutcome } from '@/modules/simulations/format'
-import { buildSpec, HARMONIC_DEFAULTS, specProblem } from '@/modules/simulations/spec'
+import { buildSpec, HARMONIC_DEFAULTS, NO_RANGE, specProblem } from '@/modules/simulations/spec'
 import type { SpecInput } from '@/modules/simulations/spec'
 
 const BASE: SpecInput = {
@@ -19,6 +19,7 @@ const BASE: SpecInput = {
   constraints: [],
   largeDeflection: false,
   harmonic: HARMONIC_DEFAULTS,
+  modalRange: NO_RANGE,
 }
 
 describe('스펙 만들기', () => {
@@ -36,6 +37,18 @@ describe('스펙 만들기', () => {
     expect(shake.intervals).toBe(90)
     expect(shake.damping_ratio).toBeCloseTo(0.02)
     expect('large_deflection' in shake).toBe(false)
+  })
+
+  it('모달의 찾을 주파수 범위 — 비우면 싣지 않고, 하한을 비우면 0, 틀리면 까닭을 말한다', () => {
+    expect('frequency_range_hz' in buildSpec(BASE)).toBe(false)
+    expect(buildSpec({ ...BASE, modalRange: { low: '200', high: '3000' } }).frequency_range_hz).toEqual([200, 3000])
+    expect(buildSpec({ ...BASE, modalRange: { low: '', high: '3000' } }).frequency_range_hz).toEqual([0, 3000])
+    // 조화에는 모달 범위를 싣지 않는다 — 조화의 범위는 훑을 범위다.
+    const shake = buildSpec({ ...BASE, recipe: 'harmonic', modalRange: { low: '1', high: '9' } })
+    expect(shake.frequency_range_hz).toEqual([0, 2000])
+    expect(specProblem({ ...BASE, modalRange: { low: '200', high: '' } })).toMatch('찾을 주파수 범위')
+    expect(specProblem({ ...BASE, modalRange: { low: '3000', high: '200' } })).toMatch('하한 < 상한')
+    expect(specProblem({ ...BASE, modalRange: { low: '200', high: '3000' } })).toBeNull()
   })
 
   it('요소 크기를 비우면 싣지 않는다 — CAD 의 「전체」 크기가 쓰인다', () => {

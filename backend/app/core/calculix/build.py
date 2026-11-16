@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
+from app.core import excitation, units
 from app.core import materials as material_model
 from app.core import touching as touch
-from app.core import units
 from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import bonding
 from app.core.calculix import deck as deck_writer
@@ -41,6 +41,7 @@ from app.core.calculix.mesh import (
     tributary_areas,
 )
 from app.core.harmonic import harmonic_plan
+from app.core.modes import search as mode_search
 from app.core.regions import match_regions
 from app.core.regions.match import (
     AREA_TOLERANCE_RATIO,
@@ -525,6 +526,18 @@ def build(
         boundary["frequency_range_hz"] = [shake_plan.low, shake_plan.high]
         boundary["intervals"] = shake_plan.intervals
         boundary["settings_from"] = shake_plan.source
+        # **기저 가진** — 측정점의 절대 가속도를 셈할 재료(`excitation`, 덱은 상대 변위를
+        # 낸다).
+        shaken = excitation.bases(given)
+        if shaken:
+            boundary[excitation.KEY] = [one.as_boundary() for one in shaken]
+    searched = mode_search.mode_search(spec, given) if isinstance(spec, ModalSpec) else None
+    if searched is not None:
+        # **찾을 주파수 범위** — 덱에는 주지 않는다(ccx 의 범위 칸은 낮은 것부터 구해 거를
+        # 뿐이고
+        # 유효질량 표가 어긋난다, `modes.search`). 솔브가 모자라면 늘려 다시 풀고, 추출이
+        # 거른다.
+        boundary[mode_search.KEY] = searched.as_boundary()
     (workdir / BOUNDARY_NAME).write_text(
         json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
@@ -561,6 +574,12 @@ def build(
             # **맞닿았는데 접촉이 없는 바디 쌍** — 선언한 쌍만 묶으므로 떨어진 채로 풀었다.
             **({"unbonded_touching": touch.line(untied)} if untied else {}),
             **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
+            # 찾을 주파수 범위 · 누가 정했나(`modes.search`).
+            **(
+                {"frequency_range_hz": f"{searched.label}", "range_from": searched.source}
+                if searched is not None
+                else {}
+            ),
             **_order_summary(mesh, body_of),
             # **실제로 쓴 전역 요소 크기**(mm) — 메시 수렴 점검이 이것을 기준으로 줄인다.
             "element_size_mm": round(size, 6),

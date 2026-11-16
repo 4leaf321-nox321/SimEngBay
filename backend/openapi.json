@@ -6476,6 +6476,20 @@
             ],
             "title": "Suggested Large Deflection"
           },
+          "suggested_frequency_range_hz": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Frequency Range Hz"
+          },
           "conditions": {
             "$ref": "#/components/schemas/ConditionsOut"
           }
@@ -7363,6 +7377,20 @@
               }
             ],
             "title": "Suggested Large Deflection"
+          },
+          "suggested_frequency_range_hz": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Frequency Range Hz"
           },
           "ontology": {
             "$ref": "#/components/schemas/StudyOntologyOut"

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -75,8 +76,10 @@ def unsupported(given: condition_model.Conditions) -> list[str]:
     return out
 
 
-#: 걸 수 있는 접촉 — **본딩은 절점 공유로 이미 걸려 있다**(`mesh.py` 의 `BooleanFragments`).
-#: 마찰 · 무마찰도 모달에서는 처음 붙어 있으면 같은 답이라, 「붙은 것으로 풀었다」 고 적는다.
+#: 걸 수 있는 접촉 — 바디를 따로 메시하고 **본딩 · 마찰 · rough 는 `*TIE` 로, no separation ·
+#: 모달의 무마찰은 법선 구속식(`Slide`)으로** 묶는다(`bonding.py`). 정적에서 변위로 당기는
+#: 마찰 · 무마찰 · rough 는 비선형 접촉 쌍이다(`contact_block`). 옛 방식(`CALCULIX_BONDING=
+#: shared`)은 절점 공유로 붙인다.
 LINEARIZED_CONTACTS = ("bonded", "no_separation", "frictional", "frictionless", "rough")
 #: 풀 수 있는 레시피 — 모달 · 정적 · 조화 셋 다(`tests/opensolver` 가 끝까지 돌린다).
 SUPPORTED_RECIPES = ("modal", "static", "harmonic")
@@ -190,10 +193,10 @@ class ShellSection:
 
 @dataclass(frozen=True)
 class Tie:
-    """쉘을 솔리드에 붙인다(`*TIE`) — CAD 가 선언한 본딩 접촉 하나.
+    """두 면을 구속식으로 묶는다(`*TIE`) — 종(절점)을 주(요소면)에 거리 한도 안에서.
 
-    중간면은 맞닿은 솔리드 면에서 **두께의 절반만큼 떨어져** 있다. 그래서 절점을 나눠 쓸 수
-    없고, 쉘 쪽 절점(종)을 솔리드 쪽 요소면(주)에 거리 한도 안에서 묶는다.
+    쉘을 솔리드에 붙일 때(중간면은 맞닿은 솔리드 면에서 두께의 절반만큼 떨어져 있다)와, 따로
+    메시한 솔리드끼리 본딩할 때(`bonding.py` — 메시가 맞지 않아도 된다) 쓴다.
     """
 
     contact: str
@@ -201,7 +204,57 @@ class Tie:
     slave_nodes: frozenset[int]
     master_faces: list[tuple[int, str]]
     tolerance: float
-    """mm — 두께의 절반보다 넉넉해야 한다."""
+    """mm — 이 거리 안의 종 절점만 묶는다(쉘은 두께의 절반보다 넉넉히, 본딩은 pinball)."""
+    adjust: bool = False
+    """종 절점을 주 면 위로 옮긴다(Mechanical 의 「Adjust to Touch」) — 초기 간극을 없앤다."""
+
+
+@dataclass(frozen=True)
+class Slide:
+    """두 면을 **법선으로만** 묶는다 — 떨어지지 않고 미끄러진다(Mechanical 의 No Separation).
+
+    종 절점마다 구속식 하나: 종 변위의 법선 성분 = 주 면(투영한 자리의 형상함수) 변위의 법선
+    성분(`*EQUATION`). 접선은 자유다. 모달 · 조화의 마찰 · 무마찰 접촉을 Ansys 처럼 미끄러짐을
+    허용해 풀 때 쓴다(`bonding.py`) — 접촉 쌍은 고유치에 안 들어간다.
+    """
+
+    contact: str
+    name: str
+    rows: tuple[tuple[int, tuple[float, float, float], tuple[tuple[int, float], ...]], ...]
+    """(종 절점, 단위 법선, ((주 절점, 형상함수 값), …)) — 종마다 한 줄."""
+    tolerance: float
+
+    @property
+    def slave_nodes(self) -> frozenset[int]:
+        return frozenset(row[0] for row in self.rows)
+
+    def lines(self) -> list[str]:
+        """`*EQUATION` — 첫 항(종속)은 법선 성분이 가장 큰 자유도다(계수가 0 에 가까우면
+        안 된다). 한 줄에 넷까지 적는다."""
+        out = ["*EQUATION"] if self.rows else []
+        for slave, normal, masters in self.rows:
+            first = max(range(3), key=lambda axis: abs(normal[axis]))
+            terms = [(slave, first + 1, normal[first])]
+            terms += [
+                (slave, axis + 1, normal[axis])
+                for axis in range(3)
+                if axis != first and abs(normal[axis]) > 1e-12
+            ]
+            terms += [
+                (node, axis + 1, -weight * normal[axis])
+                for node, weight in masters
+                for axis in range(3)
+                if abs(weight * normal[axis]) > 1e-12
+            ]
+            out.append(str(len(terms)))
+            for at in range(0, len(terms), 4):
+                out.append(
+                    ", ".join(
+                        f"{node}, {dof}, {value:.10g}"
+                        for node, dof, value in terms[at : at + 4]
+                    )
+                )
+        return out
 
 
 #: 쉘 요소에 거는 압력의 **부호를 뒤집는** 표시(`_load_rows`). ccx 의 쉘 압력은 양수면 요소
@@ -307,7 +360,7 @@ def write_modal(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: tuple[Tie, ...] | list[Tie] = (),
+    ties: Sequence[Tie | Slide] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     springs: Springs | None = None,
@@ -350,14 +403,16 @@ def write_modal(
                 why = "맞닿은 면의 절점을 공유시켜 **붙은 것으로** 풀었습니다"
                 if pair.kind in NONLINEAR_CONTACTS:
                     # **CalculiX 는 고유치에 접촉을 넣지 않는다**(실측 2026-10-03: 접촉 쌍을
-                    # 넣으면 바디가 떠서 강체 모드 6개가 나온다). 그래서 붙여서 푸는데,
-                    # **Ansys 는 같은 마찰 접촉을 모달에서 미끄러짐을 허용해 푼다** — 실측
-                    # 1차 27,940.6(접착) → 26,472.8 Hz(마찰), 5.3% 낮다. 즉 이 경로의 주파수가
-                    # 그만큼 **높게** 나올 수 있다. 그 사실을 사람에게 말한다.
+                    # 넣으면 바디가 떠서 강체 모드 6개가 나온다). 그래서 붙여서 푼다. Ansys 도
+                    # 닫힌 마찰 접촉을 모달에서 붙여 풀지만 **벌칙 강성만큼 물러** 1차 27,940.6
+                    # (접착) → 26,472.8 Hz(마찰), 5.3% 낮다 — 이 경로의 주파수가 그만큼 높게
+                    # 나올
+                    # 수 있다. (이 갈래는 옛 방식 `CALCULIX_BONDING=shared` 다 — 기본은
+                    # `bonding.py`.)
                     why += (
                         " — CalculiX 는 고유치 해석에 접촉을 넣지 않습니다. Ansys 는 같은 마찰"
-                        " 접촉을 미끄러짐을 허용해 풀어 주파수가 더 낮게 나옵니다(실측 5.3%)."
-                        " 마찰을 반영하려면 솔버를 ansys 로 바꾸세요."
+                        " 접촉을 벌칙 강성으로 붙여 풀어 주파수가 조금 낮게 나옵니다"
+                        "(실측 5.3%)."
                     )
                 else:
                     why += "(본딩은 두 솔버가 같은 답을 냅니다 — 실측 0.23%)."
@@ -535,7 +590,7 @@ def write_static(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: tuple[Tie, ...] | list[Tie] = (),
+    ties: Sequence[Tie | Slide] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     large_deflection: bool = False,
@@ -792,17 +847,24 @@ def _head(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: tuple[Tie, ...] | list[Tie] = (),
+    ties: Sequence[Tie | Slide] = (),
 ) -> list[str]:
     """절점 · 요소 · 물성 — 레시피가 달라도 같은 부분이다."""
     lines: list[str] = [
         "** SimEngBay 가 쓴 덱 — CalculiX. 단위: mm · tonne · N (MPa)",
         "*NODE, NSET=NALL",
     ]
+    # **좌표는 고정 소수 여섯 자리다 — 자릿수를 늘리지 않는다.** ccx 는 한 칸을 20 자까지 읽어,
+    # `.15g` 로 쓴 실험 덱의 `-8.31419632922542e-06`(21 자)이 잘려 요소가
+    # 뒤집혔다(「nonpositive
+    # jacobian」, 2026-11-16).
     for number, (x, y, z) in sorted(nodes.items()):
         lines.append(f"{number}, {x:.6f}, {y:.6f}, {z:.6f}")
-    kind = "C3D10" if second_order else "C3D4"
     for name, entity in sorted(body_of.items(), key=lambda pair: pair[1]):
+        # **바디마다 요소형을 절점 수로 고른다** — 바디별 요소 차수(`mesh.demote`)면 한 모델에
+        # C3D10 과 C3D4 가 섞인다.
+        first = solids[entity][0][1] if solids[entity] else []
+        kind = "C3D10" if len(first) >= 10 or (not first and second_order) else "C3D4"
         lines.append(f"*ELEMENT, TYPE={kind}, ELSET=E{entity}")
         for number, ids in solids[entity]:
             lines.append(f"{number}, " + ", ".join(str(one) for one in ids))
@@ -829,7 +891,8 @@ def _head(
         plan.applied.append(f"rigid:{held.part}")
         logger.info("강체 %s → 절점 %s · 기준점 %s", held.part, len(held.nodes), held.ref)
     for index, sheet in enumerate(shells, start=1):
-        kind = "S6" if second_order else "S3"
+        first = sheet.elements[0][1] if sheet.elements else []
+        kind = "S6" if len(first) >= 6 or (not first and second_order) else "S3"
         lines.append(f"*ELEMENT, TYPE={kind}, ELSET={sheet.name}")
         for number, ids in sheet.elements:
             lines.append(f"{number}, " + ", ".join(str(one) for one in ids))
@@ -844,13 +907,18 @@ def _head(
             "쉘 %s → 요소 %s · 두께 %s mm", sheet.part, len(sheet.elements), sheet.thickness
         )
     for tie in ties:
+        if isinstance(tie, Slide):
+            lines += tie.lines()
+            plan.applied.append(f"no_separation:{tie.contact}")
+            continue
         lines += _nset(f"{tie.name}S", set(tie.slave_nodes))
         lines += [f"*SURFACE, NAME={tie.name}S, TYPE=NODE", f"{tie.name}S"]
         # 면 정의는 `S1` 표기다(압력의 `P1` 과 같은 자리) — 섞으면 ccx 가 못 읽는다.
         lines.append(f"*SURFACE, NAME={tie.name}M, TYPE=ELEMENT")
         lines += [f"{element}, {face.replace('P', 'S')}" for element, face in tie.master_faces]
         lines += [
-            f"*TIE, NAME={tie.name}, POSITION TOLERANCE={tie.tolerance:.6g}, ADJUST=NO",
+            f"*TIE, NAME={tie.name}, POSITION TOLERANCE={tie.tolerance:.6g}, "
+            f"ADJUST={'YES' if tie.adjust else 'NO'}",
             f"{tie.name}S, {tie.name}M",
         ]
         plan.applied.append(f"tie:{tie.contact}")
@@ -1092,19 +1160,36 @@ def _holds(
             plan.applied.append(f"displacement:{rule.region}")
             continue
         if rule.kind == "frictionless":
-            rows, why = _frictionless(name, rule, members, (shapes or {}).get(rule.region))
+            others = {
+                node
+                for other in given.constraints
+                if other is not rule
+                for node in held_nodes.get(other.region, set())
+            }
+            rows, why, inclined = _frictionless(
+                name, rule, members, (shapes or {}).get(rule.region), others
+            )
             if why is not None:
                 plan.refused.append(why)
                 continue
             lines += rows
-            # 전역 축 하나를 막으므로 반력 합도 전역 성분이다(법선 성분만 남는다).
-            _hold_reaction(
-                plan,
-                rule,
-                name,
-                members,
-                ((shapes or {}).get(rule.region) or {}).get("normal"),
-            )
+            if inclined:
+                plan.skipped.append(
+                    condition_model.Note(
+                        f"구속 「{rule.name}」({rule.kind}) 반력",
+                        "기울어진 면이라 구속식으로 걸어 반력을 읽지 않았습니다 — 구속은 "
+                        "걸렸습니다.",
+                    )
+                )
+            else:
+                # 전역 축 하나를 막으므로 반력 합도 전역 성분이다(법선 성분만 남는다).
+                _hold_reaction(
+                    plan,
+                    rule,
+                    name,
+                    members,
+                    ((shapes or {}).get(rule.region) or {}).get("normal"),
+                )
             plan.applied.append(f"frictionless:{rule.region}")
             continue
         lines += _nset(name, members)
@@ -1680,31 +1765,46 @@ def _frictionless(
     rule: condition_model.Constraint,
     members: set[int],
     shape: dict[str, Any] | None,
-) -> tuple[list[str], condition_model.Note | None]:
+    others: set[int] | frozenset[int] = frozenset(),
+) -> tuple[list[str], condition_model.Note | None, bool]:
     """마찰 없는 지지 — **면의 법선 방향만** 막는다. 면을 따라서는 자유롭게 미끄러진다.
+    돌려주는 셋째 값은 「기울어진 면인가」 — 그때는 반력을 읽지 않는다.
 
-    법선은 CAD 지문의 `normal` 이다(선언이 정본). 지금은 **축에 나란한 면만** 받는다 — 기울어진
-    면은 국부 좌표계를 세워야 하는데, 그 절점에 걸린 하중까지 국부로 읽히므로
-    (`Plan.local_frames`) 그 길을 함께 다져야 한다. 못 받으면 까닭을 달아 거절한다.
+    법선은 CAD 지문의 `normal` 이다(선언이 정본). 축에 나란한 면은 그 축 하나를 막는다.
+    **기울어진 면은 절점마다 구속식 「n · u = 0」**(`*EQUATION`, 2026-11-16 — 전에는 「못 거는
+    구속」 이었다). 국부 좌표계(`*TRANSFORM`)를 세우면 그 절점의 하중까지 국부로 읽혀 하중 길을
+    함께 고쳐야 하는데(`Plan.local_frames`), 구속식은 하중을 건드리지 않는다. 모달의 대칭면 ·
+    미끄럼 받침에 흔히 쓴다. 다른 구속에 묶인 절점(`others`, 모서리)은 이미 막혔으므로 뺀다 —
+    ccx 는 고정된 자유도를 구속식의 종속으로 받지 않는다. 구속식이 버틴 힘은 ccx 가
+    반력(RF)으로 안 내므로 그 영역의 반력은 읽지 않는다.
     """
     normal = (shape or {}).get("normal")
     if not isinstance(normal, list) or len(normal) != 3:
-        return [], condition_model.Note(
-            f"구속 「{rule.name}」",
-            f"영역 「{rule.region}」 에 법선이 없습니다(평면이어야 합니다).",
+        return (
+            [],
+            condition_model.Note(
+                f"구속 「{rule.name}」",
+                f"영역 「{rule.region}」 에 법선이 없습니다(평면이어야 합니다).",
+            ),
+            False,
         )
     size = math.sqrt(sum(float(one) ** 2 for one in normal))
     unit = [float(one) / size for one in normal] if size else [0.0, 0.0, 0.0]
     axis = max(range(3), key=lambda index: abs(unit[index]))
     if abs(unit[axis]) < 0.999:
-        return [], condition_model.Note(
-            f"구속 「{rule.name}」",
-            "축에 나란하지 않은 면의 마찰 없는 지지는 아직 못 겁니다 — 솔버를 ansys 로 "
-            "바꾸세요.",
-        )
+        lines = ["*EQUATION"]
+        for node in sorted(members - set(others)):
+            terms = [(axis + 1, unit[axis])] + [
+                (index + 1, unit[index])
+                for index in range(3)
+                if index != axis and abs(unit[index]) > 1e-12
+            ]
+            lines.append(str(len(terms)))
+            lines.append(", ".join(f"{node}, {dof}, {value:.10g}" for dof, value in terms))
+        return lines, None, True
     lines = _nset(name, members)
     lines += ["*BOUNDARY", f"{name}, {axis + 1}, {axis + 1}, 0.0"]
-    return lines, None
+    return lines, None, False
 
 
 def _cylindrical(
@@ -1774,7 +1874,7 @@ def write_harmonic(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: tuple[Tie, ...] | list[Tie] = (),
+    ties: Sequence[Tie | Slide] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     springs: Springs | None = None,

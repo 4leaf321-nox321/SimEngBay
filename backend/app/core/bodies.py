@@ -13,8 +13,16 @@
 
 **부피가 먼저다.** 같은 조립에서 두 파트의 부피가 2% 안으로 같은 일은 드물고, 부피는 STEP 을
 다시 읽어도 거의 변하지 않는다(실측: 113,384 → 113,396 mm³, 0.01%). 부피가 닮은 파트가 둘
-이상이면 **무게중심으로 가른다** — 그것도 못 가르면 **짝짓지 않는다**: 틀린 파트에 물성을
-붙이면 값이 안 나오는 게 아니라 **그럴듯한 값이 나오고 틀린다.**
+이상이면 **무게중심으로 가른다**(가장 가까운 것이 다음보다 뚜렷이 가까우면 그것), 그래도 못
+가르면 **STEP 의 바디 차례**로 가른다(`step_product` 의 `body_N` 과 gmsh 의 N번 부피). 그것도
+못 가르면 **짝짓지 않는다**: 틀린 파트에 물성을 붙이면 값이 안 나오는 게 아니라 **그럴듯한
+값이 나오고 틀린다.**
+
+**작은 바디는 반올림에 진다.** CompCore 는 부피를 소수 셋째 자리에서 반올림해 보낸다 — 핸드폰
+부품의 스프링 · 용접판을 잇는 바디가 0.013 mm³ 로 왔는데 형상은 0.01327 mm³ 라 2.05% 로
+허용오차(2%)를 넘었다. 바디별 물성 · 파트별 설정이 하나라도 있으면 모델링이 「부피 0.0 mm³ 인
+바디가 없습니다」 로 멈췄고, 단일 물성이면 짝 없이 「solid23」 으로 넘어갔다(운영 VOC,
+2026-11-16). 그래서 허용오차에 **반올림만큼의 절대 하한**을 둔다(`VOLUME_TOLERANCE_MIN`).
 
 ## 못 짝지으면 실패한다
 
@@ -33,6 +41,13 @@ from app.core.conditions import ALL_BODIES, SHEET, SHEET_AS_SOLID, BodySetting, 
 #: 부피가 이 비율 안으로 같으면 「닮았다」 로 본다. STEP 을 다시 읽어 생기는 차이는 0.1% 도 안
 #: 되지만(실측 0.01%), 메시 · 곡면 재현이 걸리면 조금 더 벌어질 수 있다.
 VOLUME_TOLERANCE_RATIO = 0.02
+
+#: 부피 허용오차의 절대 하한(mm³) — CompCore 가 소수 셋째 자리에서 반올림한 몫(0.0005)과 형상
+#: 재기의 흔들림. 0.013 ↔ 0.01327 mm³ 가 이 안이다.
+VOLUME_TOLERANCE_MIN = 0.001
+
+#: 무게중심으로 가를 때, 가장 가까운 것이 다음 것보다 이 비율 안으로 가까우면 그것이다.
+CENTROID_CLEAR_RATIO = 0.5
 
 #: 무게중심은 **크기에 견주어** 본다 — 부피의 세제곱근(대표 길이)의 이 비율까지.
 CENTROID_TOLERANCE_RATIO = 0.05
@@ -99,25 +114,29 @@ def match_bodies(topology: dict[str, Any], records: list[BodyRecord]) -> BodyMat
             if one.index not in taken and _volume_close(float(volume), one.volume)
         ]
         if not near:
-            closest = min(
-                (abs(one.volume - float(volume)) / float(volume) for one in records),
-                default=math.inf,
+            closest = sorted(
+                (one for one in records if one.index not in taken),
+                key=lambda one: abs(one.volume - float(volume)),
+            )[:2]
+            shown = ", ".join(
+                f"solid {one.index} {one.volume:.6g} mm³"
+                f"({abs(one.volume - float(volume)) / float(volume) * 100:.1f}% 차이)"
+                for one in closest
             )
             result.failures.append(
-                f"{name}: 부피 {float(volume):,.1f} mm³ 인 바디가 없습니다"
-                + (
-                    f"(가장 가까운 것도 {closest * 100:.0f}% 다릅니다)"
-                    if closest < math.inf
-                    else ""
-                )
+                f"{name}: CAD 부피 {float(volume):.6g} mm³ 와 닮은 바디가 없습니다"
+                + (f" — 가장 가까운 해석 바디는 {shown}" if shown else "")
             )
             continue
         if len(near) > 1:
             near = _by_centroid(part, near)
+        if len(near) > 1:
+            near = _by_order(part, near)
         if len(near) != 1:
             # **닮은 파트가 둘이면 짝짓지 않는다.** 물성을 뒤바꿔 붙이면 아무 표시 없이 틀린다.
             result.failures.append(
-                f"{name}: 부피 · 무게중심이 닮은 바디가 {len(near)}개라 가릴 수 없습니다"
+                f"{name}: 부피 · 무게중심이 닮은 바디가 {len(near)}개라 가릴 수 없습니다 — "
+                + ", ".join(f"solid {one.index} {one.volume:.6g} mm³" for one in near)
             )
             continue
         taken.add(near[0].index)
@@ -126,17 +145,40 @@ def match_bodies(topology: dict[str, Any], records: list[BodyRecord]) -> BodyMat
 
 
 def _volume_close(wanted: float, found: float) -> bool:
-    return abs(found - wanted) / wanted <= VOLUME_TOLERANCE_RATIO
+    return abs(found - wanted) <= max(VOLUME_TOLERANCE_RATIO * wanted, VOLUME_TOLERANCE_MIN)
 
 
 def _by_centroid(part: dict[str, Any], near: list[BodyRecord]) -> list[BodyRecord]:
-    """부피로 못 가른 것을 무게중심으로. 중심이 없으면 그대로 돌려준다(가릴 수 없다)."""
+    """부피로 못 가른 것을 무게중심으로. 중심이 없으면 그대로 돌려준다(가릴 수 없다).
+
+    한도 안에 여럿이면 **가장 가까운 것이 다음보다 뚜렷이 가까울 때만** 그것을 고른다 — 작은
+    바디는 한도(최소 0.5 mm)가 바디보다 커서, 가까이 붙은 작은 바디들이 다 한도 안에 든다.
+    """
     centroid = _triple(part.get("centroid"))
     if centroid is None:
         return near
     volume = float(part["volume"])
     limit = max(CENTROID_TOLERANCE_RATIO * volume ** (1 / 3), CENTROID_TOLERANCE_MIN)
-    return [one for one in near if _distance(centroid, one.centroid) <= limit]
+    inside = sorted(
+        (one for one in near if _distance(centroid, one.centroid) <= limit),
+        key=lambda one: _distance(centroid, one.centroid),
+    )
+    if len(inside) > 1:
+        first, second = (_distance(centroid, one.centroid) for one in inside[:2])
+        if first < CENTROID_CLEAR_RATIO * second:
+            return inside[:1]
+    return inside
+
+
+def _by_order(part: dict[str, Any], near: list[BodyRecord]) -> list[BodyRecord]:
+    """그래도 못 가른 것을 **STEP 의 바디 차례**로 — `step_product` 가 `body_N` 이면 gmsh 의
+    N번 부피(gmsh 는 STEP 의 바디를 그 차례로 번호 매긴다). 명시된 차례만 쓴다 — `bodies[]`
+    의 순서는 형상의 순서와 같다는 보장이 없어 짐작이 된다. 하나로 줄 때만 쓴다."""
+    product = str(part.get("step_product") or "")
+    if not (product.startswith("body_") and product[5:].isdigit()):
+        return near
+    same = [one for one in near if one.index == int(product[5:])]
+    return same if len(same) == 1 else near
 
 
 def _triple(value: Any) -> tuple[float, float, float] | None:

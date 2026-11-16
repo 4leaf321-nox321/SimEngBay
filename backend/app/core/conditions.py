@@ -149,6 +149,12 @@ class Contact:
     friction: float | None = None
     behavior: str = "program_controlled"
     formulation: str = "program_controlled"
+    pinball: float | None = None
+    """검색 반경 — **선언된 단위계의 길이**(쓸 때 `length_mm` 을 곱한다). 이 안의 면을 묶는다.
+    비면 솔버가 정한다(CalculiX 는 요소 크기의 절반 — `calculix.build._bonded_ties`)."""
+    interface_treatment: str = "program_controlled"
+    """초기 간극 처리 — `adjust_to_touch`(종속 면을 주 면에 붙인다) · `add_offset_ramped` ·
+    `add_offset_no_ramping`(Mechanical 의 이름 그대로)."""
 
 
 @dataclass(frozen=True)
@@ -643,6 +649,8 @@ def _contact(row: dict[str, Any], regions: set[str], made: Conditions) -> None:
             friction=_number(row.get("friction")),
             behavior=str(row.get("behavior") or "program_controlled"),
             formulation=str(row.get("formulation") or "program_controlled"),
+            pinball=_number(row.get("pinball")),
+            interface_treatment=str(row.get("interface_treatment") or "program_controlled"),
         )
     )
 

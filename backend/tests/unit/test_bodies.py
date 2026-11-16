@@ -154,3 +154,71 @@ def test_kind_가_없는_옛_점_파일은_솔리드로_읽는다() -> None:
     from app.core.conditions import sheet_parts
 
     assert sheet_parts(_point(1)) == set()
+
+
+def test_반올림한_작은_부피도_짝을_찾는다() -> None:
+    """CompCore 는 부피를 소수 셋째 자리에서 반올림한다 — 스프링 · 용접판을 잇는 바디가 0.013
+    mm³
+    로 왔는데 형상은 0.01327 mm³(2.05%)라, 비율 허용오차(2%)만으로는 「없다」 였다(운영
+    VOC)."""
+    topology = {
+        "bodies": [
+            {"name": "판", "volume": 120.5, "centroid": [0.0, 0.0, 0.0]},
+            {"name": "연결편", "volume": 0.013, "centroid": [3.0, 0.0, 0.2]},
+        ]
+    }
+    records = [
+        BodyRecord(index=1, volume=120.5004, centroid=(0.0, 0.0, 0.0)),
+        BodyRecord(index=2, volume=0.01327, centroid=(3.0001, 0.0, 0.2)),
+    ]
+    found = match_bodies(topology, records)
+    assert found.ok, found.failures
+    assert found.bodies == {"판": 1, "연결편": 2}
+
+
+def test_가까이_붙은_작은_바디는_가장_가까운_무게중심으로_가른다() -> None:
+    """핸드폰 부품의 작은 바디는 무게중심 한도(최소 0.5 mm)보다 작고 서로 붙어 있다 — 한도 안에
+    둘이 들어도 하나가 뚜렷이 가까우면 그것이다."""
+    topology = {
+        "bodies": [
+            {"name": "왼쪽 접점", "volume": 0.02, "centroid": [0.0, 0.0, 0.0]},
+            {"name": "오른쪽 접점", "volume": 0.02, "centroid": [0.3, 0.0, 0.0]},
+        ]
+    }
+    records = [
+        BodyRecord(index=7, volume=0.0201, centroid=(0.3, 0.0, 0.0)),
+        BodyRecord(index=8, volume=0.0199, centroid=(0.0, 0.0, 0.0)),
+    ]
+    found = match_bodies(topology, records)
+    assert found.ok, found.failures
+    assert found.bodies == {"왼쪽 접점": 8, "오른쪽 접점": 7}
+
+
+def test_그래도_못_가르면_STEP_의_바디_차례로_짝짓는다() -> None:
+    """부피 · 무게중심이 같은 쌍둥이라도 CompCore 가 STEP 차례(`step_product` 의 `body_N`)를
+    적었으면 gmsh 의 N번 부피다. 적지 않았으면 여전히 짝짓지 않는다(위 「가릴 수 없으면」)."""
+    topology = {
+        "bodies": [
+            {"name": "앞", "step_product": "body_2", "volume": 5.0, "centroid": [0, 0, 0]},
+            {"name": "뒤", "step_product": "body_1", "volume": 5.0, "centroid": [0, 0, 0]},
+        ]
+    }
+    records = [
+        BodyRecord(index=1, volume=5.0, centroid=(0.0, 0.0, 0.0)),
+        BodyRecord(index=2, volume=5.0, centroid=(0.0, 0.0, 0.0)),
+    ]
+    found = match_bodies(topology, records)
+    assert found.ok, found.failures
+    assert found.bodies == {"앞": 2, "뒤": 1}
+
+
+def test_못_찾으면_양쪽_부피를_함께_말한다() -> None:
+    """전에는 「부피 0.0 mm³ 인 바디가 없습니다」 뿐이었다 — 소수 한 자리로 찍어 작은 바디의
+    부피가 0 으로 보였고, 해석 쪽이 무엇을 쟀는지는 없었다."""
+    topology = {"bodies": [{"name": "연결편", "volume": 0.013, "centroid": [0, 0, 0]}]}
+    records = [BodyRecord(index=23, volume=0.0189, centroid=(0.0, 0.0, 0.0))]
+    found = match_bodies(topology, records)
+    assert not found.ok
+    assert "연결편" in found.failures[0]
+    assert "0.013 mm³" in found.failures[0]
+    assert "solid 23 0.0189 mm³" in found.failures[0]

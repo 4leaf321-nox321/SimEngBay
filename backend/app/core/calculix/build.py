@@ -24,16 +24,19 @@ from app.core import conditions as condition_model
 from app.core import materials as material_model
 from app.core import units
 from app.core.bodies import match_bodies, place_settings, without
+from app.core.calculix import bonding
 from app.core.calculix import deck as deck_writer
 from app.core.calculix.mesh import (
     Probe,
     boxes_meet,
     build_mesh,
+    demote,
     element_faces,
     fragment_owners,
     measure,
     overlaps,
     probe_volumes,
+    quality,
     tributary_areas,
 )
 from app.core.harmonic import harmonic_plan
@@ -128,11 +131,18 @@ def build(
     # 절점 공유로 붙고 접촉 쌍은 마찰면 하나뿐이다 — 셋 다 접촉 쌍으로 걸던 볼트 조립(본딩 둘 +
     # 판 사이 마찰)은 첫 증분조차 12분에 못 넘었다. 강체 파트가 끼거나 면이 떨어져 있으면
     # 전처럼 쪼개지 않고 접촉 쌍으로 건다.
-    opened = use_contact and _touching(topology, frictional, given)
+    # **본딩은 따로 메시하고 `*TIE` 로 묶는다**(`bonding.py`, 2026-11-16) — 메시를 쪼개지
+    # 않는다. `CALCULIX_BONDING=shared` 면 옛 방식(쪼개 절점 공유)이다.
+    tie_mode = bonding.bonding_mode() == "tie"
+    flush = use_contact and _touching(topology, frictional, given)
+    opened = not tie_mode and flush
+    # **맞닿은 마찰면은 절점-면 접촉 · 평균 힘 기준으로 푼다** — 옛 방식이 그 면을 갈라 풀던
+    # 설정이고, 볼트 조립이 그것으로 끝까지 풀렸다(2026-10-30). 따로 메시해도 같은 면이다.
+    nodal = opened or (tie_mode and flush)
     # **큰 변형은 사람이 적었으면 그것, 비웠으면 CAD 가 적은 것이다**(`statics.static_plan`).
     statics = static_plan(spec, given) if isinstance(spec, StaticSpec) else None
     large = statics.large_deflection if statics is not None else False
-    fragment = not use_contact or opened
+    fragment = not tie_mode and (not use_contact or opened)
     # **형상 맞춤 허용오차** — 겹침 · 틈이 허용오차 안이면 쪼개기가 맞닿은 것으로 붙인다. 모든
     # 통과가 같은 값을 써야 번호가 같다(`mesh._head_lines`).
     tolerance = _boolean_tolerance(topology)
@@ -150,9 +160,17 @@ def build(
         fragment=fragment,
         size=size,
         tolerance=tolerance,
+        mixed=tie_mode,
     )
     if fragment:
         layout.notes += _contact_notes(topology, tolerance)
+    # **바디별 요소 차수** — 어느 바디든 2차를 원하면 2차로 메시하고 1차 바디를 낮춘다
+    # (`mesh.demote`). gmsh 의 차수는 모델 하나에 하나다.
+    meshed_second = (
+        second_order
+        or "quadratic" in layout.orders.values()
+        or "quadratic" in layout.shell_orders.values()
+    )
     local = _local_sizes(
         step,
         workdir,
@@ -160,7 +178,7 @@ def build(
         given,
         system,
         size,
-        second_order,
+        meshed_second,
         timeout_seconds,
         fragment=fragment,
         layout=layout,
@@ -170,7 +188,7 @@ def build(
         step,
         workdir,
         element_size_mm=size,
-        second_order=second_order,
+        second_order=meshed_second,
         timeout_seconds=timeout_seconds,
         local_sizes=local,
         fragment=fragment,
@@ -181,6 +199,17 @@ def build(
         sheets=layout.sheets,
         tolerance=tolerance,
     )
+    if tie_mode and mesh.second_order:
+        default = "quadratic" if second_order else "linear"
+        mesh = demote(
+            mesh,
+            {tag for tag in mesh.solids if layout.orders.get(tag, default) == "linear"},
+            {
+                surface
+                for surface, part in layout.shell_parts.items()
+                if layout.shell_orders.get(part, default) == "linear"
+            },
+        )
     logger.info(
         "메시: 절점 %s · 요소 %s · 면 %s · 솔리드 %s",
         len(mesh.nodes),
@@ -205,13 +234,45 @@ def build(
         condition_model.shell_view(topology, set(given.shells)) if topology else topology
     )
     shells = _shell_sections(spec, kept, system, given, layout, mesh)
-    ties, rigid, tied = _ties(topology, given, mesh, shells, rigid)
+    # 쉘만 선언했어도 「선언이 있다」 다 — 그때 솔리드는 자동으로 묶지 않는다(Ansys 와 같다).
+    declared = bool(given.contacts)
+    shell_ties, rigid, tied, shell_notes = _ties(
+        topology, given, mesh, shells, rigid, modal=not isinstance(spec, StaticSpec)
+    )
+    ties: list[deck_writer.Tie | deck_writer.Slide] = list(shell_ties)
     if tied:
         # 쉘을 잇는 접촉은 따로 건다(`*TIE` · 강체) — 덱의 「절점 공유로 붙였다」 줄에서 뺀다.
         given = replace(
             given, contacts=[one for one in given.contacts if one.name not in tied]
         )
     held = _held_nodes(topology, given, mesh)
+    bonded: bonding.Bonding | None = None
+    if tie_mode:
+        bonded = bonding.bond(
+            topology,
+            given.contacts,
+            mesh,
+            rigid,
+            body_of,
+            declared=declared,
+            nonlinear=use_contact,
+            modal=not isinstance(spec, StaticSpec),
+            size=size,
+            length_mm=system.length_mm,
+            tolerance=tolerance,
+            taken={node for tie in ties for node in tie.slave_nodes},
+            held=set().union(*held.values()) if held else set(),
+        )
+        ties = [*ties, *bonded.ties]
+        rigid = bonded.rigid
+        given = replace(
+            given,
+            contacts=[
+                one
+                for one in given.contacts
+                if one.name not in bonded.handled | bonded.dropped
+            ],
+        )
     constrained = plan_constrained(given, spec)
     shapes = _region_shapes(topology)
     # 탄성 · 압축 전용 지지의 법선 요소 · 볼트 예압의 단면 — 세 레시피가 같은 것을 쓴다(덱이
@@ -283,8 +344,8 @@ def build(
                 if use_contact
                 else None
             ),
-            pairing="NODE TO SURFACE" if opened else "SURFACE TO SURFACE",
-            average_force=_average_force(given) if opened else None,
+            pairing="NODE TO SURFACE" if nodal else "SURFACE TO SURFACE",
+            average_force=_average_force(given) if nodal else None,
             masters=masters,
             element_size_mm=size,
             large_deflection=large,
@@ -374,6 +435,11 @@ def build(
         )
     plan.skipped += layout.skipped
     plan.refused += refused_loads
+    plan.skipped += shell_notes
+    if bonded is not None:
+        plan.applied += bonded.applied
+        plan.skipped += bonded.notes
+        plan.refused += bonded.refused
     if plan.refused:
         # **못 거는 조건은 조용히 빼지 않는다.** 그대로 풀면 구속 없는 해석이 끝까지 돌고,
         # 그 결과는 0 Hz 여섯 개를 달고 나온다.
@@ -423,6 +489,9 @@ def build(
         }
     # **실제로 붙인 물성 이름** — 결과에 스펙 이름을 적으면 CAD 물성으로 푼 것을 숨긴다.
     boundary["material"] = " · ".join(dict.fromkeys(one.name for one in materials))
+    # **요소 번호 → 바디** — ccx 가 「nonpositive jacobian … element N」 으로 멈추면 솔브가 그
+    # 요소들이 어느 바디의 것인지 말한다(`solve._jacobian_failure`).
+    boundary["element_owners"] = _element_owners(solids, mesh, body_of, layout.shell_parts)
     if isinstance(spec, HarmonicSpec):
         # **실제로 쓴 감쇠비 · 범위 · 점 수.** 결과가 스펙 값을 적으면 화면이 거짓말을 한다 —
         # 봉우리 높이는 1/2ζ 로 읽히기 때문이다(Ansys 쪽과 같은 규칙).
@@ -434,6 +503,8 @@ def build(
     (workdir / BOUNDARY_NAME).write_text(
         json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
+    # 쌍마다 몇 절점이 묶였나는 ccx 가 안다 — 솔브가 로그와 맞대어 보고한다.
+    bonding.write_ties(workdir, ties, bonded.applied if bonded is not None else [])
     by_body = _masses_kg(materials, body_of, mesh)
     if shells:
         by_body = {**(by_body or {}), **_shell_masses(shells, mesh.nodes)}
@@ -459,10 +530,15 @@ def build(
             ),
             "nodes": len(mesh.nodes),
             "elements": mesh.element_count,
+            # **바디를 어떻게 붙였나** — `tie`(따로 메시하고 구속식) · `shared`(쪼개 절점
+            # 공유).
+            **({"bonding": "tie" if tie_mode else "shared"} if len(mesh.solids) > 1 else {}),
             **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
-            "mesh_order": "quadratic" if mesh.second_order else "linear",
+            **_order_summary(mesh, body_of),
             # **실제로 쓴 전역 요소 크기**(mm) — 메시 수렴 점검이 이것을 기준으로 줄인다.
             "element_size_mm": round(size, 6),
+            # **요소 품질** — 평균비의 최저와 0.1 미만 요소 수(`mesh.quality`).
+            "mesh_quality": _quality_line(mesh),
             # 형상 맞춤 허용오차(mm) — 이보다 작은 겹침 · 틈은 맞닿은 것으로 붙였다.
             **(
                 {"boolean_tolerance_mm": round(tolerance, 6)} if tolerance and fragment else {}
@@ -704,6 +780,10 @@ class _Layout:
     """CalculiX 가 못 따르는 파트 메시 칸 — 바람이므로 멈추지 않고 적는다."""
     notes: list[str] = field(default_factory=list)
     """메시를 사람이 준 것과 다르게 만든 것(겹침 · 틈 · 크기를 못 준 조각) — 결과에 적는다."""
+    orders: dict[int, str] = field(default_factory=dict)
+    """부피 → 파트 요소 차수(`linear` · `quadratic`) — 바디별 차수(`mesh.demote`)."""
+    shell_orders: dict[str, str] = field(default_factory=dict)
+    """쉘 파트 이름 → 요소 차수."""
 
 
 def _layout(
@@ -718,8 +798,11 @@ def _layout(
     fragment: bool = True,
     size: float = 5.0,
     tolerance: float = 0.0,
+    mixed: bool = False,
 ) -> _Layout:
-    """파트별 설정 → **뺄 부피 · 부피별 크기**. 메시 전에 gmsh 로 부피를 재서 짝짓는다
+    """파트별 설정 → **뺄 부피 · 부피별 크기 · 부피별 차수**. `mixed` 면 바디마다 차수를
+    달리한다(바디를 따로 메시할 때만 — 절점을 공유하면 접합부의 중간 절점이 어긋난다).
+     메시 전에 gmsh 로 부피를 재서 짝짓는다
     (`probe_volumes`). 뺄 것도 크기도 없으면 그 통과를 건너뛴다."""
     made = _Layout(sheets=bool(condition_model.sheet_parts(topology)))
     global_order = "quadratic" if second_order else "linear"
@@ -744,7 +827,7 @@ def _layout(
                     "CalculiX 경로(gmsh)는 사면체만 만듭니다 — 사면체로 풀었습니다.",
                 )
             )
-        if one.order not in ("program_controlled", global_order):
+        if one.order not in ("program_controlled", global_order) and not mixed:
             made.skipped.append(
                 condition_model.Note(
                     f"파트 「{one.name}」 요소 차수({one.order})",
@@ -755,9 +838,21 @@ def _layout(
     wanted = [
         one
         for one in given.body_settings
-        if one.suppressed or one.shell or one.element_size is not None
+        if one.suppressed
+        or one.shell
+        or one.element_size is not None
+        or (mixed and one.order in ("linear", "quadratic"))
     ]
-    if not wanted:
+    # 바디가 여럿이면 작은 바디의 크기를 본다(`_small_bodies`) — 그것도 부피를 재야 한다.
+    many = (
+        sum(
+            1
+            for one in (topology or {}).get("bodies") or []
+            if isinstance(one, dict) and one.get("kind") != condition_model.SHEET
+        )
+        > 1
+    )
+    if not wanted and not many:
         return made
     shells = given.shells
     if shells:
@@ -779,7 +874,7 @@ def _layout(
         tolerance=tolerance,
     )
     records = probe.volumes
-    placed, failures = place_settings(wanted, topology, records)
+    placed, failures = place_settings(wanted, topology, records) if wanted else ({}, [])
     if failures:
         raise StageFailure(
             "internal",
@@ -797,6 +892,19 @@ def _layout(
         for tag, one in placed.items()
         if not (one.suppressed or one.shell) and one.element_size is not None
     }
+    if mixed:
+        made.orders = {
+            tag: one.order
+            for tag, one in placed.items()
+            if not (one.suppressed or one.shell) and one.order in ("linear", "quadratic")
+        }
+        made.shell_orders = {
+            one.name: one.order
+            for one in given.body_settings
+            if one.shell and one.order in ("linear", "quadratic")
+        }
+    if many:
+        made.sizes.update(_small_bodies(probe, topology, made, size))
     if made.sizes and fragment:
         made.sizes = _sizes_after_fragment(
             step, workdir, made, probe, tolerance, min(timeout_seconds, 300)
@@ -814,6 +922,95 @@ def _layout(
     for tag, one in sorted(placed.items()):
         logger.info("파트 %s → 부피 %s · %s", one.name, tag, one.describe())
     return made
+
+
+def _element_owners(
+    solids: dict[int, list[tuple[int, list[int]]]],
+    mesh: Any,
+    body_of: dict[str, int],
+    shell_parts: dict[int, str],
+) -> list[list[Any]]:
+    """요소 번호 구간 → 바디 이름 — `[[첫, 끝, 이름], …]`. 한 바디의 요소는 번호가 이어진다."""
+    name_of = {entity: name for name, entity in body_of.items()}
+    rows: list[list[Any]] = []
+    for groups, label in ((solids, name_of), (getattr(mesh, "shells", {}) or {}, shell_parts)):
+        for entity, members in groups.items():
+            numbers = sorted(number for number, _ in members)
+            if not numbers:
+                continue
+            name = label.get(entity) or f"solid {entity}"
+            start = previous = numbers[0]
+            for number in numbers[1:]:
+                if number != previous + 1:
+                    rows.append([start, previous, name])
+                    start = number
+                previous = number
+            rows.append([start, previous, name])
+    return rows
+
+
+def _order_summary(mesh: Any, body_of: dict[str, int]) -> dict[str, str]:
+    """요소 차수 — 한 차수면 그것, 섞였으면 `mixed` 와 바디마다(바디별 차수, `mesh.demote`)."""
+    orders = {
+        name: "2차"
+        if mesh.solids.get(entity) and len(mesh.solids[entity][0][1]) >= 10
+        else "1차"
+        for name, entity in body_of.items()
+        if mesh.solids.get(entity)
+    }
+    if len(set(orders.values())) > 1:
+        return {
+            "mesh_order": "mixed",
+            "mesh_order_by_body": " · ".join(
+                f"{name} {order}" for name, order in orders.items()
+            ),
+        }
+    return {"mesh_order": "quadratic" if mesh.second_order else "linear"}
+
+
+def _quality_line(mesh: Any) -> str:
+    worst, poor, total = quality(mesh)
+    return f"최저 {worst:.3f} · 0.1 미만 {poor:,}개 / {total:,}개"
+
+
+#: 작은 바디 — 가장 긴 변이 전역 요소 크기의 이 배 안이면 「작다」(`_small_bodies`).
+SMALL_BODY_RATIO = 4.0
+#: 작은 바디의 짧은 변에 들어갈 요소 수 — 그 크기로 메시한다(전역 크기의 1/10 아래로는
+#: 안 간다).
+SMALL_BODY_CELLS = 2
+
+
+def _small_bodies(
+    probe: Probe, topology: dict[str, Any], made: _Layout, size: float
+) -> dict[int, float]:
+    """**전역 크기로는 요소가 두 개도 안 들어가는 작은 바디**에 크기를 준다 — 짧은 변의 절반.
+
+    ⚠️ 핸드폰 부품의 스프링 · 용접판을 잇는 바디(한 변 0.24 mm)를 요소 0.3 mm 로 메시하니 2차로
+       올릴 때 요소가 뒤집혀 ccx 가 「nonpositive jacobian」 으로 멈췄다(운영 VOC, 2026-11-16).
+       바디를 따로 메시하므로(`bonding.py`) 그 크기가 이웃 바디로 번지지 않는다.
+
+    가장 긴 변도 전역 크기의 네 배 안인 바디만 본다 — 얇고 넓은 판(용접판)까지 줄이면 요소가
+    폭증한다. 그런 판은 사람이 파트 크기를 준다. 사람이 크기를 준 바디 · 뺀 바디는 그대로 둔다.
+    """
+    names = {
+        index: name for name, index in match_bodies(topology, probe.volumes).bodies.items()
+    }
+    found: dict[int, float] = {}
+    for one in probe.volumes:
+        box = probe.boxes.get(one.index)
+        if box is None or one.index in made.removed or one.index in made.sizes:
+            continue
+        sides = sorted(box[axis + 3] - box[axis] for axis in range(3))
+        if sides[2] >= SMALL_BODY_RATIO * size or sides[0] >= SMALL_BODY_CELLS * size:
+            continue
+        wanted = max(sides[0] / SMALL_BODY_CELLS, size / 10)
+        found[one.index] = wanted
+        made.notes.append(
+            f"작은 바디 「{names.get(one.index, f'solid {one.index}')}」"
+            f"(짧은 변 {sides[0]:.3g} mm)는 요소 {wanted:.3g} mm 로 메시했습니다 — 전역 "
+            f"{size:g} mm 로는 요소가 두 개도 안 들어갑니다."
+        )
+    return found
 
 
 def _boolean_tolerance(topology: dict[str, Any]) -> float:
@@ -1063,9 +1260,21 @@ def _ties(
     mesh: Any,
     shells: list[deck_writer.ShellSection],
     rigid: list[deck_writer.RigidBody],
-) -> tuple[list[deck_writer.Tie], list[deck_writer.RigidBody], set[str]]:
-    """쉘이 낀 접촉 → `*TIE`. 쉘 쪽이 종(절점), 솔리드 쪽이 주(요소면)다. 쉘끼리 · 비선형
-    접촉은 아직 못 건다(멈춘다). 돌려주는 것: 묶음 · 고친 강체 · 처리한 접촉 이름.
+    *,
+    modal: bool = False,
+) -> tuple[
+    list[deck_writer.Tie | deck_writer.Slide],
+    list[deck_writer.RigidBody],
+    set[str],
+    list[condition_model.Note],
+]:
+    """쉘이 낀 접촉 → `*TIE`. 쉘 쪽이 종(절점), 솔리드 쪽이 주(요소면)다. 쉘끼리는 아직 못
+    건다(멈춘다). 돌려주는 것: 묶음 · 고친 강체 · 처리한 접촉 이름 · 사람에게 할 말.
+
+    **본딩이 아닌 접촉**(2026-11-16 — 전에는 멈췄다): 모달 · 조화에서 마찰 · rough 는 묶어 붙은
+    것으로, 무마찰 · no separation 은 솔리드 면의 법선으로만 묶는다(`deck.Slide` — 솔리드끼리와
+    같은 규칙, `bonding._sliding`). 정적은 no separation 만 법선으로 묶고, 마찰 · 무마찰은 접촉
+    쌍이 있어야 해서 멈춘다.
 
     **상대가 강체면 `*TIE` 를 쓰지 않고 쉘 절점을 그 강체에 넣는다** — 강체에 붙은 것은
     강체와 함께 움직이므로 같은 뜻이다. `*TIE` 로 강체 표면에 묶으면 구속이 사슬(쉘 → 강체
@@ -1073,7 +1282,7 @@ def _ties(
     처짐은 맞는데 반력 0).
     """
     if not shells or not given.contacts:
-        return [], rigid, set()
+        return [], rigid, set(), []
     shell_faces = set(mesh.shells)
     wanted = sorted(
         {one.source for one in given.contacts} | {one.target for one in given.contacts}
@@ -1081,9 +1290,10 @@ def _ties(
     found = match_regions(topology, mesh.faces, wanted_regions=wanted)
     lookup = element_faces(mesh)
     thickest = max(one.thickness for one in shells)
-    made: list[deck_writer.Tie] = []
+    made: list[deck_writer.Tie | deck_writer.Slide] = []
     held = list(rigid)
     handled: set[str] = set()
+    notes: list[condition_model.Note] = []
     for index, pair in enumerate(given.contacts, start=1):
         ends = (found.faces.get(pair.source) or [], found.faces.get(pair.target) or [])
         on_shell = [bool(ids) and all(one in shell_faces for one in ids) for ids in ends]
@@ -1093,11 +1303,13 @@ def _ties(
             raise StageFailure(
                 "internal", f"접촉 「{pair.name}」: 쉘끼리의 접촉은 아직 못 겁니다."
             )
-        if pair.kind != "bonded":
+        sliding = pair.kind == "no_separation" or (modal and pair.kind == "frictionless")
+        if pair.kind not in ("bonded", "no_separation") and not modal:
             raise StageFailure(
                 "internal",
-                f"접촉 「{pair.name}」({pair.kind}): 쉘이 낀 접촉은 본딩만 겁니다 — 솔버를 "
-                "ansys 로 바꾸세요.",
+                f"접촉 「{pair.name}」({pair.kind}): 쉘이 낀 마찰 · 무마찰 접촉은 정적에서 "
+                "아직 못 겁니다(접촉 쌍이 필요하다) — 본딩으로 두거나 솔버를 ansys 로 "
+                "바꾸세요.",
             )
         sheet, solid = (ends[0], ends[1]) if on_shell[0] else (ends[1], ends[0])
         slaves: set[int] = set()
@@ -1127,6 +1339,19 @@ def _ties(
                 held[owner].part,
             )
             continue
+        if sliding:
+            rings = [ring for face in solid for ring in mesh.face_rings.get(face, [])]
+            rows = bonding.slide_rows(mesh.nodes, slaves, rings, thickest)
+            made.append(
+                deck_writer.Slide(
+                    contact=pair.name,
+                    name=f"SLIDE{index}",
+                    rows=tuple(rows),
+                    tolerance=thickest,
+                )
+            )
+            logger.info("접촉 %s → 쉘 절점 %s 를 법선으로만 묶었습니다", pair.name, len(rows))
+            continue
         made.append(
             deck_writer.Tie(
                 contact=pair.name,
@@ -1137,10 +1362,18 @@ def _ties(
                 tolerance=thickest,
             )
         )
+        if pair.kind in ("frictional", "rough", "frictionless"):
+            notes.append(
+                condition_model.Note(
+                    f"접촉 「{pair.name}」({pair.kind})",
+                    "쉘이 낀 접촉을 묶어 **붙은 것으로** 풀었습니다(고유치에는 접촉이 들지 "
+                    "않습니다).",
+                )
+            )
         logger.info(
             "접촉 %s → TIE 쉘 절점 %s · 솔리드 요소면 %s", pair.name, len(slaves), len(masters)
         )
-    return made, held, handled
+    return made, held, handled, notes
 
 
 def _corner_nodes(mesh: Any, element: int) -> list[int]:

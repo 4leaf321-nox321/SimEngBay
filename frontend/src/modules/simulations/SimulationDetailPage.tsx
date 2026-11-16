@@ -119,6 +119,14 @@ const SUMMARY_LABELS: Record<string, string> = {
   // 뒤집힌 2차 요소를 폈다(CalculiX 경로). 안 보이면 「요소 수가 왜 늘었지」 를 설명할 길이 없다.
   boolean_tolerance_mm: '형상 맞춤 허용오차',
   mesh_repairs: '메시 보정',
+  mesh_quality: '요소 품질',
+  // 바디마다 요소 차수가 다르면(파트 설정) 요소 차수 칸은 「바디마다 다름」 이고 여기에 바디별로.
+  mesh_order_by_body: '바디별 요소 차수',
+  // **바디를 어떻게 붙였나**(CalculiX) — 따로 메시하고 구속식(*TIE)으로 묶었나, 절점을 공유했나.
+  // 쌍마다 몇 절점이 묶였는지가 그 아래다 — 0 이면 그 바디는 떨어진 채 풀렸다.
+  bonding: '본딩 방식',
+  bonded_pairs: '쌍별 연결',
+  bond_warning: '연결 경고',
   // 정적은 메모리가 모자랄 것 같으면 반복 솔버로 푼다 — 무엇으로 풀었고 얼마를 어림했나.
   linear_solver: '선형 솔버',
   memory_estimate_mb: '메모리 어림',
@@ -127,13 +135,34 @@ const SUMMARY_LABELS: Record<string, string> = {
 }
 
 /** 한 줄을 다 쓰고 접어 보이는 요약 칸 — 바디마다 늘어서는 값. */
-const WIDE_SUMMARY = new Set(['mass_by_body', 'mesh_repairs', 'memory_warning', 'solver_retry'])
+const WIDE_SUMMARY = new Set([
+  'mass_by_body',
+  'mesh_repairs',
+  'mesh_order_by_body',
+  'memory_warning',
+  'solver_retry',
+  'bonded_pairs',
+  'bond_warning',
+])
 
 /** 요약 묶음 — 메시 · 모델 · 해석 · 실행. 모르는 열쇠는 「기타」 로. */
 const SUMMARY_GROUPS: [string, string[]][] = [
   [
     '메시',
-    ['nodes', 'elements', 'element_size_mm', 'mesh_order', 'contact_pairs', 'boolean_tolerance_mm', 'mesh_repairs'],
+    [
+      'nodes',
+      'elements',
+      'element_size_mm',
+      'mesh_order',
+      'mesh_order_by_body',
+      'mesh_quality',
+      'contact_pairs',
+      'bonding',
+      'bonded_pairs',
+      'bond_warning',
+      'boolean_tolerance_mm',
+      'mesh_repairs',
+    ],
   ],
   [
     '모델',
@@ -217,6 +246,9 @@ function shownSummary(key: string, value: unknown): string {
   if ((key === 'element_size_mm' || key === 'boolean_tolerance_mm') && typeof value === 'number')
     return `${value} mm`
   if (key === 'linear_solver') return value === 'iterative' ? '반복 (ITERATIVE CHOLESKY)' : '직접 (SPOOLES)'
+  if (key === 'bonding') return value === 'tie' ? '따로 메시 · 구속식 묶음 (*TIE)' : '절점 공유'
+  if (key === 'mesh_order')
+    return ({ quadratic: '2차', linear: '1차', mixed: '바디마다 다름' } as Record<string, string>)[String(value)] ?? String(value)
   if (key === 'memory_estimate_mb' && typeof value === 'number') return `${value.toLocaleString()} MB`
   if (key === 'contact_pairs') return value ? '있음' : '없음'
   if (key === 'large_deflection') return value ? '켬 (기하 비선형)' : '끔'

@@ -8,14 +8,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from app.core.calculix import tools
+from app.core.calculix import bonding, tools
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
 logger = logging.getLogger(__name__)
@@ -42,11 +45,14 @@ MEMORY_SHARE = 0.7
 #: 반복 솔버를 못 쓰는 덱 — 고유치 · 조화 · 동해석은 직접 솔버뿐이고, 접촉 쌍은 마찰이 비대칭
 #: 행렬을 만든다(ccx 의 반복 솔버는 대칭 양정치만 푼다).
 #:
-#: ⚠️ **구속 방정식(MPC)이 든 덱도 뺀다.** 「조건_반쪽구멍」(원격 변위의 `*RIGID BODY` · 원통
-#:    지지의 `*TRANSFORM`)을 반복 솔버로 풀었더니 수렴했다고 끝났는데(106번, 오차 7.5e-3 <
+#: ⚠️ **강체 묶음 · 국부 좌표계가 든 덱도 뺀다.** 「조건_반쪽구멍」(원격 변위의 `*RIGID BODY` ·
+#:    원통 지지의 `*TRANSFORM`)을 반복 솔버로 풀었더니 수렴했다고 끝났는데(106번, 오차 7.5e-3 <
 #:    8.0e-3) 반력이 [553, 983, -307] N 이었다 — 직접 솔버는 [0, 1100, 0] N 으로 손셈과 같다.
-#:    변위는 0.2% 안이라 그림만 보면 모른다(2026-11-13). 수렴 기준이 느슨해 구속 방정식에 걸린
-#:    힘이 안 맞는다.
+#:    변위는 0.2% 안이라 그림만 보면 모른다(2026-11-13).
+#:    본딩의 `*TIE` · 볼트 예압의 `*EQUATION` 은 괜찮다 — 두바디 바닥 반력 2400.06 N(직접
+#:    2400.0), 볼트 판본딩 -599.68 N · 볼트 힘 1011.27 N(직접 -600.0 · 1012.05, 2026-11-16).
+#:    바디가 여럿인 정적은 모두 `*TIE` 로 묶이므로(`bonding.py`) 이것을 막으면 그런 모델은
+#:    메모리가 모자랄 때 피할 길이 없다.
 _DIRECT_ONLY = (
     "*FREQUENCY",
     "*STEADY STATE DYNAMICS",
@@ -54,8 +60,6 @@ _DIRECT_ONLY = (
     "*BUCKLE",
     "*CONTACT PAIR",
     "*RIGID BODY",
-    "*EQUATION",
-    "*TIE",
     "*TRANSFORM",
     "*MPC",
     "*COUPLING",
@@ -225,6 +229,8 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
     log = (done.stdout or "") + (done.stderr or "")
     (workdir / LOG_NAME).write_text(log, encoding="utf-8")
 
+    if "nonpositive jacobian" in log:
+        raise _jacobian_failure(workdir, log)
     found = ERROR_MARK.search(log)
     if found:
         line = next(
@@ -257,6 +263,8 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
         summary["solver_retry"] = "직접 솔버가 메모리로 끊겨 반복 솔버로 다시 풀었습니다."
     elif plan.tight and not plan.can_iterate:
         summary["memory_warning"] = _tight_message(plan)
+    # **쌍마다 연결 결과** — 몇 절점이 묶였나(반경 밖이라 ccx 가 안 묶은 절점을 뺀다).
+    summary.update(bonding.connection_report(workdir, log))
     return StageResult(
         artifacts=artifacts,
         summary=summary,
@@ -264,11 +272,40 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
     )
 
 
+#: ccx 가 뒤집힌 요소에 찍는 말 — `nonpositive jacobian` · `determinant in element N`.
+_JACOBIAN = re.compile(r"nonpositive jacobian\s+determinant in element\s+(\d+)")
+
+
+def _jacobian_failure(workdir: Path, log: str) -> StageFailure:
+    """**뒤집힌 요소가 어느 바디의 것인가** — 모델링이 적은 요소 번호 구간(`boundary.json` 의
+    `element_owners`)으로 센다. 「CalculiX 가 실패했습니다: nonpositive jacobian」 만으로는
+    어느 파트에 크기를 줘야 할지 모른다(운영 VOC, 2026-11-16)."""
+    elements = sorted({int(one) for one in _JACOBIAN.findall(log)})
+    owners: list[list[Any]] = []
+    with contextlib.suppress(OSError, ValueError):
+        saved = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+        owners = saved.get("element_owners") or []
+    counts: dict[str, int] = {}
+    for number in elements:
+        name = next((row[2] for row in owners if row[0] <= number <= row[1]), "모르는 바디")
+        counts[name] = counts.get(name, 0) + 1
+    ranked = sorted(counts.items(), key=lambda pair: -pair[1])
+    shown = " · ".join(f"「{name}」 {count}개" for name, count in ranked)
+    return StageFailure(
+        "solver_failed",
+        f"요소 {len(elements)}개가 뒤집혀 CalculiX 가 멈췄습니다(nonpositive jacobian)"
+        + (f" — {shown}" if shown else "")
+        + ". 그 바디에 파트 크기를 작게 주거나 전역 요소 크기를 줄이세요(얇은 벽 · 작은 "
+        "바디보다 요소가 크면 2차로 올릴 때 뒤집힌다).",
+        details={"elements": elements[:200], "bodies": counts},
+    )
+
+
 def _tight_message(plan: SolverPlan) -> str:
     return (
         f"메모리 어림 {plan.estimate_mb:,.0f} MB 가 남은 메모리 "
         f"{plan.available_mb or 0:,.0f} MB 의 {MEMORY_SHARE:.0%} 를 넘습니다(자유도 "
-        f"{plan.dof:,}) — 고유치 · 조화 · 접촉 · 구속 방정식(원격점 · 강체 · 원통 지지)이 든 "
+        f"{plan.dof:,}) — 고유치 · 조화 · 접촉 · 강체 묶음(원격점 · 강체) · 원통 지지가 든 "
         "해석은 반복 솔버를 못 써 직접 솔버로 풉니다."
     )
 

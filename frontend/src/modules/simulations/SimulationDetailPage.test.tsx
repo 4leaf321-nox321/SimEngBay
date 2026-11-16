@@ -301,6 +301,8 @@ describe('해석 작업 화면', () => {
         mesh_repairs: '뒤집힌 2차 요소 28개의 중간 절점을 곧게 폈습니다.',
         linear_solver: 'iterative',
         memory_estimate_mb: 2370,
+        bonding: 'tie',
+        bonded_pairs: '기둥-판 412/412 절점(반경 2.5 mm)',
       },
     } as Simulation)
     show('/simulations/sim?tab=progress')
@@ -309,5 +311,7 @@ describe('해석 작업 화면', () => {
     expect(screen.getByText('0.0147 mm')).toBeInTheDocument()
     expect(screen.getByText('반복 (ITERATIVE CHOLESKY)')).toBeInTheDocument()
     expect(screen.getByText('2,370 MB')).toBeInTheDocument()
+    expect(screen.getByText('따로 메시 · 구속식 묶음 (*TIE)')).toBeInTheDocument()
+    expect(screen.getByText('기둥-판 412/412 절점(반경 2.5 mm)')).toBeInTheDocument()
   })
 })

@@ -235,3 +235,136 @@ def test_남은_메모리는_워커_묶음의_상한까지_본다(tmp_path: Path
     # 묶음이 없으면 시스템의 남은 메모리(32 GB)다.
     (slice_ / "memory.max").write_text("max\n")
     assert solve_module.available_mb(root, proc) == pytest.approx(32 * 1024)
+
+
+def test_요소_품질은_정사면체가_1_이고_납작할수록_0_에_가깝다() -> None:
+    from app.core.calculix.mesh import Mesh, quality
+
+    h = (2 / 3) ** 0.5
+    regular = {
+        1: (0.0, 0.0, 0.0),
+        2: (1.0, 0.0, 0.0),
+        3: (0.5, 3**0.5 / 2, 0.0),
+        4: (0.5, 3**0.5 / 6, h),
+    }
+    flat = {**regular, 4: (0.5, 3**0.5 / 6, 0.01)}
+    for nodes, expected_poor in ((regular, 0), (flat, 1)):
+        mesh = Mesh(
+            nodes=nodes,
+            solids={1: [(1, [1, 2, 3, 4])]},
+            faces=[],
+            bodies=[],
+            face_nodes={},
+            triangles=[],
+            face_triangles={},
+            face_rings={},
+            second_order=False,
+        )
+        worst, poor, total = quality(mesh)
+        assert total == 1 and poor == expected_poor
+        if expected_poor == 0:
+            assert worst == pytest.approx(1.0, abs=1e-9)
+
+
+def test_작은_바디는_짧은_변에_요소_둘이_들어가게_크기를_준다() -> None:
+    """한 변 0.24 mm 바디를 요소 0.3 mm 로 메시하면 2차로 올릴 때 뒤집혔다(운영 VOC). 가장 긴
+    변도 전역 크기의 네 배 안인 바디만 — 얇고 넓은 판까지 줄이면 요소가 폭증한다."""
+    from app.core.calculix.mesh import Probe
+
+    probe = Probe(
+        volumes=[
+            BodyRecord(index=1, volume=40.0, centroid=(0.0, 0.0, 0.0)),
+            BodyRecord(index=2, volume=0.0138, centroid=(3.0, 0.0, 0.0)),
+            BodyRecord(index=3, volume=1.25, centroid=(9.0, 0.0, 0.0)),
+            BodyRecord(index=4, volume=0.01, centroid=(20.0, 0.0, 0.0)),
+        ],
+        boxes={
+            1: (0.0, 0.0, 0.0, 10.0, 4.0, 1.0),
+            2: (2.9, 0.0, 0.0, 3.14, 0.24, 0.24),
+            3: (4.0, 0.0, 0.0, 9.0, 5.0, 0.05),  # 얇고 넓은 판 — 그대로
+            4: (19.9, 0.0, 0.0, 20.1, 0.2, 0.25),  # 사람이 크기를 줬다 — 그대로
+        },
+    )
+    topology = {
+        "bodies": [
+            {"name": "판", "volume": 40.0, "centroid": [0.0, 0.0, 0.0]},
+            {"name": "연결편", "volume": 0.014, "centroid": [3.0, 0.0, 0.0]},
+        ]
+    }
+    made = build_module._Layout(sizes={4: 0.05})
+    found = build_module._small_bodies(probe, topology, made, 0.3)
+    assert found == {2: pytest.approx(0.12)}
+    assert "「연결편」" in made.notes[0] and "0.12 mm" in made.notes[0]
+
+
+def test_펴고도_남은_뒤집힌_요소는_곧은_것까지_센다() -> None:
+    """펴기는 휜 요소만 본다 — 꼭짓점 사면체가 뒤집힌 곧은 요소는 펴서 고쳐지지 않아,
+    전에는 그대로 솔버로 가 「nonpositive jacobian」 이었다(운영 VOC, v0.25.1). 남은 것을 세어
+    다시 만든다."""
+    from app.core.calculix.mesh import _still_inverted
+
+    good = _tet10(0.0)
+    ids = list(range(1, 11))
+    assert _still_inverted(good, {1: [(1, ids)]}) == 0
+    # 꼭짓점 둘을 맞바꾸면 곧은 채로 뒤집힌다(중간 절점도 같이 바꾼다).
+    flipped = [1, 3, 2, 4, 7, 6, 5, 8, 10, 9]
+    assert _still_inverted(good, {1: [(1, flipped)]}) == 1
+    assert _still_inverted(good, {1: [(1, [1, 2, 3, 4]), (2, [1, 3, 2, 4])]}) == 1
+
+
+def test_뒤집혀_멈추면_어느_바디의_요소인지_말한다(tmp_path: Path) -> None:
+    (tmp_path / "boundary.json").write_text(
+        '{"element_owners": [[1, 100, "판"], [101, 130, "스프링"], [131, 140, "용접판"]]}',
+        encoding="utf-8",
+    )
+    log = "".join(
+        f" *ERROR in e_c3d: nonpositive jacobian\n         determinant in element {n}\n"
+        for n in (105, 120, 133)
+    )
+    failure = solve_module._jacobian_failure(tmp_path, log)
+    assert failure.code == "solver_failed"
+    assert "요소 3개" in failure.message
+    assert "「스프링」 2개" in failure.message and "「용접판」 1개" in failure.message
+    assert failure.details["bodies"] == {"스프링": 2, "용접판": 1}
+
+
+def test_정한_바디만_1차로_낮추고_그_면에서도_중간_절점을_뺀다() -> None:
+    """바디별 요소 차수 — 2차로 메시하고 1차 바디의 중간 절점을 뺀다(`mesh.demote`)."""
+    from app.core.calculix.mesh import Mesh, demote
+
+    nodes = _tet10(0.0)
+    other = {at + 20: (x + 5, y, z) for at, (x, y, z) in nodes.items()}
+    mesh = Mesh(
+        nodes={**nodes, **other},
+        solids={1: [(1, list(range(1, 11)))], 2: [(2, list(range(21, 31)))]},
+        faces=[],
+        bodies=[],
+        face_nodes={9: {1, 2, 3, 5, 6, 7}, 19: {21, 22, 23, 25, 26, 27}},
+        triangles=[],
+        face_triangles={9: [(1, 2, 3)], 19: [(21, 22, 23)]},
+        face_rings={9: [[1, 2, 3, 5, 6, 7]], 19: [[21, 22, 23, 25, 26, 27]]},
+        second_order=True,
+    )
+    low = demote(mesh, {1})
+    assert low.solids[1] == [(1, [1, 2, 3, 4])]
+    assert low.solids[2] == mesh.solids[2]
+    assert set(range(5, 11)).isdisjoint(low.nodes) and 25 in low.nodes
+    assert low.face_nodes[9] == {1, 2, 3} and low.face_rings[9] == [[1, 2, 3]]
+    assert low.face_rings[19] == mesh.face_rings[19]
+    assert low.second_order
+    assert not demote(mesh, {1, 2}).second_order
+
+
+def test_기울어진_면의_마찰_없는_지지는_절점마다_법선_구속식이다() -> None:
+    from app.core import conditions as condition_model
+    from app.core.calculix.deck import _frictionless
+
+    rule = condition_model.Constraint(name="경사 받침", kind="frictionless", region="경사")
+    lines, why, inclined = _frictionless(
+        "HOLD0", rule, {1, 2, 3}, {"normal": [0.0, 0.6, -0.8]}, others={3}
+    )
+    assert why is None and inclined
+    assert lines[0] == "*EQUATION"
+    assert lines[1:] == ["2", "1, 3, -0.8, 1, 2, 0.6", "2", "2, 3, -0.8, 2, 2, 0.6"]
+    flat, why, inclined = _frictionless("HOLD0", rule, {1, 2}, {"normal": [0.0, 0.0, -1.0]})
+    assert not inclined and "HOLD0, 3, 3, 0.0" in flat

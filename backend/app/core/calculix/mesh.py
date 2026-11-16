@@ -77,6 +77,9 @@ class Mesh:
     #: 메시를 고친 것 — 곡률 크기로 다시 만들었다 · 뒤집힌 2차 요소를 폈다. 사람에게 그대로
     #: 간다.
     repairs: tuple[str, ...] = ()
+    #: 펴고도 남은 뒤집힌 요소(det J ≤ 0 — 꼭짓점 사면체가 뒤집힌 곧은 요소까지). 0 이어야
+    #: 솔버에 넘긴다(`build_mesh`).
+    inverted: int = 0
 
     @property
     def element_count(self) -> int:
@@ -251,7 +254,9 @@ def build_mesh(
     repairs: list[str] = []
     failure: StageFailure | None = None
     mesh: Mesh | None = None
-    for curvature in (0, *CURVATURE_TRIES):
+
+    def attempt(curvature: int, straight: bool) -> Mesh | None:
+        nonlocal failure
         msh.unlink(missing_ok=True)
         geo.write_text(
             _geo(
@@ -267,6 +272,7 @@ def build_mesh(
                 sheets=sheets,
                 tolerance=tolerance,
                 curvature=curvature,
+                straight=straight,
             ),
             encoding="utf-8",
         )
@@ -280,10 +286,10 @@ def build_mesh(
         tail = (done.stdout or "")[-1500:] + (done.stderr or "")[-1500:]
         if not msh.is_file():
             failure = StageFailure("mesh_failed", f"gmsh 가 메시를 못 만들었습니다:\n{tail}")
-            continue
+            return None
         try:
             # 1차 통과는 **면만** 만든다 — 사면체가 없는 것이 정상이다.
-            mesh = read_mesh(
+            return read_mesh(
                 msh,
                 require_solid=not surface_only,
                 shell_surfaces=shell_surfaces,
@@ -291,7 +297,38 @@ def build_mesh(
             )
         except StageFailure as caught:
             failure = StageFailure(caught.code, f"{caught.message}\n{tail}")
+            return None
+
+    for curvature in (0, *CURVATURE_TRIES):
+        mesh = attempt(curvature, straight=False)
+        if mesh is None:
             continue
+        if mesh.inverted and mesh.second_order:
+            # **펴고도 뒤집힌 요소가 남았다** — 꼭짓점 사면체까지 뒤집힌 것이다(휜 요소
+            # 바로잡기가 꼭짓점을 옮겼거나 바늘 같은 요소). 중간 절점을 처음부터 직선에 두고
+            # 다시 만든다 — 꼭짓점은 1차 메시의 것이라 뒤집히지 않는다(운영 VOC: v0.25.1 에서도
+            # 「nonpositive jacobian」 이었다, 2026-11-16).
+            left = mesh.inverted
+            again = attempt(curvature, straight=True)
+            if again is None or again.inverted:
+                raise StageFailure(
+                    "mesh_failed",
+                    f"2차 요소 {left}개가 뒤집혀(det J ≤ 0) 중간 절점을 직선에 두고 다시 "
+                    f"만들어도 {again.inverted if again else left}개가 남습니다 — 요소 "
+                    f"크기({element_size_mm:g} mm)가 얇은 벽 · 작은 바디보다 큽니다. 그 "
+                    "바디에 파트 크기를 작게 주거나 전역 크기를 줄이세요.",
+                )
+            mesh = again
+            repairs.append(
+                f"뒤집힌 2차 요소 {left}개가 펴도 남아 중간 절점을 직선에 두고 다시 "
+                "메시했습니다(곡면을 모서리로 근사합니다)."
+            )
+        elif mesh.inverted:
+            raise StageFailure(
+                "mesh_failed",
+                f"뒤집힌 요소(부피 ≤ 0)가 {mesh.inverted}개 있습니다 — 요소 크기"
+                f"({element_size_mm:g} mm)가 얇은 벽 · 작은 바디보다 큽니다.",
+            )
         if curvature:
             repairs.append(
                 f"요소 크기({element_size_mm:g} mm)로는 부피 메시가 안 서서 곡률 크기(원 "
@@ -645,6 +682,7 @@ def _geo(
     sheets: bool = False,
     tolerance: float = 0.0,
     curvature: int = 0,
+    straight: bool = False,
 ) -> str:
     """gmsh 에게 줄 쪽지. **`.geo` 파일이 경계다** — 파이썬 API 를 안 쓴다(`tools` 참고)."""
     parts = dict(volume_sizes or {})
@@ -666,20 +704,24 @@ def _geo(
                 # 요소가 뒤집힌다 — R60 원통의 R4 구멍, 크기 8 에서 det J ≤ 0 이 27개였고
                 # ccx 가 멈췄다. 켜면 0 개(요소 수는 그대로, 2026-11-13). 남는 것은 읽을 때
                 # 편다(`_straighten`).
-                *(["Mesh.HighOrderOptimize = 2;"] if second_order else []),
+                *(["Mesh.HighOrderOptimize = 2;"] if second_order and not straight else []),
+                # 그래도 뒤집히면 중간 절점을 처음부터 직선에 둔다(`build_mesh`).
+                *(["Mesh.SecondOrderLinear = 1;"] if second_order and straight else []),
                 *([f"Mesh.MeshSizeFromCurvature = {curvature};"] if curvature else []),
                 # 물리 그룹을 안 만들어도 전부 저장한다 — 우리는 기하 번호로 찾는다.
                 "Mesh.SaveAll = 1;",
                 "Mesh.MshFileVersion = 2.2;",
-                # **파트 크기는 그 부피의 점에 준다** — 먼저 모든 점에 전역 크기를 주고(상한을
-                # 넓혔으므로 안 주면 다른 파트가 성겨진다), 큰 것부터 적어 **맞닿은 점에서는
-                # 작은 쪽이 이긴다.** 면 힌트는 그 뒤에 와서 파트 크기를 이긴다(좁은 쪽이
-                # 이긴다 — CompCore 의 순서: 「전체」 < 파트 < 선택 그룹).
-                *([f"MeshSize{{ PointsOf{{ Volume{{:}}; }} }} = {size:g};"] if parts else []),
-                *(
-                    f"MeshSize{{ PointsOf{{ Volume{{{tag}}}; }} }} = {value:g};"
-                    for tag, value in sorted(parts.items(), key=lambda pair: -pair[1])
-                ),
+                # **파트 크기는 그 부피에 묶은 크기장으로 준다**(`_part_fields`) — 점에 주면
+                # gmsh
+                # 가 점의 크기를 **자리로** 찾아, 같은 자리에 맞닿은 이웃 바디의 점까지 그
+                # 크기를
+                # 받았다. 기둥만 1.5 mm 로 줄였는데 따로 메시한 받침판 요소가 3,031 → 5,150
+                # 으로
+                # 늘었다(크기장으로는 3,031 그대로, 2026-11-16). 전역 크기는 점에 준다(상한을
+                # 넓혔으므로 안 주면 다른 파트가 성겨진다) — 전역보다 큰 파트의 점만 빼고.
+                # 면 힌트는 점에 준다 — 전역 · 파트보다 커도 그대로 따른다(CompCore 의 순서:
+                # 「전체」 < 파트 < 선택 그룹).
+                *_part_fields(size, parts),
                 # 쉘 면은 그 파트의 크기(없으면 전역) — 중간면 점에 준다.
                 *(
                     f"MeshSize{{ PointsOf{{ Surface{{{tag}}}; }} }} = {value:g};"
@@ -696,6 +738,43 @@ def _geo(
         )
         + "\n"
     )
+
+
+def _part_fields(size: float, parts: dict[int, float]) -> list[str]:
+    """파트 크기 — 그 부피(와 그 경계)에만 듣는 상수 크기장들의 최솟값을 배경으로. 전역 크기는
+    점에 주되, 전역보다 큰 파트의 점에는 주지 않는다(주면 그 파트가 전역보다 커지지 못한다)."""
+    if not parts:
+        return []
+    bigger = sorted(tag for tag, value in parts.items() if value > size)
+    lines = (
+        [
+            "rest() = Volume{:};",
+            f"rest() -= {{{', '.join(str(tag) for tag in bigger)}}};",
+            "If (#rest() > 0)",
+            f"  MeshSize{{ PointsOf{{ Volume{{rest()}}; }} }} = {size:g};",
+            "EndIf",
+        ]
+        if bigger
+        else [f"MeshSize{{ PointsOf{{ Volume{{:}}; }} }} = {size:g};"]
+    )
+    for number, (tag, value) in enumerate(sorted(parts.items()), start=1):
+        lines += [
+            f"Field[{number}] = Constant;",
+            f"Field[{number}].VIn = {value:g};",
+            f"Field[{number}].VOut = 1e22;",
+            f"Field[{number}].VolumesList = {{{tag}}};",
+            f"Field[{number}].IncludeBoundary = 1;",
+        ]
+    if len(parts) > 1:
+        top = len(parts) + 1
+        lines += [
+            f"Field[{top}] = Min;",
+            f"Field[{top}].FieldsList = {{{', '.join(str(i) for i in range(1, top))}}};",
+            f"Background Field = {top};",
+        ]
+    else:
+        lines.append("Background Field = 1;")
+    return lines
 
 
 def read_mesh(
@@ -736,6 +815,7 @@ def read_mesh(
             )
         elif fixed:
             repairs.append(f"뒤집힌 2차 요소 {fixed}개의 중간 절점을 곧게 폈습니다.")
+    left = _still_inverted(nodes, solids) if straighten else 0
     # **쉘 요소** — 중간면의 삼각형. 번호는 사면체 다음부터(덱에서 한 줄 번호다).
     shells: dict[int, list[tuple[int, list[int]]]] = defaultdict(list)
     for kind, entity, ids in elements:
@@ -765,6 +845,7 @@ def read_mesh(
         second_order=second_order,
         shells=dict(shells),
         repairs=tuple(repairs),
+        inverted=left,
     )
 
 
@@ -828,6 +909,36 @@ def _curved(points: list[tuple[float, float, float]]) -> bool:
         ):
             return True
     return False
+
+
+def _corner_volume(points: list[tuple[float, float, float]]) -> float:
+    """꼭짓점 사면체의 부호 있는 부피 x 6 — 양이어야 한다(ccx 의 절점 차례)."""
+    a, b, c, d = points[:4]
+    ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    ad = (d[0] - a[0], d[1] - a[1], d[2] - a[2])
+    return (
+        ab[0] * (ac[1] * ad[2] - ac[2] * ad[1])
+        - ab[1] * (ac[0] * ad[2] - ac[2] * ad[0])
+        + ab[2] * (ac[0] * ad[1] - ac[1] * ad[0])
+    )
+
+
+def _still_inverted(
+    nodes: dict[int, tuple[float, float, float]],
+    solids: dict[int, list[tuple[int, list[int]]]],
+) -> int:
+    """**펴고도 남은 뒤집힌 요소** — 휜 2차는 적분점 · 꼭짓점의 det J, 곧은 요소(1차 포함)는
+    꼭짓점 사면체의 부피로 본다. 곧은 요소는 펴서 고쳐지지 않는다."""
+    count = 0
+    for rows in solids.values():
+        for _, ids in rows:
+            points = [nodes[one] for one in ids]
+            if len(ids) == 10 and _curved(points):
+                count += _inverted(points)
+            elif _corner_volume(points) <= 0:
+                count += 1
+    return count
 
 
 def _straighten(
@@ -1311,6 +1422,56 @@ def _faces(
     return records, dict(members)
 
 
+def demote(
+    mesh: Mesh, solids: set[int], shells: frozenset[int] | set[int] = frozenset()
+) -> Mesh:
+    """**정한 바디만 1차로** — 2차로 메시한 뒤 그 솔리드의 사면체에서 중간 절점을 빼 C3D4 로,
+    그 쉘의 삼각형을 S3 로 낮춘다. 그 바디의 면 절점 · 하중 분배 고리에서도 중간 절점을 뺀다.
+
+    gmsh 의 요소 차수는 모델 하나에 하나라, 바디마다 다르게 하려면 높은 쪽으로 메시하고 낮춘다.
+    **바디를 따로 메시해야 한다**(`bonding.py`) — 1차 바디와 2차 바디는 절점을 나눠 쓰지 않고
+    `*TIE` 로 묶이므로 접합부의 중간 절점을 따로 묶지 않아도 맞는다. 절점을 공유하는 옛
+    방식에서는 2차 쪽 모서리의 중간 절점이 떠서 쓰지 않는다(`build._layout` 이 그렇게
+    적는다).
+    """
+    if not solids and not shells:
+        return mesh
+    lookup = element_faces(mesh)
+    solid_of = {number: entity for entity, rows in mesh.solids.items() for number, _ in rows}
+    new_solids = {
+        entity: [(number, ids[:4]) for number, ids in rows] if entity in solids else rows
+        for entity, rows in mesh.solids.items()
+    }
+    new_shells = {
+        entity: [(number, ids[:3]) for number, ids in rows] if entity in shells else rows
+        for entity, rows in mesh.shells.items()
+    }
+    used = {node for rows in new_solids.values() for _, ids in rows for node in ids}
+    used |= {node for rows in new_shells.values() for _, ids in rows for node in ids}
+    # 낮춘 바디의 면(그 면의 첫 삼각형이 든 요소가 그 솔리드 · 그 쉘 면 자체).
+    lowered: set[int] = set(shells)
+    for face, triangles in mesh.face_triangles.items():
+        hit = lookup.get(frozenset(triangles[0])) if triangles else None
+        if hit is not None and solid_of.get(hit[0]) in solids:
+            lowered.add(face)
+    return replace(
+        mesh,
+        nodes={number: point for number, point in mesh.nodes.items() if number in used},
+        solids=new_solids,
+        shells=new_shells,
+        face_nodes={
+            face: (members & used) if face in lowered else members
+            for face, members in mesh.face_nodes.items()
+        },
+        face_rings={
+            face: [ring[:3] for ring in rings] if face in lowered else rings
+            for face, rings in mesh.face_rings.items()
+        },
+        second_order=any(len(ids) > 4 for rows in new_solids.values() for _, ids in rows[:1])
+        or any(len(ids) > 3 for rows in new_shells.values() for _, ids in rows[:1]),
+    )
+
+
 def element_faces(mesh: Mesh) -> dict[frozenset[int], tuple[int, str]]:
     """모서리 절점 셋 → (요소 번호, 면 이름). **압력을 요소면에 걸 때** 쓴다.
 
@@ -1404,6 +1565,38 @@ def _bodies(
             )
         )
     return records
+
+
+#: 평균비 품질이 이것보다 낮으면 「나쁜 요소」 로 센다(정사면체가 1, 납작해질수록 0).
+POOR_QUALITY = 0.1
+
+
+def quality(mesh: Mesh) -> tuple[float, int, int]:
+    """사면체의 **평균비 품질**(꼭짓점으로, 12·(3V)^(2/3) / Σ모서리²) — (최저, 나쁜 요소
+    수, 전체).
+
+    det J 가 0 이하인 것은 읽을 때 폈다(`_straighten`). 이것은 그 앞의 모양 — 납작하거나 바늘
+    같은 요소가 많으면 응력이 흔들린다. 작은 바디 · 얇은 벽을 큰 요소로 메시하면 낮아진다(운영
+    VOC, 2026-11-16). 요소 2만 개에 0.2 초쯤.
+    """
+    worst = 1.0
+    poor = 0
+    total = 0
+    for rows in mesh.solids.values():
+        for _, ids in rows:
+            a, b, c, d = (mesh.nodes[one] for one in ids[:4])
+            volume = _tet_volume(a, b, c, d)
+            squares = sum(
+                (first[axis] - second[axis]) ** 2
+                for first, second in ((a, b), (a, c), (a, d), (b, c), (b, d), (c, d))
+                for axis in range(3)
+            )
+            score = 12 * (3 * volume) ** (2 / 3) / squares if squares > 0 else 0.0
+            total += 1
+            worst = min(worst, score)
+            if score < POOR_QUALITY:
+                poor += 1
+    return (worst if total else 0.0), poor, total
 
 
 def _tet_volume(

@@ -13,7 +13,7 @@ from app.core.calculix.mesh import _geo, parse_probe
 from app.core.materials import Material
 
 
-def test_뺀_부피는_지우고_파트_크기는_그_부피의_점에_준다() -> None:
+def test_뺀_부피는_지우고_파트_크기는_그_부피에_묶은_크기장으로_준다() -> None:
     text = _geo(
         Path("/data/input.step"),
         5.0,
@@ -30,14 +30,17 @@ def test_뺀_부피는_지우고_파트_크기는_그_부피의_점에_준다() 
     # 파트 크기가 전역 범위를 넘으면 범위를 넓힌다 — 안 그러면 gmsh 가 되돌린다.
     assert "Mesh.MeshSizeMax = 8;" in lines
     assert "Mesh.MeshSizeMin = 0.375;" in lines
-    # 전역 → 큰 파트 → 작은 파트 → 면 힌트 순서(뒤가 이긴다: 좁은 쪽 · 작은 쪽).
-    order = [
-        lines.index("MeshSize{ PointsOf{ Volume{:}; } } = 5;"),
-        lines.index("MeshSize{ PointsOf{ Volume{1}; } } = 8;"),
-        lines.index("MeshSize{ PointsOf{ Volume{2}; } } = 1.5;"),
-        lines.index("MeshSize{ PointsOf{ Surface{12}; } } = 0.5;"),
-    ]
-    assert order == sorted(order)
+    # **파트 크기는 점이 아니라 그 부피의 크기장이다** — 점에 주면 gmsh 가 자리로 찾아, 같은
+    # 자리에 맞닿은 이웃 바디의 점까지 받는다(따로 메시해도 받침판이 기둥을 따라 촘촘해졌다).
+    assert "Field[1].VolumesList = {1};" in lines and "Field[1].VIn = 8;" in lines
+    assert "Field[2].VolumesList = {2};" in lines and "Field[2].VIn = 1.5;" in lines
+    assert "Field[3] = Min;" in lines and "Background Field = 3;" in lines
+    assert not any(line.startswith("MeshSize{ PointsOf{ Volume{1}") for line in lines)
+    # 전역 크기는 점에 준다 — 전역보다 큰 파트(1번)의 점만 빼고(주면 그 파트가 못 커진다).
+    assert "rest() -= {1};" in lines
+    assert "  MeshSize{ PointsOf{ Volume{rest()}; } } = 5;" in lines
+    # 면 힌트는 그대로 점에 준다 — 전역 · 파트보다 커도 따른다.
+    assert "MeshSize{ PointsOf{ Surface{12}; } } = 0.5;" in lines
 
 
 def test_파트_설정이_없으면_쪽지가_그대로다() -> None:

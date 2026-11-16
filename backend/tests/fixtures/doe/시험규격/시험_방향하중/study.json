@@ -1,5 +1,5 @@
 {
-  "id": "e990228d-8c9a-4d38-b1fb-4a576d8d51f8",
+  "id": "dd2dc08f-a03e-408c-a210-5276a33ea1b8",
   "name": "시험_방향하중",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -296,7 +297,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-462925e6@example.local"
+    "email": "member-73af7e1a@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

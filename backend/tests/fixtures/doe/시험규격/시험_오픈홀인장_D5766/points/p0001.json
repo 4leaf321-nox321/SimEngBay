@@ -118,8 +118,16 @@
     "short_edges": 0,
     "narrowest_face": 3.6,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -139,7 +147,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "6ae3743d-48b5-4d67-8b50-0bbe903f4862",
+      "id": "fe67d51d-ae34-4769-8349-174947cb9c08",
       "name": "시험_오픈홀인장_D5766",
       "method": "factorial",
       "seed": 1

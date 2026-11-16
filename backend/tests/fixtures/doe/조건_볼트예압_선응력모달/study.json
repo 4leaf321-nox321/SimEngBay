@@ -1,5 +1,5 @@
 {
-  "id": "e7a4520c-e201-4163-8a7f-b5d376078012",
+  "id": "bac31c67-c4d6-4b2d-8457-ca1188f8d268",
   "name": "조건_볼트예압_선응력모달",
   "description": "",
   "method": "table",
@@ -41,9 +41,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -595,7 +596,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-ac028c04@example.local"
+    "email": "member-92ae86ec@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

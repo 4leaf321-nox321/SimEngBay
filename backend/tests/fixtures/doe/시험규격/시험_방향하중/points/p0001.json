@@ -77,8 +77,16 @@
     "short_edges": 0,
     "narrowest_face": 9.6873,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 3.0,
@@ -98,7 +106,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "e990228d-8c9a-4d38-b1fb-4a576d8d51f8",
+      "id": "dd2dc08f-a03e-408c-a210-5276a33ea1b8",
       "name": "시험_방향하중",
       "method": "factorial",
       "seed": 1

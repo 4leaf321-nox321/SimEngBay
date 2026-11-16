@@ -1,5 +1,5 @@
 {
-  "id": "2d515617-4dab-4bfd-9bd9-a11cc8bf8aa2",
+  "id": "1531a0cd-aae3-4525-ad8e-f491be2a1d15",
   "name": "셸모델_시트받침조립",
   "description": "",
   "method": "factorial",
@@ -11,17 +11,19 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
       {
         "id": "imported",
         "op": "import_step",
-        "file": "9aa3afb6-cd20-406a-8520-54611b5c4e23",
-        "label": "sheet_on_base.step"
+        "file": "7f4568d2-07a8-4df1-aa90-ccd8482f4cd1",
+        "label": "sheet_on_base.step",
+        "bodies": "leaf"
       }
     ],
     "version": 1
@@ -264,7 +266,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-9968e076@example.local"
+    "email": "member-3ecb0ad5@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

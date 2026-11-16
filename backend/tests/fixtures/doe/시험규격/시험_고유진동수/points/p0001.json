@@ -62,8 +62,16 @@
     "short_edges": 0,
     "narrowest_face": 9.6873,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 3.0,
@@ -83,7 +91,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "99660be6-698e-4d05-b8b4-7a53c11d8a06",
+      "id": "e9196595-3982-4760-960f-d88110e6ae09",
       "name": "시험_고유진동수",
       "method": "factorial",
       "seed": 1

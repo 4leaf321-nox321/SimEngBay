@@ -1,5 +1,5 @@
 {
-  "id": "6ae3743d-48b5-4d67-8b50-0bbe903f4862",
+  "id": "fe67d51d-ae34-4769-8349-174947cb9c08",
   "name": "시험_오픈홀인장_D5766",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -356,7 +357,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-713a7bba@example.local"
+    "email": "member-86e813c3@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

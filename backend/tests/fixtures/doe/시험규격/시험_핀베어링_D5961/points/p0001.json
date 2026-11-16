@@ -176,8 +176,16 @@
     "short_edges": 0,
     "narrowest_face": 3.0,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.0,
@@ -199,7 +207,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "a451a2ff-f887-4dca-9cf5-8bf781da7dcf",
+      "id": "90da40c7-7965-4e88-b3d0-315141c65ef1",
       "name": "시험_핀베어링_D5961",
       "method": "factorial",
       "seed": 1

@@ -536,6 +536,18 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
 
 ## 읽을 때 알아 둘 것
 
+- **2026-11-16 — 형상 점검 기준이 핸드폰 부품 규모로, 점 파일 맨 위에 `checks`**(CompCore v0.25.0
+  `d339186` · v0.25.1 `0154519`). 폴더는 v0.25.1 과 바이트까지 같다. 태그의 `fixtures/simengbay` 트리
+  해시는 `e1a4751`(파일 247개 + README)이다. 모든 폴더를 다시 옮겼다.
+  - `checks` 기본이 최소 벽 0.1 · 짧은 모서리 0.01 · 좁은 면 0.01 · 바디 사이 틈 `contact_gap` 0.001 mm다.
+  - 점 파일 53개 맨 위에 `study.json` 과 같은 `checks` 가 실린다. 점검을 끈 스터디도 `enabled: false` 로 싣는다.
+  - `quality.contacts: []` 가 늘었다. 지금 폴더에는 겹침 · 틈이 없다.
+  - 「시험_겹치기이음_D1002」 의 접착층 벽 두께 경고가 빠졌다.
+  - `import_step` 노드에 `bodies: "leaf"` 가 실렸다(셸모델 셋 · 반쪽구멍). 셸모델 두 STEP 은 조립 구성이 바뀌었다.
+  - 그 밖에는 스터디 id · 생성일 · STEP 머리의 시각 · 조립 일련번호만 다르다.
+
+  점 파일에 `checks` 가 있으면 가져올 때 `study.json` 의 것을 덧붙이지 않는다(`services._with_checks`).
+  CalculiX 경로는 그 `contact_gap` 을 형상 맞춤 허용오차로 쓴다. 우리만 가진 「브래킷_두께훑기」 · 「재료훑기」 는 그대로다.
 - **2026-11-01 — 곡면 지문의 `centroid` 는 넓이 무게중심, 회전면에는 `axis_at`**(CompCore `5ed967f` ·
   `faeede1` · `2c937ae` — CompCore v0.22.0(`ea8eefd`)에 실렸다). 폴더는 바이트까지 같다 — 태그의
   `fixtures/simengbay` 트리 해시가 `2c937ae` 와 같은 `22357a0`(파일 248개, README 포함)이다. 모든 폴더를 다시 옮겼다 — 원통면에 `axis_at`

@@ -1,5 +1,5 @@
 {
-  "id": "8b3772f2-ed0f-49f3-8f62-314f5a12ef8a",
+  "id": "494a91cc-0a0f-4766-ad77-d432efebee87",
   "name": "조건_볼트예압_바디",
   "description": "",
   "method": "table",
@@ -41,9 +41,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -607,7 +608,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-b87e7f0c@example.local"
+    "email": "member-3525b3b6@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

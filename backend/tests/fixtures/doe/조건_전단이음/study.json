@@ -1,5 +1,5 @@
 {
-  "id": "d561764c-76f1-466f-b25d-ef31d7b3d6d9",
+  "id": "cd9f23a0-9c81-4a2e-8638-e2aa6b1e4565",
   "name": "조건_전단이음",
   "description": "",
   "method": "table",
@@ -62,9 +62,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -599,7 +600,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-0c4f7f34@example.local"
+    "email": "member-fdbf9de5@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

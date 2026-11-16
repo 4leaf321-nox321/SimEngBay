@@ -1,5 +1,5 @@
 {
-  "id": "96efa2f4-e3f7-49f0-a9a5-eb7873f5755a",
+  "id": "93bdd8d3-5241-471e-816f-f314e1c24aff",
   "name": "시험_겹치기이음_D1002",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -430,7 +431,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-afb65c94@example.local"
+    "email": "member-c92d0865@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

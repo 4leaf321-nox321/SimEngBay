@@ -201,8 +201,16 @@
     "short_edges": 0,
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 5.0,
@@ -224,7 +232,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "2d515617-4dab-4bfd-9bd9-a11cc8bf8aa2",
+      "id": "1531a0cd-aae3-4525-ad8e-f491be2a1d15",
       "name": "셸모델_시트받침조립",
       "method": "factorial",
       "seed": 1

@@ -1,5 +1,5 @@
 {
-  "id": "76961ba2-16dd-4ad0-bc80-571222bb815e",
+  "id": "d9007ad1-b6d1-472a-a7ed-dbe84e18dee7",
   "name": "조건_재료훑기",
   "description": "",
   "method": "factorial",
@@ -30,9 +30,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -465,7 +466,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-f83dccfc@example.local"
+    "email": "member-d0f62e70@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

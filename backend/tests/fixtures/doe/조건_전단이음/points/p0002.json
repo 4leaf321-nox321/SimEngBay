@@ -192,8 +192,16 @@
     "short_edges": 0,
     "narrowest_face": 4.1667,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -213,7 +221,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "d561764c-76f1-466f-b25d-ef31d7b3d6d9",
+      "id": "cd9f23a0-9c81-4a2e-8638-e2aa6b1e4565",
       "name": "조건_전단이음",
       "method": "table",
       "seed": 1

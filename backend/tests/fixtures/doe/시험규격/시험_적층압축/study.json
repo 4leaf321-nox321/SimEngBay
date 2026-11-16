@@ -1,5 +1,5 @@
 {
-  "id": "f4336421-9e85-4b5b-800f-dab2aff3e476",
+  "id": "2e1e09fd-b16d-43a5-b620-7c804fc1b74b",
   "name": "시험_적층압축",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -278,7 +279,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-03e702db@example.local"
+    "email": "member-320a01e1@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

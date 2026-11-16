@@ -83,8 +83,16 @@
     "short_edges": 0,
     "narrowest_face": 8.3333,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 4.0,
@@ -104,7 +112,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "e74aefbf-726f-4f9b-adf0-8951ac35515c",
+      "id": "6edf32a7-4f57-4262-96d7-bf01f3111d18",
       "name": "조건_원통_SI",
       "method": "factorial",
       "seed": 1

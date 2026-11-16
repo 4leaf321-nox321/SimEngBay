@@ -1,5 +1,5 @@
 {
-  "id": "1b0d00fa-b000-4f0d-af65-b43e73f90ab2",
+  "id": "cd06d8be-e9a3-4cda-b347-9b4c8b08e10e",
   "name": "시험_오픈홀압축_D6484",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -327,7 +328,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-aa0c77bd@example.local"
+    "email": "member-80ba216c@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

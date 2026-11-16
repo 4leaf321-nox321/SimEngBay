@@ -137,8 +137,16 @@
     "short_edges": 0,
     "narrowest_face": 6.6667,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 5.0,
@@ -160,7 +168,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "ba34191c-7a1e-461a-b5f1-74b6982c7472",
+      "id": "b9888904-f12d-48ad-92b3-13f91c1eaf7b",
       "name": "셸모델_시트외팔보",
       "method": "factorial",
       "seed": 1

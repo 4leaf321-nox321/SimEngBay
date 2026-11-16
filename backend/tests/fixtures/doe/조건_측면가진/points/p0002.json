@@ -146,8 +146,16 @@
     "short_edges": 0,
     "narrowest_face": 5.0,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 5.0,
@@ -167,7 +175,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "c9aeded1-5681-4642-9ba8-8131a2da8e43",
+      "id": "2284f315-490c-4bc1-adc2-03f29330207a",
       "name": "조건_측면가진",
       "method": "factorial",
       "seed": 1

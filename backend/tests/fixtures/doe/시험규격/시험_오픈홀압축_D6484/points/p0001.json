@@ -103,8 +103,16 @@
     "short_edges": 0,
     "narrowest_face": 3.6,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -124,7 +132,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "1b0d00fa-b000-4f0d-af65-b43e73f90ab2",
+      "id": "cd06d8be-e9a3-4cda-b347-9b4c8b08e10e",
       "name": "시험_오픈홀압축_D6484",
       "method": "factorial",
       "seed": 1

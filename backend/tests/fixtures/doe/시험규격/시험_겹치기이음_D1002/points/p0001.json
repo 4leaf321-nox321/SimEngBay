@@ -249,10 +249,16 @@
     "short_edges": 0,
     "narrowest_face": 0.1969,
     "narrow_faces": 0,
-    "warnings": [
-      "벽 두께 0.2 mm (기준 0.5), 위치 (-4.233, -8.467, 1.62) 부근"
-    ],
+    "contacts": [],
+    "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 1.5,
@@ -272,7 +278,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "96efa2f4-e3f7-49f0-a9a5-eb7873f5755a",
+      "id": "93bdd8d3-5241-471e-816f-f314e1c24aff",
       "name": "시험_겹치기이음_D1002",
       "method": "factorial",
       "seed": 1

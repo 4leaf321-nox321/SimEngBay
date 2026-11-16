@@ -259,8 +259,16 @@
     "short_edges": 0,
     "narrowest_face": 0.5,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -280,7 +288,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "ca2ef3ce-7856-4ce8-ae37-9b628f314d28",
+      "id": "c940d739-a2a6-4243-88b6-cb9283b81c6a",
       "name": "조건_볼트예압_정적",
       "method": "table",
       "seed": 1

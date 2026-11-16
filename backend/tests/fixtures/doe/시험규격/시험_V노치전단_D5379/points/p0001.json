@@ -103,8 +103,16 @@
     "short_edges": 0,
     "narrowest_face": 1.3519,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.0,
@@ -124,7 +132,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "173b3fbc-d0a8-41d8-b81e-a7ef5b2f4d9a",
+      "id": "d3277bbd-ffc1-41a5-8208-b478285ada0c",
       "name": "시험_V노치전단_D5379",
       "method": "factorial",
       "seed": 1

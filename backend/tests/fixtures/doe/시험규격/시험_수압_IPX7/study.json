@@ -1,5 +1,5 @@
 {
-  "id": "3eec3420-e8c8-44dc-ba39-54897994406e",
+  "id": "1fdbcf04-20a2-4bb6-8af2-8918de7809bd",
   "name": "시험_수압_IPX7",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -272,7 +273,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-f93d3030@example.local"
+    "email": "member-30b21b48@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

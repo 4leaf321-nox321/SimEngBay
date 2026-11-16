@@ -259,8 +259,16 @@
     "short_edges": 0,
     "narrowest_face": 0.5,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -280,7 +288,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "546137cd-e3ff-43e2-80f6-b05889680227",
+      "id": "a2e586af-7ec8-468e-b198-8694eacf00d5",
       "name": "조건_볼트예압_판본딩",
       "method": "table",
       "seed": 1

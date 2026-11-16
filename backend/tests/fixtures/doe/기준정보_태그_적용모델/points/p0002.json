@@ -136,8 +136,16 @@
     "short_edges": 0,
     "narrowest_face": 7.0588,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 4.0,
@@ -157,7 +165,7 @@
   "point": {
     "number": 2,
     "study": {
-      "id": "248ca375-fb9b-4b13-bc87-7b256a2382f4",
+      "id": "da32d446-dc18-4b61-911a-129713d99e11",
       "name": "기준정보_태그_적용모델",
       "method": "factorial",
       "seed": 1

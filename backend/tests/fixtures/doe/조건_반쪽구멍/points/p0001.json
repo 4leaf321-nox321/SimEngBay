@@ -108,8 +108,16 @@
     "short_edges": 0,
     "narrowest_face": 6.0,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 4.0,
@@ -129,7 +137,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "8611f83d-7e4f-4b93-b624-97b1c6325048",
+      "id": "a592491f-b734-4c31-9dd9-16e5a4bd5325",
       "name": "조건_반쪽구멍",
       "method": "factorial",
       "seed": 1

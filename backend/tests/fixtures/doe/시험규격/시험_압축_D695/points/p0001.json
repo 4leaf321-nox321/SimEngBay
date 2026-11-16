@@ -77,8 +77,16 @@
     "short_edges": 0,
     "narrowest_face": 6.35,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 1.2,
@@ -98,7 +106,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "757bcc97-8fff-4b33-9ed1-ff726522fa8c",
+      "id": "3b13eb41-fdac-49de-a7db-97e9fd0dc36a",
       "name": "시험_압축_D695",
       "method": "factorial",
       "seed": 1

@@ -1,5 +1,5 @@
 {
-  "id": "ca2ef3ce-7856-4ce8-ae37-9b628f314d28",
+  "id": "c940d739-a2a6-4243-88b6-cb9283b81c6a",
   "name": "조건_볼트예압_정적",
   "description": "",
   "method": "table",
@@ -41,9 +41,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -589,7 +590,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-ac028c04@example.local"
+    "email": "member-92ae86ec@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

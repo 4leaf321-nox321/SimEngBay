@@ -136,8 +136,16 @@
     "short_edges": 0,
     "narrowest_face": 4.6154,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -157,7 +165,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "5accc194-6de6-4a6b-95df-2db5b7915585",
+      "id": "fa7b2373-cc3f-4ea5-b1d4-d5706712c0c9",
       "name": "조건_두바디_두재료",
       "method": "factorial",
       "seed": 1

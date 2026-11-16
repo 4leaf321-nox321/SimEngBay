@@ -77,8 +77,16 @@
     "short_edges": 0,
     "narrowest_face": 6.0,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 3.0,
@@ -98,7 +106,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "bc2bce49-c05b-460d-8bac-6bdbac66f50e",
+      "id": "7726fb41-8580-4cc9-918f-62a8cea3f4f7",
       "name": "시험_정하중_T2",
       "method": "factorial",
       "seed": 1

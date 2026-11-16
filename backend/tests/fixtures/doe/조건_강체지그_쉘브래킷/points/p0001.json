@@ -255,8 +255,16 @@
     "short_edges": 0,
     "narrowest_face": 0.9091,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 4.0,
@@ -280,7 +288,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "5af9f69c-0f34-4a44-b6df-f1ebabe56422",
+      "id": "63990cda-61ac-49f7-a8cc-db56a20427ce",
       "name": "조건_강체지그_쉘브래킷",
       "method": "factorial",
       "seed": 1

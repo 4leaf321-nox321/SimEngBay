@@ -285,8 +285,16 @@
     "short_edges": 0,
     "narrowest_face": 0.5,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -306,7 +314,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "8b3772f2-ed0f-49f3-8f62-314f5a12ef8a",
+      "id": "494a91cc-0a0f-4766-ad77-d432efebee87",
       "name": "조건_볼트예압_바디",
       "method": "table",
       "seed": 1

@@ -1,5 +1,5 @@
 {
-  "id": "57255780-7d05-4a3a-871e-7e0cc6bdd084",
+  "id": "8be11aaa-312f-434c-8514-03f137200525",
   "name": "시험_숏빔전단_D2344",
   "description": "",
   "method": "factorial",
@@ -11,9 +11,10 @@
   "batches": [],
   "checks": {
     "enabled": true,
-    "min_wall": 0.5,
-    "short_edge": 0.1,
-    "narrow_face": 0.1
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "recipe": {
     "nodes": [
@@ -404,7 +405,7 @@
   },
   "owner": {
     "name": "member",
-    "email": "member-3b70614c@example.local"
+    "email": "member-daf57cb8@example.local"
   },
   "requested_by": null,
   "cloned_from": null,

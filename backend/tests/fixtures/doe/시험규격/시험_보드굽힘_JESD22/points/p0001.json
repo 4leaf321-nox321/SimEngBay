@@ -293,8 +293,16 @@
     "short_edges": 0,
     "narrowest_face": 0.5,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.0,
@@ -319,7 +327,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "791588de-8864-47c0-a659-89541639414f",
+      "id": "2db8fc5b-a640-419c-8165-b595517df5c7",
       "name": "시험_보드굽힘_JESD22",
       "method": "factorial",
       "seed": 1

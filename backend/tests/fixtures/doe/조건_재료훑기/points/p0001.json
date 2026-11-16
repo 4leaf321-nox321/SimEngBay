@@ -136,8 +136,16 @@
     "short_edges": 0,
     "narrowest_face": 4.6154,
     "narrow_faces": 0,
+    "contacts": [],
     "warnings": [],
     "notes": []
+  },
+  "checks": {
+    "enabled": true,
+    "min_wall": 0.1,
+    "short_edge": 0.01,
+    "narrow_face": 0.01,
+    "contact_gap": 0.001
   },
   "mesh_suggestion": {
     "element_size": 2.5,
@@ -157,7 +165,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "76961ba2-16dd-4ad0-bc80-571222bb815e",
+      "id": "d9007ad1-b6d1-472a-a7ed-dbe84e18dee7",
       "name": "조건_재료훑기",
       "method": "factorial",
       "seed": 1

@@ -11,6 +11,7 @@ export const RECIPE_LABELS: Record<string, string> = {
   modal: '모달(고유진동수)',
   static: '정적',
   harmonic: '조화 응답',
+  random: '랜덤 진동',
 }
 
 /**

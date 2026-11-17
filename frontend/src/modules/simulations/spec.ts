@@ -12,9 +12,9 @@
 
 import type { Solver } from '@/modules/simulations/SolverSelect'
 
-export type RecipeName = 'modal' | 'static' | 'harmonic'
+export type RecipeName = 'modal' | 'static' | 'harmonic' | 'random'
 
-export const RECIPE_NAMES: RecipeName[] = ['modal', 'static', 'harmonic']
+export const RECIPE_NAMES: RecipeName[] = ['modal', 'static', 'harmonic', 'random']
 
 export function isRecipe(value: string | null | undefined): value is RecipeName {
   return RECIPE_NAMES.includes(value as RecipeName)
@@ -36,6 +36,19 @@ export const HARMONIC_DEFAULTS: HarmonicInput = {
   intervals: '10',
   dampingPercent: '2',
 }
+
+/**
+ * 랜덤 진동의 설정. 범위를 비우면 **PSD 표의 범위**(서버 `random_vibration.plan`). CAD 가 적은 값이 먼저다.
+ * 가진(PSD)은 CAD 조건에서만 온다 — 화면에서 받지 않는다.
+ */
+export interface RandomInput {
+  low: string
+  high: string
+  /** 감쇠비(%) — 서버에는 0.02 로 간다. */
+  dampingPercent: string
+}
+
+export const RANDOM_DEFAULTS: RandomInput = { low: '', high: '', dampingPercent: '2' }
 
 /**
  * 모달의 **찾을 주파수 범위**(Hz). 둘 다 비우면 낮은 차수부터 모드 수만큼, 주면 그 범위 안의 모드만
@@ -75,6 +88,8 @@ export interface SpecInput {
   harmonic: HarmonicInput
   /** 모달의 찾을 주파수 범위 — CAD 가 적었으면 화면이 비워 보낸다(CAD 것이 먼저다). */
   modalRange: RangeInput
+  /** 랜덤 진동 — 없으면 기본값(PSD 표의 범위 · 2%). */
+  random?: RandomInput
 }
 
 /** 화면의 입력 → 서버 스펙. 레시피가 받지 않는 칸은 싣지 않는다. */
@@ -99,6 +114,13 @@ export function buildSpec(input: SpecInput): Record<string, unknown> {
     spec.intervals = Number(input.harmonic.intervals)
     spec.damping_ratio = Number(input.harmonic.dampingPercent) / 100
   }
+  if (input.recipe === 'random') {
+    const random = input.random ?? RANDOM_DEFAULTS
+    spec.modes = Number(input.modes)
+    spec.damping_ratio = Number(random.dampingPercent) / 100
+    const range = rangeOf(random)
+    if (range) spec.frequency_range_hz = range
+  }
   return spec
 }
 
@@ -111,6 +133,15 @@ export function specProblem(input: SpecInput): string | null {
     const range = rangeOf(input.modalRange)
     if (range && (!input.modalRange.high.trim() || !(range[1] > range[0] && range[0] >= 0)))
       return '찾을 주파수 범위가 올바르지 않습니다 — 0 ≤ 하한 < 상한이어야 합니다(비우면 낮은 차수부터).'
+  }
+  if (input.recipe === 'random') {
+    const random = input.random ?? RANDOM_DEFAULTS
+    if (input.solver !== 'calculix') return '랜덤 진동은 아직 CalculiX 로만 풉니다 — Ansys 경로는 확인하지 못했습니다.'
+    const range = rangeOf(random)
+    if (range && (!random.high.trim() || !(range[1] > range[0] && range[0] >= 0)))
+      return '셈할 주파수 범위가 올바르지 않습니다 — 0 ≤ 하한 < 상한이어야 합니다(비우면 PSD 표의 범위).'
+    if (!(Number(random.dampingPercent) > 0 && Number(random.dampingPercent) < 100))
+      return '감쇠비는 0 보다 크고 100% 보다 작아야 합니다.'
   }
   if (input.recipe === 'harmonic') {
     const { low, high, intervals, dampingPercent } = input.harmonic

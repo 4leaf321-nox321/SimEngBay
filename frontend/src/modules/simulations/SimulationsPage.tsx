@@ -605,5 +605,8 @@ function pointOutcome(point: StudyPoint): string | null {
   if (point.recipe === 'harmonic') {
     return point.peak_hz == null ? null : `봉우리 ${point.peak_hz.toFixed(1)} Hz`
   }
+  if (point.recipe === 'random') {
+    return point.max_displacement_mm == null ? null : `최대 1σ 변위 ${shownValue(point.max_displacement_mm, 'mm')}`
+  }
   return point.first_elastic_hz == null ? null : `1차 ${point.first_elastic_hz.toFixed(1)} Hz`
 }

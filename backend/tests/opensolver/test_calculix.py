@@ -664,6 +664,75 @@ def test_사인_스윕은_주파수별_배율로_흔들고_측정점의_절대_�
     assert low["probes_accel_g"]["측정점"] == pytest.approx(0.571, abs=0.05)
 
 
+RANDOM = FIXTURES / "doe" / "조건_랜덤진동"
+
+
+def test_랜덤_진동은_측정점_Grms_가_손셈과_맞고_조화_응답과_같은_전달을_쓴다(
+    ready: None, tmp_path: Path
+) -> None:
+    """`조건_랜덤진동`(CompCore 2026-11-17) — 바닥째 X 로 PSD(20 ~ 2,000 Hz, 6.058 Grms).
+
+    CompCore 손셈: 1차 굽힘(1,263 Hz)의 Miles 23.4 g x 기둥 끝 참여(약 1.57) ≈ **36.7 g**.
+    풀이는 모달 하나와 모드 중첩이다(`random_vibration`) — 덱에 조화 단계가 없다. 그 전달이
+    **CalculiX 의 조화 응답과 같다**: 같은 형상의 `조건_사인스윕`(1 g, 800 Hz 위는 배율 1)을
+    풀어 측정점의 절대 가속도를 주파수마다 견준다(실측 2026-11-17 상대 2x10⁻⁵).
+    """
+    from app.core import random_vibration as random_model
+    from app.core.calculix import frd, tables
+
+    shaken = tmp_path / "random"
+    shaken.mkdir()
+    shutil.copy(RANDOM / "points" / "p0001.step", shaken / "input.step")
+    shutil.copy(RANDOM / "points" / "p0001.json", shaken / "topology.json")
+    summary = _run(shaken, {**SPEC, "recipe": "random"})
+
+    deck = (shaken / "model.inp").read_text(encoding="utf-8")
+    assert "*FREQUENCY" in deck and "*STEADY STATE DYNAMICS" not in deck
+    assert summary["psd_inputs"] == "X 랜덤 6.06 Grms"
+    result = json.loads((shaken / "result.json").read_text(encoding="utf-8"))
+    assert result["recipe"] == "random" and result["acceleration"] == "absolute"
+    assert result["inputs"][0]["grms"] == pytest.approx(6.058, abs=1e-3)
+    assert result["frequency_range_hz"] == [20, 2000] and result["range_from"] == "psd"
+    tip = next(one for one in result["probes"] if one["name"] == "측정점")
+    assert tip["value"] == pytest.approx(36.7, rel=0.03) and tip["unit"] == "g"
+    assert tip["psd_peak_hz"] == pytest.approx(1263, rel=0.01)
+    assert result["max_displacement"]["value_mm"] >= tip["displacement_1sigma_mm"] > 0
+    assert len(result["curves"]["probes"]["측정점"]) == len(result["curves"]["frequency_hz"])
+    assert "warning" not in result, result.get("warning")
+    assert (shaken / "mode_01.vtp").is_file()
+
+    swept = tmp_path / "sweep"
+    swept.mkdir()
+    shutil.copy(SINE_SWEEP / "points" / "p0001.step", swept / "input.step")
+    shutil.copy(SINE_SWEEP / "points" / "p0001.json", swept / "topology.json")
+    _run(swept, {**SPEC, "recipe": "harmonic"})
+    harmonic = json.loads((swept / "result.json").read_text(encoding="utf-8"))
+
+    report = (shaken / "model.dat").read_text(encoding="utf-8")
+    naturals = tables.frequencies(report)
+    plan = random_model.read(json.loads((shaken / "boundary.json").read_text("utf-8")))
+    assert plan is not None
+    modes = random_model.gather(naturals, tables.participation_factors(report), plan.shakes)
+    blocks = [one for one in frd.read(shaken / "model.frd") if one.kind == "DISP"]
+    phis = [one.values[tip["node"]][:3] for one in blocks[-len(naturals) :]]
+    compared = 0
+    for point in harmonic["points"]:
+        if point["frequency_hz"] < 800:
+            continue  # 사인 스윕의 배율이 1 인 곳만
+        _, accel = random_model.transfer(
+            phis,
+            modes.participation["X 랜덤"],
+            naturals,
+            (1.0, 0.0, 0.0),
+            point["frequency_hz"],
+            plan.damping_ratio,
+        )
+        ours = math.sqrt(sum(abs(one) ** 2 for one in accel))
+        assert ours == pytest.approx(point["probes_accel_g"]["측정점"], rel=1e-3)
+        compared += 1
+    assert compared > 20
+
+
 def test_조화_응답이_공진에서_솟고_CAD_감쇠를_쓴다(ready: None, tmp_path: Path) -> None:
     """`조건_측면가진` — 기둥 끝에 X 10 N, CAD 가 200~2000 Hz · 감쇠 0.02 를 적어 보낸다.
 

@@ -15,8 +15,9 @@ src = [".", "scripts"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # 「개발사 › 국가」 의 `›` 는 화면에 그대로 나가는 구분자다 — `>` 로 바꾸면 조건식처럼
-# 읽혀 「개발사 > 국가」(국가보다 크다)가 된다.
-allowed-confusables = ["›"]
+# 읽혀 「개발사 > 국가」(국가보다 크다)가 된다. `σ` 는 랜덤 진동의 「1σ」(표준 편차) — 화면 ·
+# 결과 문구에 그대로 나가는 기호다(`o` 로 바꾸면 뜻이 없다).
+allowed-confusables = ["›", "σ"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "tests"]

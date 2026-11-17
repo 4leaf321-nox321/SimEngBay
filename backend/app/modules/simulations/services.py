@@ -50,7 +50,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core import cleanup, executors, materials, units
+from app.core import cleanup, executors, materials, random_vibration, units
 from app.core import conditions as condition_model
 from app.core import convergence as core_convergence
 from app.core import measured as core_measured
@@ -64,9 +64,8 @@ from app.core.modes import track_modes
 from app.core.spec import (
     RUNNABLE_RECIPES,
     SPEC_MODELS,
-    HarmonicSpec,
+    AnySpec,
     ModalSpec,
-    StaticSpec,
     parse_spec,
 )
 from app.core.stages import (
@@ -403,6 +402,20 @@ def conditions_out(payload: dict[str, Any], *, recipe: str) -> ConditionsOut:
                 kind="load",
                 label=load.name,
                 detail=f"{load.kind} {size}".strip() + faces(load.region),
+            )
+        )
+    for psd in found.psd:
+        # 랜덤 진동의 가진 — 표의 Grms 와 범위를 보인다(모든 고정 지지를 흔든다).
+        table = psd.table
+        lines.append(
+            ConditionLine(
+                kind="load",
+                label=psd.name,
+                detail=(
+                    f"가속도 PSD {random_vibration.grms(table):.3g} Grms · "
+                    f"{table[0][0]:g}~{table[-1][0]:g} Hz · 방향 "
+                    f"{tuple(round(one, 3) for one in psd.direction)}"
+                ),
             )
         )
     for hint in found.mesh_hints:
@@ -837,6 +850,7 @@ def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut
         peak_hz=found.peak_hz,
         peak_displacement_mm=found.peak_displacement_mm,
         probe_peaks_hz=found.probe_peaks_hz,
+        probe_grms=found.probe_grms,
         probes_mm=found.probes_mm,
     )
 
@@ -1004,7 +1018,7 @@ def parse_topology(raw: bytes) -> dict[str, Any]:
     return parsed
 
 
-def _parsed_spec(spec_raw: dict[str, Any]) -> ModalSpec | StaticSpec | HarmonicSpec:
+def _parsed_spec(spec_raw: dict[str, Any]) -> AnySpec:
     try:
         return parse_spec(spec_raw)
     except ValidationError as failure:
@@ -1490,7 +1504,7 @@ def _volume_of(payload: dict[str, Any], name: str) -> float | None:
     return None
 
 
-def _stored_spec(spec: ModalSpec | StaticSpec | HarmonicSpec) -> dict[str, Any]:
+def _stored_spec(spec: AnySpec) -> dict[str, Any]:
     """저장할 스펙 — **새 칸이 기본값이면 적지 않는다.** 스펙은 모르는 칸을 거절하므로
     (`extra="forbid"`), 무중단 갱신(B 먼저 그다음 A — README_OPERATOR) 중 새 서버가 만든 작업을
     옛 워커가 집으면 칸 하나 때문에 실패한다. 기본값이면 칸이 없어도 뜻이 같다."""
@@ -1517,9 +1531,7 @@ def midsurface_gap(payload: dict[str, Any] | None, *, has_midsurface: bool) -> s
     )
 
 
-def material_gap(
-    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
-) -> str | None:
+def material_gap(spec: AnySpec, payload: dict[str, Any] | None) -> str | None:
     """물성이 빠지는 자리가 있나 — 있으면 까닭, 없으면 `None`.
 
     **작업을 만들 때 막는다.** 그대로 두면 워커가 집어 들고 모델링에서야 같은 말을 한다 —
@@ -1554,9 +1566,7 @@ def material_gap(
     return None
 
 
-def conditions_gap(
-    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
-) -> str | None:
+def conditions_gap(spec: AnySpec, payload: dict[str, Any] | None) -> str | None:
     """CAD 가 보낸 조건 중 못 거는 것이 있나 — 있으면 까닭, 없으면 `None`.
 
     **작업을 만들 때 막는다.** 모델링은 「막음」 이 하나라도 있으면 멈춘다
@@ -1596,9 +1606,7 @@ def conditions_gap(
     return None
 
 
-def sheet_gap(
-    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
-) -> str | None:
+def sheet_gap(spec: AnySpec, payload: dict[str, Any] | None) -> str | None:
     """두께 없는 시트(셸 모델)를 **쉘로도 안 풀고 빼지도 않았나** — 있으면 까닭, 없으면 `None`.
 
     규칙은 모델링과 같다(`conditions.sheet_gap`). 「CAD 가 보낸 조건 사용」 을 켰으면 조건 점검
@@ -1616,9 +1624,7 @@ def sheet_gap(
     return condition_model.sheet_gap(payload, given, from_cad=from_cad) or None
 
 
-def size_gap(
-    spec: ModalSpec | StaticSpec | HarmonicSpec, payload: dict[str, Any] | None
-) -> str | None:
+def size_gap(spec: AnySpec, payload: dict[str, Any] | None) -> str | None:
     """CalculiX 작업인데 **요소 크기를 어디서도 못 얻나** — 있으면 까닭, 없으면 `None`.
 
     CalculiX 모델링은 크기를 스펙에서, 비면 CAD 의 「전체」 메시 힌트 · CompCore 의 제안값에서
@@ -1846,7 +1852,7 @@ def import_doe(
 
 def _with_cad_modes(
     doe: DoeFolder, spec_raw: dict[str, Any]
-) -> tuple[dict[str, Any], ModalSpec | StaticSpec | HarmonicSpec]:
+) -> tuple[dict[str, Any], AnySpec]:
     """**모드 수를 안 줬으면 CAD 가 적은 값**(없으면 스펙 기본 10) — 요소 크기 · 큰 변형처럼.
 
     화면은 그 값을 칸에 미리 채워 늘 보낸다. MCP 처럼 비워 보내는 쪽이 이 길을 탄다 — 전에는
@@ -1862,7 +1868,7 @@ def _with_cad_modes(
     return spec_raw, spec
 
 
-def _mode_notes(spec: ModalSpec | StaticSpec | HarmonicSpec, *, single: bool) -> list[str]:
+def _mode_notes(spec: AnySpec, *, single: bool) -> list[str]:
     """DOE 를 걸면서(가져오기 · 다시 걸기) **사람이 알아야 할 것** — 막지는 않는다.
 
     DOE 비교는 기준점의 앞 `MAX_TRACKS` 개 모드를 점마다 모양으로 이어 견준다. 구한 모드가 그
@@ -2177,6 +2183,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         probes_mm=found.probes_mm if found else {},
         probe_vectors_mm=found.probe_vectors_mm if found else {},
         probe_peaks_hz=found.probe_peaks_hz if found else {},
+        probe_grms=found.probe_grms if found else {},
         relative_mm=found.relative_mm if found else {},
     )
 
@@ -2352,6 +2359,15 @@ def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
                 picks.append(
                     lambda one, n=pair, a=axis: (one.relative_mm.get(n) or [None] * 3)[a]
                 )
+    elif study.recipe == "random":
+        head.append("최대 1σ 변위 (mm)")
+        picks.append(lambda one: one.max_displacement_mm)
+        for name in _keys_in(points, lambda one: one.probe_grms):
+            head += [f"측정점 {name} 가속도 1σ (g)", f"측정점 {name} 1σ 변위 (mm)"]
+            picks += [
+                lambda one, n=name: one.probe_grms.get(n),
+                lambda one, n=name: one.probes_mm.get(n),
+            ]
     elif study.recipe == "harmonic":
         head += ["봉우리 주파수 (Hz)", "봉우리 변위 (mm)"]
         picks += [lambda one: one.peak_hz, lambda one: one.peak_displacement_mm]
@@ -2867,6 +2883,29 @@ def _convergence_metrics(
                 False,
             )
         ]
+    if recipe == "random":
+        made = [
+            (
+                "max_mm",
+                "최대 1σ 변위",
+                "mm",
+                SIZE_TOLERANCE,
+                take(lambda one: one.max_displacement_mm),
+                False,
+            )
+        ]
+        for name in names(lambda one: one.probe_grms):
+            made.append(
+                (
+                    f"probe-grms:{name}",
+                    f"측정점 {name} 가속도 1σ",
+                    "g",
+                    SIZE_TOLERANCE,
+                    take(lambda one, n=name: one.probe_grms.get(n)),
+                    False,
+                )
+            )
+        return made
     if recipe == "harmonic":
         made = [
             (
@@ -3971,10 +4010,10 @@ def rerun_study(db: Session, *, user: User, study_id: str, modes: int) -> DoeImp
             status=409,
         )
     recipes = {str((one.spec or {}).get("recipe")) for one in mine}
-    if not recipes <= {"modal", "harmonic"}:
+    if not recipes <= {"modal", "harmonic", "random"}:
         raise AppError(
             code("SIMULATIONS", 39),
-            "모드 수는 모달 · 조화 해석에만 있습니다.",
+            "모드 수는 모달 · 조화 · 랜덤 진동 해석에만 있습니다.",
             status=400,
         )
     if all(int((one.spec or {}).get("modes") or 0) == modes for one in mine):

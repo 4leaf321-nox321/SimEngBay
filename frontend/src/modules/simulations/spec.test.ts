@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { SimulationSummary } from '@/modules/simulations/api'
 import { shownOutcome } from '@/modules/simulations/format'
-import { buildSpec, HARMONIC_DEFAULTS, NO_RANGE, specProblem } from '@/modules/simulations/spec'
+import { buildSpec, HARMONIC_DEFAULTS, NO_RANGE, RANDOM_DEFAULTS, specProblem } from '@/modules/simulations/spec'
 import type { SpecInput } from '@/modules/simulations/spec'
 
 const BASE: SpecInput = {
@@ -81,6 +81,28 @@ describe('스펙 만들기', () => {
   })
 })
 
+describe('랜덤 진동 스펙', () => {
+  const random: SpecInput = { ...BASE, recipe: 'random', solver: 'calculix' }
+
+  it('모드 수 · 감쇠비를 싣고 범위는 비우면 PSD 표의 범위다', () => {
+    const spec = buildSpec(random)
+    expect(spec).toMatchObject({ recipe: 'random', modes: 10, damping_ratio: 0.02 })
+    expect('frequency_range_hz' in spec).toBe(false)
+    expect('intervals' in spec).toBe(false)
+    const ranged = buildSpec({ ...random, random: { ...RANDOM_DEFAULTS, low: '20', high: '1000' } })
+    expect(ranged.frequency_range_hz).toEqual([20, 1000])
+    expect(specProblem(random)).toBeNull()
+  })
+
+  it('Ansys · 틀린 범위 · 감쇠비는 보내기 전에 막는다', () => {
+    expect(specProblem({ ...random, solver: 'ansys' })).toContain('CalculiX 로만')
+    expect(specProblem({ ...random, random: { ...RANDOM_DEFAULTS, low: '500', high: '100' } })).toContain(
+      '셈할 주파수 범위',
+    )
+    expect(specProblem({ ...random, random: { ...RANDOM_DEFAULTS, dampingPercent: '0' } })).toContain('감쇠비')
+  })
+})
+
 function row(recipe: string, summary: Record<string, unknown>): SimulationSummary {
   return { recipe, summary } as unknown as SimulationSummary
 }
@@ -97,5 +119,8 @@ describe('목록의 결과 칸', () => {
       shownOutcome(row('static', { max_displacement: 4e-5, solver_unit_system: 'ConsistentMKS' })),
     ).toBe('최대 변형 0.00004 m')
     expect(shownOutcome(row('static', {}))).toBeNull()
+    // 랜덤 — 측정점이 있으면 그 자리의 가속도 1σ, 없으면 최대 1σ 변위.
+    expect(shownOutcome(row('random', { probe_grms: '측정점 36.72 g' }))).toBe('측정점 36.72 g (1σ)')
+    expect(shownOutcome(row('random', { max_displacement_1sigma_mm: 0.0058 }))).toBe('최대 1σ 변위 0.0058 mm')
   })
 })

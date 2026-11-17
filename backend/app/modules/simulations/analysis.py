@@ -115,6 +115,10 @@ def _probe(name: str) -> Pick:
     return lambda point: point.probes_mm.get(name)
 
 
+def _probe_grms(name: str) -> Pick:
+    return lambda point: point.probe_grms.get(name)
+
+
 def _probe_peak(name: str) -> Pick:
     return lambda point: point.probe_peaks_hz.get(name)
 
@@ -174,6 +178,39 @@ def _results(study: StudyOut, rows: list[StudyPointOut]) -> list[Column]:
                 lambda point: point.first_elastic_hz,
             )
         ]
+    if study.recipe == "random":
+        made = [
+            Column(
+                "max_mm",
+                "최대 1σ 변위",
+                "mm",
+                "result",
+                True,
+                lambda one: one.max_displacement_mm,
+            )
+        ]
+        for name in _names(rows, lambda one: dict(one.probe_grms)):
+            made.append(
+                Column(
+                    f"probe-grms:{name}",
+                    f"측정점 {name} 가속도 1σ",
+                    "g",
+                    "result",
+                    True,
+                    _probe_grms(name),
+                )
+            )
+            made.append(
+                Column(
+                    f"probe:{name}",
+                    f"측정점 {name} 1σ 변위",
+                    "mm",
+                    "result",
+                    True,
+                    _probe(name),
+                )
+            )
+        return made
     if study.recipe == "harmonic":
         made = [
             Column("peak_hz", "봉우리 주파수", "Hz", "result", True, lambda one: one.peak_hz),

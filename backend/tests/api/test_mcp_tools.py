@@ -174,7 +174,12 @@ def test_폴더를_훑고_걸고_결과를_읽고_견준다(
     assert point["recipe"] == "modal" and "conditions" in point
 
     schema = bot.call(server.recipe_schema)
-    assert {one["name"] for one in schema["recipes"]} == {"modal", "static", "harmonic"}
+    assert {one["name"] for one in schema["recipes"]} == {
+        "modal",
+        "static",
+        "harmonic",
+        "random",
+    }
 
     made = bot.call(server.jobs_create, MODAL, path=str(folder), numbers=[1, 2])
     assert len(made["created"]) == 2

@@ -240,6 +240,9 @@ class ValuesOut(BaseModel):
     peak_displacement_mm: float | None = None
     probe_peaks_hz: dict[str, float] = Field(default_factory=dict)
     """측정점 → 그 자리 곡선의 봉우리 주파수(Hz)."""
+    # --- 랜덤 진동 — `max_displacement_mm` · `probes_mm` 은 **1σ 변위**(지지부 기준)다.
+    probe_grms: dict[str, float] = Field(default_factory=dict)
+    """측정점 → 절대 가속도 1σ(g, Grms)."""
     # --- 정적 · 조화
     probes_mm: dict[str, float] = Field(default_factory=dict)
     """측정점 → 값(mm). 정적은 변위 크기, 조화는 **그 자리 곡선의 봉우리** 진폭."""
@@ -522,6 +525,9 @@ class StudyPointOut(BaseModel):
     """정적 — 측정점 → 변위 성분(mm). 같은 자리 두 바디의 차가 미끄럼이다."""
     probe_peaks_hz: dict[str, float] = Field(default_factory=dict)
     """조화 — 측정점 → 그 자리 곡선의 봉우리 주파수(Hz)."""
+    probe_grms: dict[str, float] = Field(default_factory=dict)
+    """랜덤 진동 — 측정점 → 절대 가속도 1σ(g). 그때 `max_displacement_mm` · `probes_mm` 은 1σ
+    변위다."""
     relative_mm: dict[str, list[float]] = Field(default_factory=dict)
     """정적 — 같은 자리 · 다른 바디의 두 측정점 「A - B」 → 변위 차(mm). 전단 이음의 미끄럼."""
     mode_mass: list[dict[str, float]] = Field(default_factory=list)

@@ -12220,6 +12220,13 @@
             "type": "object",
             "title": "Probe Peaks Hz"
           },
+          "probe_grms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probe Grms"
+          },
           "relative_mm": {
             "additionalProperties": {
               "items": {
@@ -12772,6 +12779,13 @@
             },
             "type": "object",
             "title": "Probe Peaks Hz"
+          },
+          "probe_grms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Probe Grms"
           },
           "probes_mm": {
             "additionalProperties": {

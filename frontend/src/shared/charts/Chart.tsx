@@ -86,9 +86,51 @@ export interface ChartProps {
   /** 그림이 무엇을 말하는지 한 줄. 화면 낭독기가 읽는다. */
   title?: string
   className?: string
+  /**
+   * 꺾은선만 — **로그 축.** 가로축을 로그로 두면 수치축이 된다(값 자리에 점이 놓인다). PSD 처럼
+   * 몇 자릿수에 걸친 값은 선형 축에서 봉우리 하나만 보이고 나머지가 바닥에 깔린다. 로그 축에서는
+   * 0 이하의 값을 그리지 않는다.
+   */
+  logX?: boolean
+  logY?: boolean
 }
 
 const MARGIN = { top: 8, right: 12, bottom: 4, left: 4 }
+
+/**
+ * 로그 축 눈금 — **1 · 2 · 5 × 10ⁿ** 중 범위 안의 것. 많으면(12개 넘게) 10ⁿ 만. 그냥 두면 그림
+ * 도구가 자료 점 자리(21.93 · 25.47 …)에 눈금을 세워 읽을 수 없다.
+ */
+export function logTicks(low: number, high: number, most = 12): number[] | undefined {
+  if (!(low > 0 && high > low)) return undefined
+  const ticks: number[] = []
+  for (let power = Math.floor(Math.log10(low)); power <= Math.ceil(Math.log10(high)); power++) {
+    for (const lead of [1, 2, 5]) {
+      const value = Number((lead * 10 ** power).toPrecision(12))
+      if (value >= low * (1 - 1e-9) && value <= high * (1 + 1e-9)) ticks.push(value)
+    }
+  }
+  const decades = ticks.filter((one) => Number.isInteger(Math.log10(one)))
+  const shown = ticks.length > most && decades.length >= 2 ? decades : ticks
+  return shown.length >= 2 ? shown : undefined
+}
+
+function spanOf(values: unknown[]): [number, number] {
+  const kept = values.filter((one): one is number => typeof one === 'number' && one > 0)
+  return kept.length ? [Math.min(...kept), Math.max(...kept)] : [0, 0]
+}
+
+/** 로그 축에 못 놓는 값(0 이하)을 비운다 — 그 자리는 선이 끊긴다. 0 을 그대로 주면 축이 무너진다. */
+function positive(data: Record<string, unknown>[], series: ChartSeries[]): Record<string, unknown>[] {
+  return data.map((row) => {
+    const made = { ...row }
+    for (const one of series) {
+      const value = made[one.key]
+      if (typeof value === 'number' && !(value > 0)) made[one.key] = null
+    }
+    return made
+  })
+}
 
 /** 눌린 것에서 **원래 행**을 꺼낸다 — 막대는 `payload` 안에, 조각은 그 자체가 행이다. */
 function rowOf(entry: unknown): Record<string, unknown> | null {
@@ -113,12 +155,17 @@ export function Chart({
   emptyText = '그릴 것이 없습니다.',
   title,
   className,
+  logX = false,
+  logY = false,
 }: ChartProps) {
   const colors = useMemo(() => series.map((one, index) => one.color ?? colorAt(index)), [series])
   const legendHeight = legendHeightFor(series.length)
   // 계열이 하나면 범례가 같은 말을 한 번 더 하는 것이다 — 그 자리는 도표에 준다.
   const showLegend = series.length > 1
   const tilt = data.length > TILT_LABELS_OVER
+  const xTicks = logX ? logTicks(...spanOf(data.map((row) => row[x]))) : undefined
+  // 세로는 높이가 좁아 눈금이 겹친다 — 여섯을 넘으면 10ⁿ 만.
+  const yTicks = logY ? logTicks(...spanOf(data.flatMap((row) => series.map((one) => row[one.key]))), 6) : undefined
 
   if (data.length === 0 || series.length === 0) {
     return (
@@ -175,16 +222,43 @@ export function Chart({
             <Legend height={legendHeight} wrapperStyle={{ fontSize: 12 }} />
           </PieChart>
         ) : kind === 'line' ? (
-          <LineChart data={data} margin={MARGIN}>
+          <LineChart data={logY ? positive(data, series) : data} margin={logX ? { ...MARGIN, right: 28 } : MARGIN}>
             <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} />
-            <XAxis
-              dataKey={x}
-              {...axis}
-              angle={tilt ? -30 : 0}
-              textAnchor={tilt ? 'end' : 'middle'}
-              height={tilt ? 56 : 24}
-            />
-            <YAxis {...axis} tickFormatter={shownNumber} />
+            {logX ? (
+              <XAxis
+                dataKey={x}
+                {...axis}
+                type="number"
+                scale="log"
+                domain={['dataMin', 'dataMax']}
+                allowDataOverflow
+                ticks={xTicks}
+                interval={0}
+                tickFormatter={shownNumber}
+                height={24}
+              />
+            ) : (
+              <XAxis
+                dataKey={x}
+                {...axis}
+                angle={tilt ? -30 : 0}
+                textAnchor={tilt ? 'end' : 'middle'}
+                height={tilt ? 56 : 24}
+              />
+            )}
+            {logY ? (
+              <YAxis
+                {...axis}
+                scale="log"
+                domain={['auto', 'auto']}
+                allowDataOverflow
+                ticks={yTicks}
+                interval={0}
+                tickFormatter={shownNumber}
+              />
+            ) : (
+              <YAxis {...axis} tickFormatter={shownNumber} />
+            )}
             {tooltip}
             {showLegend && <Legend height={legendHeight} wrapperStyle={{ fontSize: 12 }} />}
             {series.map((one, index) => (

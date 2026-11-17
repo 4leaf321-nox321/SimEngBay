@@ -80,6 +80,9 @@ class Values:
     """정적 — 측정점 → 수직 변형률 `[εxx, εyy, εzz]`(무차원)."""
     probe_peaks_hz: dict[str, float] = field(default_factory=dict)
     """조화 — 측정점 → 그 자리 곡선의 봉우리 주파수(Hz)."""
+    probe_grms: dict[str, float] = field(default_factory=dict)
+    """랜덤 진동 — 측정점 → **절대 가속도 1σ**(g, Grms). 그때 `probes_mm` 은 1σ 변위,
+    `max_displacement_mm` 은 모든 절점의 1σ 변위 최대다(지지부 기준)."""
     relative_mm: dict[str, list[float]] = field(default_factory=dict)
     """정적 — **같은 자리 · 다른 바디**의 두 측정점 `「A - B」` → 변위 차 `[dx, dy, dz]`(mm).
     전단 이음이면 이것이 미끄럼이다. 크기만 보면 두 판이 함께 밀린 것과 서로 미끄러진 것이
@@ -154,6 +157,20 @@ def read(result: dict[str, Any]) -> Values:
                         strict=True,
                     )
                 ]
+        return made
+
+    if recipe == "random":
+        worst = result.get("max_displacement") or {}
+        made.max_displacement_mm = _scaled(worst.get("value_mm"), 1.0)
+        for row in result.get("probes") or []:
+            name = str(row.get("name") or "")
+            if not name:
+                continue
+            if row.get("unit") == "g" and isinstance(row.get("value"), int | float):
+                made.probe_grms[name] = float(row["value"])
+            moved = _scaled(row.get("displacement_1sigma_mm"), 1.0)
+            if moved is not None:
+                made.probes_mm[name] = moved
         return made
 
     if recipe == "harmonic":

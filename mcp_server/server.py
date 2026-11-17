@@ -44,8 +44,8 @@ API_BASE = os.environ.get("PLATFORM_API_BASE", "http://127.0.0.1:8070").rstrip("
 _JSON_RESPONSE = os.environ.get("MCP_JSON_RESPONSE") == "1"
 
 INSTRUCTIONS = (
-    "구조 해석(모달 · 정적 · 조화 응답)을 CAD 가 내보낸 설계점에 걸고, 결과를 읽고, "
-    "설계점끼리 · 실측과 견주는 플랫폼. **`get_guide` 를 먼저 부른다** — 작업 순서와 "
+    "구조 해석(모달 · 정적 · 조화 응답 · 랜덤 진동)을 CAD 가 내보낸 설계점에 걸고, 결과를 "
+    "읽고, 설계점끼리 · 실측과 견주는 플랫폼. **`get_guide` 를 먼저 부른다** — 작업 순서와 "
     "조건 · 단위 규칙이 거기 있다.\n"
     "\n"
     "**형상은 CompCore(CAD)에서 온다.** CompCore 에서 DOE · 설계를 만들고 내보내면"
@@ -868,6 +868,8 @@ async def job_result(ctx: Context, job_id: str, detail: bool = False) -> Any:
       바디의 미끄럼).
     - 조화: `peak_hz` · `peak_displacement_mm` · 측정점별 봉우리(`probes_mm` ·
       `probe_peaks_hz`).
+    - 랜덤 진동(모두 1σ — 3σ 는 세 배): `probe_grms`(측정점 절대 가속도, g) ·
+      `probes_mm`(측정점 1σ 변위) · `max_displacement_mm`(최대 1σ 변위, 지지부 기준).
 
     **최대 응력은 구속 모서리의 수치적 첨두일 수 있다** — 판단에 쓰기 전에 메시 수렴
     (`convergence_start`)을 권한다. `detail=true` 면 결과 파일(`result.json`) 원본도 싣는다
@@ -989,8 +991,10 @@ async def study_analyze(
     열 key: `factor:<변수>` · 모달 `mode:<기준 차수>`(형상으로 이은 모드 — 순번이 아니다) ·
     정적 `max_mm` · `max_mpa` · `reaction:<영역>` · `bolt:<볼트>`(끝의 볼트 힘) ·
     `probe:<측정점>` · 조화 `peak_hz` ·
-    `peak_mm` · 공통 `mass_kg`(모델 전체 — 강체 지그까지) · 바디마다 `mass:<파트>`(시편만
-    견주려면 이것). 모르는 key 면 쓸 수 있는 열을 알려 준다. 끝난 점만 센다."""
+    `peak_mm` · 랜덤 `max_mm`(최대 1σ 변위) ·
+    `probe-grms:<측정점>` · 공통 `mass_kg`(모델 전체 — 강체 지그까지) · 바디마다
+    `mass:<파트>`(시편만 견주려면 이것). 모르는 key 면 쓸 수 있는 열을 알려 준다. 끝난 점만
+    센다."""
     got = await _get(
         ctx,
         f"/api/simulations/studies/{study_id}/analysis",

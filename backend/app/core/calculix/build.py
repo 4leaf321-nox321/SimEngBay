@@ -23,6 +23,7 @@ from typing import Any
 from app.core import conditions as condition_model
 from app.core import excitation, units
 from app.core import materials as material_model
+from app.core import random_vibration as random_model
 from app.core import touching as touch
 from app.core.bodies import match_bodies, place_settings, without
 from app.core.calculix import bonding
@@ -51,14 +52,18 @@ from app.core.regions.match import (
     axis_point,
     model_scale,
 )
-from app.core.spec import RIGID_BODY_MODES, HarmonicSpec, ModalSpec, StaticSpec
+from app.core.spec import (
+    RIGID_BODY_MODES,
+    AnySpec,
+    HarmonicSpec,
+    ModalSpec,
+    RandomSpec,
+    StaticSpec,
+)
 from app.core.stages import MIDSURFACE_NAME, ArtifactSpec, StageFailure, StageResult
 from app.core.statics import static_plan
 
 logger = logging.getLogger(__name__)
-
-#: 받을 수 있는 스펙 — 레시피 판정은 아래 `build` 가 한다(지금은 모달뿐).
-AnySpec = ModalSpec | StaticSpec | HarmonicSpec
 
 BOUNDARY_NAME = "boundary.json"
 #: 면을 못 찾았을 때 덧붙이는 말. 넓이 · 중심은 **형상에서** 재고(`mesh.measure`), 곡면의
@@ -291,6 +296,34 @@ def build(
             ],
         )
     constrained = plan_constrained(given, spec)
+    # **랜덤 진동** — 모달 덱으로 모드를 풀고, 응답은 추출이 모드 중첩으로 셈한다
+    # (`random_vibration`). 여기서는 가진 · 범위 · 감쇠비를 정해 `boundary.json` 에 남긴다.
+    shaking: random_model.RandomPlan | None = None
+    random_refused: list[condition_model.Note] = []
+    random_notes: list[condition_model.Note] = []
+    if isinstance(spec, RandomSpec):
+        shaking, random_refused = random_model.plan(
+            given, span=spec.frequency_range_hz, damping_ratio=spec.damping_ratio
+        )
+        if not constrained:
+            # 기저 가진은 **지지부를 흔든다** — 지지가 없으면 흔들 자리가 없다.
+            random_refused.append(
+                condition_model.Note(
+                    "랜덤 진동", "고정 지지가 없습니다 — 가속도 PSD 는 지지부를 흔듭니다."
+                )
+            )
+        loose_supports = [one.name for one in given.constraints if one.kind != "fixed_support"]
+        if loose_supports:
+            # 관성력(-M·a)으로 흔들므로 **모든 구속이 함께 흔들린다** — CompCore 의 뜻은 「모든
+            # 고정 지지」 다. 다른 구속이 있으면 그것도 같이 흔든 것으로 푼 사실을 적는다.
+            random_notes.append(
+                condition_model.Note(
+                    "랜덤 진동의 가진 자리",
+                    "고정 지지가 아닌 구속("
+                    + " · ".join(f"「{one}」" for one in loose_supports)
+                    + ")도 함께 흔든 것으로 풀었습니다.",
+                )
+            )
     shapes = _region_shapes(topology)
     # 탄성 · 압축 전용 지지의 법선 요소 · 볼트 예압의 단면 — 세 레시피가 같은 것을 쓴다(덱이
     # 고른다).
@@ -439,7 +472,8 @@ def build(
             element_size_mm=size,
             # **자유-자유면 강체 모드 여섯을 더 뽑는다** — 안 그러면 사람이 요청한 탄성 모드
             # 수가 모자라게 나온다(Ansys 쪽과 같은 규칙).
-            modes=spec.modes + (0 if constrained else RIGID_BODY_MODES),
+            modes=spec.modes
+            + (0 if constrained or isinstance(spec, RandomSpec) else RIGID_BODY_MODES),
             second_order=mesh.second_order,
             rigid=rigid,
             shells=shells,
@@ -452,6 +486,10 @@ def build(
         )
     plan.skipped += layout.skipped
     plan.refused += refused_loads
+    plan.refused += random_refused
+    plan.skipped += random_notes
+    if shaking is not None:
+        plan.applied += [f"psd_acceleration:{one.name}" for one in shaking.shakes]
     plan.skipped += shell_notes
     if bonded is not None:
         plan.applied += bonded.applied
@@ -531,6 +569,9 @@ def build(
         shaken = excitation.bases(given)
         if shaken:
             boundary[excitation.KEY] = [one.as_boundary() for one in shaken]
+    if shaking is not None:
+        # **실제로 쓴 가진 · 범위 · 감쇠비** — 추출이 이것으로 응답을 셈한다.
+        boundary[random_model.KEY] = shaking.as_boundary()
     searched = mode_search.mode_search(spec, given) if isinstance(spec, ModalSpec) else None
     if searched is not None:
         # **찾을 주파수 범위** — 덱에는 주지 않는다(ccx 의 범위 칸은 낮은 것부터 구해 거를
@@ -573,7 +614,13 @@ def build(
             **({"bonding": "tie" if tie_mode else "shared"} if len(mesh.solids) > 1 else {}),
             # **맞닿았는데 접촉이 없는 바디 쌍** — 선언한 쌍만 묶으므로 떨어진 채로 풀었다.
             **({"unbonded_touching": touch.line(untied)} if untied else {}),
-            **({"modes_requested": spec.modes} if isinstance(spec, ModalSpec) else {}),
+            **(
+                {"modes_requested": spec.modes}
+                if isinstance(spec, ModalSpec | RandomSpec)
+                else {}
+            ),
+            # 랜덤 진동의 범위 · 감쇠비 · 가진(입력 Grms) — 누가 정했나도.
+            **(_random_summary(shaking) if shaking is not None else {}),
             # 찾을 주파수 범위 · 누가 정했나(`modes.search`).
             **(
                 {"frequency_range_hz": f"{searched.label}", "range_from": searched.source}
@@ -651,6 +698,18 @@ def _topology(workdir: Path) -> dict[str, Any]:
             "internal", f"{TOPOLOGY_NAME} 을 읽지 못했습니다: {failure}"
         ) from failure
     return loaded
+
+
+def _random_summary(shaking: random_model.RandomPlan) -> dict[str, Any]:
+    return {
+        "frequency_range_hz": f"{shaking.low:g}~{shaking.high:g} Hz",
+        "range_from": shaking.source,
+        "damping_ratio": shaking.damping_ratio,
+        "psd_inputs": " · ".join(
+            f"{one.name} {random_model.grms(one.table, shaking.low, shaking.high):.3g} Grms"
+            for one in shaking.shakes
+        ),
+    }
 
 
 def _declared_conditions(

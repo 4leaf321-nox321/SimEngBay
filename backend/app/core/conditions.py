@@ -74,6 +74,10 @@ _INERT_IN_MODAL = (
     "rotational_velocity",
 )
 
+#: 하중이 답을 바꾸지 않는 레시피(선응력을 켜지 않으면) — 모드를 푸는 해석들. 랜덤 진동도
+#: 모드를 풀고 가진은 PSD 로 따로 온다(`Psd`).
+QUIET_LOADS = ("modal", "random")
+
 #: 원격 변위의 원격점 자리 — 그룹 중심 · 좌표계 원점(CompCore 계약, 전역 좌표계면 막는다).
 REMOTE_LOCATIONS = ("centroid", "cs_origin")
 
@@ -184,6 +188,23 @@ class Load:
     막는다)."""
     phase: float | None = None
     """조화 응답의 위상각(도). `None` · 0 이면 실수부만."""
+
+
+@dataclass(frozen=True)
+class Psd:
+    """**랜덤 진동의 가진** 하나 — 가속도 PSD(CompCore `psd_acceleration`, 2026-11-17).
+
+    모든 고정 지지를 `direction` 으로 흔든다(`on` 이 비어 있다). 표는 `((Hz, g²/Hz), …)` 이고
+    사이는 로그-로그 보간, 표 밖은 0 이다(`random_vibration.psd_at`). 여럿이면 서로 무관한
+    가진으로 더한다.
+    """
+
+    name: str
+    table: tuple[tuple[float, float], ...]
+    direction: tuple[float, float, float]
+    cs: str = "global"
+    grms: float | None = None
+    """CompCore 가 표로 셈한 입력 Grms(g) — 우리 셈과 견주는 데만 쓴다."""
 
 
 @dataclass(frozen=True)
@@ -299,6 +320,9 @@ class Conditions:
     """이름 붙인 좌표계. 구속의 `cs` 가 이 이름을 가리킨다."""
     loads: list[Load] = field(default_factory=list)
     """**선응력 모달에서만 쓴다.** 그냥 모달이면 `skipped` 에 적고 여기는 비운다."""
+    psd: list[Psd] = field(default_factory=list)
+    """랜덤 진동의 가진(가속도 PSD) — `loads` 와 따로 둔다: 정적 단계에 걸 하중이 아니고,
+    `prestressed` 는 `loads` 로 판정한다."""
     mesh_hints: list[MeshHint] = field(default_factory=list)
     suggested_size_mm: float | None = None
     """CompCore 가 형상으로 셈한 전역 요소 크기 **제안값**(mm, `mesh_suggestion`) — 조건
@@ -321,6 +345,7 @@ class Conditions:
             or self.contacts
             or self.mesh_hints
             or self.loads
+            or self.psd
             or self.body_settings
         )
 
@@ -486,12 +511,12 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         if place in gone:
             what = f"하중 「{row.get('name') or '이름 없는 하중'}」"
             why = f"해석에서 뺀 파트({gone[place]})에 걸려 있습니다"
-            if recipe == "modal" and not made.analysis.prestressed:
+            if recipe in QUIET_LOADS and not made.analysis.prestressed:
                 made.skipped.append(Note(what, why + " — 모달이라 답과 상관없습니다"))
             else:
                 made.refused.append(Note(what, why + " — 거기에는 형상이 없습니다"))
             continue
-        live = not (recipe == "modal" and not made.analysis.prestressed)
+        live = not (recipe in QUIET_LOADS and not made.analysis.prestressed)
         if place in flat and live:
             made.refused.append(
                 Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", flat[place])
@@ -1029,10 +1054,12 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
     """
     name = str(row.get("name") or "이름 없는 하중")
     kind = str(row.get("type") or "")
-    if kind == "psd_acceleration" and recipe != "random":
+    if kind == "psd_acceleration":
+        if recipe == "random":
+            _psd(row, name, made)
+            return
         # 랜덤 진동의 가진(CompCore 2026-11-17) — 다른 해석에서는 뜻이 없다. 막지 않고
-        # 알린다(같은
-        # 형상 · 조건을 모달로 먼저 보는 일이 흔하다).
+        # 알린다(같은 형상 · 조건을 모달로 먼저 보는 일이 흔하다).
         made.skipped.append(
             Note(
                 f"하중 「{name}」(가속도 PSD)",
@@ -1043,11 +1070,14 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
     if kind not in _INERT_IN_MODAL:
         made.refused.append(Note(f"하중 「{name}」", f"모르는 하중입니다: {kind}"))
         return
-    if recipe == "modal" and not made.analysis.prestressed:
+    if recipe in QUIET_LOADS and not made.analysis.prestressed:
         made.skipped.append(
             Note(
                 f"하중 「{name}」({kind})",
-                "모달에서는 하중이 고유진동수를 바꾸지 않습니다 — 선응력을 켜면 쓰입니다",
+                "모달에서는 하중이 고유진동수를 바꾸지 않습니다 — 선응력을 켜면 쓰입니다"
+                if recipe == "modal"
+                else "랜덤 진동은 가속도 PSD 로만 흔듭니다 — 선응력을 켜면 앞 정적 단계에"
+                " 쓰입니다",
             )
         )
         return
@@ -1074,6 +1104,72 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
             phase=_number(row.get("phase")) if recipe == "harmonic" else None,
         )
     )
+
+
+#: PSD 단위 — CompCore 는 늘 `g^2/Hz` 로 보낸다(2026-11-17). 다른 단위는 막는다(g 와 m/s² 를
+#: 섞으면 응답이 96배 틀린다).
+PSD_UNITS = ("g^2/hz", "g²/hz", "g2/hz")
+
+
+def _psd(row: dict[str, Any], name: str, made: Conditions) -> None:
+    """가속도 PSD 한 줄 → `made.psd`. 못 쓰면 까닭을 달아 막는다(랜덤 진동의 답 전부다)."""
+    what = f"하중 「{name}」(가속도 PSD)"
+    table, broken = _psd_table(row.get("psd_table"))
+    if table is None:
+        made.refused.append(Note(what, broken or "PSD 표(psd_table)가 없습니다."))
+        return
+    unit = str(row.get("unit") or "g^2/Hz").replace(" ", "")
+    if unit.lower() not in PSD_UNITS:
+        made.refused.append(Note(what, f"PSD 단위는 g^2/Hz 만 받습니다: {unit}"))
+        return
+    place = str(row.get("on") or "")
+    if place:
+        made.refused.append(
+            Note(
+                what,
+                f"랜덤 진동은 모든 고정 지지를 함께 흔듭니다 — 한 영역(「{place}」)만 흔드는"
+                " 가진은 아직 못 겁니다.",
+            )
+        )
+        return
+    direction = _triple(row.get("direction"))
+    if direction is None or not any(direction):
+        made.refused.append(Note(what, "흔드는 방향(direction)이 없습니다."))
+        return
+    made.psd.append(
+        Psd(
+            name=name,
+            table=table,
+            direction=direction,
+            cs=str(row.get("cs") or "global"),
+            grms=_number(row.get("grms")),
+        )
+    )
+
+
+def _psd_table(value: Any) -> tuple[tuple[tuple[float, float], ...] | None, str]:
+    """`[[Hz, g²/Hz], …]` → 표와 **틀렸으면 까닭**. 로그-로그로 보간하므로 주파수 · 값이 모두 0
+    보다 커야 한다(Ansys 의 PSD 표와 같은 규칙)."""
+    if value is None:
+        return None, ""
+    if not isinstance(value, list) or len(value) < 2:
+        return None, "PSD 표는 [주파수, g²/Hz] 두 줄 이상이어야 합니다."
+    rows: list[tuple[float, float]] = []
+    for one in value:
+        pair = one if isinstance(one, list | tuple) and len(one) == 2 else None
+        hz = _number(pair[0]) if pair else None
+        level = _number(pair[1]) if pair else None
+        if hz is None or level is None:
+            return None, f"PSD 표의 줄이 [주파수, g²/Hz] 가 아닙니다: {one}"
+        if hz <= 0 or level <= 0:
+            return None, (
+                f"PSD 표의 주파수 · 값은 0 보다 커야 합니다(로그-로그 보간): {hz:g} Hz,"
+                f" {level:g}"
+            )
+        if rows and hz <= rows[-1][0]:
+            return None, "PSD 표의 주파수가 커지는 차례가 아닙니다."
+        rows.append((hz, level))
+    return tuple(rows), ""
 
 
 def _initial(row: dict[str, Any], recipe: str, made: Conditions) -> None:

@@ -25,7 +25,6 @@ from app.core import boundary, excitation
 from app.core import probes as core_probes
 from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes
-from app.core.calculix.mesh import read_mesh
 from app.core.numbers import significant
 from app.core.spec import HarmonicSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -36,7 +35,6 @@ RESULT_NAME = "result.json"
 FRD_NAME = "model.frd"
 BOUNDARY_NAME = "boundary.json"
 MSH_NAME = "model.msh"
-TOPOLOGY_NAME = "topology.json"
 
 #: 이보다 크면 「감쇠가 모자란 것 아닌가」 를 적어 둔다(mm). Ansys 쪽과 같은 문턱.
 SUSPICIOUS_DISPLACEMENT = 1e3
@@ -59,7 +57,7 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
     # **측정점은 그 자리의 곡선을 만든다.** 전체 최대의 곡선과 봉우리 주파수가 다를 수 있고
     # (최대가 나는 자리가 주파수마다 옮겨 다닌다), 센서는 한 자리에 붙어 있다 — 실측과 견줄
     # 수 있는 것은 그쪽이다.
-    spots = _spots(workdir)
+    spots = probes.spots(workdir)
     # **기저 가진**(가속도 하중) — 측정점의 절대 가속도를 셈한다(`excitation`).
     shaken = excitation.read(boundary.read(workdir))
     points: list[dict[str, Any]] = []
@@ -142,28 +140,6 @@ def extract(spec: HarmonicSpec, workdir: Path, **_ignored: object) -> StageResul
             f"{len(points)}점 · 최대 {worst['max_displacement']:.4g} mm @ "
             f"{worst['frequency_hz']:.1f} Hz"
         ),
-    )
-
-
-def _spots(workdir: Path) -> list[probes.Spot]:
-    """측정점마다 **가장 가까운 절점**. 점 그룹이 없으면 빈 것.
-
-    절점을 한 번만 찾아 둔다 — 주파수마다 다시 찾으면 같은 일을 수백 번 한다.
-    """
-    topology = workdir / TOPOLOGY_NAME
-    msh = workdir / MSH_NAME
-    if not topology.is_file() or not msh.is_file():
-        return []
-    try:
-        payload = json.loads(topology.read_text(encoding="utf-8"))
-        if not probes.wanted(payload):
-            return []
-        mesh = read_mesh(msh, require_solid=False)
-    except Exception:  # pragma: no cover - 파일이 깨진 경우
-        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
-        return []
-    return probes.locate(
-        payload, mesh.nodes, body_nodes=probes.body_nodes(workdir, mesh.solids)
     )
 
 

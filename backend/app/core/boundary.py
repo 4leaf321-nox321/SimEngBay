@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.spec import HarmonicSpec, ModalSpec, StaticSpec
+from app.core.spec import AnySpec
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def read(workdir: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def used_material(workdir: Path, spec: ModalSpec | StaticSpec | HarmonicSpec) -> str | None:
+def used_material(workdir: Path, spec: AnySpec) -> str | None:
     """결과에 적을 물성 이름 — **모델링이 실제로 붙인 것**. 남긴 것이 없으면 스펙의 것."""
     named = read(workdir).get("material")
     if isinstance(named, str) and named:

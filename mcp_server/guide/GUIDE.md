@@ -16,9 +16,10 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 | `modal` | 어느 주파수에서 떠는가 | 고유진동수 · 모드 방향 |
 | `static` | 하중을 걸면 얼마나 휘고 응력이 얼마인가 | 최대 변위 · 최대 응력 · 반력 · 측정점 값 |
 | `harmonic` | 주파수를 훑으며 흔들면 응답이 얼마나 큰가 | 봉우리 주파수 · 진폭 |
+| `random` | 가속도 PSD 로 지지부를 흔들면 응답이 보통 얼마인가(1σ) | 측정점 가속도 1σ(Grms) · 최대 1σ 변위 |
 
 솔버는 `calculix`(기본 — 바로 돌고 여러 점을 동시에 푼다)와 `ansys`(라이선스 — 조건을 더 많이
-건다).
+건다). **랜덤 진동은 아직 `calculix` 로만 푼다** — `ansys` 로 걸면 거절한다(확인 전이다).
 
 ## CompCore 와 어떻게 이어지나
 
@@ -81,14 +82,15 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 
 | 칸 | 기본 | 언제 바꾸나 |
 | --- | --- | --- |
-| `recipe` | (필수) | `modal` · `static` · `harmonic` |
+| `recipe` | (필수) | `modal` · `static` · `harmonic` · `random` |
 | `solver` | `calculix` | 조건이 CalculiX 에서 거절되면 `ansys` |
 | `mesh.element_size_mm` | CAD 값(「전체」 메시 힌트, 없으면 CompCore 의 제안값) | **비워 둔다** — 사람이 크기를 정해 달라고 할 때만. 주면 CAD 의 전역 크기를 덮는다(파트 · 면 크기는 CAD 그대로) |
 | `mesh.order` | `quadratic` | 거의 안 바꾼다 |
-| `modes` | CAD 값(없으면 10) | 모달 · 조화 — 볼 탄성 모드 수(강체 6개는 따로 찾는다). DOE 는 **비교하는 6개보다 넉넉히**(10 권장) — 6개 이하면 치수에 따라 모드가 밀려나 비교 선이 끊긴다 |
+| `modes` | CAD 값(없으면 10) | 모달 · 조화 · 랜덤 — 볼 탄성 모드 수(조화 · 랜덤은 모드 중첩에 쓸 수)(강체 6개는 따로 찾는다). DOE 는 **비교하는 6개보다 넉넉히**(10 권장) — 6개 이하면 치수에 따라 모드가 밀려나 비교 선이 끊긴다 |
 | `large_deflection` | CAD 값 | 정적 — 변형이 커서 모양이 바뀔 때(느리다) |
 | `frequency_range_hz` | CAD 값(없으면 비움) | **모달** — 찾을 주파수 범위 `[하한, 상한]`(Hz). 주면 그 범위 안의 모드만 `modes` 개까지 찾는다(낮은 모드에 밀려 보고 싶은 대역이 빠지지 않게). CAD 가 적었으면 그것이 먼저다 |
 | `frequency_range_hz` · `intervals` · `damping_ratio` | 0~2000 · 10 · 0.02 | 조화 — 훑을 범위 · 점 수 · 감쇠비. 감쇠가 없으면 거절 |
+| `frequency_range_hz` · `damping_ratio` | PSD 표의 범위 · 0.02 | 랜덤 — 셈할 범위(PSD 표 밖은 잘라 낸다) · 감쇠비. 가진(가속도 PSD)은 CAD 조건에서만 온다. CAD 가 적은 범위 · 감쇠비가 먼저다 |
 
 `material_from` · `conditions_from` 은 `cad`(기본)로 둔다 — 물성 · 조건은 CAD 가 파트마다 보낸다.
 `spec` 으로 바꾸면 CAD 값을 일부러 무시한다(그때는 `material` · `constraints` 를 직접 준다).
@@ -193,6 +195,17 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
 - `peak_hz` · `peak_displacement_mm` — 모델 전체의 봉우리.
 - `probes_mm` · `probe_peaks_hz` — 측정점마다 곡선의 봉우리 진폭 · 주파수.
 - 주파수별 곡선 전체는 `job_result(job_id, detail=true)` 의 `result.points`(크다).
+
+### 랜덤 진동
+
+- 값은 모두 **1σ**(실효값 — 시간의 68.3 % 가 그 아래). 설계는 흔히 **3σ(세 배)** 로 본다 —
+  사람에게 전할 때 둘을 함께 말한다.
+- `probe_grms` — 측정점 → **절대 가속도 1σ**(g, 가속도계가 재는 값). `probes_mm` — 측정점 1σ
+  변위(지지부 기준). `max_displacement_mm` — 모든 절점의 1σ 변위 최대(지지부 기준).
+- 입력 Grms · 응답 PSD 곡선 · 모드별 유효질량 몫은 `job_result(job_id, detail=true)` 의
+  `result.inputs` · `result.curves` · `result.modes`.
+- 풀이는 모달 하나 + 모드 중첩이다(가진 방향 참여계수 · 모드 형상 · PSD). 가진이 여럿이면 서로
+  무관한 것으로 더한다. 응력 1σ 는 아직 내지 않는다.
 
 ### 그 밖
 

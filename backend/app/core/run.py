@@ -26,7 +26,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from app.core.spec import HarmonicSpec, ModalSpec, StaticSpec, parse_stored_spec
+from app.core.spec import (
+    AnySpec,
+    HarmonicSpec,
+    ModalSpec,
+    RandomSpec,
+    StaticSpec,
+    parse_stored_spec,
+)
 from app.core.stages import STAGES, ArtifactSpec, Stage, StageFailure, StageResult
 
 #: 결과 파일 이름. 단계마다 따로 둔다 — 한 폴더에서 네 단계가 차례로 돌고, 지난 단계의 기록이
@@ -40,7 +47,7 @@ def result_path(workdir: Path, stage: str) -> Path:
 
 def run_stage(
     stage: Stage,
-    spec: ModalSpec | StaticSpec | HarmonicSpec,
+    spec: AnySpec,
     workdir: Path,
     *,
     input_name: str,
@@ -93,6 +100,10 @@ def run_stage(
         )
 
     if stage == "extracting" and spec.solver == "calculix":
+        if isinstance(spec, RandomSpec):
+            from app.core.calculix import extract_random
+
+            return extract_random(spec, workdir)
         if isinstance(spec, HarmonicSpec):
             from app.core.calculix import extract_harmonic as extract_open_harmonic
 
@@ -108,6 +119,11 @@ def run_stage(
         from app.core.calculix import extract as extract_open
 
         return extract_open(spec, workdir)
+
+    if stage == "extracting" and isinstance(
+        spec, RandomSpec
+    ):  # pragma: no cover - 스펙이 막는다
+        raise StageFailure("internal", "랜덤 진동은 아직 CalculiX 로만 풉니다.")
 
     if stage == "extracting" and isinstance(spec, HarmonicSpec):
         # **조화 응답은 곡선이다** — 주파수마다 응답이 나온다.
@@ -171,7 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         raw = json.loads((workdir / "spec.json").read_text(encoding="utf-8"))
         spec = parse_stored_spec(raw)
-        if not isinstance(spec, ModalSpec | StaticSpec | HarmonicSpec):  # pragma: no cover
+        if not isinstance(
+            spec, ModalSpec | StaticSpec | HarmonicSpec | RandomSpec
+        ):  # pragma: no cover
             raise StageFailure("internal", f"{spec.recipe} 레시피는 실행기가 없습니다.")
         result = run_stage(
             args.stage,

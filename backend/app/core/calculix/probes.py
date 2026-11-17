@@ -27,11 +27,22 @@ import math
 from pathlib import Path
 from typing import Any
 
+from app.core.calculix.mesh import read_mesh
 from app.core.probes import FAR_MM, Spot, body_of, row, wanted
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FAR_MM", "Spot", "body_nodes", "locate", "nearest", "read", "rows", "wanted"]
+__all__ = [
+    "FAR_MM",
+    "Spot",
+    "body_nodes",
+    "locate",
+    "nearest",
+    "read",
+    "rows",
+    "spots",
+    "wanted",
+]
 
 
 def nearest(
@@ -166,3 +177,23 @@ def body_nodes(
         if members:
             found[str(name)] = members
     return found
+
+
+def spots(workdir: Path) -> list[Spot]:
+    """측정점마다 **가장 가까운 절점**. 점 그룹이 없으면 빈 것.
+
+    절점을 한 번만 찾아 둔다 — 주파수마다 다시 찾으면 같은 일을 수백 번 한다.
+    """
+    topology = workdir / "topology.json"
+    msh = workdir / "model.msh"
+    if not topology.is_file() or not msh.is_file():
+        return []
+    try:
+        payload = json.loads(topology.read_text(encoding="utf-8"))
+        if not wanted(payload):
+            return []
+        mesh = read_mesh(msh, require_solid=False)
+    except Exception:  # pragma: no cover - 파일이 깨진 경우
+        logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
+        return []
+    return locate(payload, mesh.nodes, body_nodes=body_nodes(workdir, mesh.solids))

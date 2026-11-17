@@ -146,7 +146,7 @@ export default function StudyDetailPage() {
   // **도는 점이 있으면 지우지 않는다**(SIMULATIONS-0035) — 대기 중인 점은 서버가 취소로 닫고 지운다.
   const solving = points.filter((one) => !['done', 'failed', 'canceled', 'queued'].includes(one.status)).length
   // **모드 수가 있는 해석만**, 도는 점이 없을 때만 — 옛 결과와 새 결과가 함께 돌면 비교가 섞인다.
-  const modeful = modal || study.data.recipe === 'harmonic'
+  const modeful = modal || study.data.recipe === 'harmonic' || study.data.recipe === 'random'
   const computed = Math.max(0, ...points.map((one) => one.frequencies?.length ?? 0))
   const newModes = Number(rerunModes)
   const validModes = Number.isInteger(newModes) && newModes >= 1 && newModes <= 100

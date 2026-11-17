@@ -1475,6 +1475,69 @@ def test_조화_DOE_비교에_측정점의_봉우리가_실린다(
     assert "측정점 측정점 봉우리 진폭 (mm)" in head
 
 
+RANDOM_FOLDER = Path(__file__).resolve().parents[1] / "fixtures" / "doe" / "조건_랜덤진동"
+
+
+def test_랜덤_진동_DOE_는_1σ_변위와_측정점_가속도를_견준다(
+    client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CompCore 2026-11-17 「조건_랜덤진동」 — CAD 가 `random` 을 적었으니 레시피를 미리
+    고르고, 스터디 비교 · CSV 가 **1σ 변위 · 측정점 가속도 1σ** 를 견준다. Ansys 로는 아직 안
+    건다."""
+    folder = _fresh_study(RANDOM_FOLDER, tmp_path, monkeypatch)
+    preview = client.get(f"/api/simulations/doe/preview?path={folder}", headers=member.headers)
+    assert preview.json()["suggested_recipe"] == "random"
+    assert preview.json()["suggested_modes"] == 6
+
+    refused = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "random", "solver": "ansys", "material": MODAL["material"]},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert refused.status_code == 400, refused.text
+    assert "CalculiX 로만" in refused.text
+
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "random", "material": MODAL["material"]},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    study_id = created.json()["study_id"]
+    body = client.get(f"/api/simulations/studies/{study_id}", headers=member.headers).json()
+    assert body["recipe"] == "random"
+    done = [one for one in body["points"] if one["status"] == "done"]
+    assert len(done) == 2
+    for one in done:
+        assert one["max_displacement_mm"] > 0
+        assert one["probe_grms"]["측정점"] > 0 and one["probes_mm"]["측정점"] > 0
+    values = client.get(
+        f"/api/simulations/{done[0]['simulation_id']}/values", headers=member.headers
+    ).json()
+    assert values["recipe"] == "random" and values["probe_grms"]["측정점"] > 0
+    result = client.get(
+        f"/api/simulations/{done[0]['simulation_id']}/result", headers=member.headers
+    ).json()
+    # CAD 의 PSD 로 흔들었다(지어낸 가진이 아니다) — 입력 Grms 가 CompCore 손셈과 같다.
+    assert result["inputs"][0]["name"] == "X 랜덤"
+    assert result["inputs"][0]["grms"] == pytest.approx(6.058, abs=1e-3)
+
+    exported = client.get(
+        f"/api/simulations/studies/{study_id}/export.csv", headers=member.headers
+    )
+    head = next(csv.reader(io.StringIO(exported.content.decode("utf-8").lstrip("\ufeff"))))
+    assert "최대 1σ 변위 (mm)" in head
+    assert "측정점 측정점 가속도 1σ (g)" in head
+
+
 def test_이름으로_묶인_옛_스터디도_상세가_열린다(
     client: TestClient, member: Signed, db: Session
 ) -> None:
@@ -1646,7 +1709,7 @@ def test_레시피_목록에_걸_수_있는_해석이_다_나온다(client: Test
     response = client.get("/api/simulations/recipes", headers=member.headers)
     assert response.status_code == 200, response.text
     found = {one["name"]: one for one in response.json()}
-    assert list(found) == ["modal", "static", "harmonic"]
+    assert list(found) == ["modal", "static", "harmonic", "random"]
     assert all(one["runnable"] for one in found.values())
     harmonic = found["harmonic"]["schema"]
     assert harmonic["properties"]["recipe"]["const"] == "harmonic"

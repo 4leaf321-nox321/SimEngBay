@@ -68,6 +68,26 @@ function names(points: StudyPoint[], pick: (point: StudyPoint) => Record<string,
 
 /** 레시피별로 견줄 값들. 영역 · 측정점 이름은 스터디마다 다르므로 점들에서 모은다. */
 export function metricsOf(recipe: string, points: StudyPoint[]): Metric[] {
+  if (recipe === 'random') {
+    // 1σ(실효값) — 변위는 지지부 기준, 가속도는 측정점의 절대 가속도(g).
+    return [
+      { key: 'max_mm', label: '최대 1σ 변위', unit: 'mm', pick: (one) => one.max_displacement_mm ?? null },
+      ...names(points, (one) => one.probe_grms).flatMap((name): Metric[] => [
+        {
+          key: `probe-grms:${name}`,
+          label: `측정점 ${name} 가속도 1σ`,
+          unit: 'g',
+          pick: (one) => one.probe_grms?.[name] ?? null,
+        },
+        {
+          key: `probe:${name}`,
+          label: `측정점 ${name} 1σ 변위`,
+          unit: 'mm',
+          pick: (one) => one.probes_mm?.[name] ?? null,
+        },
+      ]),
+    ]
+  }
   if (recipe === 'harmonic') {
     return [
       { key: 'peak_hz', label: '봉우리 주파수', unit: 'Hz', pick: (one) => one.peak_hz ?? null, scatterOnly: true },

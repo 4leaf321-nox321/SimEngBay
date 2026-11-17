@@ -25,13 +25,16 @@ from typing import Any
 
 from app.core import conditions as condition_model
 from app.core import probes as core_probes
+from app.core import random_vibration as random_model
 from app.core.harmonic import harmonic_plan
 from app.core.modes import search as mode_search
 from app.core.spec import (
     RIGID_BODY_MODES,
+    AnySpec,
     HarmonicSpec,
     MaterialSpec,
     ModalSpec,
+    RandomSpec,
     StaticSpec,
     parse_stored_spec,
 )
@@ -81,7 +84,12 @@ class FakeExecutor:
 
     def _modeling(self, ctx: StageContext, spec: AnySpec) -> StageResult:
         dat = ctx.workdir / "model.dat"
-        kind = {"modal": "MODAL", "static": "STATIC", "harmonic": "HARMIC"}[spec.recipe]
+        kind = {
+            "modal": "MODAL",
+            "static": "STATIC",
+            "harmonic": "HARMIC",
+            "random": "SPECTR",
+        }[spec.recipe]
         dat.write_text(
             "/PREP7\n! fake input — 진짜 실행기가 오면 WriteInputFile 의 것으로 바뀐다\n"
             f"! material {_material(spec).name}\n/SOLU\nANTYPE,{kind}\nSOLVE\nFINISH\n",
@@ -123,6 +131,8 @@ class FakeExecutor:
             return _static(ctx, spec)
         if isinstance(spec, HarmonicSpec):
             return _harmonic(ctx, spec)
+        if isinstance(spec, RandomSpec):
+            return _random(ctx, spec)
         modes: list[dict[str, Any]] = []
         elastic_index = 0
         # **찾을 주파수 범위**(스펙) — 진짜 실행기처럼 범위 안을 최대 모드
@@ -183,8 +193,6 @@ class FakeExecutor:
         )
 
 
-AnySpec = ModalSpec | StaticSpec | HarmonicSpec
-
 #: 요소 크기를 안 주면 이것으로 본다(mm) — 지어낸 기준.
 BASE_SIZE_MM = 5.0
 
@@ -214,7 +222,9 @@ def _stiffening(spec: AnySpec) -> float:
     return 1.0 + 0.02 * (_element_size(spec) / BASE_SIZE_MM) ** 2
 
 
-def _fake_frequencies(spec: ModalSpec | HarmonicSpec, count: int | None = None) -> list[float]:
+def _fake_frequencies(
+    spec: ModalSpec | HarmonicSpec | RandomSpec, count: int | None = None
+) -> list[float]:
     """지어낸 고유진동수. 강성/밀도 제곱근에 비례하게 만들어 물성을 바꾸면 값이 따라오게
     한다. 성긴 메시일수록 조금 높다. `count` 는 탄성 모드 수(비우면 스펙의 `modes`)."""
     material = _material(spec)
@@ -360,6 +370,114 @@ def _harmonic(ctx: StageContext, spec: HarmonicSpec) -> StageResult:
             "peak_displacement": worst["max_displacement"],
         },
         detail=f"{len(points)}점 · 최대 {worst['max_displacement']:.4g} mm",
+    )
+
+
+#: CAD 가 PSD 를 안 보냈을 때 지어내는 가진 — 진짜 실행기는 거기서 멈춘다(모양만 맞춘다).
+FAKE_SHAKE = random_model.Shake(
+    name="지어낸 가진", direction=(1.0, 0.0, 0.0), table=((20.0, 0.01), (2000.0, 0.01))
+)
+
+
+def _random(ctx: StageContext, spec: RandomSpec) -> StageResult:
+    """랜덤 진동 — `calculix/random_read.py` 와 같은 열쇠. **1차 모드 하나**(질량 1 · 참여
+    1)를 진짜와 같은 셈(`random_vibration`)으로 흔든다. 가진 · 범위 · 감쇠비는 진짜와 같이
+    CAD 가 적은 것이 먼저다."""
+    topology = _topology(ctx)
+    plan, _ = random_model.plan(
+        condition_model.read(topology, recipe="random"),
+        span=spec.frequency_range_hz,
+        damping_ratio=spec.damping_ratio,
+    )
+    if plan is None:
+        plan = random_model.RandomPlan(
+            low=20.0,
+            high=2000.0,
+            damping_ratio=spec.damping_ratio,
+            shakes=(FAKE_SHAKE,),
+            source="spec",
+        )
+    naturals = _fake_frequencies(spec)
+    modes = random_model.gather(naturals, {1: [1.0, 1.0, 1.0]}, plan.shakes)
+    breaks = sorted({hz for shake in plan.shakes for hz, _ in shake.table})
+    freqs = random_model.grid(plan.low, plan.high, naturals[:1], plan.damping_ratio, breaks)
+    shapes = [[1.0, 0.0, 0.0]] + [[0.0, 0.0, 0.0]] * (len(naturals) - 1)
+    got = random_model.at_point(shapes, modes, plan.shakes, freqs, plan.damping_ratio)
+    spots = _spots(topology)
+    probes: list[dict[str, Any]] = []
+    for spot in spots:
+        line = core_probes.row(
+            name=spot.name,
+            point=spot.point,
+            node=spot.node,
+            distance_mm=spot.distance_mm,
+            value=got.accel_grms,
+            unit="g",
+            vector=list(got.accel_axes),
+        )
+        line["displacement_1sigma_mm"] = round(got.displacement_mm, 10)
+        probes.append(line)
+    nodes, elements = _mesh_counts(spec)
+    result: dict[str, Any] = {
+        "recipe": "random",
+        "units": {
+            "frequency": "Hz",
+            "displacement": "mm",
+            "acceleration": "g",
+            "psd": "g^2/Hz",
+            "system": "ConsistentNMM",
+        },
+        "mesh": {"nodes": nodes, "elements": elements},
+        "sigma": 1,
+        "damping_ratio": plan.damping_ratio,
+        "frequency_range_hz": [plan.low, plan.high],
+        "range_from": plan.source,
+        "inputs": [
+            {
+                "name": shake.name,
+                "direction": list(shake.direction),
+                "grms": round(random_model.grms(shake.table), 6),
+                "grms_in_range": round(random_model.grms(shake.table, plan.low, plan.high), 6),
+                "table": [list(one) for one in shake.table],
+            }
+            for shake in plan.shakes
+        ],
+        "modes": [
+            {
+                "number": at + 1,
+                "frequency_hz": round(hz, 4),
+                "participation": {
+                    shake.name: modes.participation[shake.name][at] for shake in plan.shakes
+                },
+            }
+            for at, hz in enumerate(naturals)
+        ],
+        "acceleration": "absolute",
+        "displacement": "relative",
+        "frequency_points": len(freqs),
+        "curves": {
+            "frequency_hz": [round(hz, 4) for hz in freqs],
+            "input_psd": {
+                shake.name: [random_model.psd_at(shake.table, hz) for hz in freqs]
+                for shake in plan.shakes
+            },
+            **({"probes": {spot.name: got.psd for spot in spots}} if spots else {}),
+        },
+        "max_displacement": {"value_mm": round(got.displacement_mm, 10), "node": 1},
+        "material": _material(spec).name,
+        "fake": True,
+    }
+    if probes:
+        result["probes"] = probes
+    path = _write(ctx, result)
+    return StageResult(
+        artifacts=[ArtifactSpec("result_json", path)],
+        summary={
+            "modes": len(naturals),
+            "frequency_points": len(freqs),
+            "max_displacement_1sigma_mm": result["max_displacement"]["value_mm"],
+        },
+        detail=f"모드 {len(naturals)}개 · 1σ 변위 최대 {got.displacement_mm:.4g} mm",
     )
 
 

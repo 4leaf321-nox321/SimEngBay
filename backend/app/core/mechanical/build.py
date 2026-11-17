@@ -35,9 +35,11 @@ from app.core.modes import search as mode_search
 from app.core.regions import FaceRecord, match_regions
 from app.core.spec import (
     RIGID_BODY_MODES,
+    AnySpec,
     HarmonicSpec,
     MaterialSpec,
     ModalSpec,
+    RandomSpec,
     StaticSpec,
 )
 from app.core.stages import (
@@ -59,7 +61,6 @@ from app.core.statics import (
 logger = logging.getLogger(__name__)
 
 #: 모델링이 받는 스펙 — 레시피마다 거는 것이 다르다.
-AnySpec = ModalSpec | StaticSpec | HarmonicSpec
 
 
 #: 라이선스 실패로 볼 말. Mechanical 은 이것을 예외 메시지에 실어 준다.
@@ -95,6 +96,13 @@ def build(
 
     프로세스당 임베디드 App 은 하나다 — 워커가 한 번에 작업 하나만 돌리는 이유이기도 하다.
     """
+    if isinstance(spec, RandomSpec):
+        # 스펙이 먼저 막는다 — 저장된 옛 스펙 · 손으로 고친 spec.json 이 여기까지 올 때.
+        raise StageFailure(
+            "internal",
+            "랜덤 진동은 아직 CalculiX 로만 풉니다 — Ansys 의 랜덤 진동은 확인하지"
+            " 못했습니다.",
+        )
     step = workdir / input_name
     if not step.is_file() or step.stat().st_size == 0:
         raise StageFailure("geometry_import", f"입력 형상이 없습니다: {input_name}")

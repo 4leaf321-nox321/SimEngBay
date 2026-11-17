@@ -152,6 +152,64 @@ export interface HarmonicResult {
   fake?: boolean
 }
 
+/** 랜덤 진동의 측정점 한 줄 — `value` 가 **절대 가속도 1σ**(g, Grms), `vector` 가 축 성분(g). */
+export interface RandomProbeRow extends ProbeRow {
+  /** 지지부 기준 1σ 변위(mm). */
+  displacement_1sigma_mm?: number
+  /** 응답 PSD 의 봉우리 주파수(Hz)와 그 값(g²/Hz). */
+  psd_peak_hz?: number | null
+  psd_peak?: number | null
+}
+
+/**
+ * 랜덤 진동의 결과(CalculiX — 모드 중첩, `app/core/random_vibration.py`) — **응답의 1σ**(실효값). 3σ 는
+ * 세 배다. 측정점 가속도는 **절대**(가속도계가 재는 값), 변위는 **지지부 기준**이다.
+ */
+export interface RandomResult {
+  recipe: 'random'
+  solver?: string
+  units: { frequency: string; displacement: string; acceleration: string; psd: string; system?: string }
+  mesh?: { nodes: number; elements: number }
+  sigma: number
+  damping_ratio: number
+  frequency_range_hz: [number, number]
+  /** 범위를 누가 정했나 — `cad` · `spec` · `psd`(PSD 표의 범위). */
+  range_from: 'cad' | 'spec' | 'psd'
+  /** 가진마다 — 전역 방향 · 표의 Grms · 셈한 범위 안의 Grms · CAD 가 셈한 값(있으면). */
+  inputs: {
+    name: string
+    direction: [number, number, number]
+    grms: number
+    grms_in_range: number
+    declared_grms?: number
+    table: [number, number][]
+  }[]
+  /** 모드 중첩에 쓴 모드 — 가진마다 참여(Γ) · 유효질량 몫. */
+  modes: {
+    number: number
+    frequency_hz: number
+    participation: Record<string, number>
+    mass_share?: Record<string, number>
+  }[]
+  acceleration: 'absolute'
+  displacement: 'relative'
+  frequency_points: number
+  /** 그림 격자(Hz)와 가진의 입력 PSD · 측정점의 응답 PSD(g²/Hz, 가진들의 합 · 세 축의 합). */
+  curves: {
+    frequency_hz: number[]
+    input_psd: Record<string, number[]>
+    probes?: Record<string, number[]>
+  }
+  /** 모든 절점의 1σ 변위 최대(mm)와 그 자리. */
+  max_displacement?: { value_mm: number; node: number; point?: [number, number, number] }
+  probes?: RandomProbeRow[]
+  shape?: { vtp: string; points?: number; field?: string }
+  parts?: string[]
+  material?: string
+  warning?: string
+  fake?: boolean
+}
+
 /** 정적 해석의 결과 — **모드가 아니라 변형 · 응력**이다. */
 export interface StaticResult {
   recipe: 'static'
@@ -404,7 +462,7 @@ export const simulationApi = {
     ),
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
   result: (id: string) =>
-    api.get<SimulationResult | StaticResult | HarmonicResult>(`/simulations/${id}/result`),
+    api.get<SimulationResult | StaticResult | HarmonicResult | RandomResult>(`/simulations/${id}/result`),
   /** 모드 형상(VTP). vtk.js 가 ArrayBuffer 를 그대로 읽는다. */
   mesh: (simulationId: string, artifactId: string) =>
     fetchBytes(`/simulations/${simulationId}/artifacts/${artifactId}/content`),

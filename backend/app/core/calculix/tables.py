@@ -24,6 +24,7 @@ import re
 logger = logging.getLogger(__name__)
 
 EIGEN_HEAD = "E I G E N V A L U E   O U T P U T"
+PARTICIPATION_HEAD = "P A R T I C I P A T I O N   F A C T O R S"
 MODAL_MASS_HEAD = "E F F E C T I V E   M O D A L   M A S S"
 TOTAL_MASS_HEAD = "T O T A L   E F F E C T I V E   M A S S"
 
@@ -52,6 +53,12 @@ def frequencies(text: str) -> list[float]:
         if started and not line.strip():
             break
     return found
+
+
+def participation_factors(text: str) -> dict[int, list[float]]:
+    """`{모드: [X, Y, Z, ROTX, ROTY, ROTZ]}` — **질량 정규화 모드의 참여계수 Γ = φᵀMr**(부호가
+    있다). 랜덤 진동이 가진 방향으로 모아 모드 중첩에 쓴다(`random_vibration.gather`)."""
+    return _rows(text, PARTICIPATION_HEAD)
 
 
 def effective_mass_ratios(text: str) -> dict[str, dict[int, float]]:
@@ -89,6 +96,11 @@ def _rows(text: str, head: str) -> dict[int, list[float]]:
         if started and not line.strip():
             break
     return found
+
+
+def total_masses(text: str) -> list[float]:
+    """방향마다 전체 유효질량(tonne · 이동 셋은 모델 질량) — 없으면 빈 것."""
+    return _totals(text)
 
 
 def _totals(text: str) -> list[float]:

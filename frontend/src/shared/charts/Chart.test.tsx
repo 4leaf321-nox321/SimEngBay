@@ -23,6 +23,7 @@ vi.mock('recharts', async () => {
 })
 
 import { Chart } from '@/shared/charts'
+import { logTicks } from '@/shared/charts/Chart'
 
 const DATA = [
   { name: 'A', 건수: 3 },
@@ -67,5 +68,13 @@ describe('Chart', () => {
       />,
     )
     expect(screen.getByRole('img', { name: '건수, 무게 차트' })).toBeInTheDocument()
+  })
+
+  it('로그 축 눈금은 1 · 2 · 5 x 10ⁿ — 많으면 10ⁿ 만', () => {
+    expect(logTicks(20, 2000)).toEqual([20, 50, 100, 200, 500, 1000, 2000])
+    expect(logTicks(0.007, 16.9)).toEqual([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10])
+    expect(logTicks(1e-6, 1e3)).toEqual([1e-6, 1e-5, 1e-4, 0.001, 0.01, 0.1, 1, 10, 100, 1000])
+    expect(logTicks(0.007, 16.9, 6)).toEqual([0.01, 0.1, 1, 10])
+    expect(logTicks(0, 10)).toBeUndefined()
   })
 })

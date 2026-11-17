@@ -13,11 +13,13 @@ import { simulationApi } from '@/modules/simulations/api'
 import type {
   Artifact,
   HarmonicResult as HarmonicResultData,
+  RandomResult as RandomResultData,
   SimulationResult,
   StaticResult as StaticResultData,
 } from '@/modules/simulations/api'
 import { HarmonicResult } from '@/modules/simulations/HarmonicResult'
 import { ModalResult } from '@/modules/simulations/ModalResult'
+import { RandomResult } from '@/modules/simulations/RandomResult'
 import { StaticResult } from '@/modules/simulations/StaticResult'
 import { ApiError } from '@/shared/api/client'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -40,7 +42,7 @@ export interface LoadedResult {
 }
 
 /** 화면이 받을 수 있는 결과 — **레시피마다 모양이 다르다.** */
-export type AnyResult = SimulationResult | StaticResultData | HarmonicResultData
+export type AnyResult = SimulationResult | StaticResultData | HarmonicResultData | RandomResultData
 
 /** **레시피로 가른다** — `SimulationResult.recipe` 가 넓은 글자형이라 좁혀 준다. */
 export function isStatic(result: AnyResult): result is StaticResultData {
@@ -49,6 +51,10 @@ export function isStatic(result: AnyResult): result is StaticResultData {
 
 export function isHarmonic(result: AnyResult): result is HarmonicResultData {
   return result.recipe === 'harmonic'
+}
+
+export function isRandom(result: AnyResult): result is RandomResultData {
+  return result.recipe === 'random'
 }
 
 /**
@@ -106,6 +112,9 @@ export function ResultPanel({ simulationId, status, artifacts, loaded }: Props) 
     }
     if (isHarmonic(result)) {
       return <HarmonicResult result={result} />
+    }
+    if (isRandom(result)) {
+      return <RandomResult simulationId={simulationId} result={result} artifacts={artifacts} />
     }
     return (
       <ModalResult

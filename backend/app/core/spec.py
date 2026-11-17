@@ -4,7 +4,8 @@ Mechanical 의 모든 기능을 노출하지 않는다. 오케스트레이터(�
 받는 칸뿐이고, 그 밖의 것은 여기서 거절된다 — 워커가 집어 들고 나서 모르는 칸 때문에 실패하면
 사람은 「왜 실패했나」 를 목록에서 찾아야 한다.
 
-레시피는 셋이다 — `modal` · `static` · `harmonic`. 솔버도 둘이다(`ansys` · `calculix`).
+레시피는 넷이다 — `modal` · `static` · `harmonic` · `random`. 솔버도 둘이다(`ansys` ·
+`calculix`) — 랜덤 진동은 아직 CalculiX 로만 푼다(`RandomSpec`).
 
 ## 단위
 
@@ -198,14 +199,69 @@ class HarmonicSpec(BaseModel):
         return _needs_material(self)
 
 
-JobSpec = Annotated[ModalSpec | StaticSpec | HarmonicSpec, Field(discriminator="recipe")]
+class RandomSpec(BaseModel):
+    """랜덤 진동 — **가속도 PSD 로 지지부를 흔들어** 응답의 1σ(실효값)를 본다(CompCore
+    2026-11-17, 가진 프로파일).
+
+    모드를 풀고, 모드 형상 · 참여계수 · PSD 로 응답을 셈한다(모드 중첩, `random_vibration`).
+    가진은 CAD 가 적은 `psd_acceleration` 하중이다 — 스펙에는 PSD 칸이 없다(조화 응답의 하중과
+    같은 규칙). 여럿이면 **서로 무관한 가진**으로 더한다. 감쇠가 없으면 공진에서 응답이 끝없이
+    커지므로 감쇠비를 안 주면 거절한다.
+
+    **아직 CalculiX 로만 푼다.** Ansys 의 랜덤 진동(모달 → 랜덤 진동 시스템)은 이 PC 에서
+    확인하지 못했다 — 확인하기 전에는 받지 않는다(조용히 틀린 값을 내는 것보다 낫다).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipe: Literal["random"] = "random"
+    solver: Literal["ansys", "calculix"] = "calculix"
+    """무엇으로 풀까 — `ModalSpec.solver` 참고. **`ansys` 는 아직 거절한다**(위)."""
+    material: MaterialSpec | None = None
+    """`ModalSpec.material` 참고."""
+    material_from: Literal["cad", "spec"] = "cad"
+    conditions_from: Literal["cad", "spec"] = "cad"
+    mesh: MeshSpec = Field(default_factory=MeshSpec)
+    constraints: list[Constraint] = Field(default_factory=list)
+    frequency_range_hz: tuple[float, float] | None = None
+    """셈할 범위(Hz). 비우면 **PSD 표의 범위**다(표 밖은 0 이라 셈할 것이 없다). CAD 가 적어
+    보내면 그것이 먼저다. 어느 쪽이든 PSD 표 밖은 잘라 낸다."""
+    modes: int = Field(default=10, ge=1, le=100)
+    """모드 중첩에 쓸 모드 수 — 낮은 차수부터. 범위 위쪽 모드도 정적 몫을 보탠다."""
+    damping_ratio: float = Field(default=0.02, gt=0, lt=1)
+    """임계 감쇠에 대한 비(모든 모드). 응답 1σ 는 대략 1/√ζ 로 간다."""
+
+    @model_validator(mode="after")
+    def _own_material(self) -> Self:
+        return _needs_material(self)
+
+    @model_validator(mode="after")
+    def _calculix_only(self) -> Self:
+        if self.solver != "calculix":
+            raise ValueError(
+                "랜덤 진동은 아직 CalculiX 로만 풉니다 — Ansys 경로는 확인하지 못했습니다."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _range_order(self) -> Self:
+        span = self.frequency_range_hz
+        if span is not None and not 0 <= span[0] < span[1]:
+            raise ValueError("셈할 주파수 범위는 0 ≤ 하한 < 상한 이어야 합니다.")
+        return self
+
+
+#: 레시피 스펙 하나 — 실행기 · 추출이 받는 것.
+AnySpec = ModalSpec | StaticSpec | HarmonicSpec | RandomSpec
+
+JobSpec = Annotated[AnySpec, Field(discriminator="recipe")]
 
 #: 실행기가 있는 레시피. 여기 없는 것은 API 가 만들기 전에 거절한다.
-RUNNABLE_RECIPES: tuple[str, ...] = ("modal", "static", "harmonic")
+RUNNABLE_RECIPES: tuple[str, ...] = ("modal", "static", "harmonic", "random")
 
 #: 레시피 이름 → 스펙 모델. **`JobSpec` 의 갈래에서 뽑는다** — 손으로 적으면 하나가 빠진다
 #: (`GET /simulations/recipes` 가 조화 응답을 빼고 냈다, 2026-10-20).
-SPEC_MODELS: dict[str, type[ModalSpec | StaticSpec | HarmonicSpec]] = {
+SPEC_MODELS: dict[str, type[AnySpec]] = {
     model.model_fields["recipe"].default: model for model in get_args(get_args(JobSpec)[0])
 }
 
@@ -214,7 +270,7 @@ class _SpecEnvelope(BaseModel):
     spec: JobSpec
 
 
-def parse_spec(raw: object) -> ModalSpec | StaticSpec | HarmonicSpec:
+def parse_spec(raw: object) -> AnySpec:
     """dict(JSON) → 스펙. 레시피 판별과 칸 검증을 한 번에 — 오류는 pydantic 의 것 그대로."""
     return _SpecEnvelope.model_validate({"spec": raw}).spec
 
@@ -223,7 +279,7 @@ def parse_spec(raw: object) -> ModalSpec | StaticSpec | HarmonicSpec:
 LEGACY_SOLVER = "ansys"
 
 
-def parse_stored_spec(raw: object) -> ModalSpec | StaticSpec | HarmonicSpec:
+def parse_stored_spec(raw: object) -> AnySpec:
     """**저장된** 스펙(작업 행 · `spec.json`)을 읽는다 — 솔버 칸이 없으면 옛 작업이라 Ansys 다.
 
     새 요청은 `parse_spec` 으로 읽어 기본값(CalculiX)을 받는다. 저장된 스펙에 칸이 없는 것은

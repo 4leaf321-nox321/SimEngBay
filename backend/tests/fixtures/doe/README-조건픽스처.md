@@ -577,6 +577,9 @@ gmsh · ccx, 점 파일 · STEP 을 그대로 `topology.json` · `input.step` �
     `direction` 으로, `psd_table` 로그-로그 · 표 밖 0, 늘 `g^2/Hz`, `grms`). 여럿이면 무관하게 합산.
   - 손셈: PSD Grms 6.058 g, Miles 23.4 g rms, 사인 스윕 공진 Q = 25 · 측정점 약 39 g. 다른 폴더에는 새 열쇠가
     없다 — 없으면 `null` 로 읽는다.
+  - 우리 값(CalculiX, 요소 5 mm): 사인 스윕 기둥 끝 1,263 Hz 39.05 g(절대 가속도). 랜덤 진동(모드 중첩,
+    `random_vibration`)은 입력 6.058 g · 기둥 끝 1σ 36.7 g(= Miles 23.4 x 참여 1.57) · 최대 1σ 변위
+    0.0058 mm. 결과는 1σ 로 내고 화면이 3σ 를 함께 적는다.
 
 - **2026-11-16 — 맞닿은 바디 쌍(`quality.touching`) · 셸모델 STEP 되돌림**(CompCore v0.26.0 `bb0c831` —
   `411247f` · `d3aeed7`). 폴더는 v0.26.0 과 바이트까지 같다. 태그의 `fixtures/simengbay` 트리 해시는

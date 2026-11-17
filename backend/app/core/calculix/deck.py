@@ -81,8 +81,8 @@ def unsupported(given: condition_model.Conditions) -> list[str]:
 #: 마찰 · 무마찰 · rough 는 비선형 접촉 쌍이다(`contact_block`). 옛 방식(`CALCULIX_BONDING=
 #: shared`)은 절점 공유로 붙인다.
 LINEARIZED_CONTACTS = ("bonded", "no_separation", "frictional", "frictionless", "rough")
-#: 풀 수 있는 레시피 — 모달 · 정적 · 조화 셋 다(`tests/opensolver` 가 끝까지 돌린다).
-SUPPORTED_RECIPES = ("modal", "static", "harmonic")
+#: 풀 수 있는 레시피 — 모달 · 정적 · 조화 · 랜덤 진동(`tests/opensolver` 가 끝까지 돌린다).
+SUPPORTED_RECIPES = ("modal", "static", "harmonic", "random")
 
 
 @dataclass

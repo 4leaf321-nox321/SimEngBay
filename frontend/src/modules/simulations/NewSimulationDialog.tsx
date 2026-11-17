@@ -48,9 +48,17 @@ import type {
 import { ConditionList } from '@/modules/simulations/ConditionList'
 import { FolderBrowser } from '@/modules/simulations/FolderBrowser'
 import { rangeText } from '@/modules/simulations/format'
-import { buildSpec, HARMONIC_DEFAULTS, isOrder, isRecipe, NO_RANGE, specProblem } from '@/modules/simulations/spec'
-import type { HarmonicInput, MeshOrder, RangeInput, RecipeName } from '@/modules/simulations/spec'
-import { HarmonicFields, MeshFields, RecipeSelect } from '@/modules/simulations/SpecFields'
+import {
+  buildSpec,
+  HARMONIC_DEFAULTS,
+  isOrder,
+  isRecipe,
+  NO_RANGE,
+  RANDOM_DEFAULTS,
+  specProblem,
+} from '@/modules/simulations/spec'
+import type { HarmonicInput, MeshOrder, RandomInput, RangeInput, RecipeName } from '@/modules/simulations/spec'
+import { HarmonicFields, MeshFields, RandomFields, RecipeSelect } from '@/modules/simulations/SpecFields'
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
 import { MAX_TRACKS } from '@/modules/simulations/studyTable'
 import type { Solver } from '@/modules/simulations/SolverSelect'
@@ -133,6 +141,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
   const [modes, setModes] = useState('10')
   const [largeDeflection, setLargeDeflection] = useState(false)
   const [harmonic, setHarmonic] = useState<HarmonicInput>(HARMONIC_DEFAULTS)
+  const [random, setRandom] = useState<RandomInput>(RANDOM_DEFAULTS)
   const [modalRange, setModalRange] = useState<RangeInput>(NO_RANGE)
   const [elementSize, setElementSize] = useState('')
   const [order, setOrder] = useState<MeshOrder>('quadratic')
@@ -206,6 +215,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     constraints: useCadConditions ? [] : regions,
     largeDeflection,
     harmonic,
+    random,
     // CAD 가 범위를 적었으면 그것이 먼저다 — 칸은 잠그고 보내지 않는다(두 값이 갈리면 무엇으로 돌았는지 헷갈린다).
     modalRange: cadRange ? NO_RANGE : modalRange,
   }
@@ -282,7 +292,11 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     setPreview(found)
     // **조건 줄을 편 종류로 맞춘다** — CAD 가 종류를 안 적었으면 서버는 모달로 폈다. 앞에서 고른
     // 종류를 그대로 두면 칸은 「정적」 인데 조건 · 막힘 판정은 모달 것이다(2026-10-05 리뷰).
-    if (isRecipe(found.recipe)) setRecipe(found.recipe)
+    if (isRecipe(found.recipe)) {
+      setRecipe(found.recipe)
+      // 랜덤 진동은 아직 CalculiX 로만 푼다(서버가 Ansys 를 거절한다).
+      if (found.recipe === 'random') setSolver('calculix')
+    }
     if (found.suggested_modes) setModes(String(found.suggested_modes))
     if (isOrder(found.suggested_order)) setOrder(found.suggested_order)
     // 큰 변형도 CAD 가 적은 대로 — 늘 적어 보내므로 사람이 바꾼 것만 CAD 와 다르다.
@@ -412,6 +426,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
 
   async function changeRecipe(next: RecipeName) {
     setRecipe(next)
+    if (next === 'random') setSolver('calculix')
     // 조건이 어떻게 다뤄지나는 해석 종류에 달렸다(모달이면 하중을 넘긴다) — 다시 묻는다.
     if (source === 'folder' && folder && focus !== null) {
       await askPoint(folder.path, focus, next, setPreview)
@@ -827,7 +842,9 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                 {recipe !== 'static' && (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <Label htmlFor="sim-modes">{recipe === 'harmonic' ? '모드 중첩에 쓸 모드 수' : '탄성 모드 수'}</Label>
+                      <Label htmlFor="sim-modes">
+                        {recipe === 'modal' ? '탄성 모드 수' : '모드 중첩에 쓸 모드 수'}
+                      </Label>
                       <Input
                         id="sim-modes"
                         type="number"
@@ -912,6 +929,14 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                     value={harmonic}
                     onChange={setHarmonic}
                     fromCad={preview.suggested_recipe === 'harmonic'}
+                  />
+                )}
+                {recipe === 'random' && (
+                  <RandomFields
+                    idPrefix="sim-random"
+                    value={random}
+                    onChange={setRandom}
+                    fromCad={preview.suggested_recipe === 'random'}
                   />
                 )}
 
@@ -1100,4 +1125,5 @@ function shown(value: number): string {
 const RECIPE_HINT: Record<string, string> = {
   static: '정적 해석은 하중이 답을 만듭니다.',
   harmonic: '조화 응답은 가진력이 있어야 흔들립니다.',
+  random: '랜덤 진동은 가속도 PSD(psd_acceleration)로 흔듭니다.',
 }

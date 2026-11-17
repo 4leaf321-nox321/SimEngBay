@@ -6,7 +6,7 @@
 
 import { RECIPE_LABELS } from '@/modules/simulations/labels'
 import { RECIPE_NAMES } from '@/modules/simulations/spec'
-import type { HarmonicInput, MeshOrder, RecipeName } from '@/modules/simulations/spec'
+import type { HarmonicInput, MeshOrder, RandomInput, RecipeName } from '@/modules/simulations/spec'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 
@@ -192,6 +192,72 @@ export function HarmonicFields({
         {fromCad
           ? 'CAD 가 적은 범위 · 점 수 · 감쇠비가 먼저입니다 — 이 값은 CAD 가 적지 않은 칸에만 사용합니다.'
           : '봉우리 높이는 감쇠비에 거의 반비례합니다(1/2ζ). 점이 적으면 봉우리가 점 사이로 빠져나갑니다.'}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * 랜덤 진동의 설정 — 셈할 범위(비우면 PSD 표의 범위) · 감쇠비. **가진(PSD)은 CAD 가 보낸 것이다** —
+ * 화면에서 받지 않는다. CAD 가 범위 · 감쇠비를 적었으면 그것이 먼저다.
+ */
+export function RandomFields({
+  idPrefix,
+  value,
+  onChange,
+  fromCad,
+}: {
+  idPrefix: string
+  value: RandomInput
+  onChange: (next: RandomInput) => void
+  /** CAD 가 랜덤 진동을 적었나. */
+  fromCad: boolean
+}) {
+  const set = (key: keyof RandomInput) => (event: { target: { value: string } }) =>
+    onChange({ ...value, [key]: event.target.value })
+  return (
+    <div className="space-y-1.5">
+      <div className="grid grid-cols-3 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-low`}>셈할 범위 하한 (Hz)</Label>
+          <Input
+            id={`${idPrefix}-low`}
+            type="number"
+            step="any"
+            min={0}
+            value={value.low}
+            onChange={set('low')}
+            placeholder="PSD 표"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-high`}>셈할 범위 상한 (Hz)</Label>
+          <Input
+            id={`${idPrefix}-high`}
+            type="number"
+            step="any"
+            min={0}
+            value={value.high}
+            onChange={set('high')}
+            placeholder="PSD 표"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-damping`}>감쇠비 (%)</Label>
+          <Input
+            id={`${idPrefix}-damping`}
+            type="number"
+            step="any"
+            min={0}
+            value={value.dampingPercent}
+            onChange={set('dampingPercent')}
+          />
+        </div>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        {fromCad
+          ? 'CAD 가 적은 범위 · 감쇠비가 먼저입니다 — 이 값은 CAD 가 적지 않은 칸에만 사용합니다. 가진은 CAD 의 가속도 PSD 입니다.'
+          : '가진은 CAD 조건의 가속도 PSD(psd_acceleration)입니다 — 모든 고정 지지를 함께 흔듭니다. 응답 1σ 는 감쇠비의 제곱근에 거의 반비례합니다.'}
       </p>
     </div>
   )

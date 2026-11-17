@@ -17,7 +17,7 @@ import { simulationApi } from '@/modules/simulations/api'
 import type { Convergence, Measurement, Simulation, Stage } from '@/modules/simulations/api'
 import { rangeText, shownForce, shownMass, shownValue } from '@/modules/simulations/format'
 import { STAGE_LABELS, shownDuration } from '@/modules/simulations/labels'
-import { isHarmonic, isStatic } from '@/modules/simulations/ResultPanel'
+import { isHarmonic, isRandom, isStatic } from '@/modules/simulations/ResultPanel'
 import type { AnyResult } from '@/modules/simulations/ResultPanel'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 
@@ -94,6 +94,20 @@ export function headline(simulation: Simulation, result: AnyResult | null): Stat
       ...(probe
         ? [{ label: '측정점 봉우리', value: shownValue(probe.value, probe.unit), hint: probe.name }]
         : []),
+      ...common,
+    ].slice(0, 4)
+  }
+  if (result && isRandom(result)) {
+    // **모달보다 먼저 가른다** — 랜덤 결과에도 `modes`(모드 중첩에 쓴 모드)가 있다.
+    const probe = result.probes?.[0]
+    const input = result.inputs?.[0]
+    return [
+      ...(probe ? [{ label: '측정점 가속도 1σ', value: shownValue(probe.value, 'g'), hint: probe.name }] : []),
+      ...(result.max_displacement
+        ? [{ label: '최대 1σ 변위', value: shownValue(result.max_displacement.value_mm, 'mm'), hint: '지지부 기준' }]
+        : []),
+      ...(input ? [{ label: '입력', value: shownValue(input.grms, 'Grms'), hint: input.name }] : []),
+      { label: '감쇠비', value: `${(result.damping_ratio * 100).toFixed(1)}%` },
       ...common,
     ].slice(0, 4)
   }

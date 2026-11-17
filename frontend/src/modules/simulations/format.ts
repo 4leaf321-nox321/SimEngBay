@@ -74,6 +74,12 @@ export function shownOutcome(row: SimulationSummary): string | null {
     const peak = number('peak_hz')
     return peak === null ? null : `봉우리 ${peak.toFixed(1)} Hz`
   }
+  if (row.recipe === 'random') {
+    // 측정점이 있으면 그 자리의 가속도 1σ(가속도계와 견줄 값), 없으면 최대 1σ 변위.
+    if (typeof summary.probe_grms === 'string') return `${summary.probe_grms} (1σ)`
+    const largest = number('max_displacement_1sigma_mm')
+    return largest === null ? null : `최대 1σ 변위 ${shownValue(largest, 'mm')}`
+  }
   const first = number('first_elastic_hz')
   return first === null ? null : `1차 ${first.toFixed(1)} Hz`
 }

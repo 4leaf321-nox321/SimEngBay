@@ -393,7 +393,7 @@ describe('새 해석 작업', () => {
     expect('frequency_range_hz' in spec).toBe(false)
   })
 
-  it('CAD 가 랜덤 진동을 적었으면 CalculiX 로 고르고 감쇠비 · 범위를 싣는다(가진은 CAD 의 PSD)', async () => {
+  it('CAD 가 랜덤 진동을 적었으면 CalculiX 로 고르고 감쇠비 · 찾을 범위를 싣는다(가진 · 대역은 CAD 의 PSD)', async () => {
     vi.mocked(simulationApi.previewDoePoint).mockResolvedValue({
       ...SHEAR,
       recipe: 'random',
@@ -401,17 +401,36 @@ describe('새 해석 작업', () => {
       suggested_modes: 6,
     })
     openAt(DOE)
-    await waitFor(() => expect(screen.getByLabelText('셈할 범위 하한 (Hz)')).toBeDefined())
+    await waitFor(() => expect(screen.getByLabelText('찾을 범위 하한 (Hz)')).toBeDefined())
     expect((screen.getByLabelText('해석 종류') as HTMLSelectElement).value).toBe('random')
     expect(screen.getByLabelText('모드 중첩에 쓸 모드 수')).toBeDefined()
-    expect(screen.getByText(/가진은 CAD 의 가속도 PSD 입니다/)).toBeDefined()
-    await userEvent.type(screen.getByLabelText('셈할 범위 상한 (Hz)'), '1000')
-    await userEvent.type(screen.getByLabelText('셈할 범위 하한 (Hz)'), '20')
+    expect(screen.getByText(/가진은 CAD 의 가속도 PSD 이고/)).toBeDefined()
+    expect(screen.getByText(/가진 대역은 PSD 표의 범위입니다/)).toBeDefined()
+    await userEvent.type(screen.getByLabelText('찾을 범위 상한 (Hz)'), '1000')
+    await userEvent.type(screen.getByLabelText('찾을 범위 하한 (Hz)'), '20')
     await userEvent.click(screen.getByRole('button', { name: '3건 실행' }))
     await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
     const spec = vi.mocked(simulationApi.importDoe).mock.calls[0][0].spec as Record<string, unknown>
     expect(spec).toMatchObject({ recipe: 'random', solver: 'calculix', modes: 6, damping_ratio: 0.02 })
     expect(spec.frequency_range_hz).toEqual([20, 1000])
+  })
+
+  it('CAD 가 랜덤의 찾을 범위를 적었으면 칸을 잠그고 비워 보낸다(CAD 것이 먼저)', async () => {
+    vi.mocked(simulationApi.previewDoePoint).mockResolvedValue({
+      ...SHEAR,
+      recipe: 'random',
+      suggested_recipe: 'random',
+      suggested_modes: 6,
+      suggested_frequency_range_hz: [100, 3000],
+    })
+    openAt(DOE)
+    await waitFor(() => expect(screen.getByLabelText('찾을 범위 하한 (Hz)')).toBeDefined())
+    expect((screen.getByLabelText('찾을 범위 하한 (Hz)') as HTMLInputElement).disabled).toBe(true)
+    expect(screen.getByText(/CAD 가 적은 범위 100 – 3,000 Hz 안의 모드를 찾습니다/)).toBeDefined()
+    await userEvent.click(screen.getByRole('button', { name: '3건 실행' }))
+    await waitFor(() => expect(simulationApi.importDoe).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.importDoe).mock.calls[0][0].spec as Record<string, unknown>
+    expect('frequency_range_hz' in spec).toBe(false)
   })
 
   it('해석 종류를 바꾸면 보는 점의 조건을 그 종류로 다시 읽는다', async () => {

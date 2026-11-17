@@ -20,7 +20,7 @@ import pytest
 from app.core.calculix import tools
 from app.core.calculix.mesh import read_mesh
 from app.core.stages import StageFailure
-from tests.opensolver.test_calculix import SIDE_SHAKE, SPEC, _run
+from tests.opensolver.test_calculix import FIXTURES, SIDE_SHAKE, SPEC, _run
 
 pytestmark = pytest.mark.opensolver
 
@@ -92,7 +92,7 @@ def _result(work: Path) -> dict[str, Any]:
 def test_선언한_본딩은_pinball_안의_간극만_묶는다(ready: None, tmp_path: Path) -> None:
     """기둥이 0.3 mm 떠 있다. pinball 0.5 mm 면 묶여 맞닿은 모델과 같은 1차가 나오고, 0.1 mm 면
     안 묶여 기둥이 떠서 0 Hz 모드가 나온다. pinball 이 없으면 요소 크기의 절반(2.5 mm)이라
-    묶인다. 「Adjust to Touch」 는 종 절점을 주 면에 붙인다(`ADJUST=YES`)."""
+    묶인다. 종 절점은 늘 주 면에 붙인다(`ADJUST=YES`)."""
     touching = tmp_path / "touching"
     _lifted(touching, 0.0)
     _run(touching, SPEC)
@@ -111,10 +111,10 @@ def test_선언한_본딩은_pinball_안의_간극만_묶는다(ready: None, tmp
             assert _floating(work), pinball
         assert "tie:기둥-판" in summary["constrained_regions"]
 
-    adjusted = tmp_path / "adjusted"
-    _lifted(adjusted, 0.3, contact={"interface_treatment": "adjust_to_touch"})
-    _run(adjusted, SPEC)
-    assert "ADJUST=YES" in (adjusted / "model.inp").read_text(encoding="utf-8")
+    # **CAD 가 「Adjust to Touch」 를 안 적어도 옮긴다** — 안 옮기면 종 절점이 주 면에서 떨어진
+    # 만큼 구속식이 회전 강체 모드를 잡는다(`bonding.py`, 아래 자유-자유 시험).
+    deck = (tmp_path / "pinball-None" / "model.inp").read_text(encoding="utf-8")
+    assert "ADJUST=YES" in deck and "ADJUST=NO" not in deck
 
 
 def test_선언이_없으면_미세_간극은_묶고_CompCore_가_알린_틈새는_남긴다(
@@ -362,3 +362,63 @@ def test_조립에서_빠진_접촉과_미끄럼_접촉을_0_Hz_모드와_함께
     assert result["rigid_body_modes"] == 0
     assert found["missing"][0]["first_elastic_hz"] == pytest.approx(1263.5, rel=0.01)
     assert 0.8 < summary["first_elastic_hz"] / found["missing"][0]["first_elastic_hz"] < 0.95
+
+
+def _free_free(folder: Path, work: Path) -> dict[str, Any]:
+    """CAD 폴더의 첫 점을 **지지 · 하중 없이** 모달로 — 본딩만 남긴다. 결과를 돌려준다."""
+    work.mkdir(parents=True)
+    points = folder / "points"
+    step = points / "p0001.step"
+    if not step.exists():
+        step = next((folder / "shapes").glob("*.step"))
+    shutil.copy(step, work / "input.step")
+    if (points / "p0001_mid.step").exists():
+        shutil.copy(points / "p0001_mid.step", work / "input_mid.step")
+    payload = json.loads((points / "p0001.json").read_text(encoding="utf-8"))
+    conditions = payload["conditions"]
+    conditions["constraints"] = []
+    conditions["loads"] = []
+    conditions["analysis"] = {"type": "modal", "modes": 6, "solver": "program_controlled"}
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    _run(work, {"recipe": "modal", "solver": "calculix", "modes": 6})
+    return _result(work)
+
+
+def test_자유_자유_본딩은_강체_모드가_여섯이고_구속식이_회전을_잡지_않는다(
+    ready: None, tmp_path: Path
+) -> None:
+    """**종 절점을 주 면 위로 옮긴다**(`ADJUST=YES`, 2026-11-17). 안 옮기면 종 절점이 주
+    면에서 떨어진 만큼(2차 곡면의 현 오차 · 미세 간극) 구속식이 강체 회전을 잡는다.
+    「조건_볼트예압_판본딩」(본딩 셋, 나사 물림은 원통면) 자유-자유의 회전 셋이 0.23 · 0.30 ·
+    0.30 Hz 였고(옮기면 0.003 Hz, 절점 공유와 같다), 64쌍 조립은 1 Hz 를 넘어 강체 모드가
+    3개로 셌다."""
+    bolted = tmp_path / "bolted"
+    result = _free_free(FIXTURES / "doe" / "조건_볼트예압_판본딩", bolted)
+    deck = (bolted / "model.inp").read_text(encoding="utf-8")
+    assert deck.count("ADJUST=YES") == 3 and "ADJUST=NO" not in deck
+    rigid = [one for one in result["modes"] if one["rigid_body"]]
+    assert len(rigid) == 6 and not any(one.get("held_rigid") for one in rigid)
+    assert max(one["frequency_hz"] for one in rigid) < 0.05
+    assert "warning" not in result, result.get("warning")
+
+
+def test_쉘_솔리드_본딩은_구속식으로_묶어_회전을_잡지_않는다(
+    ready: None, tmp_path: Path
+) -> None:
+    """**쉘 ↔ 솔리드 본딩은 `*TIE` 가 아니라 `*EQUATION`** 이다(`deck.Slide.bonded`,
+    2026-11-17). `*TIE` 는 쉘을 펼친 3D 절점(중간면 ± 두께/2)을 모두 솔리드 면에 묶어,
+    두께만큼 떨어진 절점들이 강체 회전을 잡았다 — 셸모델_시트받침조립 자유-자유의 회전 셋이
+    2.62 · 5.04 · 12.8 Hz(1차 탄성 475.30 Hz, `ADJUST` 로는 안 풀린다). 구속식은 원래 쉘
+    절점(펼친 절점의 평균 = 중간면)에 걸린다 — 0.011 Hz 아래 여섯 · 1차 탄성 475.25 Hz."""
+    sheet = tmp_path / "sheet"
+    result = _free_free(FIXTURES / "doe" / "셸모델_시트받침조립", sheet)
+    deck = (sheet / "model.inp").read_text(encoding="utf-8")
+    assert "*TIE" not in deck and "*EQUATION" in deck
+    rigid = [one for one in result["modes"] if one["rigid_body"]]
+    assert len(rigid) == 6 and not any(one.get("held_rigid") for one in rigid)
+    assert max(one["frequency_hz"] for one in rigid) < 0.1
+    first = next(one for one in result["modes"] if not one["rigid_body"])
+    assert first["frequency_hz"] == pytest.approx(475.25, rel=0.01)
+    assert "warning" not in result, result.get("warning")

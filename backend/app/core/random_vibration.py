@@ -47,8 +47,8 @@ BASE_POINTS = 400
 #: 모드 둘레에 더하는 자리 — fₘ(1 ± ζ·x). 반전력 폭이 x = 1 이고, 0.04 에서 40 까지 등비(1.12
 #: 배)로 놓는다 — 봉우리 꼬리(∝ 1/x²)를 사다리꼴로 적분할 때 간격비가 크면 몇 % 넘친다.
 _AROUND = (0.0, *(0.04 * 1.12**at for at in range(62)))
-#: 가장 높은 모드가 범위 위끝의 이 배수에 못 미치면 「모드를 늘리라」 고 적는다 — 위쪽 모드의
-#: 정적 몫이 빠진다(Ansys 가 권하는 기준).
+#: 가장 높은 모드가 가진 대역 위끝의 이 배수에 못 미치면 「모드를 늘리라」 고 적는다 — 위쪽
+#: 모드의 정적 몫이 빠진다(Ansys 가 권하는 기준).
 MODE_REACH = 1.5
 
 
@@ -77,28 +77,28 @@ class RandomPlan:
 
     low: float
     high: float
+    """**가진 대역** — PSD 표들이 덮는 범위(표 밖은 0). CAD 의 `frequency_range` 는 모드를 찾을
+    범위라 여기 쓰지 않는다(CompCore 계약 2026-11-17, `modes.search`)."""
     damping_ratio: float
     shakes: tuple[Shake, ...]
-    source: str
-    """범위를 누가 정했나 — `cad` · `spec` · `psd`(PSD 표의 범위)."""
+    residual_steps: int = 0
+    """덱이 고유치 단계 뒤에 붙인 **1 g 정적 단계 수**(가진마다 하나, 잔여 벡터) — `.frd` 의
+    마지막 변위 블록들이다. 0 이면 붙이지 못했다(선응력 · 비선형 접촉)."""
 
     def as_boundary(self) -> dict[str, Any]:
         return {
-            "frequency_range_hz": [self.low, self.high],
+            "band_hz": [self.low, self.high],
             "damping_ratio": self.damping_ratio,
-            "range_from": self.source,
             "shakes": [one.as_boundary() for one in self.shakes],
+            "residual_steps": self.residual_steps,
         }
 
 
 def plan(
-    given: condition_model.Conditions,
-    *,
-    span: tuple[float, float] | None,
-    damping_ratio: float,
+    given: condition_model.Conditions, *, damping_ratio: float
 ) -> tuple[RandomPlan | None, list[condition_model.Note]]:
-    """CAD 조건과 스펙(범위 · 감쇠비)을 합친다. **못 풀면 까닭을 돌려준다** — 가진이 없거나,
-    좌표계를 못 찾았거나, 범위가 PSD 표와 겹치지 않을 때."""
+    """CAD 조건과 스펙(감쇠비)을 합친다. **못 풀면 까닭을 돌려준다** — 가진이 없거나, 좌표계를
+    못 찾았을 때. 가진 대역은 PSD 표들이 덮는 범위다."""
     refused: list[condition_model.Note] = []
     shakes: list[Shake] = []
     for psd in given.psd:
@@ -136,24 +136,8 @@ def plan(
                 " 있어야 합니다.",
             )
         ]
-    first = min(one.table[0][0] for one in shakes)
-    last = max(one.table[-1][0] for one in shakes)
-    declared = given.analysis.frequency_range
-    if declared is not None and 0 <= declared[0] < declared[1]:
-        low, high, source = declared[0], declared[1], "cad"
-    elif span is not None:
-        low, high, source = span[0], span[1], "spec"
-    else:
-        low, high, source = first, last, "psd"
-    # PSD 표 밖은 0 이다 — 셈할 것이 없으니 잘라 낸다.
-    low, high = max(low, first), min(high, last)
-    if not low < high:
-        return None, [
-            condition_model.Note(
-                "랜덤 진동의 주파수 범위",
-                f"범위가 PSD 표({first:g}~{last:g} Hz)와 겹치지 않습니다.",
-            )
-        ]
+    low = min(one.table[0][0] for one in shakes)
+    high = max(one.table[-1][0] for one in shakes)
     damping = given.analysis.damping_ratio
     return (
         RandomPlan(
@@ -161,7 +145,6 @@ def plan(
             high=high,
             damping_ratio=damping if damping is not None and damping > 0 else damping_ratio,
             shakes=tuple(shakes),
-            source=source,
         ),
         [],
     )
@@ -173,7 +156,7 @@ def read(payload: dict[str, Any]) -> RandomPlan | None:
     if not isinstance(block, dict):
         return None
     try:
-        low, high = (float(one) for one in block["frequency_range_hz"])
+        low, high = (float(one) for one in block["band_hz"])
         shakes = tuple(
             Shake(
                 name=str(row["name"]),
@@ -192,7 +175,7 @@ def read(payload: dict[str, Any]) -> RandomPlan | None:
             high=high,
             damping_ratio=float(block["damping_ratio"]),
             shakes=shakes,
-            source=str(block.get("range_from") or "psd"),
+            residual_steps=int(block.get("residual_steps") or 0),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -250,7 +233,7 @@ def grid(
         else:
             found.add(low + (high - low) * at / BASE_POINTS)
     for natural in naturals:
-        if natural <= 0:
+        if natural <= 0 or math.isinf(natural):
             continue
         for offset in _AROUND:
             for sign in (1.0, -1.0):
@@ -279,7 +262,12 @@ def trapezoid(freqs: Sequence[float]) -> list[float]:
 
 
 def modal_gain(natural_hz: float, hz: float, damping_ratio: float) -> complex:
-    """모드 좌표의 응답(mm 당 Γ, 1 g 가진당) — hₘ(f) = -g / (ωₘ² - Ω² + 2iζωₘΩ)."""
+    """모드 좌표의 응답(mm 당 Γ, 1 g 가진당) — hₘ(f) = -g / (ωₘ² - Ω² + 2iζωₘΩ).
+
+    **잔여 벡터**(`RESIDUAL`)는 주파수와 무관하게 1 이다 — 그 「모드 형상」 이 이미 1 g 당 정적
+    변위다(`with_residual`)."""
+    if math.isinf(natural_hz):
+        return 1.0 + 0j
     wn = 2 * math.pi * natural_hz
     w = 2 * math.pi * hz
     return -G_MM_S2 / complex(wn * wn - w * w, 2 * damping_ratio * wn * w)
@@ -308,6 +296,58 @@ def gather(
             row.append(sum(shake.direction[axis] * values[axis] for axis in range(3)))
         out[shake.name] = tuple(row)
     return Modes(naturals=tuple(naturals), participation=out)
+
+
+#: 잔여 벡터의 「고유진동수」 — 모드 중첩에 주파수와 무관한 모드로 끼운다(`modal_gain`).
+RESIDUAL = math.inf
+
+
+def with_residual(
+    modes: Modes,
+    shapes: Sequence[Mapping[int, Sequence[float]]],
+    statics: Sequence[Mapping[int, Sequence[float]]],
+    shakes: Sequence[Shake],
+) -> tuple[Modes, list[Mapping[int, Sequence[float]]]]:
+    """**빠진 모드의 정적 몫**(잔여 벡터)을 가진마다 「모드」 하나로 더한다.
+
+    가진 s 를 1 g 로 걸었을 때의 정적 변위 uₛ(덱의 정적 단계) 에서 모드들이 이미 낸 정적 몫
+    Σₘ φₘ Γₘ,ₛ hₘ(0) 을 뺀 것 Rₛ 가 그 형상이다. 고유진동수가 가진 대역보다 훨씬 높은
+    부품(준정적)은 모드 수가 모자라면 응답이 모드 수에 따라 출렁인다(시험_랜덤진동: 모드 10 ·
+    40 · 100 개에 +20 · -13 · +6 %). Rₛ 를 더하면 낮은 주파수 끝에서 정적 해와 같아진다(Ansys
+    의 잔여 벡터와 같은 길). 0 Hz 모드는 hₘ(0) 이 없어 빼지 않는다."""
+    naturals = list(modes.naturals)
+    participation = {name: list(values) for name, values in modes.participation.items()}
+    out: list[Mapping[int, Sequence[float]]] = list(shapes)
+    for shake, static in zip(shakes, statics, strict=True):
+        gamma = modes.participation[shake.name]
+        gains = [
+            gamma[m] * modal_gain(natural, 0.0, 0.0).real
+            if natural > 0 and not math.isinf(natural)
+            else 0.0
+            for m, natural in enumerate(modes.naturals)
+        ]
+        used = [m for m, gain in enumerate(gains) if gain != 0.0]
+        residual: dict[int, list[float]] = {}
+        for node, moved in static.items():
+            vector = [float(one) for one in list(moved)[:3]]
+            for m in used:
+                phi = shapes[m].get(node)
+                if phi is None:
+                    continue
+                for axis in range(3):
+                    vector[axis] -= phi[axis] * gains[m]
+            residual[node] = vector
+        out.append(residual)
+        naturals.append(RESIDUAL)
+        for name, values in participation.items():
+            values.append(1.0 if name == shake.name else 0.0)
+    return (
+        Modes(
+            naturals=tuple(naturals),
+            participation={name: tuple(values) for name, values in participation.items()},
+        ),
+        out,
+    )
 
 
 @dataclass(frozen=True)
@@ -417,9 +457,15 @@ def field(
 ) -> dict[int, float]:
     """절점마다 **1σ 변위(mm, 지지부 기준)** — 크기 √(σx² + σy² + σz²).
 
-    응답에 거의 안 보태는 모드는 뺀다(대각 몫이 가장 큰 것의 10⁻¹⁰ 아래) — 가진 방향과 직각인
-    모드들이다. 남은 모드 K 개로 절점마다 K² 번 곱한다."""
-    diagonal = [matrix[m][m] for m in range(len(matrix))]
+    응답에 거의 안 보태는 모드는 뺀다(몫이 가장 큰 것의 10⁻¹⁰ 아래) — 가진 방향과 직각인
+    모드들이다. **몫은 대각값 x 형상의 크기²** 로 본다 — 모드 형상은 질량 정규화 값이고 잔여
+    벡터는 mm 라, 대각값만 견주면 잔여 벡터 곁에서 진짜 모드가 다 빠진다(실측 2026-11-17,
+    시험_랜덤진동). 남은 모드 K 개로 절점마다 K² 번 곱한다."""
+    sizes = [
+        max((sum(c * c for c in list(v)[:3]) for v in one.values()), default=0.0)
+        for one in shapes
+    ]
+    diagonal = [matrix[m][m] * sizes[m] for m in range(len(matrix))]
     top = max(diagonal, default=0.0)
     kept = [m for m, value in enumerate(diagonal) if top > 0 and value > 1e-10 * top]
     rows = [[matrix[m][k] for k in kept] for m in kept]

@@ -98,6 +98,22 @@ def _rows(text: str, head: str) -> dict[int, list[float]]:
     return found
 
 
+#: `*EL PRINT … EMAS, TOTALS=ONLY` 의 머리 — 그다음 숫자 줄이 그 묶음의 질량(tonne).
+_MODEL_MASS = re.compile(r"total mass for set (\w+) and time[^\n]*\n\s*\n?\s*([-+0-9.Ee]+)")
+
+
+def model_mass(text: str) -> float | None:
+    """**솔버가 셈한 전체 질량**(tonne) — 덱의 밀도 · 형상이 그대로 든 값(`deck._finish` 가
+    첫 단계에 `EMAS` 를 찍게 한다). 없으면 None. 여러 번 찍혔으면(증분마다) 첫 값."""
+    found = _MODEL_MASS.search(text)
+    if found is None:
+        return None
+    try:
+        return float(found.group(2))
+    except ValueError:
+        return None
+
+
 def total_masses(text: str) -> list[float]:
     """방향마다 전체 유효질량(tonne · 이동 셋은 모델 질량) — 없으면 빈 것."""
     return _totals(text)

@@ -1175,8 +1175,15 @@ def _psd_table(value: Any) -> tuple[tuple[tuple[float, float], ...] | None, str]
 def _initial(row: dict[str, Any], recipe: str, made: Conditions) -> None:
     kind = str(row.get("type") or "")
     if kind == "environment_temperature":
+        # **물성 기준 온도로 쓴다**(CompCore 계약 2026-11-17 —
+        # `materials.reference_temperature`). 열 변형은 풀지 않는다 — 덱에 열팽창 계수를
+        # 넣지 않아 열 변형이 0 이다(Ansys 도 바디 온도가 따로 없으면 0).
         made.skipped.append(
-            Note("초기조건 (환경 온도)", "열응력을 풀지 않으므로 모달 결과를 바꾸지 않습니다")
+            Note(
+                "초기조건 (환경 온도)",
+                "물성 기준 온도로 씁니다(탄성계수 온도 표에서 가장 가까운 점) — 열 변형은 "
+                "풀지 않습니다",
+            )
         )
         return
     if kind == "prestress":

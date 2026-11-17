@@ -24,7 +24,13 @@
 - 검색 반경은 pinball 이 오면 그것, 아니면 선언한 쌍은 요소 크기의 절반(그 두 면 사이에서만
   찾으므로 넉넉해도 엉뚱한 면에 안 붙는다), 자동은 형상 맞춤 허용오차와 요소 크기의 2 % 중 큰
   것 — CompCore 가 그 두 바디 사이의 틈을 알렸으면 그 0.4 배 아래(설계 틈새를 묶지 않는다).
-- 「Adjust to Touch」 는 종 절점을 주 면 위로 옮긴다(`ADJUST=YES`).
+- **본딩 `*TIE` 는 늘 `ADJUST=YES` 다**(2026-11-17) — 종 절점을 주 면 위로 옮긴다. ccx 의
+  구속식은 u종 = Σ N·u주 라, 종 절점이 주 면에서 δ 떨어져 있으면 강체 회전 ω 에서 ω x δ 만큼
+  어긋나 **회전 강체 모드를 잡는다**. 따로 메시한 2차 곡면의 현 오차 · CAD 의 미세 간극만으로
+  생긴다 — 자유-자유 「조건_볼트예압_판본딩」 의 회전 셋이 0.23 · 0.30 · 0.30 Hz 로 올라왔고
+  (옮기면 0.003 Hz, 절점 공유와 같다), 64쌍 조립은 1 Hz 를 넘어 강체 모드가 3개로 셌다.
+  Mechanical 의 본딩(MPC)은 간극을 둔 채로 강체 운동에 맞는 구속식을 세운다 — ccx 에서 그와
+  같아지는 길이 이것이다. 옮기는 거리는 검색 반경 안이다(맞닿게 그린 면이면 현 오차뿐).
 - **강체가 낀 묶음은 `*TIE` 를 쓰지 않고 상대 절점을 그 강체에 넣는다** — 강체 표면에 묶으면
   구속이 사슬이 되어 ccx 가 기준점 반력에 그 몫을 안 넣었다(쉘 묶음과 같은 까닭,
   `build._ties`).
@@ -327,7 +333,9 @@ def _declared(
                     slave_nodes=frozenset(slaves),
                     master_faces=masters,
                     tolerance=radius,
-                    adjust=pair.interface_treatment == "adjust_to_touch",
+                    # 늘 옮긴다 — 안 옮기면 회전 강체 모드를 잡는다(맨 위 「본딩 `*TIE` 는 늘
+                    # `ADJUST=YES`」).
+                    adjust=True,
                 )
             )
             logger.info(
@@ -518,6 +526,7 @@ def _automatic(
                             fixed or set(),
                         ),
                         tolerance=reach_here,
+                        adjust=True,
                     )
                 )
             used |= near

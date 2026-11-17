@@ -13,7 +13,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 
 import type { Artifact, RandomResult as RandomResultData } from '@/modules/simulations/api'
 import { simulationApi } from '@/modules/simulations/api'
-import { shownValue as shown } from '@/modules/simulations/format'
+import { rangeText, shownValue as shown } from '@/modules/simulations/format'
 import { Chart } from '@/shared/charts'
 
 // **3D 뷰어는 `lazy()` 로만 받는다** — vtk.js 한 덩어리가 수백 KB 다(`shared/viewer`).
@@ -25,10 +25,9 @@ type Props = {
   artifacts: Artifact[]
 }
 
-const RANGE_FROM: Record<RandomResultData['range_from'], string> = {
+const RANGE_FROM: Record<'cad' | 'spec', string> = {
   cad: 'CAD 가 적은 범위',
   spec: '작업에서 준 범위',
-  psd: 'PSD 표의 범위',
 }
 
 /** 그림에 싣는 점 상한 — 넘으면 고르게 솎는다(봉우리 자리는 남긴다). */
@@ -90,7 +89,10 @@ export function RandomResult({ simulationId, result, artifacts }: Props) {
   }))
   const first = probes[0]
   const largest = result.max_displacement?.value_mm
-  const [low, high] = result.frequency_range_hz
+  // **v0.29.0 의 결과는 `band_hz` 가 없다** — 그때는 `frequency_range_hz` 가 적분 대역이었다(찾을 범위가
+  // 아니다). 저장된 옛 결과도 읽는다.
+  const [low, high] = result.band_hz ?? result.frequency_range_hz ?? [freqs[0] ?? 0, freqs[freqs.length - 1] ?? 0]
+  const searched = result.band_hz ? result.frequency_range_hz : undefined
 
   return (
     <section className="space-y-3">
@@ -126,7 +128,7 @@ export function RandomResult({ simulationId, result, artifacts }: Props) {
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">감쇠비 · 범위</dt>
+          <dt className="text-muted-foreground text-xs">감쇠비 · 가진 대역</dt>
           <dd className="font-medium">
             {(result.damping_ratio * 100).toFixed(1)}% · {shown(low)}~{shown(high)} Hz
           </dd>
@@ -134,8 +136,19 @@ export function RandomResult({ simulationId, result, artifacts }: Props) {
       </dl>
       <p className="text-muted-foreground text-xs">
         1σ(실효값) — 시간의 68.3 % 가 그 아래, 3σ 는 세 배(99.7 %). 가속도는 지지부의 가속도를 더한 절대 값
-        (가속도계가 재는 값), 변위는 지지부 기준입니다. 범위는 {RANGE_FROM[result.range_from]}이고, 가진이
-        여럿이면 서로 무관한 것으로 더했습니다.
+        (가속도계가 재는 값), 변위는 지지부 기준입니다. 가진 대역은 PSD 표의 범위이고, 가진이 여럿이면 서로 무관한
+        것으로 더했습니다.
+        {searched && (result.range_from === 'cad' || result.range_from === 'spec') && (
+          <>
+            {' '}
+            모드는 {RANGE_FROM[result.range_from]} {rangeText(searched)} 안에서 찾은 것만 썼습니다.
+          </>
+        )}
+        {result.residual === undefined
+          ? null
+          : result.residual
+            ? ' 빠진 높은 모드의 정적 몫(잔여 벡터)을 더했습니다 — 고유진동수가 대역보다 훨씬 높은 부품도 모드 수와 상관없이 맞습니다.'
+            : ' 빠진 높은 모드의 정적 몫(잔여 벡터)은 더하지 못했습니다(선응력 · 비선형 접촉) — 모드 수가 모자라면 응답이 달라집니다.'}
       </p>
 
       {probes.length > 0 && (

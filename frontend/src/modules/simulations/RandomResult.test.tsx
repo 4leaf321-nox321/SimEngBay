@@ -2,7 +2,7 @@
  * **랜덤 진동 결과를 읽을 수 있게 보여 주는가**(CompCore 2026-11-17 「조건_랜덤진동」 의 값).
  *
  * ① 측정점 가속도 1σ · 최대 1σ 변위가 **3σ 와 함께** 뜬다 — 설계는 흔히 3σ 로 본다. ② 입력 Grms ·
- * 감쇠비 · 범위가 같이 뜬다. ③ 랜덤 결과가 모달 화면으로 새지 않는다 — 랜덤에도 `modes` 가 있다.
+ * 감쇠비 · 가진 대역이 같이 뜬다. ③ 랜덤 결과가 모달 화면으로 새지 않는다 — 랜덤에도 `modes` 가 있다.
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -25,14 +25,13 @@ const shaken: RandomResultData = {
   mesh: { nodes: 6436, elements: 5451 },
   sigma: 1,
   damping_ratio: 0.02,
-  frequency_range_hz: [20, 2000],
-  range_from: 'psd',
+  band_hz: [20, 2000],
+  residual: true,
   inputs: [
     {
       name: 'X 랜덤',
       direction: [1, 0, 0],
       grms: 6.05818,
-      grms_in_range: 6.05818,
       declared_grms: 6.05818,
       table: [
         [20, 0.01],
@@ -83,7 +82,8 @@ describe('랜덤 진동 결과', () => {
     expect(screen.getByText('0.00580426 mm · 3σ 0.0174128 mm')).toBeDefined()
     expect(screen.getByText('X 랜덤 6.058 Grms')).toBeDefined()
     expect(screen.getByText('2.0% · 20~2000 Hz')).toBeDefined()
-    expect(screen.getByText(/PSD 표의 범위/)).toBeDefined()
+    expect(screen.getByText(/가진 대역은 PSD 표의 범위/)).toBeDefined()
+    expect(screen.getByText(/정적 몫\(잔여 벡터\)을 더했습니다/)).toBeDefined()
     // 축 성분 · 응답 봉우리 · 모드의 유효질량 몫.
     expect(screen.getByText('36.59 · 0.155167 · 3.062')).toBeDefined()
     // 응답 봉우리(1,263.0 Hz)와 1차 모드(1,263.4 Hz)가 같은 자리다.
@@ -91,6 +91,29 @@ describe('랜덤 진동 결과', () => {
     expect(screen.getByText('2.7%')).toBeDefined()
     expect(screen.getByRole('img', { name: /로그-로그/ })).toBeDefined()
     expect(screen.getByText('이 작업은 1σ 그림을 만들지 않았습니다.')).toBeDefined()
+  })
+
+  it('모드를 찾은 범위와 잔여 벡터를 못 더한 것을 적는다', () => {
+    render(
+      <RandomResult
+        simulationId="s1"
+        result={{ ...shaken, frequency_range_hz: [100, 3000], range_from: 'cad', residual: false }}
+        artifacts={[]}
+      />,
+    )
+    expect(screen.getByText(/모드는 CAD 가 적은 범위 100 – 3,000 Hz 안에서 찾은 것만/)).toBeDefined()
+    expect(screen.getByText(/잔여 벡터\)은 더하지 못했습니다/)).toBeDefined()
+    // 가진 대역은 여전히 PSD 표다.
+    expect(screen.getByText('2.0% · 20~2000 Hz')).toBeDefined()
+  })
+
+  it('v0.29.0 의 결과(가진 대역이 `frequency_range_hz`)도 읽는다', () => {
+    const { band_hz: _band, residual: _residual, ...rest } = shaken
+    const old = { ...rest, frequency_range_hz: [20, 2000], range_from: 'psd' } as RandomResultData
+    render(<RandomResult simulationId="s1" result={old} artifacts={[]} />)
+    expect(screen.getByText('2.0% · 20~2000 Hz')).toBeDefined()
+    expect(screen.queryByText(/안에서 찾은 것만/)).toBeNull()
+    expect(screen.queryByText(/잔여 벡터/)).toBeNull()
   })
 
   it('경고를 맨 위에 보인다', () => {

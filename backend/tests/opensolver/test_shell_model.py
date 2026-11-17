@@ -106,7 +106,9 @@ def test_시트_외팔보가_손셈에_맞는다(ready: None, tmp_path: Path) ->
 
 def test_시트를_솔리드_받침에_접착해_푼다(ready: None, tmp_path: Path) -> None:
     """솔리드 받침(base) 위에 시트(skin)를 접착 띠로 붙였다. 손셈 끝 처짐 0.173 mm.
-    실측(2026-10-16): 0.1767 mm · 12.54 MPa · *TIE 하나.
+    실측(2026-10-16): 0.1767 mm · 12.54 MPa · *TIE 하나. 2026-11-17 부터 `*TIE` 가 아니라
+    구속식(`*EQUATION`, x · y · z)으로 묶는다 — `*TIE` 는 쉘을 펼친 절점을 모두 묶어 강체
+    회전을 잡았다(`test_bonding` 의 자유-자유 시험).
 
     접착 띠(시트)와 받침 윗면(솔리드)이 같은 자리에 있다 — 쉘 면에 파트 이름을 달기 전에는
     두 면을 한 파트로 읽어 「쉘끼리의 접촉」 으로 막았다.
@@ -115,11 +117,13 @@ def test_시트를_솔리드_받침에_접착해_푼다(ready: None, tmp_path: P
     result, summary = _solve(tmp_path, _spec())
     assert summary["shell_bodies"] == "skin 1.2 mm"
     deck = (tmp_path / "model.inp").read_text(encoding="utf-8")
-    assert deck.count("*TIE") == 1 and "TYPE=S6" in deck and "TYPE=C3D10" in deck
+    assert "*TIE" not in deck and deck.count("*EQUATION") == 1
+    assert "TYPE=S6" in deck and "TYPE=C3D10" in deck
     assert result["max_displacement"] == pytest.approx(0.173, rel=0.05)
     # 받침(4000 mm³) + 시트(2000 mm² x 1.2 mm) = 6400 mm³ x 7850 kg/m³.
     assert summary["mass_kg"] == pytest.approx(0.0502, rel=0.01)
-    # 반력 — 손셈 1.6 N(0.001 MPa x 80 x 20). 시트가 *TIE 로 받침에 얹혀 받침 바닥이 받는다.
+    # 반력 — 손셈 1.6 N(0.001 MPa x 80 x 20). 시트가 구속식으로 받침에 얹혀 받침 바닥이
+    # 받는다.
     assert result["reactions"]["받침 바닥"] == pytest.approx([0.0, 0.0, 1.6], abs=1e-4)
 
 

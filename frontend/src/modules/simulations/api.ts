@@ -172,15 +172,22 @@ export interface RandomResult {
   mesh?: { nodes: number; elements: number }
   sigma: number
   damping_ratio: number
-  frequency_range_hz: [number, number]
-  /** 범위를 누가 정했나 — `cad` · `spec` · `psd`(PSD 표의 범위). */
-  range_from: 'cad' | 'spec' | 'psd'
-  /** 가진마다 — 전역 방향 · 표의 Grms · 셈한 범위 안의 Grms · CAD 가 셈한 값(있으면). */
+  /** **가진 대역** — PSD 표들이 덮는 범위(적분 범위). v0.29.0 의 결과에는 없다(그때는 `frequency_range_hz`). */
+  band_hz?: [number, number]
+  /**
+   * **모드를 찾은 범위**(모달과 같은 열쇠 · 뜻 — CompCore 의 랜덤 `frequency_range`). 그 안의 모드만 중첩에
+   * 썼다. 없으면 낮은 차수부터.
+   */
+  frequency_range_hz?: [number, number]
+  /** v0.29.0 의 결과에는 `psd`(그때의 적분 대역 출처)도 있다. */
+  range_from?: 'cad' | 'spec' | 'psd'
+  /** 빠진 모드의 정적 몫(잔여 벡터)을 더했나 — 못 더했으면(선응력 · 비선형 접촉) 모드 수에 따라 응답이 출렁인다. */
+  residual?: boolean
+  /** 가진마다 — 전역 방향 · 표의 Grms · CAD 가 셈한 값(있으면). */
   inputs: {
     name: string
     direction: [number, number, number]
     grms: number
-    grms_in_range: number
     declared_grms?: number
     table: [number, number][]
   }[]

@@ -465,6 +465,12 @@ def build(
                 ),
                 "material": " · ".join(used.names),
                 "material_from": used.source,
+                # 탄성계수를 어느 온도의 값으로 썼나(온도 표에서 22 °C 에 가장 가까운 점).
+                **(
+                    {"material_temperature": line}
+                    if (line := materials.temperature_line(given))
+                    else {}
+                ),
                 **(
                     {
                         "youngs_modulus_gpa": round(used.single.youngs_modulus_gpa, 4),

@@ -801,7 +801,9 @@ def test_볼트_예압은_갈라진_절점을_조임량으로_묶고_다음_단�
     # 단면 앞쪽 절점(6)의 내력 합이 볼트 힘, 기준점의 변위가 조임량 — ① 끝은 `…A` 로 찍는다.
     assert (
         "*STEP\n*STATIC\n*CLOAD\n7, 1, 2000\n"
-        "*NODE PRINT, NSET=BOLT1CUTA, TOTALS=ONLY\nRF\n*NODE PRINT, NSET=BOLT1A\nU\n*END STEP"
+        "*NODE PRINT, NSET=BOLT1CUTA, TOTALS=ONLY\nRF\n*NODE PRINT, NSET=BOLT1A\nU\n"
+        # 첫 단계는 솔버가 셈한 질량도 찍는다(`deck._finish` — 단위 점검).
+        "*EL PRINT, ELSET=EMASS, TOTALS=ONLY\nEMAS\n*END STEP"
     ) in text
     assert "*BOUNDARY, FIXED\n7, 1, 1\n*CLOAD, OP=NEW\n*CLOAD\n5, 3, -1" in text
     assert "*NODE PRINT, NSET=BOLT1CUT, TOTALS=ONLY\nRF\n*NODE PRINT, NSET=BOLT1\nU" in text
@@ -1060,7 +1062,10 @@ def test_원격점은_좌표계_원점에_세울_수_있고_같은_면의_원통
     )
     assert plan.refused == []
     assert "6, 5.000000, 5.000000, 0.000000" in plan.text
-    pinned = plan.text.split("*BOUNDARY")[-1].split("*STEP")[0].strip().splitlines()
+    # 첫 단계 앞의 질량 묶음(`*ELSET, ELSET=EMASS`, 단위 점검)은 구속 줄이 아니다.
+    pinned = (
+        plan.text.split("*BOUNDARY")[-1].split("*ELSET, ELSET=EMASS")[0].strip().splitlines()
+    )
     assert pinned == [
         "6, 1, 1, 0.0",
         "6, 2, 2, 0.0",

@@ -692,7 +692,8 @@ def test_랜덤_진동은_측정점_Grms_가_손셈과_맞고_조화_응답과_�
     result = json.loads((shaken / "result.json").read_text(encoding="utf-8"))
     assert result["recipe"] == "random" and result["acceleration"] == "absolute"
     assert result["inputs"][0]["grms"] == pytest.approx(6.058, abs=1e-3)
-    assert result["frequency_range_hz"] == [20, 2000] and result["range_from"] == "psd"
+    # 가진 대역은 PSD 표다 — 이 픽스처는 찾을 범위(`frequency_range`)가 null 이다.
+    assert result["band_hz"] == [20, 2000] and "frequency_range_hz" not in result
     tip = next(one for one in result["probes"] if one["name"] == "측정점")
     assert tip["value"] == pytest.approx(36.7, rel=0.03) and tip["unit"] == "g"
     assert tip["psd_peak_hz"] == pytest.approx(1263, rel=0.01)
@@ -713,8 +714,12 @@ def test_랜덤_진동은_측정점_Grms_가_손셈과_맞고_조화_응답과_�
     plan = random_model.read(json.loads((shaken / "boundary.json").read_text("utf-8")))
     assert plan is not None
     modes = random_model.gather(naturals, tables.participation_factors(report), plan.shakes)
+    # 모드 블록 뒤에 잔여 벡터의 1 g 정적 블록이 붙는다(가진마다 하나). 조화 응답(ccx)에는 잔여
+    # 벡터가 없으니 모드 몫만 견준다 — 이 기둥은 모드가 대역 안이라 잔여 몫이 작다.
+    assert result["residual"] is True and plan.residual_steps == 1
     blocks = [one for one in frd.read(shaken / "model.frd") if one.kind == "DISP"]
-    phis = [one.values[tip["node"]][:3] for one in blocks[-len(naturals) :]]
+    end = len(blocks) - plan.residual_steps
+    phis = [one.values[tip["node"]][:3] for one in blocks[end - len(naturals) : end]]
     compared = 0
     for point in harmonic["points"]:
         if point["frequency_hz"] < 800:

@@ -3,7 +3,8 @@
 뜻은 Ansys 의 `LimitSearchToRange` 그대로다 — **범위 안의 모드를 최대 `modes` 개.** 범위
 아래의 모드는 세지 않는다. 보고 싶은 대역(가진 대역 · 시험 대역)이 낮은 모드에 밀려 모드 수
 밖으로 나가지 않게 하는 칸이다. CAD 가 적어 보내면 그것이 먼저다(조화 응답의 범위와 같은 규칙 —
-`harmonic.py`).
+`harmonic.py`). **랜덤 진동도 같다** — 모드 중첩에 쓸 모드를 이 범위에서 찾는다(가진 대역은 PSD
+표다, `random_vibration`).
 
 ## CalculiX 에는 범위를 주지 않는다
 
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.core import conditions as condition_model
-from app.core.spec import ModalSpec
+from app.core.spec import ModalSpec, RandomSpec
 
 #: `boundary.json` 의 열쇠 — 모델링이 적고 솔브 · 추출이 읽는다.
 KEY = "mode_search"
@@ -57,16 +58,23 @@ class ModeSearch:
         return {"low": self.low, "high": self.high, "want": self.want, "source": self.source}
 
 
+#: CAD 의 `frequency_range` 가 **찾을 범위**인 해석 — 모달과 랜덤 진동(모달 단계의 범위다,
+#: CompCore 계약 2026-11-17 — 랜덤의 가진 대역은 PSD 표가 정한다).
+SEARCHED_KINDS = ("modal", "random")
+
+
 def cad_range(given: condition_model.Conditions) -> tuple[float, float] | None:
-    """CAD 가 적은 **모달의** 찾을 범위 — 해석 종류가 모달일 때만(조화의 범위는 훑을 범위라
+    """CAD 가 적은 찾을 범위 — 해석 종류가 모달 · 랜덤일 때만(조화의 범위는 훑을 범위라
     뜻이 다르다 — 조화로 적은 점 파일을 모달로 걸면 그 범위로 모드를 거르지 않는다)."""
     declared = given.analysis.frequency_range
-    if given.analysis.kind != "modal" or declared is None:
+    if given.analysis.kind not in SEARCHED_KINDS or declared is None:
         return None
     return declared if 0 <= declared[0] < declared[1] else None
 
 
-def mode_search(spec: ModalSpec, given: condition_model.Conditions) -> ModeSearch | None:
+def mode_search(
+    spec: ModalSpec | RandomSpec, given: condition_model.Conditions
+) -> ModeSearch | None:
     """찾을 범위 — CAD(`analysis.frequency_range`)가 먼저, 없으면 스펙. 둘 다 없으면 None."""
     declared = cad_range(given)
     if declared is not None:

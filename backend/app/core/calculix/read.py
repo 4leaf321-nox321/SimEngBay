@@ -87,6 +87,16 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
 
     # 그림 · 지문 · 측정점이 **같은 메시와 변위를 읽는다** — `.frd` 는 수십 MB 라 한 번만.
     found = _read_shapes(workdir)
+    # **구속식이 잡은 강체 모드**(자유-자유) — 1 Hz 를 넘었어도 모양이 강체 운동이면 강체로
+    # 센다. 묶음(*TIE)의 종 절점이 상대 면에서 떨어져 있으면 회전이 몇 Hz 로 올라온다
+    # (`modes.rigid`).
+    held: list[dict[str, Any]] = []
+    if not constrained and found is not None:
+        shapes_at = found
+        held = rigid_modes.held_rigid(modes, lambda number: _rigid_residual(shapes_at, number))
+        if held:
+            rigid_found = sum(1 for one in modes if one["rigid_body"])
+            elastic = [one for one in modes if not one["rigid_body"]]
     # 강체 모드도 성격을 잰다 — 0 Hz 모드에서 **어느 바디가 움직이나**(`part_share`)가 경고의
     # 재료다. Ansys 쪽도 모든 모드를 잰다.
     _describe_modes(workdir, found, modes)
@@ -99,6 +109,8 @@ def extract(spec: ModalSpec, workdir: Path, **_ignored: object) -> StageResult:
         constrained=constrained,
         connections=rigid_modes.read_connections(workdir / BOUNDARY_NAME),
     )
+    if held:
+        said = " ".join(one for one in (rigid_modes.held_note(held), said) if one)
     # **찾을 주파수 범위** — 범위 안만 남기고 탄성 차수를 그 안에서 다시 센다(`modes.search`).
     # 표 · 형상은 전체 차례(`number`)로 찾으므로 어긋나지 않는다.
     searched = mode_search.read(workdir / BOUNDARY_NAME)
@@ -262,6 +274,22 @@ def _cross(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, float, fl
 def _triple(a: tuple[float, ...], b: tuple[float, ...], c: tuple[float, ...]) -> float:
     cross = _cross(b, c)
     return a[0] * cross[0] + a[1] * cross[1] + a[2] * cross[2]
+
+
+def _rigid_residual(found: tuple[Mesh, list[frd_reader.Block]], number: int) -> float | None:
+    """그 모드의 변위가 강체 운동에서 얼마나 벗어났나(`modes.rigid.rigid_residual`)."""
+    mesh, blocks = found
+    if number > len(blocks):
+        return None
+    rows = blocks[number - 1].values
+    ids = [node for node in mesh.nodes if node in rows]
+    try:
+        return rigid_modes.rigid_residual(
+            [mesh.nodes[node] for node in ids], [rows[node][:3] for node in ids]
+        )
+    except Exception:  # pragma: no cover - 값이 깨진 경우
+        logger.warning("모드 %s 의 강체 맞춤을 못 셈했습니다", number, exc_info=True)
+        return None
 
 
 def _describe_modes(

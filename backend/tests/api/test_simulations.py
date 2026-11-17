@@ -1538,6 +1538,50 @@ def test_랜덤_진동_DOE_는_1σ_변위와_측정점_가속도를_견준다(
     assert "측정점 측정점 가속도 1σ (g)" in head
 
 
+AXES_FOLDER = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "doe"
+    / "시험규격"
+    / "시험_랜덤진동_축셋"
+)
+
+
+def test_축을_나눈_랜덤_진동은_설계점마다_한_축이다(
+    client: TestClient, member: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CompCore v0.29.0 「시험_랜덤진동_축셋」 — IEC 처럼 X · Y · Z 를 한 축씩. **한 조건에는
+    한 축**이고 축 셋은 고르기 인자(`가진 축`: x · y · z)로 나눈다 — 점 파일의 `direction` 은
+    성분, 축 이름은 `study.json` · `manifest.csv` 에만 있다. 설계점 셋이 형상 하나를 나눠
+    쓴다."""
+    folder = _fresh_study(AXES_FOLDER, tmp_path, monkeypatch)
+    preview = client.get(f"/api/simulations/doe/preview?path={folder}", headers=member.headers)
+    assert preview.json()["suggested_recipe"] == "random"
+    created = client.post(
+        "/api/simulations/doe/import",
+        json={
+            "path": str(folder),
+            "spec": {"recipe": "random", "material": MODAL["material"]},
+            "workspace_slug": member.workspace,
+        },
+        headers=member.headers,
+    )
+    assert created.status_code == 201, created.text
+    body = client.get(
+        f"/api/simulations/studies/{created.json()['study_id']}", headers=member.headers
+    ).json()
+    points = sorted(body["points"], key=lambda one: one["number"])
+    assert [one["params"]["가진 축"] for one in points] == ["x", "y", "z"]
+    assert all(one["status"] == "done" for one in points)
+    for one, axis in zip(points, ((1, 0, 0), (0, 1, 0), (0, 0, 1)), strict=True):
+        result = client.get(
+            f"/api/simulations/{one['simulation_id']}/result", headers=member.headers
+        ).json()
+        # 하중 이름에 축이 없다(v0.29.0) — 방향은 점 파일의 성분으로 온다.
+        assert result["inputs"][0]["name"] == "랜덤 가진"
+        assert tuple(result["inputs"][0]["direction"]) == axis
+
+
 def test_이름으로_묶인_옛_스터디도_상세가_열린다(
     client: TestClient, member: Signed, db: Session
 ) -> None:

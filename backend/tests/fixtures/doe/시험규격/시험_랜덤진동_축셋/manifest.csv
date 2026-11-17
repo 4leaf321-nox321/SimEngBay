@@ -1,0 +1,4 @@
+﻿point,status,가진 축,step_file,point_file,unresolved,interference,warnings,error
+1,ok,x,shapes/6a3a7528e816.step,points/p0001.json,,,,
+2,ok,y,shapes/6a3a7528e816.step,points/p0002.json,,,,
+3,ok,z,shapes/6a3a7528e816.step,points/p0003.json,,,,

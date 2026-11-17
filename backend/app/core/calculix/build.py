@@ -16,6 +16,8 @@ import json
 import logging
 import math
 import os
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -256,7 +258,7 @@ def build(
             "bodies": touch.contact_bodies(topology, by_name[one.contact]),
         }
         for one in shell_ties
-        if isinstance(one, deck_writer.Slide) and one.contact in by_name
+        if isinstance(one, deck_writer.Slide) and not one.bonded and one.contact in by_name
     ]
     # **접촉 없이 맞닿은 쌍** — CompCore 가 잰 목록(`quality.touching`)이 있으면 그것으로(두
     # 솔버가 같은 쌍을 말한다), 없는 옛 점 파일이면 메시에서 잰다(`bonding.untied_pairs`).
@@ -267,6 +269,16 @@ def build(
             given, contacts=[one for one in given.contacts if one.name not in tied]
         )
     held = _held_nodes(topology, given, mesh)
+    fixed_all = set().union(*held.values()) if held else set()
+    if fixed_all:
+        # 구속된 쉘 절점은 구속식의 종(종속 자유도)이 될 수 없다 — 구속이 이긴다(`*TIE` 도 그
+        # 절점은 안 묶었다).
+        ties = [
+            replace(one, rows=tuple(row for row in one.rows if row[0] not in fixed_all))
+            if isinstance(one, deck_writer.Slide) and one.bonded
+            else one
+            for one in ties
+        ]
     bonded: bonding.Bonding | None = None
     if tie_mode:
         bonded = bonding.bond(
@@ -297,14 +309,13 @@ def build(
         )
     constrained = plan_constrained(given, spec)
     # **랜덤 진동** — 모달 덱으로 모드를 풀고, 응답은 추출이 모드 중첩으로 셈한다
-    # (`random_vibration`). 여기서는 가진 · 범위 · 감쇠비를 정해 `boundary.json` 에 남긴다.
+    # (`random_vibration`). 여기서는 가진 · 대역 · 감쇠비를 정해 `boundary.json` 에 남긴다.
+    # 찾을 범위(CAD `frequency_range` · 스펙)는 모달과 같이 모드를 고른다(`modes.search`).
     shaking: random_model.RandomPlan | None = None
     random_refused: list[condition_model.Note] = []
     random_notes: list[condition_model.Note] = []
     if isinstance(spec, RandomSpec):
-        shaking, random_refused = random_model.plan(
-            given, span=spec.frequency_range_hz, damping_ratio=spec.damping_ratio
-        )
+        shaking, random_refused = random_model.plan(given, damping_ratio=spec.damping_ratio)
         if not constrained:
             # 기저 가진은 **지지부를 흔든다** — 지지가 없으면 흔들 자리가 없다.
             random_refused.append(
@@ -474,6 +485,8 @@ def build(
             # 수가 모자라게 나온다(Ansys 쪽과 같은 규칙).
             modes=spec.modes
             + (0 if constrained or isinstance(spec, RandomSpec) else RIGID_BODY_MODES),
+            # 랜덤 진동 — 가진 방향마다 1 g 정적 단계(잔여 벡터, `random_vibration`).
+            residual=[one.direction for one in shaking.shakes] if shaking is not None else (),
             second_order=mesh.second_order,
             rigid=rigid,
             shells=shells,
@@ -570,23 +583,35 @@ def build(
         if shaken:
             boundary[excitation.KEY] = [one.as_boundary() for one in shaken]
     if shaking is not None:
-        # **실제로 쓴 가진 · 범위 · 감쇠비** — 추출이 이것으로 응답을 셈한다.
-        boundary[random_model.KEY] = shaking.as_boundary()
-    searched = mode_search.mode_search(spec, given) if isinstance(spec, ModalSpec) else None
+        # **실제로 쓴 가진 · 대역 · 감쇠비** — 추출이 이것으로 응답을 셈한다. 잔여 벡터의 정적
+        # 단계를 붙였으면 그 수도(`.frd` 의 마지막 변위 블록들).
+        boundary[random_model.KEY] = replace(
+            shaking, residual_steps=len(plan.residual)
+        ).as_boundary()
+    searched = (
+        mode_search.mode_search(spec, given)
+        if isinstance(spec, ModalSpec | RandomSpec)
+        else None
+    )
     if searched is not None:
         # **찾을 주파수 범위** — 덱에는 주지 않는다(ccx 의 범위 칸은 낮은 것부터 구해 거를
         # 뿐이고
         # 유효질량 표가 어긋난다, `modes.search`). 솔브가 모자라면 늘려 다시 풀고, 추출이
         # 거른다.
         boundary[mode_search.KEY] = searched.as_boundary()
+    by_body = _masses_kg(materials, body_of, mesh)
+    if shells:
+        by_body = {**(by_body or {}), **_shell_masses(shells, mesh.nodes)}
+    if by_body:
+        # **솔버가 셈한 질량과 견줄 값**(`solve.py` — `.dat` 의 EMAS). 형상 부피 x 밀도다.
+        boundary["mass_kg"] = sum(by_body.values())
     (workdir / BOUNDARY_NAME).write_text(
         json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
     # 쌍마다 몇 절점이 묶였나는 ccx 가 안다 — 솔브가 로그와 맞대어 보고한다.
     bonding.write_ties(workdir, ties, bonded.applied if bonded is not None else [])
-    by_body = _masses_kg(materials, body_of, mesh)
-    if shells:
-        by_body = {**(by_body or {}), **_shell_masses(shells, mesh.nodes)}
+    sized = _size_warning(topology, body_of, mesh, skip=set(given.suppressed))
+    deck_materials = _deck_materials(plan.text, body_of, shells)
     return StageResult(
         artifacts=[ArtifactSpec("dat", path)],
         summary={
@@ -609,6 +634,12 @@ def build(
             ),
             "nodes": len(mesh.nodes),
             "elements": mesh.element_count,
+            # **형상 크기가 CAD 와 같은가** — STEP 을 읽어 잰 부피 vs CompCore 의
+            # `bodies[].volume`. 길이 단위가 어긋나면 10⁻⁹ · 10⁹ 배로 갈린다.
+            **({"size_warning": sized} if sized else {}),
+            # **덱에 실제로 쓴 물성**(탄성계수 GPa · 밀도 kg/m³) — 단위가 어긋나면 여기서
+            # 보인다.
+            **({"deck_materials": deck_materials} if deck_materials else {}),
             # **바디를 어떻게 붙였나** — `tie`(따로 메시하고 구속식) · `shared`(쪼개 절점
             # 공유).
             **({"bonding": "tie" if tie_mode else "shared"} if len(mesh.solids) > 1 else {}),
@@ -660,6 +691,12 @@ def build(
             "solver_unit_system": "ConsistentNMM",
             "material_from": material_from,
             "material": " · ".join(one.name for one in materials) if materials else None,
+            # 탄성계수를 어느 온도의 값으로 썼나(온도 표에서 22 °C 에 가장 가까운 점).
+            **(
+                {"material_temperature": line}
+                if (line := material_model.temperature_line(materials))
+                else {}
+            ),
             **(
                 {"conditions_from": "cad" if given.constraints else "spec"} if topology else {}
             ),
@@ -701,13 +738,12 @@ def _topology(workdir: Path) -> dict[str, Any]:
 
 
 def _random_summary(shaking: random_model.RandomPlan) -> dict[str, Any]:
+    """가진 대역(PSD 표) · 감쇠비 · 입력 Grms. 찾을 범위는 모달과 같은 열쇠로 따로 적는다."""
     return {
-        "frequency_range_hz": f"{shaking.low:g}~{shaking.high:g} Hz",
-        "range_from": shaking.source,
+        "psd_band_hz": f"{shaking.low:g}~{shaking.high:g} Hz",
         "damping_ratio": shaking.damping_ratio,
         "psd_inputs": " · ".join(
-            f"{one.name} {random_model.grms(one.table, shaking.low, shaking.high):.3g} Grms"
-            for one in shaking.shakes
+            f"{one.name} {random_model.grms(one.table):.3g} Grms" for one in shaking.shakes
         ),
     }
 
@@ -1373,7 +1409,8 @@ def _ties(
     set[str],
     list[condition_model.Note],
 ]:
-    """쉘이 낀 접촉 → `*TIE`. 쉘 쪽이 종(절점), 솔리드 쪽이 주(요소면)다. 쉘끼리는 아직 못
+    """쉘이 낀 접촉 → 구속식(`deck.Slide`, 본딩은 세 방향). 쉘 쪽이 종(절점), 솔리드 쪽이
+    주(요소면)다. 쉘끼리는 아직 못
     건다(멈춘다). 돌려주는 것: 묶음 · 고친 강체 · 처리한 접촉 이름 · 사람에게 할 말.
 
     **본딩이 아닌 접촉**(2026-11-16 — 전에는 멈췄다): 모달 · 조화에서 마찰 · rough 는 묶어 붙은
@@ -1462,14 +1499,18 @@ def _ties(
             )
             logger.info("접촉 %s → 쉘 절점 %s 를 법선으로만 묶었습니다", pair.name, len(rows))
             continue
+        # **`*TIE` 가 아니라 구속식으로 묶는다**(2026-11-17) — `*TIE` 는 쉘을 펼친 3D
+        # 절점(중간면 ± 두께/2)을 모두 솔리드 면에 묶어 강체 회전을 잡았다
+        # (`deck.Slide.bonded`). 쉘 절점을 솔리드 면에 투영한 자리의 형상함수로 x · y · z 를
+        # 묶는다. 반경은 두께만큼(중간면이 면에서 떨어져 그린 모델도 있다).
+        rings = [ring for face in solid for ring in mesh.face_rings.get(face, [])]
         made.append(
-            deck_writer.Tie(
+            deck_writer.Slide(
                 contact=pair.name,
-                name=f"TIE{index}",
-                slave_nodes=frozenset(slaves),
-                master_faces=masters,
-                # 중간면은 두께의 절반만큼 떨어져 있다 — 넉넉히 두께만큼 본다.
+                name=f"GLUE{index}",
+                rows=tuple(bonding.slide_rows(mesh.nodes, slaves, rings, thickest)),
                 tolerance=thickest,
+                bonded=True,
             )
         )
         if pair.kind in ("frictional", "rough", "frictionless"):
@@ -1481,7 +1522,10 @@ def _ties(
                 )
             )
         logger.info(
-            "접촉 %s → TIE 쉘 절점 %s · 솔리드 요소면 %s", pair.name, len(slaves), len(masters)
+            "접촉 %s → 쉘 절점 %s 를 솔리드 요소면 %s 에 구속식으로 묶었습니다",
+            pair.name,
+            len(slaves),
+            len(masters),
         )
     return made, held, handled, notes
 
@@ -2021,6 +2065,114 @@ def _shell_masses(
         mass = area * sheet.thickness * 1e-9 * sheet.material.density_kg_m3
         out[sheet.part] = out.get(sheet.part, 0.0) + mass
     return out
+
+
+#: 형상 부피가 CAD 의 부피와 이만큼 넘게 다르면 적는다(`_size_warning`).
+SIZE_TOLERANCE = 0.01
+
+
+def _size_warning(
+    topology: dict[str, Any],
+    body_of: dict[str, int],
+    mesh: Any,
+    *,
+    skip: set[str] | None = None,
+) -> str | None:
+    """**형상 크기가 CAD 와 다른가** — gmsh 가 STEP 을 읽고 잰 바디 부피(`mesh.bodies`, 메시가
+    아니라 형상이라 요소 크기와 상관없다)를 CompCore 의 `bodies[].volume`(mm³)과 견준다.
+
+    STEP 의 길이 단위가 어긋나면 부피가 10⁻⁹ · 10⁹ 배로 갈린다 — 고유진동수는 오류 없이 10³ 배
+    틀린다(운영 2026-11-17: 1차 탄성이 1000배, 질량이 mg). 1 % 넘게 다르면 적는다. 쉘 · 잴 수
+    없는 바디는 뺀다."""
+    measured = {one.index: one.volume for one in getattr(mesh, "bodies", [])}
+    rows = topology.get("bodies") if isinstance(topology, dict) else None
+    solids = [
+        row
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict)
+        and row.get("kind") != "sheet"
+        and str(row.get("name") or "") not in (skip or set())
+        and isinstance(row.get("volume"), int | float)
+        and row["volume"] > 0
+    ]
+    off: list[tuple[str, float, float, float]] = []
+    compared = 0
+    for row in solids:
+        name = str(row.get("name") or "")
+        entity = body_of.get(name)
+        if entity not in measured:
+            continue
+        compared += 1
+        ours, cad = float(measured[entity]), float(row["volume"])
+        if ours > 0 and abs(ours / cad - 1) > SIZE_TOLERANCE:
+            off.append((name, ours / cad, ours, cad))
+    if not compared and solids and measured:
+        # **바디별 짝이 없다** — 바디 하나 · 물성 하나면 짝짓기가 실패해도 그대로 푼다(크기가
+        # 어긋나면 짝짓기부터 실패한다). 그때는 전체 부피끼리 견준다.
+        ours = sum(float(one) for one in measured.values())
+        cad = sum(float(row["volume"]) for row in solids)
+        if ours > 0 and abs(ours / cad - 1) > SIZE_TOLERANCE:
+            off.append(("전체", ours / cad, ours, cad))
+    if not off:
+        return None
+    worst = max(off, key=lambda one: abs(math.log10(one[1])))
+    shown = " · ".join(
+        f"「{name}」 {ours:.6g} mm³(CAD {cad:.6g} mm³, {ratio:.3g} 배)"
+        for name, ratio, ours, cad in off[:5]
+    ) + (f" 외 {len(off) - 5}개" if len(off) > 5 else "")
+    if abs(math.log10(worst[1])) >= 2:
+        return (
+            f"형상 크기가 CAD 와 다릅니다(길이 단위) — 부피가 CAD 의 {worst[1]:.3g} 배"
+            f"(길이 {worst[1] ** (1 / 3):.3g} 배)입니다: {shown}. STEP 의 길이 단위를 "
+            "보세요 — 고유진동수가 그만큼 틀립니다."
+        )
+    return (
+        f"형상 크기가 CAD 와 다릅니다 — 바디 부피가 1 % 넘게 다릅니다: {shown}. 형상 맞춤 · "
+        "겹침 정리로 바뀌었거나 다른 형상일 수 있습니다."
+    )
+
+
+def _deck_materials(
+    text: str, body_of: dict[str, int], shells: Sequence[deck_writer.ShellSection]
+) -> str | None:
+    """**덱에 실제로 쓴 물성** — `*MATERIAL` 마다 탄성계수(MPa → GPa) · 밀도(tonne/mm³ →
+    kg/m³)와 그것을 쓴 바디. 값이 같은 바디는 한 줄로 묶는다. 「물성 단위가 의심된다」 를 덱을
+    열지 않고 본다."""
+    values: dict[str, tuple[float, float]] = {}
+    elastic: dict[str, float] = {}
+    users: dict[str, list[str]] = {}
+    names = {f"E{entity}": name for name, entity in body_of.items()}
+    names.update({sheet.name: sheet.part for sheet in shells})
+    lines = text.splitlines()
+    current: str | None = None
+    for at, line in enumerate(lines):
+        upper = line.upper()
+        if upper.startswith("*MATERIAL"):
+            found = re.search(r"NAME=([^,\s]+)", line, re.IGNORECASE)
+            current = found.group(1) if found else None
+        elif current and upper.startswith("*ELASTIC") and at + 1 < len(lines):
+            elastic[current] = float(lines[at + 1].split(",")[0])
+        elif current and upper.startswith("*DENSITY") and at + 1 < len(lines):
+            density = float(lines[at + 1].split(",")[0])
+            if current in elastic:
+                values[current] = (elastic[current] / 1e3, density * 1e12)
+        elif upper.startswith(("*SOLID SECTION", "*SHELL SECTION")):
+            elset = re.search(r"ELSET=([^,\s]+)", line, re.IGNORECASE)
+            material = re.search(r"MATERIAL=([^,\s]+)", line, re.IGNORECASE)
+            if elset and material:
+                users.setdefault(material.group(1), []).append(
+                    names.get(elset.group(1), elset.group(1))
+                )
+    grouped: dict[tuple[float, float], list[str]] = {}
+    for named, (gpa, kg_m3) in values.items():
+        key = (float(f"{gpa:.4g}"), float(f"{kg_m3:.4g}"))
+        grouped.setdefault(key, []).extend(users.get(named, [named]))
+    if not grouped:
+        return None
+    return " · ".join(
+        f"E {gpa:g} GPa · 밀도 {kg_m3:,.4g} kg/m³ ({', '.join(dict.fromkeys(bodies))})"
+        for (gpa, kg_m3), bodies in grouped.items()
+    )
 
 
 def _masses_kg(

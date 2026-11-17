@@ -38,6 +38,7 @@ CompCore 는 물성마다 MatNexus 원본(`payload`)과 **그 계로 환산한 �
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,8 +51,10 @@ MODULUS_KEY = "mechanical.youngs_modulus"
 POISSON_KEY = "mechanical.poisson_ratio"
 DENSITY_KEY = "physical.density"
 
-#: 온도 표에서 고를 기준 온도. 모달은 상온 한 점이면 된다 — 여러 점이 오면 여기서 가장
-#: 가까운 것을 고르고 **고른 온도를 적어 둔다**(요약에 뜬다).
+#: 온도 표에서 고를 기준 온도의 기본값. 여러 점이 오면 기준에 가장 가까운 것을 고르고 **고른
+#: 온도를 적어 둔다**(요약 `material_temperature`). 기준은 CAD 초기조건의 「환경 온도」
+#: (`conditions.initial[]` 의 `environment_temperature`, °C)가 먼저다 — CompCore 계약
+#: 2026-11-17.
 REFERENCE_C = 22.0
 
 #: CompCore 가 「모든 바디」 를 가리키는 이름. `apply_to: ["전체"]` 가 그 뜻이다.
@@ -72,6 +75,8 @@ class Material:
     """어디서 읽었나 — `converted`(CAD 가 환산한 값) · `payload`(원본에서 직접)."""
     temperature_c: float | None = None
     """온도 표에서 고른 점. 표가 없으면 `None`."""
+    reference_c: float = REFERENCE_C
+    """고를 때 쓴 기준 온도(°C) — 환경 온도가 있으면 그것, 없으면 22 °C."""
     notes: tuple[str, ...] = ()
     """사람에게 전할 말 — 못 바꾼 항목, 문헌 등급 등."""
     commands: str = ""
@@ -91,6 +96,24 @@ class Material:
         )
 
 
+def temperature_line(found: Sequence[Material]) -> str | None:
+    """**탄성계수를 어느 온도의 값으로 썼나** — 온도 표가 있던 물성만(「SECC 22 °C · …」).
+    CompCore v0.29.0 부터 `points[].temperature_C` 가 찬다. 기준이 환경 온도면 그것도 적는다.
+    없으면 None."""
+    shown = [
+        f"{one.name} {one.temperature_c:g} °C"
+        for one in found
+        if one.temperature_c is not None
+    ]
+    if not shown:
+        return None
+    line = " · ".join(dict.fromkeys(shown))
+    references = sorted({one.reference_c for one in found if one.temperature_c is not None})
+    if references and references != [REFERENCE_C]:
+        line += f" (기준: 환경 온도 {' · '.join(f'{one:g}' for one in references)} °C)"
+    return line
+
+
 class MaterialProblem(ValueError):
     """물성을 읽을 수 없다. **추측하지 않는다** — 빠진 물성은 해석이 기본값(구조용 강)으로
     풀어 버리고, 그 사실은 고유진동수가 틀린 뒤에야 드러난다."""
@@ -108,6 +131,7 @@ def read(payload: Any, system: units.UnitSystem) -> list[Material]:
     에서 준 스펙을 쓴다. 조건이 있는데 값을 못 읽으면 **실패한다.**
     """
     rows = _rows(payload)
+    reference = reference_temperature(payload)
     made: list[Material] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -118,8 +142,27 @@ def read(payload: Any, system: units.UnitSystem) -> list[Material]:
         # 안 붙은 것이다(`apply_to: []`). 그것을 전체에 붙이면 사람이 안 고른 재료로 푼다.
         if row.get("apply_to") == []:
             continue
-        made.append(_material(name, bodies, row, system))
+        made.append(_material(name, bodies, row, system, reference))
     return made
+
+
+def reference_temperature(payload: Any) -> float:
+    """물성을 고를 **기준 온도**(°C) — CAD 초기조건 「환경 온도」(`conditions.initial[]` 의
+    `type: environment_temperature`, `value`, `unit: "C"`)가 있으면 그것, 없으면 22 °C.
+
+    CompCore 는 모델에 하나만 두고(저장할 때 막는다) 점 파일에 풀린 숫자로 보낸다 — 식으로
+    적었으면 설계점마다 다를 수 있다. 켈빈으로 오면 옮긴다."""
+    block = payload.get("conditions") if isinstance(payload, dict) else None
+    rows = block.get("initial") if isinstance(block, dict) else None
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("type") != "environment_temperature":
+            continue
+        value = row.get("value")
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            continue
+        unit = str(row.get("unit") or "C").strip().upper().replace("°", "")
+        return float(value) - 273.15 if unit == "K" else float(value)
+    return REFERENCE_C
 
 
 def for_body(materials: list[Material], body: str) -> Material | None:
@@ -196,21 +239,29 @@ def _bodies(row: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _material(
-    name: str, bodies: tuple[str, ...], row: dict[str, Any], system: units.UnitSystem
+    name: str,
+    bodies: tuple[str, ...],
+    row: dict[str, Any],
+    system: units.UnitSystem,
+    reference: float = REFERENCE_C,
 ) -> Material:
     converted = row.get("converted")
     if isinstance(converted, dict) and converted:
-        return _from_converted(name, bodies, converted, system)
+        return _from_converted(name, bodies, converted, system, reference)
     source = row.get("payload")
     if isinstance(source, dict) and source:
-        return _from_payload(name, bodies, source)
+        return _from_payload(name, bodies, source, reference)
     raise MaterialProblem(
         name, "CAD 가 값을 보내지 않았습니다(payload · converted 둘 다 없음)"
     )
 
 
 def _from_converted(
-    name: str, bodies: tuple[str, ...], converted: dict[str, Any], system: units.UnitSystem
+    name: str,
+    bodies: tuple[str, ...],
+    converted: dict[str, Any],
+    system: units.UnitSystem,
+    reference: float = REFERENCE_C,
 ) -> Material:
     """CAD 가 그 계로 환산해 준 값 — **여기가 정본 경로다.**
 
@@ -238,7 +289,7 @@ def _from_converted(
         # 읽으니 안전하고(모르는 이름이면 거절), 나머지는 사람에게 전한다.
         notes.append(f"CAD 가 못 바꾼 항목: {' · '.join(str(one) for one in unconverted)}")
 
-    modulus_pa, temperature = _modulus(name, converted, system)
+    modulus_pa, temperature = _modulus(name, converted, system, reference)
     poisson = converted.get("poisson_ratio")
     if not isinstance(poisson, int | float):
         raise MaterialProblem(name, "푸아송비가 없습니다")
@@ -266,12 +317,16 @@ def _from_converted(
         density_kg_m3=density_kg_m3,
         source="converted",
         temperature_c=temperature,
+        reference_c=reference,
         notes=tuple(notes),
     )
 
 
 def _modulus(
-    name: str, converted: dict[str, Any], system: units.UnitSystem
+    name: str,
+    converted: dict[str, Any],
+    system: units.UnitSystem,
+    reference: float = REFERENCE_C,
 ) -> tuple[float, float | None]:
     """탄성계수 → Pa, 그리고 고른 온도.
 
@@ -283,7 +338,7 @@ def _modulus(
         for row in rows:
             if not isinstance(row, dict) or row.get("key") != MODULUS_KEY:
                 continue
-            point = _nearest(row.get("points"))
+            point = _nearest(row.get("points"), reference)
             if point is None:
                 continue
             try:
@@ -313,23 +368,24 @@ def _items(rows: Any) -> str:
     return f" (온 항목: {' · '.join(names)})" if names else ""
 
 
-def _nearest(points: Any) -> dict[str, Any] | None:
-    """온도 표에서 기준 온도에 가장 가까운 점. 온도가 없는 점은 그대로 쓴다."""
+def _nearest(points: Any, reference: float = REFERENCE_C) -> dict[str, Any] | None:
+    """온도 표에서 기준 온도에 가장 가까운 점 — 보간하지 않는다. **같은 거리면 낮은 온도**
+    (300 °C 에서 200 · 400 °C 면 200 °C — CompCore 화면의 「해석에 쓰는 값」 과 같다). 온도가
+    없는 점은 그대로 쓴다."""
     rows = [
         one
         for one in (points or [])
         if isinstance(one, dict) and isinstance(one.get("value"), int | float)
     ]
-    if not rows:
-        return None
+    return min(rows, key=lambda one: _distance(one, reference)) if rows else None
 
-    def distance(one: dict[str, Any]) -> float:
-        temperature = one.get("temperature_C")
-        if not isinstance(temperature, int | float):
-            return 0.0
-        return abs(float(temperature) - REFERENCE_C)
 
-    return min(rows, key=distance)
+def _distance(point: dict[str, Any], reference: float) -> tuple[float, float]:
+    """(기준과의 거리, 온도) — 거리가 같으면 낮은 온도가 먼저다. 온도가 없으면 0."""
+    temperature = point.get("temperature_C")
+    if not isinstance(temperature, int | float):
+        return (0.0, reference)
+    return (abs(float(temperature) - reference), float(temperature))
 
 
 def _tier(converted: dict[str, Any]) -> str:
@@ -345,7 +401,12 @@ def _tier(converted: dict[str, Any]) -> str:
     return f"문헌 값 등급 {' · '.join(sorted(tiers))}" if tiers else ""
 
 
-def _from_payload(name: str, bodies: tuple[str, ...], source: dict[str, Any]) -> Material:
+def _from_payload(
+    name: str,
+    bodies: tuple[str, ...],
+    source: dict[str, Any],
+    reference: float = REFERENCE_C,
+) -> Material:
     """환산값이 없을 때의 대비 경로 — **원본에서 직접.**
 
     여기서는 값과 단위를 떼지 않는 것이 전부다: 밀도는 `density_si` 또는
@@ -365,7 +426,7 @@ def _from_payload(name: str, bodies: tuple[str, ...], source: dict[str, Any]) ->
             continue
         point = min(
             points,
-            key=lambda one: abs(float(one.get("temperature_C") or REFERENCE_C) - REFERENCE_C),
+            key=lambda one: _distance(one, reference),
         )
         try:
             modulus = units.stress_from(float(point["value_si"]), row.get("si_unit"))
@@ -406,6 +467,7 @@ def _from_payload(name: str, bodies: tuple[str, ...], source: dict[str, Any]) ->
         density_kg_m3=density_kg_m3,
         source="payload",
         temperature_c=temperature,
+        reference_c=reference,
         notes=("CAD 의 환산값이 없어 원본에서 읽었습니다",),
     )
 

@@ -84,21 +84,19 @@ describe('스펙 만들기', () => {
 describe('랜덤 진동 스펙', () => {
   const random: SpecInput = { ...BASE, recipe: 'random', solver: 'calculix' }
 
-  it('모드 수 · 감쇠비를 싣고 범위는 비우면 PSD 표의 범위다', () => {
+  it('모드 수 · 감쇠비를 싣고, 범위는 모달과 같은 찾을 주파수 범위다(가진 대역은 PSD 표)', () => {
     const spec = buildSpec(random)
     expect(spec).toMatchObject({ recipe: 'random', modes: 10, damping_ratio: 0.02 })
     expect('frequency_range_hz' in spec).toBe(false)
     expect('intervals' in spec).toBe(false)
-    const ranged = buildSpec({ ...random, random: { ...RANDOM_DEFAULTS, low: '20', high: '1000' } })
+    const ranged = buildSpec({ ...random, modalRange: { low: '20', high: '1000' } })
     expect(ranged.frequency_range_hz).toEqual([20, 1000])
     expect(specProblem(random)).toBeNull()
   })
 
   it('Ansys · 틀린 범위 · 감쇠비는 보내기 전에 막는다', () => {
     expect(specProblem({ ...random, solver: 'ansys' })).toContain('CalculiX 로만')
-    expect(specProblem({ ...random, random: { ...RANDOM_DEFAULTS, low: '500', high: '100' } })).toContain(
-      '셈할 주파수 범위',
-    )
+    expect(specProblem({ ...random, modalRange: { low: '500', high: '100' } })).toContain('찾을 주파수 범위')
     expect(specProblem({ ...random, random: { ...RANDOM_DEFAULTS, dampingPercent: '0' } })).toContain('감쇠비')
   })
 })

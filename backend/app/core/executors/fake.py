@@ -381,22 +381,19 @@ FAKE_SHAKE = random_model.Shake(
 
 def _random(ctx: StageContext, spec: RandomSpec) -> StageResult:
     """랜덤 진동 — `calculix/random_read.py` 와 같은 열쇠. **1차 모드 하나**(질량 1 · 참여
-    1)를 진짜와 같은 셈(`random_vibration`)으로 흔든다. 가진 · 범위 · 감쇠비는 진짜와 같이
-    CAD 가 적은 것이 먼저다."""
+    1)를 진짜와 같은 셈(`random_vibration`)으로 흔든다. 가진 · 감쇠비는 진짜와 같이 CAD 가
+    적은 것이 먼저고, 대역은 PSD 표다."""
     topology = _topology(ctx)
-    plan, _ = random_model.plan(
-        condition_model.read(topology, recipe="random"),
-        span=spec.frequency_range_hz,
-        damping_ratio=spec.damping_ratio,
-    )
+    given = condition_model.read(topology, recipe="random")
+    plan, _ = random_model.plan(given, damping_ratio=spec.damping_ratio)
     if plan is None:
         plan = random_model.RandomPlan(
-            low=20.0,
-            high=2000.0,
+            low=FAKE_SHAKE.table[0][0],
+            high=FAKE_SHAKE.table[-1][0],
             damping_ratio=spec.damping_ratio,
             shakes=(FAKE_SHAKE,),
-            source="spec",
         )
+    searched = mode_search.mode_search(spec, given)
     naturals = _fake_frequencies(spec)
     modes = random_model.gather(naturals, {1: [1.0, 1.0, 1.0]}, plan.shakes)
     breaks = sorted({hz for shake in plan.shakes for hz, _ in shake.table})
@@ -430,14 +427,20 @@ def _random(ctx: StageContext, spec: RandomSpec) -> StageResult:
         "mesh": {"nodes": nodes, "elements": elements},
         "sigma": 1,
         "damping_ratio": plan.damping_ratio,
-        "frequency_range_hz": [plan.low, plan.high],
-        "range_from": plan.source,
+        "band_hz": [plan.low, plan.high],
+        **(
+            {
+                "frequency_range_hz": [searched.low, searched.high],
+                "range_from": searched.source,
+            }
+            if searched is not None
+            else {}
+        ),
         "inputs": [
             {
                 "name": shake.name,
                 "direction": list(shake.direction),
                 "grms": round(random_model.grms(shake.table), 6),
-                "grms_in_range": round(random_model.grms(shake.table, plan.low, plan.high), 6),
                 "table": [list(one) for one in shake.table],
             }
             for shake in plan.shakes

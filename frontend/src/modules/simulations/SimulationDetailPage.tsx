@@ -80,6 +80,15 @@ const SUMMARY_LABELS: Record<string, string> = {
   mesh_order: '요소 차수',
   settings_from: '해석 설정 출처',
   damping_ratio: '감쇠비',
+  // 모달 · 랜덤의 **찾을 주파수 범위**와 그 출처 — 랜덤의 가진 대역(PSD 표)과는 다른 칸이다.
+  frequency_range_hz: '찾을 주파수 범위',
+  range_from: '범위 출처',
+  mode_search: '범위 찾기',
+  psd_band_hz: '가진 대역 (PSD 표)',
+  psd_inputs: '입력 PSD',
+  input_grms: '입력 Grms',
+  probe_grms: '측정점 가속도 1σ',
+  max_displacement_1sigma_mm: '최대 1σ 변위',
   ansys_version: 'Ansys 버전',
   // **CAD 가 선언한 계**로 세션을 세운다(2026-09-24). 숫자가 어느 계로 들어갔는지는 값을
   // 보고 알 수 없어서 — 틀리면 그럴듯한 값이 나온다 — 여기에 적어 둔다.
@@ -89,6 +98,14 @@ const SUMMARY_LABELS: Record<string, string> = {
   // 값으로 돈 것인지」 를 값만 보고는 알 수 없다.
   material: '물성',
   material_from: '물성 출처',
+  // 탄성계수를 어느 온도의 값으로 썼나 — 온도 표에서 22 °C 에 가장 가까운 점(CompCore v0.29.0 부터 온도가 실린다).
+  material_temperature: '물성 온도',
+  // **단위가 어긋났나** — 덱에 실제로 쓴 물성, 솔버가 셈한 질량(`.dat`), 형상 부피를 CAD 와 견준 경고.
+  // 고유진동수가 오류 없이 10³ 배 틀리는 사고를 숫자로 가린다(운영 2026-11-17).
+  deck_materials: '덱 물성',
+  solver_mass_kg: '솔버 질량',
+  size_warning: '형상 크기 경고',
+  mass_warning: '질량 경고',
   youngs_modulus_gpa: '탄성계수',
   density_kg_m3: '밀도',
   // 정적 · 조화는 모드가 아니라 **크기**를 낸다. 단위는 결과 카드가 붙여 준다.
@@ -141,9 +158,15 @@ const SUMMARY_LABELS: Record<string, string> = {
   solver_retry: '다시 푼 까닭',
 }
 
+/** 작업 상세 맨 위에 띠로 보이는 요약 경고 — 단위가 어긋나면 결과 숫자 전체가 틀린다. */
+const UNIT_WARNINGS = ['size_warning', 'mass_warning'] as const
+
 /** 한 줄을 다 쓰고 접어 보이는 요약 칸 — 바디마다 늘어서는 값. */
 const WIDE_SUMMARY = new Set([
   'mass_by_body',
+  'deck_materials',
+  'size_warning',
+  'mass_warning',
   'mesh_repairs',
   'mesh_order_by_body',
   'memory_warning',
@@ -183,6 +206,11 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'mass_by_body',
       'material',
       'material_from',
+      'material_temperature',
+      'deck_materials',
+      'solver_mass_kg',
+      'size_warning',
+      'mass_warning',
       'youngs_modulus_gpa',
       'density_kg_m3',
       'rigid_bodies',
@@ -206,6 +234,14 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'rigid_body_modes',
       'first_elastic_hz',
       'result_warning',
+      'frequency_range_hz',
+      'range_from',
+      'mode_search',
+      'psd_band_hz',
+      'psd_inputs',
+      'input_grms',
+      'probe_grms',
+      'max_displacement_1sigma_mm',
       'damping_ratio',
       'frequency_points',
       'max_displacement',
@@ -251,11 +287,12 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'first_elastic_hz' && typeof value === 'number') return `${value.toFixed(2)} Hz`
   if (key === 'peak_hz' && typeof value === 'number') return `${value.toFixed(1)} Hz`
   if (key === 'solver_seconds' && typeof value === 'number') return `${value.toFixed(1)}초`
-  if (key === 'material_from' || key === 'settings_from' || key === 'large_deflection_from')
+  if (key === 'material_from' || key === 'settings_from' || key === 'large_deflection_from' || key === 'range_from')
     return value === 'cad' ? 'CAD 가 보낸 값' : '사람이 넣은 값'
   if (key === 'solver') return SOLVER_LABELS[String(value)] ?? String(value)
   if (key === 'damping_ratio' && typeof value === 'number') return `${(value * 100).toFixed(1)}%`
   if (key === 'youngs_modulus_gpa' && typeof value === 'number') return `${value} GPa`
+  if (key === 'max_displacement_1sigma_mm' && typeof value === 'number') return `${value} mm`
   if ((key === 'element_size_mm' || key === 'boolean_tolerance_mm') && typeof value === 'number')
     return `${value} mm`
   if (key === 'linear_solver') return value === 'iterative' ? '반복 (ITERATIVE CHOLESKY)' : '직접 (SPOOLES)'
@@ -266,7 +303,7 @@ function shownSummary(key: string, value: unknown): string {
   if (key === 'contact_pairs') return value ? '있음' : '없음'
   if (key === 'large_deflection') return value ? '켬 (기하 비선형)' : '끔'
   if (key === 'shape_reused') return value ? '다시 씀' : '새로 만듦'
-  if (key === 'mass_kg' && typeof value === 'number') return shownMass(value)
+  if ((key === 'mass_kg' || key === 'solver_mass_kg') && typeof value === 'number') return shownMass(value)
   if (key === 'mass_by_body' && value && typeof value === 'object')
     return Object.entries(value as Record<string, unknown>)
       .map(([name, kg]) => `${name} ${typeof kg === 'number' ? shownMass(kg) : '—'}`)
@@ -559,6 +596,20 @@ function SimulationDetail({ id }: { id: string }) {
           </AlertDescription>
         </Alert>
       )}
+
+      {/* **단위 경고는 맨 위에** — 형상 크기 · 질량이 어긋나면 결과 숫자 전체가 10³ 배씩 틀린다. */}
+      {UNIT_WARNINGS.map((key) => {
+        const said = (simulation.summary ?? {})[key]
+        return typeof said === 'string' && said ? (
+          <p
+            key={key}
+            role="alert"
+            className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            {SUMMARY_LABELS[key]}: {said}
+          </p>
+        ) : null
+      })}
 
       {/* **한눈에 보기** — 대표 숫자와 「이 숫자를 믿어도 되나」. 누르면 그 탭으로. */}
       <ResultGlance

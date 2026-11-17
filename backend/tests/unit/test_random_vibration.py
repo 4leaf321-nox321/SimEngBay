@@ -17,7 +17,8 @@ from app.core import conditions as condition_model
 from app.core import random_vibration as random_model
 from app.core import values as core_values
 from app.core.calculix import tables
-from app.core.spec import parse_spec
+from app.core.modes import search as mode_search
+from app.core.spec import RandomSpec, parse_spec
 
 #: CompCore 조건_랜덤진동의 PSD — 20 ~ 2,000 Hz, Grms 6.058(CompCore 손셈).
 TABLE = ((20.0, 0.01), (80.0, 0.04), (350.0, 0.04), (2000.0, 0.007))
@@ -173,27 +174,33 @@ def test_못_쓰는_PSD_는_까닭을_달아_막는다(change: dict[str, Any], w
     assert why in got.refused[0].why
 
 
-def test_범위는_CAD_스펙_PSD_차례고_PSD_표_밖은_자른다() -> None:
-    given = _read([PSD], {"damping_ratio": 0.03})
-    plan, refused = random_model.plan(given, span=None, damping_ratio=0.02)
+def test_가진_대역은_PSD_표고_CAD_범위는_모드를_찾을_범위다() -> None:
+    """CompCore 계약(2026-11-17 답): 랜덤의 `frequency_range` 는 **모달 단계의 찾을 범위**다.
+    가진 대역은 PSD 표가 정하므로 그 범위로 PSD 를 자르지 않는다."""
+    given = _read([PSD], {"damping_ratio": 0.03, "frequency_range": [100, 1000]})
+    plan, refused = random_model.plan(given, damping_ratio=0.02)
     assert not refused and plan is not None
-    assert (plan.low, plan.high, plan.source) == (20, 2000, "psd")
+    assert (plan.low, plan.high) == (20, 2000), "CAD 범위로 PSD 를 자르지 않는다"
     assert plan.damping_ratio == 0.03, "CAD 감쇠비가 먼저다"
-    plan, _ = random_model.plan(_read([PSD]), span=(10, 500), damping_ratio=0.02)
-    assert plan is not None and (plan.low, plan.high, plan.source) == (20, 500, "spec")
-    plan, _ = random_model.plan(
-        _read([PSD], {"frequency_range": [100, 3000]}), span=(10, 500), damping_ratio=0.02
-    )
-    assert plan is not None and (plan.low, plan.high, plan.source) == (100, 2000, "cad")
     assert random_model.read({random_model.KEY: plan.as_boundary()}) == plan
-    # 겹치지 않는 범위 · 가진 없음 · 없는 좌표계는 막는다.
-    _, refused = random_model.plan(_read([PSD]), span=(3000, 4000), damping_ratio=0.02)
-    assert "겹치지 않습니다" in refused[0].why
-    _, refused = random_model.plan(_read([]), span=None, damping_ratio=0.02)
-    assert "하나도 없습니다" in refused[0].why
-    _, refused = random_model.plan(
-        _read([{**PSD, "cs": "기울인 계"}]), span=None, damping_ratio=0.02
+    # 찾을 범위는 모달과 같은 자리에서 — CAD 가 먼저, 없으면 스펙.
+    spec = parse_spec({"recipe": "random", "modes": 6, "frequency_range_hz": [10, 500]})
+    assert isinstance(spec, RandomSpec)
+    searched = mode_search.mode_search(spec, given)
+    assert searched is not None
+    assert searched == mode_search.ModeSearch(100, 1000, 6, "cad")
+    assert mode_search.mode_search(spec, _read([PSD])) == mode_search.ModeSearch(
+        10, 500, 6, "spec"
     )
+    bare = parse_spec({"recipe": "random"})
+    assert isinstance(bare, RandomSpec) and mode_search.mode_search(bare, _read([PSD])) is None
+    # 조화로 적은 범위(훑을 범위)는 찾을 범위가 아니다.
+    harmonic = _read([PSD], {"frequency_range": [100, 1000]}, recipe="harmonic")
+    assert mode_search.cad_range(harmonic) is None
+    # 가진 없음 · 없는 좌표계는 막는다.
+    _, refused = random_model.plan(_read([]), damping_ratio=0.02)
+    assert "하나도 없습니다" in refused[0].why
+    _, refused = random_model.plan(_read([{**PSD, "cs": "기울인 계"}]), damping_ratio=0.02)
     assert "기울인 계" in refused[0].why
 
 
@@ -206,7 +213,7 @@ def test_랜덤_진동은_아직_CalculiX_로만() -> None:
     assert parse_spec({"recipe": "random"}).solver == "calculix"
     with pytest.raises(ValidationError, match="CalculiX 로만"):
         parse_spec({"recipe": "random", "solver": "ansys"})
-    with pytest.raises(ValidationError, match="0 ≤ 하한 < 상한"):
+    with pytest.raises(ValidationError, match="찾을 주파수 범위는 0 ≤ 하한 < 상한"):
         parse_spec({"recipe": "random", "frequency_range_hz": [500, 100]})
 
 
@@ -228,3 +235,40 @@ def test_견줄_값은_1σ_변위와_측정점_가속도() -> None:
     assert found.max_displacement_mm == 0.0058
     assert found.probe_grms == {"측정점": 36.7}
     assert found.probes_mm == {"측정점": 0.0058}
+
+
+def test_잔여_벡터는_빠진_모드의_정적_몫을_채우고_절점_장도_그것을_본다() -> None:
+    """준정적 부품(고유진동수 ≫ 가진 대역) — 모드 하나가 정적 변위의 절반만 낸다고 하자. 잔여
+    벡터를 더하면 낮은 주파수에서 응답이 **정적 해 그대로**다.
+
+    절점 장은 모드를 몫으로 거른다 — 몫을 대각값만으로 보면 질량 정규화 형상(수백)과 mm 형상인
+    잔여 벡터의 단위가 달라 진짜 모드가 다 빠졌다(실측 2026-11-17, 시험_랜덤진동 -16 %)."""
+    natural = 60_000.0
+    phi = 300.0  # 질량 정규화 형상은 크다(질량이 t 단위라)
+    gamma = 1e-4
+    static_by_mode = phi * gamma * random_model.modal_gain(natural, 0.0, 0.0).real
+    shake = random_model.Shake("Z", (0.0, 0.0, 1.0), TABLE)
+    modes = random_model.Modes((natural,), {"Z": (gamma,)})
+    shapes = [{1: [0.0, 0.0, phi], 2: [0.0, 0.0, phi / 2]}]
+    statics = [{1: [0.0, 0.0, 2 * static_by_mode], 2: [0.0, 0.0, static_by_mode]}]
+    joined, used = random_model.with_residual(modes, shapes, statics, [shake])
+    assert math.isinf(joined.naturals[-1]) and joined.participation["Z"] == (gamma, 1.0)
+    u, _ = random_model.transfer(
+        [one[1] for one in used],
+        joined.participation["Z"],
+        joined.naturals,
+        (0, 0, 1),
+        20.0,
+        0.02,
+    )
+    assert u[2].real == pytest.approx(2 * static_by_mode, rel=1e-6)
+    grid = random_model.grid(20, 2000, joined.naturals, 0.02, [hz for hz, _ in TABLE])
+    point = random_model.at_point([one[1] for one in used], joined, [shake], grid, 0.02)
+    # 준정적 — 1σ 변위 = 1 g 정적 변위 x Grms(CompCore 손셈의 꼴).
+    assert point.displacement_mm == pytest.approx(
+        abs(2 * static_by_mode) * random_model.grms(TABLE), rel=1e-3
+    )
+    matrix = random_model.couplings(joined, [shake], grid, 0.02)
+    assert random_model.field(used, matrix, [1])[1] == pytest.approx(
+        point.displacement_mm, rel=1e-9
+    )

@@ -224,10 +224,13 @@ class RandomSpec(BaseModel):
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     constraints: list[Constraint] = Field(default_factory=list)
     frequency_range_hz: tuple[float, float] | None = None
-    """셈할 범위(Hz). 비우면 **PSD 표의 범위**다(표 밖은 0 이라 셈할 것이 없다). CAD 가 적어
-    보내면 그것이 먼저다. 어느 쪽이든 PSD 표 밖은 잘라 낸다."""
+    """**모드를 찾을 범위**(Hz) — 모달의 `frequency_range_hz` 와 같은 뜻이다(CompCore 계약:
+    랜덤의 `frequency_range` 는 모달 단계의 범위). 주면 그 안의 모드만 `modes` 개까지 중첩에
+    쓴다. **가진 대역은 PSD 표가 정한다** — 이 범위로 PSD 를 자르지 않는다. CAD 가 적어 보내면
+    그것이 먼저다(`modes.search`)."""
     modes: int = Field(default=10, ge=1, le=100)
-    """모드 중첩에 쓸 모드 수 — 낮은 차수부터. 범위 위쪽 모드도 정적 몫을 보탠다."""
+    """모드 중첩에 쓸 모드 수 — 낮은 차수부터(범위를 주면 그 안에서). PSD 대역 위쪽 모드도 정적
+    몫을 보탠다."""
     damping_ratio: float = Field(default=0.02, gt=0, lt=1)
     """임계 감쇠에 대한 비(모든 모드). 응답 1σ 는 대략 1/√ζ 로 간다."""
 
@@ -247,7 +250,7 @@ class RandomSpec(BaseModel):
     def _range_order(self) -> Self:
         span = self.frequency_range_hz
         if span is not None and not 0 <= span[0] < span[1]:
-            raise ValueError("셈할 주파수 범위는 0 ≤ 하한 < 상한 이어야 합니다.")
+            raise ValueError("찾을 주파수 범위는 0 ≤ 하한 < 상한 이어야 합니다.")
         return self
 
 

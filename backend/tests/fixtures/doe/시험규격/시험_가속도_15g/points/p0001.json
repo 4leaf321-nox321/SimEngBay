@@ -92,7 +92,7 @@
   "point": {
     "number": 1,
     "study": {
-      "id": "ca8da583-eb2f-4a59-aaee-ddffce8b7da9",
+      "id": "585c74cf-24d0-4d0f-8a21-b36629e04cac",
       "name": "시험_가속도_15g",
       "method": "factorial",
       "seed": 1
@@ -407,7 +407,7 @@
     ],
     "loads": [
       {
-        "name": "가속도 (Z축)",
+        "name": "가속도",
         "type": "acceleration",
         "on": "",
         "cs": "global",
@@ -418,7 +418,10 @@
           0,
           1
         ],
-        "preload": null
+        "preload": null,
+        "frequency_table": null,
+        "phase": null,
+        "psd_table": null
       }
     ],
     "contacts": [],

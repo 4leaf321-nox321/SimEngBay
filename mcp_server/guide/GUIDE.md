@@ -90,7 +90,7 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 | `large_deflection` | CAD 값 | 정적 — 변형이 커서 모양이 바뀔 때(느리다) |
 | `frequency_range_hz` | CAD 값(없으면 비움) | **모달** — 찾을 주파수 범위 `[하한, 상한]`(Hz). 주면 그 범위 안의 모드만 `modes` 개까지 찾는다(낮은 모드에 밀려 보고 싶은 대역이 빠지지 않게). CAD 가 적었으면 그것이 먼저다 |
 | `frequency_range_hz` · `intervals` · `damping_ratio` | 0~2000 · 10 · 0.02 | 조화 — 훑을 범위 · 점 수 · 감쇠비. 감쇠가 없으면 거절 |
-| `frequency_range_hz` · `damping_ratio` | PSD 표의 범위 · 0.02 | 랜덤 — 셈할 범위(PSD 표 밖은 잘라 낸다) · 감쇠비. 가진(가속도 PSD)은 CAD 조건에서만 온다. CAD 가 적은 범위 · 감쇠비가 먼저다 |
+| `frequency_range_hz` · `damping_ratio` | 비움 · 0.02 | 랜덤 — **모드를 찾을 범위**(모달과 같은 뜻 — 그 안의 모드만 중첩에 쓴다) · 감쇠비. **가진과 그 대역은 CAD 조건의 가속도 PSD 표**다 — 범위로 PSD 를 자르지 않는다. CAD 가 적은 범위 · 감쇠비가 먼저다 |
 
 `material_from` · `conditions_from` 은 `cad`(기본)로 둔다 — 물성 · 조건은 CAD 가 파트마다 보낸다.
 `spec` 으로 바꾸면 CAD 값을 일부러 무시한다(그때는 `material` · `constraints` 를 직접 준다).
@@ -205,12 +205,19 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
 - 입력 Grms · 응답 PSD 곡선 · 모드별 유효질량 몫은 `job_result(job_id, detail=true)` 의
   `result.inputs` · `result.curves` · `result.modes`.
 - 풀이는 모달 하나 + 모드 중첩이다(가진 방향 참여계수 · 모드 형상 · PSD). 가진이 여럿이면 서로
-  무관한 것으로 더한다. 응력 1σ 는 아직 내지 않는다.
+  무관한 것으로 더한다. **빠진 높은 모드의 정적 몫(잔여 벡터)을 더한다** — 고유진동수가 대역보다
+  훨씬 높은 부품(준정적)도 모드 수와 상관없이 맞는다(`result.residual`). 응력 1σ 는 아직 내지 않는다.
+- 적분한 대역은 `result.band_hz`(PSD 표), 모드를 찾은 범위는 `result.frequency_range_hz`(있을 때만).
 
 ### 그 밖
 
 - `mass_kg` · `nodes`(절점 수), 결과에 찍힌 `solver`.
 - 두 솔버의 수는 몇 % 갈린다 — 견줄 때는 같은 솔버끼리.
+- **값이 10³ 배씩 이상하면 단위부터** — `job_get` 의 `summary` 에서(CalculiX) `deck_materials`(덱에 실제로
+  쓴 탄성계수 GPa · 밀도 kg/m³), `solver_mass_kg`(솔버가 덱으로 셈한 질량 — `mass_kg` 와 같아야 한다),
+  `size_warning`(STEP 을 읽어 잰 부피가 CAD 와 1 % 넘게 다름 — 길이 단위면 그렇게 적는다), `mass_warning`.
+  고유진동수는 √(E/ρ) / 길이라 길이가 1000배 작거나 E 가 10⁶ 배 크면 1000배로 나온다. 질량이 정상이면
+  탄성계수, 10⁻⁶ 배면 밀도, 10⁻⁹ 배면 형상이다.
 
 <!--@ compare -->
 ## 견주기

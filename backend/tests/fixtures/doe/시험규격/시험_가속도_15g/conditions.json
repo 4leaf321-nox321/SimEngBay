@@ -1,7 +1,7 @@
 {
   "loads": [
     {
-      "name": "가속도 (Z축)",
+      "name": "가속도",
       "type": "acceleration",
       "direction": [
         0,

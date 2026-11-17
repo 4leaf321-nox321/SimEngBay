@@ -396,3 +396,68 @@ def test_시험_지그는_CompCore_의_기본_강재로_온다(folder: str, jigs
     assert specimen.bodies == ("시편",)
     # 빈 파트가 없다 — 「CAD 가 재료를 지정하지 않은 파트」 로 거르지 않는다.
     assert materials.uncovered(found, materials.body_names(payload)) == []
+
+
+def test_온도가_여럿이면_22_도에_가장_가까운_값을_쓰고_그_온도를_요약에_적는다() -> None:
+    """CompCore v0.29.0 부터 `converted.properties[].points[].temperature_C` 가 찬다
+    (MatNexus 의 켈빈 - 273.15). 탄성계수는 **22 °C 에 가장 가까운 점** 하나를 쓴다 — 보간하지
+    않는다.
+    고른 온도는 요약 `material_temperature` 에 뜬다(`temperature_line`)."""
+    converted = _converted("등록재료-mm_n_tonne.json")
+    for row in converted["properties"]:
+        if row.get("key") == materials.MODULUS_KEY:
+            unit = row.get("unit")
+            row["points"] = [
+                {"temperature_C": -40.0, "value": 212000.0},
+                {"temperature_C": 25.0, "value": 205000.0},
+                {"temperature_C": 150.0, "value": 196000.0},
+            ]
+            assert unit
+    found = materials.read(_payload(_row(converted)), units.MM_N_TONNE)
+    assert found[0].temperature_c == 25.0
+    assert math.isclose(found[0].youngs_modulus_pa, 205e9, rel_tol=1e-9)
+    assert materials.temperature_line(found) == "SS400 25 °C"
+    # 온도가 없는 값(옛 폴더 · 문헌)은 적지 않는다.
+    assert (
+        materials.temperature_line([materials.Material("A", (), 1.0, 0.3, 1.0, "spec")])
+        is None
+    )
+
+
+def _table(points: list[dict[str, float]]) -> dict[str, Any]:
+    converted = _converted("등록재료-mm_n_tonne.json")
+    for row in converted["properties"]:
+        if row.get("key") == materials.MODULUS_KEY:
+            row["points"] = points
+    return converted
+
+
+def test_기준_온도는_초기조건_환경_온도고_같은_거리면_낮은_온도다() -> None:
+    """CompCore 계약(2026-11-17): 기준 온도는 `conditions.initial[]` 의
+    `environment_temperature`(°C) — 없으면 22 °C. 가장 가까운 점 하나를 쓰고, **같은 거리면
+    낮은 온도**(CompCore 화면의 「해석에 쓰는 값」 과 같다). 밀도 · 푸아송비는 `converted` 의
+    한 값이다."""
+    points = [
+        {"temperature_C": 400.0, "value": 170000.0},
+        {"temperature_C": 22.0, "value": 205000.0},
+        {"temperature_C": 200.0, "value": 190000.0},
+    ]
+    payload = _payload(_row(_table(points)))
+    payload["conditions"]["initial"] = [
+        {"type": "environment_temperature", "on": "", "value": 300, "unit": "C"}
+    ]
+    hot = materials.read(payload, units.MM_N_TONNE)[0]
+    # 300 °C 에서 200 · 400 °C 는 같은 거리 — 낮은 200 °C.
+    assert (hot.temperature_c, hot.reference_c) == (200.0, 300.0)
+    assert math.isclose(hot.youngs_modulus_pa, 190e9, rel_tol=1e-9)
+    assert materials.temperature_line([hot]) == "SS400 200 °C (기준: 환경 온도 300 °C)"
+    # 차례가 바뀌어도 같다.
+    payload = _payload(_row(_table(list(reversed(points)))))
+    payload["conditions"]["initial"] = [
+        {"type": "environment_temperature", "value": 573.15, "unit": "K"}
+    ]
+    assert materials.read(payload, units.MM_N_TONNE)[0].temperature_c == 200.0
+    # 환경 온도가 없으면 22 °C.
+    plain = materials.read(_payload(_row(_table(points))), units.MM_N_TONNE)[0]
+    assert (plain.temperature_c, plain.reference_c) == (22.0, materials.REFERENCE_C)
+    assert materials.temperature_line([plain]) == "SS400 22 °C"

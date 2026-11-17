@@ -120,7 +120,7 @@ def test_기울어진_면의_마찰_없는_지지는_축에_맞춘_것과_같은
 def test_모달에서_쉘이_낀_비본딩_접촉도_푼다(ready: None, tmp_path: Path) -> None:
     """쉘 브래킷 ↔ 솔리드 블록(강체를 변형체로 바꾼다 — 강체면 접촉과 상관없이 강체에 넣는다).
     전에는 본딩이 아니면 멈췄다. 모달에서 마찰은 묶어 붙은 것으로(본딩과 같은 주파수, 그렇다고
-    적는다), 무마찰은 솔리드 면의 법선으로만 묶는다(`*EQUATION`)."""
+    적는다), 무마찰은 솔리드 면의 법선으로만 묶는다(둘 다 `*EQUATION`)."""
     from tests.opensolver.test_calculix import _shell_point
 
     spec = {
@@ -150,7 +150,10 @@ def test_모달에서_쉘이_낀_비본딩_접촉도_푼다(ready: None, tmp_pat
             assert "*EQUATION" in deck
             assert "no_separation:브래킷 접합" in summary["constrained_regions"]
         else:
-            assert "*TIE" in deck
+            # 쉘 ↔ 솔리드 본딩은 `*TIE` 가 아니라 세 방향 구속식이다(2026-11-17 — `*TIE` 는
+            # 쉘을 펼친 절점을 모두 묶어 강체 회전을 잡았다, `deck.Slide.bonded`).
+            assert "*TIE" not in deck and "*EQUATION" in deck
+            assert "tie:브래킷 접합" in summary["constrained_regions"]
         if kind == "frictional":
             assert "붙은 것으로" in summary["conditions_skipped"]
     assert first["frictional"] == pytest.approx(first["bonded"], rel=1e-6)

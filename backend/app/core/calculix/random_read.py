@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from app.core.calculix import frd as frd_reader
 from app.core.calculix import probes, tables, vtp
 from app.core.calculix.mesh import Mesh, read_mesh
 from app.core.modes import rigid as rigid_modes
+from app.core.modes import search as mode_search
 from app.core.numbers import significant
 from app.core.spec import RandomSpec
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -65,10 +67,45 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
             "boundary.json 에 랜덤 진동 설정(가진 · 범위 · 감쇠비)이 없습니다 — 모델링을 다시"
             " 돌리세요.",
         )
-    mesh, shapes = _mode_shapes(workdir, len(naturals))
+    mesh, shapes, statics = _mode_shapes(workdir, len(naturals), shaking.residual_steps)
+    # **찾을 범위**(모달과 같다) — 범위 안의 모드만 `modes` 개까지 중첩에 쓴다. 솔브가 범위를
+    # 채우려 더 풀었을 수 있으니 차례(`number`)로 고른다 — 표 · 형상은 전체 차례 그대로다.
+    searched = mode_search.read(workdir / boundary.BOUNDARY_NAME)
+    solved = list(naturals)
+    numbers = list(range(1, len(naturals) + 1))
+    if searched is not None:
+        picked, _ = mode_search.kept(
+            [
+                {
+                    "number": at,
+                    "frequency_hz": hz,
+                    "rigid_body": rigid_modes.is_rigid(hz),
+                }
+                for at, hz in enumerate(solved, start=1)
+            ],
+            searched,
+        )
+        numbers = [int(one["number"]) for one in picked]
+        if not numbers:
+            raise StageFailure(
+                "solver_failed",
+                f"찾을 범위 {searched.label} 안에 모드가 없습니다 — 중첩할 모드가 없어 응답을"
+                " 셈할 수 없습니다. 범위를 넓히거나 비우세요.",
+            )
+        naturals = [naturals[at - 1] for at in numbers]
+        shapes = [shapes[at - 1] for at in numbers]
+        factors = {
+            order: factors[at] for order, at in enumerate(numbers, start=1) if at in factors
+        }
 
     damping = shaking.damping_ratio
     modes = random_model.gather(naturals, factors, shaking.shakes)
+    # **잔여 벡터** — 모드가 빠뜨린 정적 몫을 가진마다 「모드」 하나로 더한다. 모드 표 · 「가장
+    # 높은 모드」 는 진짜 모드만 본다.
+    real_modes = modes
+    used: list[Mapping[int, Sequence[float]]] = list(shapes)
+    if statics:
+        modes, used = random_model.with_residual(modes, shapes, statics, shaking.shakes)
     breaks = sorted({hz for shake in shaking.shakes for hz, _ in shake.table})
     freqs = random_model.grid(shaking.low, shaking.high, naturals, damping, breaks)
 
@@ -87,9 +124,6 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
             "name": shake.name,
             "direction": [round(one, 6) for one in shake.direction],
             "grms": significant(ours),
-            "grms_in_range": significant(
-                random_model.grms(shake.table, shaking.low, shaking.high)
-            ),
             "table": [list(one) for one in shake.table],
         }
         if shake.declared_grms is not None:
@@ -105,14 +139,38 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
         inputs.append(line)
 
     if naturals[-1] < random_model.MODE_REACH * shaking.high:
-        # 범위 위쪽 모드도 정적 몫을 보탠다 — 위끝의 1.5배까지 풀어야 응답이 맞는다(Ansys 가
+        # 대역 위쪽 모드도 정적 몫을 보탠다 — 위끝의 1.5배까지 풀어야 응답이 맞는다(Ansys 가
         # 권하는 기준). 유효질량 몫은 기준으로 쓰지 않는다: 고정된 바디의 질량이 분모에 들어
         # 받침판이 무거운 모델(조건_랜덤진동 96 %)에서 늘 모자라 보인다.
-        warnings.append(
-            f"가장 높은 모드가 {naturals[-1]:,.0f} Hz 입니다 — 범위 위끝"
-            f"({shaking.high:,.0f} Hz)의 {random_model.MODE_REACH:g}배 넘게 풀어야 응답이"
-            " 맞습니다. 모드 수를 늘리세요."
+        capped = (
+            searched is not None and searched.high < random_model.MODE_REACH * shaking.high
         )
+        warnings.append(
+            f"중첩한 가장 높은 모드가 {naturals[-1]:,.0f} Hz 입니다 — 가진 대역 위끝"
+            f"({shaking.high:,.0f} Hz)의 {random_model.MODE_REACH:g}배 넘게 풀어야 응답이"
+            " 맞습니다. "
+            + (
+                f"찾을 범위({searched.label})의 상한을 올리세요."
+                if capped and searched is not None
+                else "모드 수를 늘리세요."
+            )
+        )
+    if searched is not None:
+        said = mode_search.note(searched, len(numbers), solved)
+        if said:
+            warnings.append(said)
+        # 범위 아래 모드를 뺐다 — 대역 안의 모드라면 응답이 그만큼 빠진다(사람이 고른 것이다).
+        dropped = [
+            hz
+            for hz in solved
+            if shaking.low <= hz < searched.low and not rigid_modes.is_rigid(hz)
+        ]
+        if dropped:
+            warnings.append(
+                f"찾을 범위({searched.label}) 아래의 모드 {len(dropped)}개"
+                f"({dropped[0]:,.0f} Hz …)가 가진 대역 안인데 중첩에서 빠졌습니다 — 그 모드의"
+                " 응답은 결과에 없습니다."
+            )
 
     # **측정점** — 가속도계와 견줄 값(절대 가속도 1σ)과 응답 PSD 곡선.
     spots = probes.spots(workdir)
@@ -126,7 +184,7 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
     }
     responses: dict[str, list[float]] = {}
     for spot in spots:
-        phis = [list(one.get(spot.node) or [0.0, 0.0, 0.0])[:3] for one in shapes]
+        phis = [list(one.get(spot.node) or [0.0, 0.0, 0.0])[:3] for one in used]
         got = random_model.at_point(phis, modes, shaking.shakes, freqs, damping)
         top = max(range(len(freqs)), key=lambda at: got.psd[at]) if freqs else 0
         row = core_probes.row(
@@ -149,7 +207,7 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
     # **모든 절점의 1σ 변위** — 모드 결합 행렬로(절점마다 K² 번).
     matrix = random_model.couplings(modes, shaking.shakes, freqs, damping)
     ids = [node for node in mesh.nodes if node in shapes[0]]
-    sigma = random_model.field(shapes, matrix, ids)
+    sigma = random_model.field(used, matrix, ids)
     worst = max(sigma, key=lambda node: sigma[node]) if sigma else None
 
     result: dict[str, Any] = {
@@ -165,10 +223,21 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
         # 1σ(표준 편차 = 실효값, 평균 0). 3σ 는 세 배.
         "sigma": 1,
         "damping_ratio": damping,
-        "frequency_range_hz": [shaking.low, shaking.high],
-        "range_from": shaking.source,
+        # **가진 대역** — PSD 표가 덮는 범위(적분 범위).
+        "band_hz": [shaking.low, shaking.high],
+        # 찾을 범위(모달과 같은 열쇠) — 있을 때만.
+        **(
+            {
+                "frequency_range_hz": [searched.low, searched.high],
+                "range_from": searched.source,
+            }
+            if searched is not None
+            else {}
+        ),
         "inputs": inputs,
-        "modes": _mode_rows(naturals, modes, report, shaking),
+        "modes": _mode_rows(naturals, numbers, real_modes, report, shaking),
+        # 빠진 모드의 정적 몫(잔여 벡터)을 더했나 — 못 더했으면 모드 수에 따라 응답이 출렁인다.
+        "residual": bool(statics),
         # 측정점 가속도의 기준 — 지지부의 가속도를 더한 **절대** 값(가속도계가 재는 것).
         "acceleration": "absolute",
         "displacement": "relative",
@@ -222,37 +291,49 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
     )
 
 
-def _mode_shapes(workdir: Path, count: int) -> tuple[Mesh, list[dict[int, list[float]]]]:
-    """메시와 모드마다의 변위(질량 정규화). **응답의 재료라 없으면 실패다**(모달과 다르다).
+def _mode_shapes(
+    workdir: Path, count: int, statics: int = 0
+) -> tuple[Mesh, list[dict[int, list[float]]], list[dict[int, list[float]]]]:
+    """메시 · 모드마다의 변위(질량 정규화) · 잔여 벡터의 1 g 정적 변위(가진마다). **응답의
+    재료라 없으면 실패다**(모달과 다르다).
 
-    선응력이면 앞 정적 단계의 변위 블록이 먼저 온다 — 모드 블록은 **뒤에서부터** 센다."""
+    블록 차례는 [선응력의 앞 정적 단계] · 모드 `count` 개 · 1 g 정적 `statics` 개다 — 모드는
+    **뒤에서부터** 센다."""
     result = workdir / FRD_NAME
     msh = workdir / MSH_NAME
     if not result.is_file() or not msh.is_file():
         raise StageFailure("solver_failed", f"모드 형상 파일이 없습니다: {FRD_NAME}")
     mesh = read_mesh(msh, require_solid=False)
     blocks = [one for one in frd_reader.read_folded(workdir, result) if one.kind == "DISP"]
-    if len(blocks) < count:
+    if len(blocks) < count + statics:
         raise StageFailure(
             "solver_failed",
-            f"{FRD_NAME} 의 모드 형상이 {len(blocks)}개뿐입니다(고유진동수 {count}개).",
+            f"{FRD_NAME} 의 변위 블록이 {len(blocks)}개뿐입니다(고유진동수 {count}개 · 정적"
+            f" {statics}개).",
         )
-    return mesh, [one.values for one in blocks[-count:]]
+    end = len(blocks) - statics
+    return (
+        mesh,
+        [one.values for one in blocks[end - count : end]],
+        [one.values for one in blocks[end:]],
+    )
 
 
 def _mode_rows(
     naturals: list[float],
+    numbers: list[int],
     modes: random_model.Modes,
     report: str,
     shaking: random_model.RandomPlan,
 ) -> list[dict[str, Any]]:
-    """모드마다 주파수 · 가진마다 참여 Γ · 유효질량 몫(Γ² / 전체 질량)."""
+    """모드마다 주파수 · 가진마다 참여 Γ · 유효질량 몫(Γ² / 전체 질량). `number` 는 푼 차례다
+    (찾을 범위가 있으면 1 부터가 아니다)."""
     totals = tables.total_masses(report)
     mass = totals[0] if totals and totals[0] > 0 else None
     rows = []
     for at, hz in enumerate(naturals):
         row: dict[str, Any] = {
-            "number": at + 1,
+            "number": numbers[at],
             "frequency_hz": round(hz, 4),
             "participation": {
                 shake.name: significant(modes.participation[shake.name][at])

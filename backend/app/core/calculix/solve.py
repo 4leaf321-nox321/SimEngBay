@@ -194,6 +194,39 @@ def eigen_env(text: str) -> dict[str, str] | None:
     return dict(EIGEN_ENV) if "*FREQUENCY" in text.upper() else None
 
 
+#: 솔버가 셈한 질량이 모델링 셈과 이만큼 넘게 다르면 적는다 — 둘 다 같은 밀도인데 하나는
+#: 형상 부피, 하나는 메시 부피라 곡면에서 조금 갈린다. 단위가 어긋나면 10³ 배씩 갈린다.
+MASS_TOLERANCE = 0.05
+
+
+def _mass_check(workdir: Path) -> dict[str, object]:
+    """**솔버가 셈한 전체 질량**(`.dat` 의 EMAS, `deck._finish`)과 모델링이 셈한 질량(형상
+    부피 x 밀도, `boundary.json` 의 `mass_kg`)을 견준다. 요약 칸 `solver_mass_kg` 와, 5 %
+    넘게 다르면 `mass_warning` — 덱의 밀도 · 단위가 어긋난 것이다."""
+    data = workdir / DATA_NAME
+    if not data.is_file():
+        return {}
+    tonne = tables.model_mass(data.read_text(encoding="utf-8", errors="replace"))
+    if tonne is None or tonne <= 0:
+        return {}
+    solver_kg = tonne * 1e3
+    out: dict[str, object] = {"solver_mass_kg": float(f"{solver_kg:.6g}")}
+    try:
+        saved = json.loads((workdir / BOUNDARY_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return out
+    ours = saved.get("mass_kg") if isinstance(saved, dict) else None
+    if not isinstance(ours, int | float) or ours <= 0:
+        return out
+    if abs(solver_kg / ours - 1) > MASS_TOLERANCE:
+        out["mass_warning"] = (
+            f"솔버가 셈한 질량({solver_kg:.4g} kg)이 형상 부피 x 밀도({ours:.4g} kg)와 "
+            f"{solver_kg / ours:.3g} 배 다릅니다 — 덱의 밀도 · 단위를 보세요(요약의 「덱 "
+            "물성」)."
+        )
+    return out
+
+
 def asked_modes(text: str) -> int | None:
     """`*FREQUENCY` 다음 줄의 모드 수."""
     lines = text.splitlines()
@@ -322,6 +355,7 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
         summary["solver_retry"] = "직접 솔버가 메모리로 끊겨 반복 솔버로 다시 풀었습니다."
     elif plan.tight and not plan.can_iterate:
         summary["memory_warning"] = _tight_message(plan)
+    summary.update(_mass_check(workdir))
     if searched is not None and solved is not None:
         # 범위를 채우려고 몇 번 · 몇 개까지 풀었나 — 큰 모델이면 시간이 그만큼 든다.
         summary["mode_search"] = f"{searched.label} · {passes}번 풀어 모드 {solved}개까지"

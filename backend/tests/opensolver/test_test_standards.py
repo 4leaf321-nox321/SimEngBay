@@ -44,12 +44,17 @@ def ready() -> None:
             pytest.skip(str(failure))
 
 
-def _solve(name: str, size: float, workdir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """폴더의 점 파일 · STEP 을 그대로 작업 폴더로 — 네 단계를 돌리고 (결과, 요약)."""
+def _solve(
+    name: str, size: float, workdir: Path, number: int = 1
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """폴더의 점 파일 · STEP 을 그대로 작업 폴더로 — 네 단계를 돌리고 (결과, 요약). STEP 은
+    점 파일의 `step_file`(설계점이 형상 하나를 나눠 쓰면 `shapes/…`)."""
     folder = STANDARDS / name / "points"
-    shutil.copy(folder / "p0001.step", workdir / "input.step")
-    shutil.copy(folder / "p0001.json", workdir / "topology.json")
-    point = json.loads((folder / "p0001.json").read_text(encoding="utf-8"))
+    point_file = folder / f"p{number:04d}.json"
+    point = json.loads(point_file.read_text(encoding="utf-8"))
+    step = (point.get("point") or {}).get("step_file") or f"points/p{number:04d}.step"
+    shutil.copy(STANDARDS / name / step, workdir / "input.step")
+    shutil.copy(point_file, workdir / "topology.json")
     recipe = point["conditions"]["analysis"]["type"]
     spec: dict[str, Any] = {
         "recipe": recipe,
@@ -224,3 +229,56 @@ def test_CAD_가_적은_큰_변형으로_푼다(ready: None, tmp_path: Path) -> 
     assert done.summary["large_deflection"] is True
     assert done.summary["large_deflection_from"] == "cad"
     assert "*STEP, NLGEOM" in (tmp_path / "model.inp").read_text(encoding="utf-8")
+
+
+def test_진동_시험의_변위_일정_구간과_랜덤_진동이_준정적_손셈과_맞는다(
+    ready: None, tmp_path: Path
+) -> None:
+    """CompCore 0587ef7(2026-11-17) — 구멍 판의 아랫면을 고정하고 Z 로 흔든다. 판의 1차
+    고유진동수가 약 60.6 kHz 라 시험 대역에서는 **준정적**이다(응답이 그 순간의 가속도에 비례).
+
+    - `시험_진동_150Hz`(IEC 60068-2-6, 0.075 mm · 1 g): 배율 표 33행 — 교차 주파수 57.55 Hz
+      아래는 (f / 57.55)². 응답의 **10 Hz / 150 Hz 비 ≈ 0.0302**(CompCore 손셈).
+    - `시험_랜덤진동`(6.058 Grms): **1σ 변위 ≈ 1 g 정적 변위 x Grms** — 같은 판의
+      `시험_가속도_15g`(15 g 정적)를 풀어 15 로 나눈다(CalculiX 4.2165e-7 → 1.703e-7 mm,
+      CompCore 손셈 1.70e-7). 잔여 벡터(`random_vibration.with_residual`)가 없으면 모드 10 · 40
+      개에 +20 · -13 % 였다 — 모드 수가 모자라도 맞는지 기본 10 개로 본다.
+    """
+    sine = tmp_path / "sine"
+    sine.mkdir()
+    result, summary = _solve("시험_진동_150Hz", 3.0, sine)
+    assert "conditions_refused" not in summary
+    points = result["points"]
+    assert points[0]["frequency_hz"] == pytest.approx(10)
+    assert points[-1]["frequency_hz"] == pytest.approx(150)
+    ratio = points[0]["max_displacement"] / points[-1]["max_displacement"]
+    assert ratio == pytest.approx((10 / 57.551) ** 2, rel=0.01)
+
+    still = tmp_path / "static"
+    still.mkdir()
+    pressed, _ = _solve("시험_가속도_15g", 3.0, still)
+    per_g = pressed["max_displacement"] / 15
+
+    shaken = tmp_path / "random"
+    shaken.mkdir()
+    result, summary = _solve("시험_랜덤진동", 3.0, shaken)
+    assert "conditions_refused" not in summary
+    assert result["residual"] is True and len(result["modes"]) == 10
+    assert result["inputs"][0]["grms"] == pytest.approx(6.058, abs=1e-3)
+    assert result["max_displacement"]["value_mm"] == pytest.approx(
+        per_g * result["inputs"][0]["grms"], rel=0.01
+    )
+    assert "warning" not in result, result.get("warning")
+
+    # **축을 나눈 같은 시험**(CompCore v0.29.0 「시험_랜덤진동_축셋」 — 설계점마다 한 축, 형상
+    # 하나를 나눠 쓴다). Z 점은 위와 같고, 판의 면 방향(X)은 더 물러 4배쯤 크다(실측 6.95e-7 ·
+    # 1.70e-7 mm).
+    by_axis: dict[str, float] = {}
+    for number, axis in ((1, "x"), (3, "z")):
+        work = tmp_path / f"axis-{axis}"
+        work.mkdir()
+        split, _ = _solve("시험_랜덤진동_축셋", 3.0, work, number)
+        assert split["inputs"][0]["name"] == "랜덤 가진"
+        by_axis[axis] = split["max_displacement"]["value_mm"]
+    assert by_axis["z"] == pytest.approx(result["max_displacement"]["value_mm"], rel=1e-3)
+    assert by_axis["x"] > 2 * by_axis["z"]

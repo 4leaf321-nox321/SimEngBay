@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -133,6 +134,9 @@ class Plan:
     #: 절점이다)과 단면 앞쪽 집합 둘(`BOLTnCUTA` · `BOLTnCUT`), 예압의 꼴(`force` · `length`)과
     #: 값(N · mm), 볼트 축. `boundary.json` 의 `bolts` 다.
     bolt_report: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: 고유치 단계 뒤에 붙인 **1 g 정적 단계의 방향**(랜덤 진동의 잔여 벡터) — 차례대로
+    #: `.frd` 의 마지막 변위 블록들이다. 비었으면 붙이지 않았다.
+    residual: list[tuple[float, float, float]] = field(default_factory=list)
 
 
 #: 탄성 · 압축 전용 지지 영역 → 절점마다 (맡은 넓이 mm², 면의 바깥 단위 법선) — 모델링이
@@ -223,6 +227,11 @@ class Slide:
     rows: tuple[tuple[int, tuple[float, float, float], tuple[tuple[int, float], ...]], ...]
     """(종 절점, 단위 법선, ((주 절점, 형상함수 값), …)) — 종마다 한 줄."""
     tolerance: float
+    bonded: bool = False
+    """**세 방향 다 묶는다**(본딩) — 쉘 ↔ 솔리드 본딩이 쓴다(2026-11-17). `*TIE` 는 쉘을 펼친
+    3D 절점(중간면 ± 두께/2)을 모두 솔리드 면에 묶어, 두께만큼 떨어진 절점들이 **강체 회전을
+    잡았다**(셸모델_시트받침조립 자유-자유 2.62 · 5.04 · 12.8 Hz). `*EQUATION` 은 원래 쉘 절점
+    (펼친 절점의 평균 = 중간면)에 걸려 강체 운동과 맞는다."""
 
     @property
     def slave_nodes(self) -> frozenset[int]:
@@ -230,7 +239,10 @@ class Slide:
 
     def lines(self) -> list[str]:
         """`*EQUATION` — 첫 항(종속)은 법선 성분이 가장 큰 자유도다(계수가 0 에 가까우면
-        안 된다). 한 줄에 넷까지 적는다."""
+        안 된다). 한 줄에 넷까지 적는다. 본딩이면 종 절점의 x · y · z 를 하나씩 —
+        u종 = Σ N·u주."""
+        if self.bonded:
+            return self._bonded_lines()
         out = ["*EQUATION"] if self.rows else []
         for slave, normal, masters in self.rows:
             first = max(range(3), key=lambda axis: abs(normal[axis]))
@@ -254,6 +266,23 @@ class Slide:
                         for node, dof, value in terms[at : at + 4]
                     )
                 )
+        return out
+
+    def _bonded_lines(self) -> list[str]:
+        out = ["*EQUATION"] if self.rows else []
+        for slave, _, masters in self.rows:
+            for dof in (1, 2, 3):
+                terms = [(slave, dof, 1.0)] + [
+                    (node, dof, -weight) for node, weight in masters if abs(weight) > 1e-12
+                ]
+                out.append(str(len(terms)))
+                for at in range(0, len(terms), 4):
+                    out.append(
+                        ", ".join(
+                            f"{node}, {axis}, {value:.10g}"
+                            for node, axis, value in terms[at : at + 4]
+                        )
+                    )
         return out
 
 
@@ -326,7 +355,12 @@ def _finish(
 ) -> str:
     """덱 글을 맺는다. 강체가 있으면 결과를 **메시 절점(`NALL`)만** 내게 한다 — 기준점 ·
     회전 절점이 결과에 섞이지 않게(`RigidBody` 참고). 쉘이 있으면 **펼친 채로**(`OUTPUT=3D`)
-    낸다 — `OUTPUT=2D` 는 응력을 중간면에서 내서 굽힘이 빠진다."""
+    낸다 — `OUTPUT=2D` 는 응력을 중간면에서 내서 굽힘이 빠진다.
+
+    **솔버가 셈한 전체 질량을 `.dat` 에 적게 한다**(`*EL PRINT … EMAS`, 첫 단계 — 2026-11-17).
+    덱의 밀도 · 형상이 그대로 든 값이라, 모델링이 셈한 질량과 견주면 단위가 어긋난 것이
+    보인다(`tables.model_mass`). 솔리드 · 쉘 요소 묶음만 — 스프링 · 간극 요소는 질량이 없다."""
+    lines = _with_mass_print(lines)
     if shells:
         # 펼친 채로 낸다 — 겉면 응력이 거기 있다. 원래 쉘 절점으로 접는 일은 결과를 읽을 때
         # 한다(`frd.fold_shells`). 그때 우리 메시 밖의 절점(펼친 것 · 강체 기준점)은 빠진다.
@@ -342,6 +376,40 @@ def _finish(
         # 원격 변위의 원격점도 같다 — 회전 절점의 「변위」 가 각(라디안)이다.
         lines = ["*NODE FILE, NSET=NALL" if line == "*NODE FILE" else line for line in lines]
     return "\n".join(lines) + "\n"
+
+
+#: 솔버가 셈한 질량을 적을 요소 묶음 — 솔리드 · 쉘 요소 묶음 전부(`_finish`).
+MASS_SET = "EMASS"
+_MASSIVE = re.compile(r"^\*ELEMENT,\s*TYPE=(C3D\w*|S\d\w*),\s*ELSET=(\w+)", re.IGNORECASE)
+
+
+def _with_mass_print(lines: list[str]) -> list[str]:
+    """첫 `*STEP` 앞에 질량 묶음, 첫 `*END STEP` 앞에 `*EL PRINT … EMAS` 를 넣는다. 묶을
+    요소가 없거나 이미 넣었으면 그대로."""
+    sets = list(dict.fromkeys(m.group(2) for line in lines if (m := _MASSIVE.match(line))))
+    if not sets or any(line.startswith(f"*ELSET, ELSET={MASS_SET}") for line in lines):
+        return lines
+    start = next(
+        (at for at, line in enumerate(lines) if line.upper().startswith("*STEP")), None
+    )
+    if start is None:
+        return lines
+    end = next(
+        (at for at, line in enumerate(lines) if at > start and line.upper() == "*END STEP"),
+        None,
+    )
+    if end is None:
+        return lines
+    members = [", ".join(sets[at : at + 8]) for at in range(0, len(sets), 8)]
+    return [
+        *lines[:start],
+        f"*ELSET, ELSET={MASS_SET}",
+        *members,
+        *lines[start:end],
+        f"*EL PRINT, ELSET={MASS_SET}, TOTALS=ONLY",
+        "EMAS",
+        *lines[end:],
+    ]
 
 
 def write_modal(
@@ -366,8 +434,14 @@ def write_modal(
     springs: Springs | None = None,
     stress_mpa: float = 1.0,
     bolt_stage: tuple[list[str], list[str], list[str]] | None = None,
+    residual: Sequence[tuple[float, float, float]] = (),
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
+
+    `residual` 을 주면(랜덤 진동) 고유치 단계 뒤에 **방향마다 1 g 정적 단계**를 하나씩 붙인다 —
+    모드 중첩이 빠뜨린 모드의 정적 몫(잔여 벡터)을 셈할 재료다(`random_vibration`). 선응력 ·
+    비선형 접촉이 있으면 붙이지 않는다(`Plan.residual` 이 비어 있다) — 그 정적 단계는 선형
+    섭동이 아니라 다시 비선형으로 풀린다.
 
     `contact_faces` 를 주면 **접촉 쌍을 쓴다**(메시를 쪼개지 않은 경우). `preload` 를 주면 그
     줄들로 **비선형 정적 단계를 앞에 두고** 그 상태에서 모드를 뽑는다(`*STEP, PERTURBATION`) —
@@ -474,6 +548,25 @@ def write_modal(
         "U",
         "*END STEP",
     ]
+    if residual and not (preload or bolt_stage) and "*CONTACT PAIR" not in "\n".join(lines):
+        # **잔여 벡터 재료** — 지지부를 그 방향으로 1 g 가속하면 몸은 반대로 눌린다(가속도
+        # 하중과 같은 관성 — `_inertia_rows`). 앞 단계의 하중은 없다(`OP=NEW`).
+        elsets = _elsets(body_of, shells)
+        for direction in residual:
+            lines += [
+                "*STEP",
+                "*STATIC",
+                "*DLOAD, OP=NEW",
+                *(
+                    f"{elset}, GRAV, {STANDARD_GRAVITY:.8g}, {-direction[0]:.8g},"
+                    f" {-direction[1]:.8g}, {-direction[2]:.8g}"
+                    for elset in elsets
+                ),
+                "*NODE FILE",
+                "U",
+                "*END STEP",
+            ]
+            plan.residual.append(direction)
     plan.text = _finish(
         lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes or bolt_stage)
     )
@@ -901,7 +994,7 @@ def _head(
     for tie in ties:
         if isinstance(tie, Slide):
             lines += tie.lines()
-            plan.applied.append(f"no_separation:{tie.contact}")
+            plan.applied.append(f"{'tie' if tie.bonded else 'no_separation'}:{tie.contact}")
             continue
         lines += _nset(f"{tie.name}S", set(tie.slave_nodes))
         lines += [f"*SURFACE, NAME={tie.name}S, TYPE=NODE", f"{tie.name}S"]

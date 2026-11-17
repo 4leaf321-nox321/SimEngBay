@@ -319,4 +319,25 @@ describe('해석 작업 화면', () => {
     expect(screen.getByText('기둥 ↔ 모자 (절점 105 · 자리 (0, 0, 90) mm)')).toBeInTheDocument()
     expect(screen.getByText('결과 경고')).toBeInTheDocument()
   })
+
+  it('형상 크기 · 질량이 어긋났으면 맨 위에 띠로 알리고, 덱 물성 · 솔버 질량을 요약에 보인다', async () => {
+    vi.mocked(simulationApi.get).mockResolvedValue({
+      ...job('done'),
+      summary: {
+        nodes: 23963,
+        mass_kg: 0.186494,
+        solver_mass_kg: 0.186496,
+        deck_materials: 'E 205 GPa · 밀도 7,850 kg/m³ (판)',
+        size_warning: '형상 크기가 CAD 와 다릅니다(길이 단위) — 부피가 CAD 의 1e-09 배(길이 0.001 배)입니다.',
+      },
+    } as Simulation)
+    show('/simulations/sim?tab=progress')
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('형상 크기 경고: 형상 크기가 CAD 와 다릅니다(길이 단위)')
+    expect(screen.getByText('덱 물성')).toBeInTheDocument()
+    expect(screen.getByText('E 205 GPa · 밀도 7,850 kg/m³ (판)')).toBeInTheDocument()
+    expect(screen.getByText('솔버 질량')).toBeInTheDocument()
+    // 질량 둘(형상 부피 x 밀도 · 솔버)이 같다 — 같은 글자가 둘 이상(한눈에 보기 줄에도 있다).
+    expect(screen.getAllByText('186.5 g').length).toBeGreaterThanOrEqual(2)
+  })
 })

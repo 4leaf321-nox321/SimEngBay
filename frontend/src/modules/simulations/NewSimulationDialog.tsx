@@ -55,6 +55,7 @@ import {
   isRecipe,
   NO_RANGE,
   RANDOM_DEFAULTS,
+  searchesModes,
   specProblem,
 } from '@/modules/simulations/spec'
 import type { HarmonicInput, MeshOrder, RandomInput, RangeInput, RecipeName } from '@/modules/simulations/spec'
@@ -865,8 +866,9 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                         </p>
                       )}
                     </div>
-                    {recipe === 'modal' && (
+                    {searchesModes(recipe) && (
                       // **찾을 주파수 범위** — 낮은 모드에 밀려 보고 싶은 대역이 모드 수 밖으로 나가지 않게.
+                      // 랜덤 진동도 같은 칸이다(CompCore 의 랜덤 `frequency_range` 는 모달 단계의 범위).
                       <div className="space-y-1.5">
                         <Label htmlFor="sim-range-low">찾을 주파수 범위 (Hz, 선택)</Label>
                         <div className="flex items-center gap-2">
@@ -897,6 +899,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                           {cadRange
                             ? `CAD 가 적은 범위 ${rangeText(cadRange)} 안의 모드를 찾습니다 — CAD 값이 먼저입니다.`
                             : '비우면 낮은 차수부터 모드 수만큼. 주면 그 범위 안의 모드만 모드 수까지 찾습니다.'}
+                          {recipe === 'random' && ' 가진 대역은 PSD 표의 범위입니다 — 이 범위로 자르지 않습니다.'}
                         </p>
                       </div>
                     )}

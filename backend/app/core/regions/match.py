@@ -171,8 +171,9 @@ def _score(wanted: dict[str, Any], face: FaceRecord, scale: float) -> tuple[bool
 
     # **조립이면 파트부터 본다** — 지문이 「어느 파트의 면」 인지 말하고 우리도 그 면의 파트를
     # 알 때만. 한쪽이라도 모르면 자리로만 고른다(전과 같다).
-    owner = str(wanted.get("body") or "").strip()
-    if owner and face.body and face.body != owner:
+    # 파트 이름은 **받은 그대로** 견준다 — 앞뒤 공백도 이름이다(`bodies.match_bodies`).
+    owner = str(wanted.get("body") or "")
+    if owner.strip() and face.body and face.body != owner:
         return False, distance, f"다른 파트(「{face.body}」)의 면입니다"
 
     # **축까지 본다**(둘 다 알 때만). 반지름과 중심이 같은데 축이 다른 면은 다른 면이다 —

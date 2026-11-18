@@ -1498,7 +1498,7 @@ def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOu
 
 def _volume_of(payload: dict[str, Any], name: str) -> float | None:
     for one in payload.get("bodies") or []:
-        if isinstance(one, dict) and str(one.get("name") or "").strip() == name:
+        if isinstance(one, dict) and str(one.get("name") or "") == name:
             volume = one.get("volume")
             return float(volume) if isinstance(volume, int | float) else None
     return None

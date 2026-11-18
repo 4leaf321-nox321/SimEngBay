@@ -445,7 +445,7 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         _body_setting(row, made, middle)
     # **시트는 쉘로 풀거나 뺀다** — 부피가 0 이라 솔리드로 풀 길이 없다. 설정 줄이 이미 막힌
     # 시트(두께를 못 받은 쉘)는 그 까닭이 먼저 섰다.
-    halted = {str(row.get("name") or "").strip() for row in _rows(block, "body_settings")}
+    halted = {str(row.get("name") or "") for row in _rows(block, "body_settings")}
     halted -= {one.name for one in made.body_settings}
     for name in loose_sheets(payload, made):
         if name not in halted:
@@ -805,7 +805,7 @@ def sheet_parts(payload: Any) -> set[str]:
     이 날(2026-10-15) 전의 점 파일에는 `kind` 가 없다 — 그때는 모두 솔리드로 읽는다.
     """
     return {
-        str(one.get("name") or "").strip()
+        str(one.get("name") or "")
         for one in _dict(payload).get("bodies") or []
         if isinstance(one, dict) and one.get("kind") == SHEET
     }
@@ -972,8 +972,8 @@ def _body_setting(
     row: dict[str, Any], made: Conditions, middle: _Middle | None = None
 ) -> None:
     """파트별 설정 한 줄. **모르는 값은 멈춘다** — 거동 · 표현은 답을 바꾼다."""
-    name = str(row.get("name") or "").strip()
-    if not name:
+    name = str(row.get("name") or "")  # 받은 그대로 — `bodies.match_bodies`
+    if not name.strip():
         made.refused.append(Note("파트별 설정", "파트 이름이 비어 있습니다"))
         return
     what = f"파트 「{name}」"

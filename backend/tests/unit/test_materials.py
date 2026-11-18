@@ -369,7 +369,10 @@ def test_파트마다_붙을_물성을_모델링과_같은_규칙으로_짝짓�
     assert materials.uncovered(plate, ["부품"]) == []
     assert materials.uncovered(whole, ["지그판", "부품"]) == []
     assert materials.uncovered(plate + whole, ["지그판", "부품"]) == []
-    assert materials.body_names({"bodies": [{"name": " 판 "}, {"name": ""}, "x"]}) == ["판"]
+    # 이름은 받은 그대로다 — 앞뒤 공백도 `apply_to` 에 같은 글자로 온다(CompCore v0.30.0).
+    # 비었거나 공백뿐인 이름만 뺀다.
+    rows = [{"name": " 판 "}, {"name": ""}, {"name": "  "}, "x"]
+    assert materials.body_names({"bodies": rows}) == [" 판 "]
 
 
 @pytest.mark.parametrize(

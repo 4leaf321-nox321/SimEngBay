@@ -94,8 +94,10 @@ def match_bodies(topology: dict[str, Any], records: list[BodyRecord]) -> BodyMat
 
     taken: set[int] = set()
     for part in wanted:
-        name = str(part.get("name") or "").strip()
-        if not name:
+        # 이름은 **받은 그대로** 견준다 — 앞뒤 공백도 이름의 일부다(CompCore: 네 자리
+        # `bodies` · `apply_to` · `body_settings` · `midsurface` 에 같은 글자로 나간다).
+        name = str(part.get("name") or "")
+        if not name.strip():
             continue
         if part.get("kind") == SHEET:
             # **시트는 부피가 0 이다** — 부피로 짝지을 바디가 없다. 시트는 쉘로만 풀고(중간면이
@@ -243,6 +245,6 @@ def without(topology: dict[str, Any], names: set[str]) -> dict[str, Any]:
     rows = [
         one
         for one in topology.get("bodies") or []
-        if not (isinstance(one, dict) and str(one.get("name") or "").strip() in names)
+        if not (isinstance(one, dict) and str(one.get("name") or "") in names)
     ]
     return {**topology, "bodies": rows}

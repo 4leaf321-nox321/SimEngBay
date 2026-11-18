@@ -179,8 +179,8 @@ def for_body(materials: list[Material], body: str) -> Material | None:
 def body_names(payload: Any) -> list[str]:
     """점 파일의 `bodies[].name` — CAD 가 이름 붙인 파트들. 없으면 빈 목록."""
     rows = payload.get("bodies") if isinstance(payload, dict) else None
-    names = [str(one.get("name") or "").strip() for one in rows or [] if isinstance(one, dict)]
-    return [one for one in names if one]
+    names = [str(one.get("name") or "") for one in rows or [] if isinstance(one, dict)]
+    return [one for one in names if one.strip()]
 
 
 def assigned(materials: list[Material], bodies: list[str]) -> dict[str, Material | None]:
@@ -234,7 +234,8 @@ def _bodies(row: dict[str, Any]) -> tuple[str, ...]:
     """
     raw = row.get("apply_to")
     names = [raw] if isinstance(raw, str) else list(raw or [])
-    picked = tuple(str(one).strip() for one in names if str(one).strip())
+    # 받은 그대로 — 앞뒤 공백을 지우면 `bodies[].name` 과 어긋난다(`bodies.match_bodies`).
+    picked = tuple(str(one) for one in names if str(one).strip())
     return () if ALL_BODIES in picked else picked
 
 

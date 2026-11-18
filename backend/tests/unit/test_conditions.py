@@ -17,7 +17,8 @@ from typing import Any
 
 import pytest
 
-from app.core import conditions
+from app.core import conditions, materials, units
+from app.core.bodies import BodyRecord, match_bodies, without
 
 FOLDERS = Path(__file__).resolve().parents[1] / "fixtures" / "doe"
 
@@ -284,6 +285,51 @@ def test_쉘_파트를_중간면과_두께로_읽는다() -> None:
     )
     edged = conditions.read(payload, recipe="static")
     assert any("모서리" in one.why for one in edged.refused)
+
+
+def test_바디_이름은_앞뒤_공백까지_받은_그대로_견준다() -> None:
+    """CompCore v0.30.0 부터 바디 이름이 STEP 그대로다(공백 · 점 · 괄호 · 작은따옴표). 앞뒤
+    공백도 v0.30.0 에서는 남고, 다음 버전부터 지우지만 **이미 저장된 이름은 그대로 둔다.** 네
+    자리(`bodies` · `apply_to` · `body_settings` · `midsurface.bodies`)에 같은 글자로 나가므로
+    받은 그대로 견준다 — 전에는 앞의 셋만 지우고 중간면은 그대로 둬 쉘 파트를 못 찾았다."""
+    renamed = {"브래킷": "브래킷 ", "지그블록": " 지그블록", "명판": "명판 (A'급)."}
+
+    def swap(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: swap(one) for key, one in value.items()}
+        if isinstance(value, list):
+            return [swap(one) for one in value]
+        return renamed.get(value, value) if isinstance(value, str) else value
+
+    payload = swap(_point(SHELL_FOLDER))
+    found = conditions.read(payload, recipe="static")
+    assert found.refused == []
+    assert found.shells == {"브래킷 ": 2.0}
+    assert found.rigid == {" 지그블록"} and found.suppressed == {"명판 (A'급)."}
+    assert conditions.loose_sheets(payload, found) == []
+
+    names = materials.body_names(payload)
+    assert names == [" 지그블록", "브래킷 ", "명판 (A'급)."]
+    made = materials.read(payload, units.MM_N_TONNE)
+    assert materials.uncovered(made, names) == []
+
+    # 쉘 · 뺀 파트를 지운 바디 목록 → 남은 솔리드만 부피로 짝짓는다.
+    kept = without(payload, found.suppressed | set(found.shells))
+    assert [one["name"] for one in kept["bodies"]] == [" 지그블록"]
+    records = [
+        BodyRecord(
+            index=0,
+            volume=float(row["volume"]),
+            centroid=(
+                float(row["centroid"][0]),
+                float(row["centroid"][1]),
+                float(row["centroid"][2]),
+            ),
+            name="STEP 이름은 안 본다",
+        )
+        for row in kept["bodies"]
+    ]
+    assert match_bodies(kept, records).bodies == {" 지그블록": 0}
 
 
 def test_뺀_파트에_걸린_조건은_가려_낸다() -> None:

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -181,6 +182,12 @@ def test_조립의_지문은_그_파트의_면만_집는다() -> None:
     # 파트를 모르는 면(메시에서 되찾은 CalculiX 의 면)은 자리로만 고른다 — 전과 같다.
     unknown = [FaceRecord(id=3, centroid=(0.0, 0.0, 5.0), area=200.0, radius=3.0)]
     assert match_regions(topology, unknown, wanted_regions=["구멍면"]).faces == {"구멍면": [3]}
+    # 파트 이름은 앞뒤 공백까지 받은 그대로다(CompCore v0.30.0) — 지문의 `body` 만 지우면
+    # 「다른 파트의 면」 으로 막힌다.
+    spaced = replace(hole, body=" 시편 (A'급).")
+    topology["regions"]["구멍면"][0]["body"] = " 시편 (A'급)."
+    found = match_regions(topology, [pin, spaced])
+    assert found.ok and found.faces == {"구멍면": [2], "핀 옆면": [1]}
 
 
 def test_반지름_없는_곡면은_축으로_곡면인_줄_알고_중심으로_좁게_본다() -> None:

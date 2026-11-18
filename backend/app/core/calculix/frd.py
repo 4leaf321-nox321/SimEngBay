@@ -40,6 +40,10 @@ class Block:
     value: float
     step: int
     values: dict[int, list[float]]
+    stage: int = 0
+    """**ccx 의 단계 번호**(`*STEP` 의 차례, 1 부터) — 블록 앞 `1PSTEP` 줄의 마지막 수. 덱이
+    단계를 여럿 쓰면(조화 응답의 고유치 · 주파수 훑기 · 잔여 벡터 단계) 이것으로 가른다. 못
+    읽었으면 0. (`step` 은 `100CL` 줄에서 읽은 차례 값이라 단계 번호가 아니다.)"""
 
 
 def read(path: Path) -> list[Block]:
@@ -48,15 +52,23 @@ def read(path: Path) -> list[Block]:
     kind = ""
     value = 0.0
     step = 0
+    stage = 0
     rows: dict[int, list[float]] = {}
     last: int | None = None
 
     def close() -> None:
         if kind and rows:
-            blocks.append(Block(kind=kind, value=value, step=step, values=dict(rows)))
+            blocks.append(
+                Block(kind=kind, value=value, step=step, values=dict(rows), stage=stage)
+            )
 
     with path.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
+            if line.startswith("    1PSTEP"):
+                # `    1PSTEP   <차례>   <증분>   <단계>` — 마지막 수가 ccx 단계 번호다.
+                tail = line.split()
+                stage = int(tail[-1]) if len(tail) > 1 and tail[-1].isdigit() else 0
+                continue
             if line.startswith("  100CL"):
                 close()
                 kind, rows, last = "", {}, None
@@ -272,7 +284,13 @@ def fold_shells(
                     sum(row[index] for row in rows) / len(rows) for index in range(width)
                 ]
         folded.append(
-            Block(kind=block.kind, value=block.value, step=block.step, values=values)
+            Block(
+                kind=block.kind,
+                value=block.value,
+                step=block.step,
+                values=values,
+                stage=block.stage,
+            )
         )
     return folded
 

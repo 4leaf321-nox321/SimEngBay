@@ -187,7 +187,7 @@ def _at_spots(
         field = dpf.operators.math.amplitude_fc(fields_container=fields).eval()[0]
     except Exception:
         field = fields[0]
-    ids = np.asarray(field.scoping.ids, dtype=int)
+    ids = np.array(field.scoping.ids, copy=True, dtype=int)
     data = np.asarray(field.data, dtype=float)
     size = np.linalg.norm(data, axis=1) if data.ndim == 2 else np.abs(data)
     by_node = dict(zip(ids.tolist(), size.tolist(), strict=False))

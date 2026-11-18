@@ -93,6 +93,11 @@ class UnitSystem:
         """이 계의 부피 → m³. 질량을 kg 로 내는 데 쓴다."""
         return volume * self.length_m**3
 
+    def mass_kg(self, mass: float) -> float:
+        """이 계의 질량 → kg. 질량 단위 = 밀도 단위 x 길이 단위³(mm · N · t 면 1 t = 1000 kg) —
+        솔버가 적은 전체 질량(MAPDL `TOTAL MASS`)을 견줄 때 쓴다."""
+        return mass * self.density_kg_m3 * self.length_m**3
+
     @property
     def length_label(self) -> str:
         """길이 단위 이름 — Mechanical 에 값을 줄 때 **단위를 붙여** 준다(`Quantity`)."""

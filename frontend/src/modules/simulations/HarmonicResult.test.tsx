@@ -53,6 +53,21 @@ describe('조화 응답 결과', () => {
     expect(screen.getByText('3.3배')).toBeDefined()
   })
 
+  it('잔여 벡터를 더했으면 그렇다고 적고 봉우리의 최대 상당응력을 보인다', () => {
+    render(
+      <HarmonicResult
+        result={{
+          ...measured,
+          residual: true,
+          stress: { frequency_hz: 60000, max_von_mises_mpa: 1.10496, node: 410 },
+        }}
+      />,
+    )
+    expect(screen.getByText(/최대 상당응력/)).toBeDefined()
+    expect(screen.getByText('1.105 MPa')).toBeDefined()
+    expect(screen.getByText(/잔여 벡터\)을 더했습니다/)).toBeDefined()
+  })
+
   it('봉우리가 창 끝에 있으면 범위를 넓히라고 말한다', () => {
     const flank: HarmonicResultData = {
       ...measured,

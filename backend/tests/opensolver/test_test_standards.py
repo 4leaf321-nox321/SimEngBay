@@ -246,7 +246,8 @@ def test_진동_시험의_변위_일정_구간과_랜덤_진동이_준정적_손
     """
     sine = tmp_path / "sine"
     sine.mkdir()
-    result, summary = _solve("시험_진동_150Hz", 3.0, sine)
+    swept, summary = _solve("시험_진동_150Hz", 3.0, sine)
+    result = swept
     assert "conditions_refused" not in summary
     points = result["points"]
     assert points[0]["frequency_hz"] == pytest.approx(10)
@@ -258,6 +259,13 @@ def test_진동_시험의_변위_일정_구간과_랜덤_진동이_준정적_손
     still.mkdir()
     pressed, _ = _solve("시험_가속도_15g", 3.0, still)
     per_g = pressed["max_displacement"] / 15
+    stress_per_g = pressed["max_von_mises"] / 15
+
+    # **잔여 벡터**(2026-11-18) — 150 Hz(배율 1)의 응답이 1 g 정적 해 그대로다. 없으면 모드
+    # 20 · 40 개에 -29.5 · -13 % 였다. 봉우리의 상당응력도 1 g 정적 응력이다(모드 응력 중첩).
+    assert swept["residual"] is True
+    assert swept["points"][-1]["max_displacement"] == pytest.approx(per_g, rel=1e-3)
+    assert swept["stress"]["max_von_mises_mpa"] == pytest.approx(stress_per_g, rel=1e-3)
 
     shaken = tmp_path / "random"
     shaken.mkdir()
@@ -267,6 +275,11 @@ def test_진동_시험의_변위_일정_구간과_랜덤_진동이_준정적_손
     assert result["inputs"][0]["grms"] == pytest.approx(6.058, abs=1e-3)
     assert result["max_displacement"]["value_mm"] == pytest.approx(
         per_g * result["inputs"][0]["grms"], rel=0.01
+    )
+    # 상당응력 1σ(Segalman) — 준정적이라 1 g 정적 응력 x Grms(실측 0.00264553 ·
+    # 0.00264531 MPa).
+    assert result["stress"]["max_von_mises_mpa"] == pytest.approx(
+        stress_per_g * result["inputs"][0]["grms"], rel=0.01
     )
     assert "warning" not in result, result.get("warning")
 

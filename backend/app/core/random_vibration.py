@@ -484,3 +484,81 @@ def field(
             )
         out[node] = math.sqrt(max(total, 0.0))
     return out
+
+
+def residual_fields(
+    modes: Modes,
+    shapes: Sequence[Mapping[int, Sequence[float]]],
+    statics: Sequence[Mapping[int, Sequence[float]]],
+    shakes: Sequence[Shake],
+    width: int,
+) -> list[dict[int, list[float]]]:
+    """가진마다 **잔여 장**(정적 장 - Σₘ shapeₘ Γₘ,ₛ hₘ(0)) — `with_residual` 과 같은 셈을 성분
+    `width` 개로(응력이면 여섯). `modes` 는 진짜 모드만(잔여 「모드」 를 넣기 전)."""
+    out: list[dict[int, list[float]]] = []
+    for shake, static in zip(shakes, statics, strict=True):
+        gamma = modes.participation[shake.name]
+        gains = [
+            gamma[m] * modal_gain(natural, 0.0, 0.0).real
+            if natural > 0 and not math.isinf(natural)
+            else 0.0
+            for m, natural in enumerate(modes.naturals)
+        ]
+        used = [m for m, gain in enumerate(gains) if gain != 0.0]
+        field_: dict[int, list[float]] = {}
+        for node, whole in static.items():
+            left = [float(one) for one in list(whole)[:width]]
+            if len(left) < width:
+                continue
+            for m in used:
+                shape = shapes[m].get(node)
+                if shape is None or len(shape) < width:
+                    continue
+                for axis in range(width):
+                    left[axis] -= shape[axis] * gains[m]
+            field_[node] = left
+        out.append(field_)
+    return out
+
+
+def stress_sigma(
+    stresses: Sequence[Mapping[int, Sequence[float]]],
+    matrix: Sequence[Sequence[float]],
+) -> tuple[float, int | None]:
+    """**모든 절점의 상당응력 1σ 최대**(Segalman, `superposition.von_mises_rms`)와 그 절점.
+
+    절점마다 K² 번은 무겁다(절점 5만 · 모드 40 이면 수억 번) — 먼저 **상한**
+    √E[σᵥ²] ≤ Σₘ √Rₘₘ · √Q(ψₘ, ψₘ)(Q 노름의 삼각 부등식 + 민코프스키)를 셈하고, 큰 차례로
+    정확한 값을 셈해 상한이 지금까지의 최대보다 작아지면 멈춘다. 몫이 없는 모드는 뺀다(`field`
+    와 같은 규칙)."""
+    from app.core import superposition
+
+    count = min(len(stresses), len(matrix))
+    if not count:
+        return 0.0, None
+    scale = [math.sqrt(max(matrix[m][m], 0.0)) for m in range(count)]
+    kept = [m for m in range(count) if scale[m] > 0]
+    rows = [[matrix[m][k] for k in kept] for m in kept]
+    picked = [stresses[m] for m in kept]
+    bounds: list[tuple[float, int]] = []
+    width = superposition.STRESS_COMPONENTS
+    for node in picked[0] if picked else {}:
+        found = [one.get(node) for one in picked]
+        rows_at = [list(one)[:width] for one in found if one is not None and len(one) >= width]
+        if len(rows_at) != len(found):
+            continue
+        top = sum(
+            scale[kept[i]] * math.sqrt(max(superposition.von_mises_form(v, v), 0.0))
+            for i, v in enumerate(rows_at)
+        )
+        bounds.append((top, node))
+    bounds.sort(reverse=True)
+    best, where = 0.0, None
+    for top, node in bounds:
+        if top <= best:
+            break
+        vectors = [list(one[node])[:width] for one in picked]
+        value = superposition.von_mises_rms(vectors, rows)
+        if value > best:
+            best, where = value, node
+    return best, where

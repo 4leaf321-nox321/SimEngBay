@@ -159,11 +159,11 @@ def _body_nodes(mesh: Any) -> Any:
         if len(body) == len(np.unique(kinds)):
             return None
         scoping = dpf.Scoping(
-            ids=np.asarray(mesh.elements.scoping.ids)[np.isin(kinds, list(body))],
+            ids=np.array(mesh.elements.scoping.ids, copy=True)[np.isin(kinds, list(body))],
             location=dpf.locations.elemental,
         )
         part = dpf.operators.mesh.from_scoping(scoping=scoping, mesh=mesh).outputs.mesh()
-        return np.asarray(part.nodes.scoping.ids)
+        return np.array(part.nodes.scoping.ids, copy=True)
     except Exception:  # pragma: no cover - 판마다 칸이 다를 수 있다
         logger.warning("몸의 절점을 못 갈랐습니다 — 전 절점에서 최대를 잽니다", exc_info=True)
         return None
@@ -300,7 +300,7 @@ def _bolts(
         import numpy as np
 
         kinds = np.asarray(mesh.property_field("apdl_element_type").data)
-        ids = np.asarray(mesh.elements.scoping.ids)
+        ids = np.array(mesh.elements.scoping.ids, copy=True)
         nodes = sorted(
             {
                 int(mesh.elements.element_by_id(int(one)).node_ids[-1])
@@ -314,7 +314,7 @@ def _bolts(
             rows = np.asarray(field.data, dtype=float).reshape(-1, 3)
             return {
                 int(node): list(rows[index])
-                for index, node in enumerate(field.scoping.ids)
+                for index, node in enumerate(np.array(field.scoping.ids, copy=True).tolist())
                 if int(node) in nodes
             }
 

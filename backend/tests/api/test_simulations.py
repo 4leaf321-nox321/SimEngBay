@@ -1489,18 +1489,6 @@ def test_랜덤_진동_DOE_는_1σ_변위와_측정점_가속도를_견준다(
     assert preview.json()["suggested_recipe"] == "random"
     assert preview.json()["suggested_modes"] == 6
 
-    refused = client.post(
-        "/api/simulations/doe/import",
-        json={
-            "path": str(folder),
-            "spec": {"recipe": "random", "solver": "ansys", "material": MODAL["material"]},
-            "workspace_slug": member.workspace,
-        },
-        headers=member.headers,
-    )
-    assert refused.status_code == 400, refused.text
-    assert "CalculiX 로만" in refused.text
-
     created = client.post(
         "/api/simulations/doe/import",
         json={

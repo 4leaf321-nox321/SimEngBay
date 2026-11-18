@@ -93,6 +93,24 @@ describe('랜덤 진동 결과', () => {
     expect(screen.getByText('이 작업은 1σ 그림을 만들지 않았습니다.')).toBeDefined()
   })
 
+  it('Ansys 로 푼 결과면 잔여 벡터 · 상당응력 1σ 가 없다고 적는다', () => {
+    render(<RandomResult simulationId="s1" result={{ ...shaken, solver: 'ansys', residual: false }} artifacts={[]} />)
+    expect(screen.getByText(/Ansys\(Mechanical 의 Random Vibration\)로 풀었습니다/)).toBeDefined()
+    expect(screen.queryByText('최대 상당응력 1σ')).toBeNull()
+  })
+
+  it('최대 상당응력 1σ 를 3σ 와 함께 보인다', () => {
+    render(
+      <RandomResult
+        simulationId="s1"
+        result={{ ...shaken, stress: { max_von_mises_mpa: 1.06295, node: 410, method: 'segalman' } }}
+        artifacts={[]}
+      />,
+    )
+    expect(screen.getByText('최대 상당응력 1σ')).toBeDefined()
+    expect(screen.getByText('1.063 MPa · 3σ 3.189 MPa')).toBeDefined()
+  })
+
   it('모드를 찾은 범위와 잔여 벡터를 못 더한 것을 적는다', () => {
     render(
       <RandomResult

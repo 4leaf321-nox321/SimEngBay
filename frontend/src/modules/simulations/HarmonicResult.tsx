@@ -123,7 +123,21 @@ export function HarmonicResult({ result }: Props) {
           <dt className="text-muted-foreground text-xs">창에서 몇 배</dt>
           <dd className="font-medium">{gain ? `${gain.toFixed(1)}배` : '—'}</dd>
         </div>
+        {result.stress && (
+          <div>
+            <dt className="text-muted-foreground text-xs">
+              최대 상당응력 ({shown(result.stress.frequency_hz, frequency)})
+            </dt>
+            <dd className="font-medium">{shown(result.stress.max_von_mises_mpa, 'MPa')}</dd>
+          </div>
+        )}
       </dl>
+      {result.residual && (
+        <p className="text-muted-foreground text-xs">
+          빠진 높은 모드의 정적 몫(잔여 벡터)을 더했습니다 — 고유진동수가 범위보다 훨씬 높은 부품도 모드 수와
+          상관없이 맞습니다.{result.stress && ' 상당응력은 봉우리 주파수에서 위상을 돌려 가장 큰 값입니다.'}
+        </p>
+      )}
 
       {onEdge && (
         <p className="rounded-md border border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">

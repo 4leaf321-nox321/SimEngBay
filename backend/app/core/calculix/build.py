@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import excitation, units
+from app.core import excitation, unit_checks, units
 from app.core import materials as material_model
 from app.core import random_vibration as random_model
 from app.core import touching as touch
@@ -487,6 +487,8 @@ def build(
             + (0 if constrained or isinstance(spec, RandomSpec) else RIGID_BODY_MODES),
             # 랜덤 진동 — 가진 방향마다 1 g 정적 단계(잔여 벡터, `random_vibration`).
             residual=[one.direction for one in shaking.shakes] if shaking is not None else (),
+            # 랜덤 진동은 모드 응력도 — 상당응력 1σ 의 재료(`random_read`).
+            stress=shaking is not None,
             second_order=mesh.second_order,
             rigid=rigid,
             shells=shells,
@@ -577,6 +579,10 @@ def build(
         boundary["frequency_range_hz"] = [shake_plan.low, shake_plan.high]
         boundary["intervals"] = shake_plan.intervals
         boundary["settings_from"] = shake_plan.source
+        # **잔여 벡터 하중**(차례대로) — 덱이 하중마다 정적 · 거의 0 Hz 단계를 붙였다. 추출이
+        # 단계 번호(고유치 1 · 훑기 2 · 하중 l 의 정적 3+2l · 0 Hz 4+2l)로 블록을 가른다.
+        if plan.harmonic_loads:
+            boundary["harmonic_residual"] = plan.harmonic_loads
         # **기저 가진** — 측정점의 절대 가속도를 셈할 재료(`excitation`, 덱은 상대 변위를
         # 낸다).
         shaken = excitation.bases(given)
@@ -2067,8 +2073,8 @@ def _shell_masses(
     return out
 
 
-#: 형상 부피가 CAD 의 부피와 이만큼 넘게 다르면 적는다(`_size_warning`).
-SIZE_TOLERANCE = 0.01
+#: 형상 부피가 CAD 의 부피와 이만큼 넘게 다르면 적는다(`unit_checks.size_warning`).
+SIZE_TOLERANCE = unit_checks.SIZE_TOLERANCE
 
 
 def _size_warning(
@@ -2078,57 +2084,17 @@ def _size_warning(
     *,
     skip: set[str] | None = None,
 ) -> str | None:
-    """**형상 크기가 CAD 와 다른가** — gmsh 가 STEP 을 읽고 잰 바디 부피(`mesh.bodies`, 메시가
-    아니라 형상이라 요소 크기와 상관없다)를 CompCore 의 `bodies[].volume`(mm³)과 견준다.
-
-    STEP 의 길이 단위가 어긋나면 부피가 10⁻⁹ · 10⁹ 배로 갈린다 — 고유진동수는 오류 없이 10³ 배
-    틀린다(운영 2026-11-17: 1차 탄성이 1000배, 질량이 mg). 1 % 넘게 다르면 적는다. 쉘 · 잴 수
-    없는 바디는 뺀다."""
+    """**형상 크기가 CAD 와 다른가** — gmsh 가 STEP 을 읽고 잰 바디 부피(`mesh.bodies`)를
+    CompCore 의 `bodies[].volume` 과 견준다(`unit_checks.size_warning`, 두 솔버 공통)."""
     measured = {one.index: one.volume for one in getattr(mesh, "bodies", [])}
-    rows = topology.get("bodies") if isinstance(topology, dict) else None
-    solids = [
-        row
-        for row in (rows if isinstance(rows, list) else [])
-        if isinstance(row, dict)
-        and row.get("kind") != "sheet"
-        and str(row.get("name") or "") not in (skip or set())
-        and isinstance(row.get("volume"), int | float)
-        and row["volume"] > 0
-    ]
-    off: list[tuple[str, float, float, float]] = []
-    compared = 0
-    for row in solids:
-        name = str(row.get("name") or "")
-        entity = body_of.get(name)
-        if entity not in measured:
-            continue
-        compared += 1
-        ours, cad = float(measured[entity]), float(row["volume"])
-        if ours > 0 and abs(ours / cad - 1) > SIZE_TOLERANCE:
-            off.append((name, ours / cad, ours, cad))
-    if not compared and solids and measured:
-        # **바디별 짝이 없다** — 바디 하나 · 물성 하나면 짝짓기가 실패해도 그대로 푼다(크기가
-        # 어긋나면 짝짓기부터 실패한다). 그때는 전체 부피끼리 견준다.
-        ours = sum(float(one) for one in measured.values())
-        cad = sum(float(row["volume"]) for row in solids)
-        if ours > 0 and abs(ours / cad - 1) > SIZE_TOLERANCE:
-            off.append(("전체", ours / cad, ours, cad))
-    if not off:
-        return None
-    worst = max(off, key=lambda one: abs(math.log10(one[1])))
-    shown = " · ".join(
-        f"「{name}」 {ours:.6g} mm³(CAD {cad:.6g} mm³, {ratio:.3g} 배)"
-        for name, ratio, ours, cad in off[:5]
-    ) + (f" 외 {len(off) - 5}개" if len(off) > 5 else "")
-    if abs(math.log10(worst[1])) >= 2:
-        return (
-            f"형상 크기가 CAD 와 다릅니다(길이 단위) — 부피가 CAD 의 {worst[1]:.3g} 배"
-            f"(길이 {worst[1] ** (1 / 3):.3g} 배)입니다: {shown}. STEP 의 길이 단위를 "
-            "보세요 — 고유진동수가 그만큼 틀립니다."
-        )
-    return (
-        f"형상 크기가 CAD 와 다릅니다 — 바디 부피가 1 % 넘게 다릅니다: {shown}. 형상 맞춤 · "
-        "겹침 정리로 바뀌었거나 다른 형상일 수 있습니다."
+    by_name = {
+        name: float(measured[entity]) for name, entity in body_of.items() if entity in measured
+    }
+    return unit_checks.size_warning(
+        topology,
+        by_name,
+        total_mm3=sum(float(one) for one in measured.values()) or None,
+        skip=skip or set(),
     )
 
 
@@ -2163,16 +2129,10 @@ def _deck_materials(
                 users.setdefault(material.group(1), []).append(
                     names.get(elset.group(1), elset.group(1))
                 )
-    grouped: dict[tuple[float, float], list[str]] = {}
+    rows: list[tuple[str, float, float]] = []
     for named, (gpa, kg_m3) in values.items():
-        key = (float(f"{gpa:.4g}"), float(f"{kg_m3:.4g}"))
-        grouped.setdefault(key, []).extend(users.get(named, [named]))
-    if not grouped:
-        return None
-    return " · ".join(
-        f"E {gpa:g} GPa · 밀도 {kg_m3:,.4g} kg/m³ ({', '.join(dict.fromkeys(bodies))})"
-        for (gpa, kg_m3), bodies in grouped.items()
-    )
+        rows += [(body, gpa, kg_m3) for body in users.get(named, [named])]
+    return unit_checks.material_line(rows)
 
 
 def _masses_kg(

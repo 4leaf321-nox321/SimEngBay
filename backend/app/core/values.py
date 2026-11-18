@@ -162,6 +162,10 @@ def read(result: dict[str, Any]) -> Values:
     if recipe == "random":
         worst = result.get("max_displacement") or {}
         made.max_displacement_mm = _scaled(worst.get("value_mm"), 1.0)
+        # 상당응력 1σ(Segalman) — CalculiX 가 모드 응력으로 셈한다(2026-11-18). 옛 결과는 없다.
+        made.max_von_mises_mpa = _scaled(
+            (result.get("stress") or {}).get("max_von_mises_mpa"), 1.0
+        )
         for row in result.get("probes") or []:
             name = str(row.get("name") or "")
             if not name:
@@ -178,6 +182,10 @@ def read(result: dict[str, Any]) -> Values:
         if isinstance(peak.get("frequency_hz"), int | float):
             made.peak_hz = float(peak["frequency_hz"])
         made.peak_displacement_mm = _scaled(peak.get("max_displacement"), length)
+        # 봉우리 주파수의 최대 상당응력(위상을 돌린 최대, CalculiX — 2026-11-18).
+        made.max_von_mises_mpa = _scaled(
+            (result.get("stress") or {}).get("max_von_mises_mpa"), 1.0
+        )
         tops = {str(one["name"]): one for one in result.get("probes") or [] if "name" in one}
         names = list(tops) or sorted(
             {name for one in result.get("points") or [] for name in (one.get("probes") or {})}

@@ -68,6 +68,9 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
             " 돌리세요.",
         )
     mesh, shapes, statics = _mode_shapes(workdir, len(naturals), shaking.residual_steps)
+    mode_stresses, static_stresses = _mode_stresses(
+        workdir, len(naturals), shaking.residual_steps
+    )
     # **찾을 범위**(모달과 같다) — 범위 안의 모드만 `modes` 개까지 중첩에 쓴다. 솔브가 범위를
     # 채우려 더 풀었을 수 있으니 차례(`number`)로 고른다 — 표 · 형상은 전체 차례 그대로다.
     searched = mode_search.read(workdir / boundary.BOUNDARY_NAME)
@@ -94,6 +97,8 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
             )
         naturals = [naturals[at - 1] for at in numbers]
         shapes = [shapes[at - 1] for at in numbers]
+        if mode_stresses:
+            mode_stresses = [mode_stresses[at - 1] for at in numbers]
         factors = {
             order: factors[at] for order, at in enumerate(numbers, start=1) if at in factors
         }
@@ -209,6 +214,25 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
     ids = [node for node in mesh.nodes if node in shapes[0]]
     sigma = random_model.field(used, matrix, ids)
     worst = max(sigma, key=lambda node: sigma[node]) if sigma else None
+    # **상당응력 1σ**(Segalman) — 모드 응력 + 잔여 응력을 같은 결합 행렬로(2026-11-18).
+    stress_row: dict[str, Any] | None = None
+    if mode_stresses and len(mode_stresses) == len(real_modes.naturals):
+        stress_shapes: list[Mapping[int, Sequence[float]]] = list(mode_stresses)
+        if statics and len(static_stresses) == len(statics):
+            stress_shapes += random_model.residual_fields(
+                real_modes, mode_stresses, static_stresses, shaking.shakes, 6
+            )
+        if len(stress_shapes) == len(modes.naturals):
+            peak_mpa, node = random_model.stress_sigma(stress_shapes, matrix)
+            if node is not None:
+                stress_row = {
+                    "max_von_mises_mpa": significant(peak_mpa),
+                    "node": node,
+                    "point": [round(one, 6) for one in mesh.nodes[node]]
+                    if node in mesh.nodes
+                    else None,
+                    "method": "segalman",
+                }
 
     result: dict[str, Any] = {
         "recipe": "random",
@@ -254,6 +278,8 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
             "node": worst,
             "point": [round(one, 6) for one in mesh.nodes[worst]],
         }
+    if stress_row is not None:
+        result["stress"] = stress_row
     if probe_rows:
         result["probes"] = probe_rows
     if warnings:
@@ -275,6 +301,11 @@ def extract(spec: RandomSpec, workdir: Path, **_ignored: object) -> StageResult:
             "frequency_points": len(freqs),
             "input_grms": " · ".join(f"{one['name']} {one['grms']:.4g}" for one in inputs),
             **({"max_displacement_1sigma_mm": largest} if largest is not None else {}),
+            **(
+                {"max_von_mises_1sigma_mpa": stress_row["max_von_mises_mpa"]}
+                if stress_row is not None
+                else {}
+            ),
             **(
                 {"probe_grms": f"{first['name']} {first['value']:.4g} g"}
                 if first is not None
@@ -317,6 +348,24 @@ def _mode_shapes(
         [one.values for one in blocks[end - count : end]],
         [one.values for one in blocks[end:]],
     )
+
+
+def _mode_stresses(
+    workdir: Path, count: int, statics: int = 0
+) -> tuple[list[dict[int, list[float]]], list[dict[int, list[float]]]]:
+    """모드마다의 응력(성분 여섯) · 잔여 벡터의 1 g 정적 응력 — 변위와 같은 차례(뒤에서부터).
+    덱이 응력을 안 적었으면(옛 덱) 둘 다 빈 것."""
+    blocks = [
+        one
+        for one in frd_reader.read_folded(workdir, workdir / FRD_NAME)
+        if one.kind == "STRESS"
+    ]
+    if len(blocks) < count + statics:
+        return [], []
+    end = len(blocks) - statics
+    return [one.values for one in blocks[end - count : end]], [
+        one.values for one in blocks[end:]
+    ]
 
 
 def _mode_rows(

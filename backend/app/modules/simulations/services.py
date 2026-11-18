@@ -2360,8 +2360,8 @@ def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
                     lambda one, n=pair, a=axis: (one.relative_mm.get(n) or [None] * 3)[a]
                 )
     elif study.recipe == "random":
-        head.append("최대 1σ 변위 (mm)")
-        picks.append(lambda one: one.max_displacement_mm)
+        head += ["최대 1σ 변위 (mm)", "최대 상당응력 1σ (MPa)"]
+        picks += [lambda one: one.max_displacement_mm, lambda one: one.max_von_mises_mpa]
         for name in _keys_in(points, lambda one: one.probe_grms):
             head += [f"측정점 {name} 가속도 1σ (g)", f"측정점 {name} 1σ 변위 (mm)"]
             picks += [
@@ -2369,8 +2369,12 @@ def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
                 lambda one, n=name: one.probes_mm.get(n),
             ]
     elif study.recipe == "harmonic":
-        head += ["봉우리 주파수 (Hz)", "봉우리 변위 (mm)"]
-        picks += [lambda one: one.peak_hz, lambda one: one.peak_displacement_mm]
+        head += ["봉우리 주파수 (Hz)", "봉우리 변위 (mm)", "봉우리 상당응력 (MPa)"]
+        picks += [
+            lambda one: one.peak_hz,
+            lambda one: one.peak_displacement_mm,
+            lambda one: one.max_von_mises_mpa,
+        ]
         for name in _keys_in(points, lambda one: one.probes_mm):
             head += [f"측정점 {name} 봉우리 주파수 (Hz)", f"측정점 {name} 봉우리 진폭 (mm)"]
             picks += [
@@ -2892,7 +2896,15 @@ def _convergence_metrics(
                 SIZE_TOLERANCE,
                 take(lambda one: one.max_displacement_mm),
                 False,
-            )
+            ),
+            (
+                "max_mpa",
+                "최대 상당응력 1σ",
+                "MPa",
+                SIZE_TOLERANCE,
+                take(lambda one: one.max_von_mises_mpa),
+                True,
+            ),
         ]
         for name in names(lambda one: one.probe_grms):
             made.append(
@@ -2923,6 +2935,14 @@ def _convergence_metrics(
                 SIZE_TOLERANCE,
                 take(lambda one: one.peak_displacement_mm),
                 False,
+            ),
+            (
+                "max_mpa",
+                "봉우리 상당응력",
+                "MPa",
+                SIZE_TOLERANCE,
+                take(lambda one: one.max_von_mises_mpa),
+                True,
             ),
         ]
         for name in names(lambda one: one.probes_mm):

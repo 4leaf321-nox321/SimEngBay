@@ -120,10 +120,11 @@ def run_stage(
 
         return extract_open(spec, workdir)
 
-    if stage == "extracting" and isinstance(
-        spec, RandomSpec
-    ):  # pragma: no cover - 스펙이 막는다
-        raise StageFailure("internal", "랜덤 진동은 아직 CalculiX 로만 풉니다.")
+    if stage == "extracting" and isinstance(spec, RandomSpec):
+        # **Mechanical 의 Random Vibration 이 푼 1σ** 를 읽는다(2026-11-18).
+        from app.core.dpf.random import extract as extract_random_ansys
+
+        return extract_random_ansys(spec, workdir)
 
     if stage == "extracting" and isinstance(spec, HarmonicSpec):
         # **조화 응답은 곡선이다** — 주파수마다 응답이 나온다.

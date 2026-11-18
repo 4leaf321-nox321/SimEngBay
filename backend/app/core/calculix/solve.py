@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.core import unit_checks
 from app.core.calculix import bonding, tables, tools
 from app.core.modes import search as mode_search
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
@@ -194,37 +195,27 @@ def eigen_env(text: str) -> dict[str, str] | None:
     return dict(EIGEN_ENV) if "*FREQUENCY" in text.upper() else None
 
 
-#: 솔버가 셈한 질량이 모델링 셈과 이만큼 넘게 다르면 적는다 — 둘 다 같은 밀도인데 하나는
-#: 형상 부피, 하나는 메시 부피라 곡면에서 조금 갈린다. 단위가 어긋나면 10³ 배씩 갈린다.
-MASS_TOLERANCE = 0.05
+#: 솔버가 셈한 질량이 모델링 셈과 이만큼 넘게 다르면 적는다(`unit_checks.mass_check`).
+MASS_TOLERANCE = unit_checks.MASS_TOLERANCE
 
 
 def _mass_check(workdir: Path) -> dict[str, object]:
     """**솔버가 셈한 전체 질량**(`.dat` 의 EMAS, `deck._finish`)과 모델링이 셈한 질량(형상
-    부피 x 밀도, `boundary.json` 의 `mass_kg`)을 견준다. 요약 칸 `solver_mass_kg` 와, 5 %
-    넘게 다르면 `mass_warning` — 덱의 밀도 · 단위가 어긋난 것이다."""
+    부피 x 밀도, `boundary.json` 의 `mass_kg`)을 견준다(`unit_checks.mass_check`)."""
     data = workdir / DATA_NAME
     if not data.is_file():
         return {}
     tonne = tables.model_mass(data.read_text(encoding="utf-8", errors="replace"))
     if tonne is None or tonne <= 0:
         return {}
-    solver_kg = tonne * 1e3
-    out: dict[str, object] = {"solver_mass_kg": float(f"{solver_kg:.6g}")}
     try:
         saved = json.loads((workdir / BOUNDARY_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return out
+        saved = {}
     ours = saved.get("mass_kg") if isinstance(saved, dict) else None
-    if not isinstance(ours, int | float) or ours <= 0:
-        return out
-    if abs(solver_kg / ours - 1) > MASS_TOLERANCE:
-        out["mass_warning"] = (
-            f"솔버가 셈한 질량({solver_kg:.4g} kg)이 형상 부피 x 밀도({ours:.4g} kg)와 "
-            f"{solver_kg / ours:.3g} 배 다릅니다 — 덱의 밀도 · 단위를 보세요(요약의 「덱 "
-            "물성」)."
-        )
-    return out
+    return unit_checks.mass_check(
+        tonne * 1e3, float(ours) if isinstance(ours, int | float) else None
+    )
 
 
 def asked_modes(text: str) -> int | None:

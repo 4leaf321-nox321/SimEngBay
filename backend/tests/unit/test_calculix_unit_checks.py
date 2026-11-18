@@ -129,3 +129,51 @@ def test_솔버_질량이_형상_부피_x_밀도와_어긋나면_적는다(tmp_p
     said = solve._mass_check(tmp_path)
     assert said["solver_mass_kg"] == 0.126257
     assert "1e-06 배" in str(said["mass_warning"])
+
+
+def test_Ansys_는_MAPDL_의_전체_질량을_세션_단위계로_옮겨_견준다(tmp_path: Path) -> None:
+    """`solve.out` 의 `PRECISE MASS SUMMARY` — mm · N · t 세션이면 톤이다(실측 0.52920E-03).
+    단위계를 모르는 옛 경계 파일이면 옮기지 않는다(SI 로 짐작하면 1000배 틀린다)."""
+    from app.core import units
+    from app.core.solve import mapdl
+
+    log = "   TOTAL MASS = 0.52920E-03\n     The mass principal axes coincide"
+    assert units.MM_N_TONNE.mass_kg(0.5292e-3) == 0.5292
+    assert units.SI.mass_kg(0.5292) == 0.5292
+    (tmp_path / "boundary.json").write_text(
+        json.dumps({"unit_system": "mm_n_tonne", "mass_kg": 0.5292}), encoding="utf-8"
+    )
+    assert mapdl.mass_summary(tmp_path, log) == {"solver_mass_kg": 0.5292}
+    (tmp_path / "boundary.json").write_text(
+        json.dumps({"unit_system": "mm_n_tonne", "mass_kg": 529.2}), encoding="utf-8"
+    )
+    assert "0.001 배" in str(mapdl.mass_summary(tmp_path, log)["mass_warning"])
+    (tmp_path / "boundary.json").write_text(json.dumps({"mass_kg": 0.5292}), encoding="utf-8")
+    assert mapdl.mass_summary(tmp_path, log) == {}
+
+
+def test_Ansys_랜덤_덱은_작업_폴더에서_풀리고_g_는_표준_중력이다() -> None:
+    """Mechanical 이 쓴 랜덤 덱(실측 2026-11-18)은 앞 모달을 임시 폴더에서 찾고, PSD 의 g 를
+    386.4 in/s² 를 옮긴 9,814.56 mm/s² 로 적는다 — 현재 폴더 · 9,806.65 로 고쳐 쓴다(경로를
+    쓰면 한글 폴더 이름에서 MAPDL 이 모드 파일을 못 찾았다)."""
+    from app.core import units
+    from app.core.mechanical.build import localized_random_deck
+
+    deck = "\n".join(
+        [
+            r"resume,'C:\Users\Home\AppData\Local\Temp\Mech\Modal\file',db",
+            "/solu",
+            r"modd,on,'C:\Users\Home\AppData\Local\Temp\Mech\Modal\',file",
+            "PSDUNIT,1,ACCG,9814.56",
+            "PSDFRQ,1,,20.,80.",
+        ]
+    )
+    fixed = localized_random_deck(deck, units.MM_N_TONNE)
+    assert fixed.splitlines() == [
+        "resume,file,db",
+        "/solu",
+        "modd,on,,file",
+        "PSDUNIT,1,ACCG,9806.65",
+        "PSDFRQ,1,,20.,80.",
+    ]
+    assert "ACCG,9.80665" in localized_random_deck(deck, units.SI)

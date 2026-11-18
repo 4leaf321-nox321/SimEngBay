@@ -5,7 +5,7 @@ Mechanical 의 모든 기능을 노출하지 않는다. 오케스트레이터(�
 사람은 「왜 실패했나」 를 목록에서 찾아야 한다.
 
 레시피는 넷이다 — `modal` · `static` · `harmonic` · `random`. 솔버도 둘이다(`ansys` ·
-`calculix`) — 랜덤 진동은 아직 CalculiX 로만 푼다(`RandomSpec`).
+`calculix`) — 랜덤 진동은 두 솔버가 다르게 푼다(`RandomSpec`).
 
 ## 단위
 
@@ -208,15 +208,16 @@ class RandomSpec(BaseModel):
     같은 규칙). 여럿이면 **서로 무관한 가진**으로 더한다. 감쇠가 없으면 공진에서 응답이 끝없이
     커지므로 감쇠비를 안 주면 거절한다.
 
-    **아직 CalculiX 로만 푼다.** Ansys 의 랜덤 진동(모달 → 랜덤 진동 시스템)은 이 PC 에서
-    확인하지 못했다 — 확인하기 전에는 받지 않는다(조용히 틀린 값을 내는 것보다 낫다).
+    **두 솔버가 다르게 푼다**(2026-11-18) — CalculiX 는 모드를 풀고 우리가 PSD 를 셈한다(잔여
+    벡터 · 상당응력 1σ 까지, `random_vibration`). Ansys 는 Mechanical 의 Random Vibration 이 푼
+    1σ 를 읽는다(`dpf/random.py` — 잔여 벡터 · 상당응력 1σ 는 없다, PSD 방향은 축만).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     recipe: Literal["random"] = "random"
     solver: Literal["ansys", "calculix"] = "calculix"
-    """무엇으로 풀까 — `ModalSpec.solver` 참고. **`ansys` 는 아직 거절한다**(위)."""
+    """무엇으로 풀까 — `ModalSpec.solver` 참고(위 「두 솔버가 다르게 푼다」)."""
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
@@ -237,14 +238,6 @@ class RandomSpec(BaseModel):
     @model_validator(mode="after")
     def _own_material(self) -> Self:
         return _needs_material(self)
-
-    @model_validator(mode="after")
-    def _calculix_only(self) -> Self:
-        if self.solver != "calculix":
-            raise ValueError(
-                "랜덤 진동은 아직 CalculiX 로만 풉니다 — Ansys 경로는 확인하지 못했습니다."
-            )
-        return self
 
     @model_validator(mode="after")
     def _range_order(self) -> Self:

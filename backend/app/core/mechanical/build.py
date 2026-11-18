@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import excitation, materials, units
+from app.core import excitation, materials, unit_checks, units
+from app.core import random_vibration as random_model
 from app.core import touching as touch
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
 from app.core.harmonic import HarmonicPlan, harmonic_plan
@@ -96,13 +97,6 @@ def build(
 
     프로세스당 임베디드 App 은 하나다 — 워커가 한 번에 작업 하나만 돌리는 이유이기도 하다.
     """
-    if isinstance(spec, RandomSpec):
-        # 스펙이 먼저 막는다 — 저장된 옛 스펙 · 손으로 고친 spec.json 이 여기까지 올 때.
-        raise StageFailure(
-            "internal",
-            "랜덤 진동은 아직 CalculiX 로만 풉니다 — Ansys 의 랜덤 진동은 확인하지"
-            " 못했습니다.",
-        )
     step = workdir / input_name
     if not step.is_file() or step.stat().st_size == 0:
         raise StageFailure("geometry_import", f"입력 형상이 없습니다: {input_name}")
@@ -199,10 +193,34 @@ def build(
         used = _apply_material(spec, active, system, given, kept)
         sheet_materials = _apply_sheet_materials(spec, sheet_of, given, system)
         _rigid_mass(active, used, rigid_ids, system)
+        # 질량은 메시와 상관없다 — 경계 파일(`boundary.json`)에 남겨 솔브가 MAPDL 의 전체
+        # 질량과 견주게 한다(`unit_checks.mass_check`).
+        by_body = _masses_kg(used, active, system)
+        if sheet_materials:
+            by_body = {
+                **(by_body or {}),
+                **_sheet_masses(topology or {}, shells, sheet_materials),
+            }
+        # **단위가 어긋났나** — 형상 부피를 CAD 와 견주고 덱에 쓴 물성을 적는다(두 솔버 공통,
+        # `unit_checks`).
+        sized = _size_warning(active, kept, system, given_conditions.suppressed)
+        deck_materials = unit_checks.material_line(
+            (name or f"바디 {index + 1}", one.youngs_modulus_gpa, one.density_kg_m3)
+            for index, name, one in used.per_body
+        )
         constrained = bool(given_conditions.constraints or spec.constraints)
         plan: HarmonicPlan | None = None
         statics: StaticPlan | None = None
-        if isinstance(spec, HarmonicSpec):
+        shaking: random_model.RandomPlan | None = None
+        if isinstance(spec, RandomSpec):
+            # **랜덤 진동도 모달이 앞에 선다**(2026-11-18) — Mechanical 의 Random Vibration 이
+            # 그 모드로 PSD 응답을 쌓는다. CalculiX 경로와 같은 계약(모든 고정 지지를 흔든다 ·
+            # 무관한 가진은 더한다 · 대역은 PSD 표).
+            shaking = _random_plan(spec, given_conditions, constrained)
+            upstream = _add_modal_for_harmonic(app, spec)
+            _limit_range(upstream, mode_search.mode_search(spec, given_conditions))
+            analysis = _add_random(app, upstream, shaking)
+        elif isinstance(spec, HarmonicSpec):
             # **조화 응답은 모달이 앞에 선다**(모드 중첩) — 그 모드로 응답을 쌓는다.
             upstream = _add_modal_for_harmonic(app, spec)
             plan = harmonic_plan(spec, given_conditions)
@@ -261,7 +279,7 @@ def build(
         # 찾을 주파수 범위(모달) — 덱 · 결과 · 요약이 같은 것을 말하게 한 번 정한다.
         searched = (
             mode_search.mode_search(spec, given_conditions)
-            if isinstance(spec, ModalSpec)
+            if isinstance(spec, ModalSpec | RandomSpec)
             else None
         )
         untied = touch.uncovered(topology or {}, given_conditions) or []
@@ -274,11 +292,14 @@ def build(
             spec=spec,
             plan=plan,
             material=used.names,
+            mass_kg=sum(by_body.values()) if by_body else None,
+            unit_system=system.key,
             connections={"untied": untied, "sliding": slid},
             searched=searched,
             shaken=excitation.bases(given_conditions)
             if isinstance(spec, HarmonicSpec)
             else None,
+            shaking=shaking,
         )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -295,7 +316,9 @@ def build(
             flipped = set()
             remote_tags = {}
             regions = _apply_constraints(app, spec, workdir, active, held)
-        if isinstance(spec, HarmonicSpec):
+        if isinstance(spec, RandomSpec):
+            pass  # 흔드는 것은 PSD 하중뿐이다(`_add_random`) — 다른 하중은 쓰지 않는다.
+        elif isinstance(spec, HarmonicSpec):
             # **조화 응답의 하중은 흔드는 힘이다** — 앞선 모달이 아니라 조화 쪽에 건다.
             # (모달에 걸면 덱에 `sfedele,all` 만 남아 응답이 전부 0 으로 나온다 — 실측.)
             _apply_loads(app, given_conditions, system, places, analysis, flipped)
@@ -309,12 +332,6 @@ def build(
                 flipped,
                 steps=_static_steps(given_conditions),
             )
-        by_body = _masses_kg(used, active, system)
-        if sheet_materials:
-            by_body = {
-                **(by_body or {}),
-                **_sheet_masses(topology or {}, shells, sheet_materials),
-            }
         nodes, elements = _mesh(
             app, spec, given_conditions, system, places, view or {}, modelled
         )
@@ -346,6 +363,14 @@ def build(
             ) from failure
         if not dat.is_file():
             raise StageFailure("solver_failed", "솔버 입력 파일이 만들어지지 않았습니다.")
+        if isinstance(spec, RandomSpec):
+            # 랜덤 덱은 앞 모달을 Mechanical 임시 폴더에서 찾는다 — 작업 폴더로 고쳐 쓴다.
+            dat.write_text(
+                localized_random_deck(
+                    dat.read_text(encoding="utf-8", errors="replace"), system
+                ),
+                encoding="utf-8",
+            )
 
         artifacts = [ArtifactSpec("dat", dat), *artifacts_extra]
         # **`.mechdb` 는 디버깅용이다.** 리눅스에 GUI 는 없지만 파일은 OS 간
@@ -400,11 +425,27 @@ def build(
                 **(
                     {"modes_requested": spec.modes + (0 if constrained else RIGID_BODY_MODES)}
                     if isinstance(spec, ModalSpec)
-                    else {"recipe": "static"}
+                    else {"recipe": spec.recipe}
+                ),
+                # 랜덤 진동의 대역 · 감쇠비 · 입력 Grms(CalculiX 와 같은 열쇠).
+                **(
+                    {
+                        "modes_requested": spec.modes,
+                        "psd_band_hz": f"{shaking.low:g}~{shaking.high:g} Hz",
+                        "damping_ratio": shaking.damping_ratio,
+                        "psd_inputs": " · ".join(
+                            f"{one.name} {random_model.grms(one.table):.3g} Grms"
+                            for one in shaking.shakes
+                        ),
+                    }
+                    if shaking is not None and isinstance(spec, RandomSpec)
+                    else {}
                 ),
                 "ansys_version": version,
                 "constrained_regions": regions,
                 **materials.mass_summary(by_body),
+                **({"size_warning": sized} if sized else {}),
+                **({"deck_materials": deck_materials} if deck_materials else {}),
                 "shape_reused": reused,
                 "unit_system": system.key,
                 "solver_unit_system": system.solver,
@@ -948,7 +989,122 @@ def _limit_range(analysis: Any, searched: mode_search.ModeSearch | None) -> None
         logger.warning("주파수 범위를 걸지 못했습니다 — 범위 없이 돕니다", exc_info=True)
 
 
-def _add_modal_for_harmonic(app: Any, spec: HarmonicSpec) -> Any:
+#: Mechanical 의 PSD G 가속도 방향 — 축만 받는다(`NormalOrientationType`).
+PSD_AXES = {(1, 0, 0): "XAxis", (0, 1, 0): "YAxis", (0, 0, 1): "ZAxis"}
+
+
+def _random_plan(
+    spec: RandomSpec, given: condition_model.Conditions, constrained: bool
+) -> random_model.RandomPlan:
+    """랜덤 진동 설정(가진 · 대역 · 감쇠비) — CalculiX 와 같은 셈(`random_vibration.plan`).
+    Ansys 경로가 못 거는 것은 까닭을 달아 멈춘다: 고정 지지 없음 · 축이 아닌 방향 · 선응력."""
+    shaking, refused = random_model.plan(given, damping_ratio=spec.damping_ratio)
+    if refused or shaking is None:
+        raise StageFailure(
+            "internal",
+            " · ".join(f"{one.what}: {one.why}" for one in refused) or "가진이 없습니다",
+        )
+    if not constrained:
+        raise StageFailure(
+            "internal", "랜덤 진동: 고정 지지가 없습니다 — 가속도 PSD 는 지지부를 흔듭니다."
+        )
+    if given.prestressed:
+        raise StageFailure(
+            "internal",
+            "랜덤 진동: 선응력은 아직 Ansys 경로로 못 겁니다 — CalculiX 로 돌리세요.",
+        )
+    for one in shaking.shakes:
+        if _psd_axis(one.direction) is None:
+            raise StageFailure(
+                "internal",
+                f"가진 「{one.name}」 의 방향 {tuple(round(v, 4) for v in one.direction)} — "
+                "Ansys 의 PSD 가속도는 X · Y · Z 축만 받습니다(CalculiX 는 아무 방향이나 "
+                "받습니다).",
+            )
+    return shaking
+
+
+def _psd_axis(direction: tuple[float, float, float]) -> str | None:
+    """단위 방향 → Mechanical 의 축 이름. 부호는 상관없다(PSD 는 제곱이다). 축이 아니면
+    None."""
+    rounded = tuple(abs(round(one, 6)) for one in direction)
+    return PSD_AXES.get(rounded)  # type: ignore[arg-type]
+
+
+def _add_random(app: Any, modal: Any, shaking: random_model.RandomPlan) -> Any:
+    """**Random Vibration** — 앞선 모달로 PSD 응답을 쌓는다(실측 2026-11-18, 2025 R2).
+
+    칸 이름: `InitialConditions[0].ModalICEnvironment` 로 모달을 물고, 속도 · 가속도도 셈하게
+    한다(`CalculateVelocity` · `CalculateAcceleration` — 기본은 변위만). PSD 하중은
+    `AddPSDGAcceleration()`, 방향은 축(`NormalOrientationType`), 표는 `LoadData`(주파수 →
+    「gravity gravity Hz^-1」). 경계조건을 따로 안 주면 덱이 **UX 를 묶은 절점 전부**를 흔든다
+    (`nsel,r,d,ux,0` — Mechanical 의 「All Fixed Supports」). 감쇠비 칸은 읽기 전용이라 조화
+    응답처럼 명령 조각(`DMPRAT`)으로 건다 — 덱의 기본 `dmprat,1.e-002` 뒤에 적혀 이긴다."""
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    quantity = _global("Quantity")
+    random = app.Model.AddRandomVibrationAnalysis()
+    try:
+        initial = next(iter(random.InitialConditions))
+        initial.ModalICEnvironment = modal
+        settings = random.AnalysisSettings
+        settings.CalculateVelocity = True
+        settings.CalculateAcceleration = True
+        for shake in shaking.shakes:
+            psd = random.AddPSDGAcceleration()
+            psd.Direction = getattr(
+                enums.NormalOrientationType, str(_psd_axis(shake.direction))
+            )
+            psd.LoadData.Inputs[0].DiscreteValues = [
+                quantity(f"{hz} [Hz]") for hz, _ in shake.table
+            ]
+            psd.LoadData.Output.DiscreteValues = [
+                quantity(f"{value} [gravity gravity Hz^-1]") for _, value in shake.table
+            ]
+            psd.Name = shake.name
+        snippet = random.AddCommandSnippet()
+        snippet.AppendText(
+            f"! SimEngBay: constant damping ratio\nDMPRAT,{shaking.damping_ratio:.6g}\n"
+        )
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise _translated(
+            failure, "internal", "랜덤 진동 설정을 세우지 못했습니다"
+        ) from failure
+    return random
+
+
+#: 표준 중력(mm/s²) — CompCore 계약의 g(9.80665 m/s²). Mechanical 은 PSD 의 g 를 386.4 in/s²
+#: 를 옮긴 9,814.56 mm/s² 로 적는다(실측 2026-11-18) — 0.08 % 크다.
+STANDARD_GRAVITY_MM = 9806.65
+
+
+def localized_random_deck(text: str, system: units.UnitSystem) -> str:
+    """Mechanical 이 쓴 랜덤 덱을 **작업 폴더에서 풀리게** 고친다(실측 2026-11-18):
+
+    - `resume,'<임시>\\Modal\\file',db` → `resume,file,db` — 앞 모달이 같은 폴더에서 풀린다.
+    - `modd,on,'<임시>\\Modal\\',file` → `modd,on,,file`(현재 폴더) — 모드 파일(`file.mode`)이
+      거기 있다. **경로를 쓰지 않는다** — 작업 폴더 이름에 한글이 있으면 MAPDL 이 그 경로의
+      파일을 「없다」 고 했다(실측 2026-11-18).
+    - `PSDUNIT,n,ACCG,9814.56` → 표준 중력(그 세션의 길이 단위) — CompCore 의 g 와 같게.
+    """
+    import re
+
+    gravity = STANDARD_GRAVITY_MM / 1000.0 / system.length_m
+    out: list[str] = []
+    for line in text.splitlines():
+        low = line.strip().lower()
+        if low.startswith("resume,") and low.endswith(",db") and "'" in line:
+            out.append("resume,file,db")
+        elif low.startswith("modd,on,") and "'" in line:
+            out.append("modd,on,,file")
+        elif re.match(r"(?i)^\s*psdunit,\s*\d+\s*,\s*accg\s*,", line):
+            head = ",".join(line.split(",")[:3])
+            out.append(f"{head},{gravity:.8g}")
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _add_modal_for_harmonic(app: Any, spec: HarmonicSpec | RandomSpec) -> Any:
     """조화 응답이 쓸 모드를 먼저 푼다 — **모드 중첩**은 그 모드로 응답을 쌓는다.
 
     구속 · 접촉은 이 해석에 걸린다(모드가 거기서 나온다). 하중은 조화 쪽이다.
@@ -1236,14 +1392,22 @@ def _profiled(
 def _phase(
     made: Any, load: condition_model.Load, quantity: Any, names: tuple[str, ...]
 ) -> None:
-    """조화 응답의 위상각(도). ⚠️ Ansys 없이 짠 길 — 칸이 없거나 못 걸면 멈춘다(위상을 빼고
-    풀면 하중이 둘 이상일 때 합이 틀린다)."""
+    """조화 응답의 위상각(도) — 못 걸면 멈춘다(위상을 빼고 풀면 하중이 둘 이상일 때 합이
+    틀린다).
+
+    **성분의 위상각은 필드다**(`XPhaseAngle` 은 `XComponent` 처럼 `.Output.DiscreteValues` 로
+    건다) — 값을 바로 대입하면 「property is read-only」 로 막혔다(실측 2026-11-18, 2025 R2 —
+    같은 힘을 180° 로 하나 더 걸어 응답이 0 인지로 본다)."""
     if not load.phase:
         return
     angle = quantity(f"{load.phase} [deg]")
     try:
         for name in names:
-            setattr(made, name, angle)
+            target = getattr(made, name)
+            if hasattr(target, "Output"):
+                target.Output.DiscreteValues = [angle]
+            else:
+                setattr(made, name, angle)
     except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
         raise StageFailure(
             "internal",
@@ -1562,6 +1726,9 @@ def _write_boundary(
     connections: dict[str, list[dict[str, Any]]] | None = None,
     searched: mode_search.ModeSearch | None = None,
     shaken: list[excitation.Base] | None = None,
+    mass_kg: float | None = None,
+    unit_system: str | None = None,
+    shaking: random_model.RandomPlan | None = None,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
@@ -1578,6 +1745,14 @@ def _write_boundary(
         ),
         "recipe": spec.recipe,
     }
+    if mass_kg:
+        # 솔브가 MAPDL 의 `TOTAL MASS`(세션 단위계)와 견준다(`solve.mapdl`).
+        payload["mass_kg"] = mass_kg
+    if shaking is not None:
+        # 랜덤 진동 — 실제로 건 가진 · 대역 · 감쇠비(추출이 입력 Grms · 그림에 쓴다).
+        payload[random_model.KEY] = shaking.as_boundary()
+    if unit_system:
+        payload["unit_system"] = unit_system
     if searched is not None:
         # 찾을 주파수 범위 — 추출이 결과에 적는다(`dpf/extract.py`, CalculiX 와 같은 열쇠).
         payload[mode_search.KEY] = searched.as_boundary()
@@ -1596,6 +1771,31 @@ def _write_boundary(
         payload["settings_from"] = plan.source
     (workdir / BOUNDARY_NAME).write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _size_warning(
+    bodies: list[Any],
+    topology: dict[str, Any] | None,
+    system: units.UnitSystem,
+    suppressed: set[str],
+) -> str | None:
+    """**형상 크기가 CAD 와 다른가** — Mechanical 이 형상을 읽어 잰 바디 부피(mm³ 로 옮긴 것)를
+    CompCore `bodies[].volume` 과 견준다(`unit_checks.size_warning`, CalculiX 와 같은 말)."""
+    if not topology or not topology.get("bodies"):
+        return None
+    try:
+        records = _body_records(bodies, system)
+        matched = match_bodies(topology, records)
+    except Exception:  # pragma: no cover - 형상에 따라 못 잴 수 있다
+        logger.warning("형상 크기를 견주지 못했습니다", exc_info=True)
+        return None
+    by_name = {name: records[index].volume for name, index in matched.bodies.items()}
+    return unit_checks.size_warning(
+        topology,
+        by_name,
+        total_mm3=sum(one.volume for one in records) or None,
+        skip=suppressed,
     )
 
 

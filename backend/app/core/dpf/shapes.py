@@ -109,7 +109,7 @@ def _surface_with_displacement(model: Any, skin_mesh: Any, mode: int) -> Any:
 
     displacement = model.results.displacement.on_time_scoping([mode]).eval()[0]
     # **절점 번호로 맞춘다**(`fields.py` — 그 규칙은 한 곳에만 적는다).
-    vectors = fields.ordered_by(skin_mesh.nodes.scoping.ids, displacement)
+    vectors = fields.ordered_by(np.array(skin_mesh.nodes.scoping.ids, copy=True), displacement)
 
     grid = skin_mesh.grid
     grid.point_data["displacement"] = vectors

@@ -295,8 +295,6 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     // 종류를 그대로 두면 칸은 「정적」 인데 조건 · 막힘 판정은 모달 것이다(2026-10-05 리뷰).
     if (isRecipe(found.recipe)) {
       setRecipe(found.recipe)
-      // 랜덤 진동은 아직 CalculiX 로만 푼다(서버가 Ansys 를 거절한다).
-      if (found.recipe === 'random') setSolver('calculix')
     }
     if (found.suggested_modes) setModes(String(found.suggested_modes))
     if (isOrder(found.suggested_order)) setOrder(found.suggested_order)
@@ -427,7 +425,6 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
 
   async function changeRecipe(next: RecipeName) {
     setRecipe(next)
-    if (next === 'random') setSolver('calculix')
     // 조건이 어떻게 다뤄지나는 해석 종류에 달렸다(모달이면 하중을 넘긴다) — 다시 묻는다.
     if (source === 'folder' && folder && focus !== null) {
       await askPoint(folder.path, focus, next, setPreview)

@@ -137,7 +137,6 @@ export function specProblem(input: SpecInput): string | null {
   }
   if (input.recipe === 'random') {
     const random = input.random ?? RANDOM_DEFAULTS
-    if (input.solver !== 'calculix') return '랜덤 진동은 아직 CalculiX 로만 풉니다 — Ansys 경로는 확인하지 못했습니다.'
     if (!(Number(random.dampingPercent) > 0 && Number(random.dampingPercent) < 100))
       return '감쇠비는 0 보다 크고 100% 보다 작아야 합니다.'
   }

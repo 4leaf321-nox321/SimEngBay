@@ -92,7 +92,7 @@ def _result(work: Path) -> dict[str, Any]:
 def test_선언한_본딩은_pinball_안의_간극만_묶는다(ready: None, tmp_path: Path) -> None:
     """기둥이 0.3 mm 떠 있다. pinball 0.5 mm 면 묶여 맞닿은 모델과 같은 1차가 나오고, 0.1 mm 면
     안 묶여 기둥이 떠서 0 Hz 모드가 나온다. pinball 이 없으면 요소 크기의 절반(2.5 mm)이라
-    묶인다. 종 절점은 늘 주 면에 붙인다(`ADJUST=YES`)."""
+    묶인다. 종 절점은 늘 주 면에 붙인다(ccx 의 기본 — `ADJUST=NO` 를 안 쓴다)."""
     touching = tmp_path / "touching"
     _lifted(touching, 0.0)
     _run(touching, SPEC)
@@ -113,8 +113,10 @@ def test_선언한_본딩은_pinball_안의_간극만_묶는다(ready: None, tmp
 
     # **CAD 가 「Adjust to Touch」 를 안 적어도 옮긴다** — 안 옮기면 종 절점이 주 면에서 떨어진
     # 만큼 구속식이 회전 강체 모드를 잡는다(`bonding.py`, 아래 자유-자유 시험).
+    # ccx 는 옮기는 것이 기본이고 `ADJUST=NO` 만 알아듣는다 — `ADJUST=YES` 는 「parameter not
+    # recognized」 로 건너뛴다. 그래서 아무것도 안 쓴다.
     deck = (tmp_path / "pinball-None" / "model.inp").read_text(encoding="utf-8")
-    assert "ADJUST=YES" in deck and "ADJUST=NO" not in deck
+    assert "*TIE, NAME=" in deck and "ADJUST" not in deck
 
 
 def test_선언이_없으면_미세_간극은_묶고_CompCore_가_알린_틈새는_남긴다(
@@ -389,15 +391,17 @@ def _free_free(folder: Path, work: Path) -> dict[str, Any]:
 def test_자유_자유_본딩은_강체_모드가_여섯이고_구속식이_회전을_잡지_않는다(
     ready: None, tmp_path: Path
 ) -> None:
-    """**종 절점을 주 면 위로 옮긴다**(`ADJUST=YES`, 2026-11-17). 안 옮기면 종 절점이 주
-    면에서 떨어진 만큼(2차 곡면의 현 오차 · 미세 간극) 구속식이 강체 회전을 잡는다.
+    """**종 절점을 주 면 위로 옮긴다**(ccx 의 기본 — `ADJUST=NO` 를 안 쓴다, 2026-11-17).
+    안 옮기면 종 절점이 주 면에서 떨어진 만큼(2차 곡면의 현 오차 · 미세 간극) 구속식이 강체
+    회전을 잡는다.
     「조건_볼트예압_판본딩」(본딩 셋, 나사 물림은 원통면) 자유-자유의 회전 셋이 0.23 · 0.30 ·
     0.30 Hz 였고(옮기면 0.003 Hz, 절점 공유와 같다), 64쌍 조립은 1 Hz 를 넘어 강체 모드가
     3개로 셌다."""
     bolted = tmp_path / "bolted"
     result = _free_free(FIXTURES / "doe" / "조건_볼트예압_판본딩", bolted)
     deck = (bolted / "model.inp").read_text(encoding="utf-8")
-    assert deck.count("ADJUST=YES") == 3 and "ADJUST=NO" not in deck
+    assert deck.count("*TIE, NAME=") == 3 and "ADJUST" not in deck
+    assert "parameter not recognized" not in (bolted / "ccx.out").read_text(encoding="utf-8")
     rigid = [one for one in result["modes"] if one["rigid_body"]]
     assert len(rigid) == 6 and not any(one.get("held_rigid") for one in rigid)
     assert max(one["frequency_hz"] for one in rigid) < 0.05

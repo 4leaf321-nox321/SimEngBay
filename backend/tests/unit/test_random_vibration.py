@@ -209,10 +209,10 @@ def test_다른_해석에서는_PSD_를_쓰지_않고_랜덤에서는_가진으�
     assert _read([PSD], recipe="harmonic").skipped[0].what.endswith("(가속도 PSD)")
 
 
-def test_랜덤_진동은_아직_CalculiX_로만() -> None:
+def test_랜덤_진동은_기본이_CalculiX_고_Ansys_도_받는다() -> None:
+    """Ansys 는 Mechanical 의 Random Vibration 으로 푼다(2026-11-18, `dpf/random.py`)."""
     assert parse_spec({"recipe": "random"}).solver == "calculix"
-    with pytest.raises(ValidationError, match="CalculiX 로만"):
-        parse_spec({"recipe": "random", "solver": "ansys"})
+    assert parse_spec({"recipe": "random", "solver": "ansys"}).solver == "ansys"
     with pytest.raises(ValidationError, match="찾을 주파수 범위는 0 ≤ 하한 < 상한"):
         parse_spec({"recipe": "random", "frequency_range_hz": [500, 100]})
 

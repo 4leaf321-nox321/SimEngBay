@@ -80,7 +80,7 @@ def locate(topology: dict[str, Any], mesh: Any, *, scale: float = 1.0) -> list[S
         import numpy as np
 
         places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
-        ids = np.asarray(mesh.nodes.scoping.ids, dtype=int)
+        ids = np.array(mesh.nodes.scoping.ids, copy=True, dtype=int)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("측정점을 못 찾았습니다 — 없이 갑니다", exc_info=True)
         return []
@@ -123,7 +123,7 @@ def rows(
         import numpy as np
 
         data = np.asarray(values.data, dtype=float)
-        value_ids = np.asarray(values.scoping.ids, dtype=int)
+        value_ids = np.array(values.scoping.ids, copy=True, dtype=int)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("측정점을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return []
@@ -133,7 +133,7 @@ def rows(
     normal: dict[int, list[float]] = {}
     if strains is not None:
         try:
-            strain_ids = np.asarray(strains.scoping.ids, dtype=int).tolist()
+            strain_ids = np.array(strains.scoping.ids, copy=True, dtype=int).tolist()
             strain_data = np.asarray(strains.data, dtype=float).reshape(-1, 6)
             for node, one in zip(strain_ids, strain_data, strict=False):
                 normal[int(node)] = one[:3].tolist()
@@ -199,10 +199,10 @@ def body_nodes(mesh: Any, topology: dict[str, Any]) -> dict[str, set[int]]:
         import numpy as np
 
         materials = mesh.elements.materials_field
-        element_ids = np.asarray(materials.scoping.ids, dtype=int)
+        element_ids = np.array(materials.scoping.ids, copy=True, dtype=int)
         material_of = np.asarray(materials.data, dtype=int)
         places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
-        node_ids = np.asarray(mesh.nodes.scoping.ids, dtype=int)
+        node_ids = np.array(mesh.nodes.scoping.ids, copy=True, dtype=int)
         index_of = {int(node): index for index, node in enumerate(node_ids)}
         groups: dict[int, set[int]] = {}
         for element, material in zip(element_ids.tolist(), material_of.tolist(), strict=False):
@@ -246,13 +246,13 @@ def reaction(
 
         field = model.results.reaction_force.eval()[0]
         places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
-        node_ids = np.asarray(mesh.nodes.scoping.ids, dtype=int)
+        node_ids = np.array(mesh.nodes.scoping.ids, copy=True, dtype=int)
         scale = scale_for(str(mesh.unit or ""))
         unit = np.asarray(normal, dtype=float)
         unit = unit / np.linalg.norm(unit)
         offsets = (places * scale - np.asarray(centroid, dtype=float)) @ unit
         on_plane = set(node_ids[np.abs(offsets) < tolerance_mm].tolist())
-        ids = np.asarray(field.scoping.ids, dtype=int)
+        ids = np.array(field.scoping.ids, copy=True, dtype=int)
         data = np.asarray(field.data, dtype=float).reshape(-1, 3)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("반력을 못 읽었습니다", exc_info=True)
@@ -272,7 +272,7 @@ def reaction_on(model: Any, node_ids: list[int] | dict[str, list[int]]) -> list[
         import numpy as np
 
         field = model.results.reaction_force.eval()[0]
-        ids = np.asarray(field.scoping.ids, dtype=int)
+        ids = np.array(field.scoping.ids, copy=True, dtype=int)
         data = np.asarray(field.data, dtype=float).reshape(-1, 3)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("반력을 못 읽었습니다", exc_info=True)

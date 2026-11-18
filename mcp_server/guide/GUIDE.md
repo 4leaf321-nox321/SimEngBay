@@ -19,7 +19,9 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
 | `random` | 가속도 PSD 로 지지부를 흔들면 응답이 보통 얼마인가(1σ) | 측정점 가속도 1σ(Grms) · 최대 1σ 변위 |
 
 솔버는 `calculix`(기본 — 바로 돌고 여러 점을 동시에 푼다)와 `ansys`(라이선스 — 조건을 더 많이
-건다). **랜덤 진동은 아직 `calculix` 로만 푼다** — `ansys` 로 걸면 거절한다(확인 전이다).
+건다). **랜덤 진동은 두 솔버가 다르게 푼다** — `calculix`(기본)는 모드를 풀고 우리가 PSD 를
+셈하고(잔여 벡터 · 상당응력 1σ 까지), `ansys` 는 Mechanical 의 Random Vibration 이 푼 1σ 를 읽는다(잔여
+벡터 · 상당응력 1σ 없음, PSD 방향은 X · Y · Z 축만). 두 셈이 0.4 % 안에서 같다(조건_랜덤진동).
 
 ## CompCore 와 어떻게 이어지나
 
@@ -193,8 +195,12 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
 ### 조화
 
 - `peak_hz` · `peak_displacement_mm` — 모델 전체의 봉우리.
+- `max_von_mises_mpa` — **봉우리 주파수의 최대 상당응력**(위상을 돌린 최대, CalculiX). 자리는
+  `result.stress`.
 - `probes_mm` · `probe_peaks_hz` — 측정점마다 곡선의 봉우리 진폭 · 주파수.
 - 주파수별 곡선 전체는 `job_result(job_id, detail=true)` 의 `result.points`(크다).
+- CalculiX 는 **빠진 높은 모드의 정적 몫(잔여 벡터)을 더한다**(`result.residual`) — 고유진동수가
+  범위보다 훨씬 높은 부품(준정적)도 모드 수와 상관없이 맞는다.
 
 ### 랜덤 진동
 
@@ -202,11 +208,13 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
   사람에게 전할 때 둘을 함께 말한다.
 - `probe_grms` — 측정점 → **절대 가속도 1σ**(g, 가속도계가 재는 값). `probes_mm` — 측정점 1σ
   변위(지지부 기준). `max_displacement_mm` — 모든 절점의 1σ 변위 최대(지지부 기준).
+- `max_von_mises_mpa` — **최대 상당응력 1σ**(Segalman — Ansys 랜덤 진동의 상당응력과 같은 정의).
+  자리는 `result.stress`.
 - 입력 Grms · 응답 PSD 곡선 · 모드별 유효질량 몫은 `job_result(job_id, detail=true)` 의
   `result.inputs` · `result.curves` · `result.modes`.
 - 풀이는 모달 하나 + 모드 중첩이다(가진 방향 참여계수 · 모드 형상 · PSD). 가진이 여럿이면 서로
   무관한 것으로 더한다. **빠진 높은 모드의 정적 몫(잔여 벡터)을 더한다** — 고유진동수가 대역보다
-  훨씬 높은 부품(준정적)도 모드 수와 상관없이 맞는다(`result.residual`). 응력 1σ 는 아직 내지 않는다.
+  훨씬 높은 부품(준정적)도 모드 수와 상관없이 맞는다(`result.residual`).
 - 적분한 대역은 `result.band_hz`(PSD 표), 모드를 찾은 범위는 `result.frequency_range_hz`(있을 때만).
 
 ### 그 밖

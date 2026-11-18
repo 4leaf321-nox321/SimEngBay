@@ -147,6 +147,13 @@ export interface HarmonicResult {
    */
   acceleration?: 'absolute' | 'relative'
   base_excitation?: boolean
+  /**
+   * 빠진 높은 모드의 정적 몫(잔여 벡터)을 더했나(CalculiX, 2026-11-18) — 고유진동수가 범위보다 훨씬 높은
+   * 부품(준정적)도 모드 수와 상관없이 맞는다. 옛 결과 · Ansys 는 없다.
+   */
+  residual?: boolean
+  /** **봉우리 주파수의 최대 상당응력**(MPa, 위상을 돌린 최대) — 모드 응력 중첩 + 잔여 응력(CalculiX). */
+  stress?: { frequency_hz: number; max_von_mises_mpa: number; node?: number; point?: [number, number, number] }
   material?: string
   warning?: string
   fake?: boolean
@@ -209,6 +216,8 @@ export interface RandomResult {
   }
   /** 모든 절점의 1σ 변위 최대(mm)와 그 자리. */
   max_displacement?: { value_mm: number; node: number; point?: [number, number, number] }
+  /** **최대 상당응력 1σ**(MPa, Segalman — 모드 응력 + 잔여 응력, CalculiX 2026-11-18). 옛 결과엔 없다. */
+  stress?: { max_von_mises_mpa: number; node?: number; point?: [number, number, number] | null; method?: string }
   probes?: RandomProbeRow[]
   shape?: { vtp: string; points?: number; field?: string }
   parts?: string[]

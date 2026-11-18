@@ -187,7 +187,15 @@ def _results(study: StudyOut, rows: list[StudyPointOut]) -> list[Column]:
                 "result",
                 True,
                 lambda one: one.max_displacement_mm,
-            )
+            ),
+            Column(
+                "max_mpa",
+                "최대 상당응력 1σ",
+                "MPa",
+                "result",
+                True,
+                lambda one: one.max_von_mises_mpa,
+            ),
         ]
         for name in _names(rows, lambda one: dict(one.probe_grms)):
             made.append(
@@ -221,6 +229,14 @@ def _results(study: StudyOut, rows: list[StudyPointOut]) -> list[Column]:
                 "result",
                 True,
                 lambda one: one.peak_displacement_mm,
+            ),
+            Column(
+                "max_mpa",
+                "봉우리 상당응력",
+                "MPa",
+                "result",
+                True,
+                lambda one: one.max_von_mises_mpa,
             ),
         ]
         for name in _names(rows, lambda one: dict(one.probes_mm)):

@@ -94,8 +94,8 @@ describe('랜덤 진동 스펙', () => {
     expect(specProblem(random)).toBeNull()
   })
 
-  it('Ansys · 틀린 범위 · 감쇠비는 보내기 전에 막는다', () => {
-    expect(specProblem({ ...random, solver: 'ansys' })).toContain('CalculiX 로만')
+  it('Ansys 도 받고(2026-11-18), 틀린 범위 · 감쇠비는 보내기 전에 막는다', () => {
+    expect(specProblem({ ...random, solver: 'ansys' })).toBeNull()
     expect(specProblem({ ...random, modalRange: { low: '500', high: '100' } })).toContain('찾을 주파수 범위')
     expect(specProblem({ ...random, random: { ...RANDOM_DEFAULTS, dampingPercent: '0' } })).toContain('감쇠비')
   })

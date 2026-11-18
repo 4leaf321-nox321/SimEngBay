@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,10 @@ from app.core.stages import ArtifactSpec, StageFailure, StageResult
 #: 솔버가 남기는 결과 파일. `.dat` 가 기본 잡 이름(`file`)을 쓴다.
 RESULT_NAME = "file.rst"
 OUTPUT_NAME = "solve.out"
+#: 랜덤 진동(PSD) 덱의 실행 이름 · 결과 파일 — 앞 모달(`file`)과 이름이 같으면 시작하면서
+#: 모달의 `file.rst` 를 새 결과 파일로 덮어 「file.rst 가 없다」 로 멈췄다(실측 2026-11-18).
+PSD_JOB = "psd"
+PSD_RESULT = "psd.rst"
 
 #: **오류 줄에** 이것이 보이면 라이선스 문제다 — 고칠 곳이 다르므로 따로 센다.
 #:
@@ -68,6 +73,7 @@ def _run_deck(
     processes: int,
     timeout_seconds: int,
     output_name: str,
+    extra: tuple[str, ...] = (),
 ) -> str:
     """덱 하나를 MAPDL 로 돌리고 로그를 돌려준다. **실패하면 여기서 멈춘다.**"""
     binary = executable(root, version)
@@ -77,7 +83,17 @@ def _run_deck(
             f"솔버 실행 파일이 없습니다: {binary}",
             details={"executable": str(binary)},
         )
-    command = [str(binary), "-b", "-np", str(processes), "-i", dat.name, "-o", output_name]
+    command = [
+        str(binary),
+        "-b",
+        *extra,
+        "-np",
+        str(processes),
+        "-i",
+        dat.name,
+        "-o",
+        output_name,
+    ]
     try:
         finished = subprocess.run(
             command,
@@ -115,9 +131,15 @@ def solve(
     `resume` 한다. 모델링이 `upstream.dat` 를 남겼으면 **그것부터** 푼다
     (둘 다 실측 2026-10-02).
     """
+    # **랜덤 진동은 공유 메모리로 · 다른 실행 이름으로 푼다**(실측 2026-11-18) — 분산(DMP)으로
+    # 풀면 모달이 `file0.rst` · `file1.rst` 로 나뉘어 PSD 단계가 못 찾았고, 같은 이름이면 PSD
+    # 실행이 모달의 `file.rst` 를 덮었다.
+    psd = _recipe(workdir) == "random"
+    extra: tuple[str, ...] = ("-smp",) if psd else ()
     upstream = workdir / "upstream.dat"
+    upstream_log = ""
     if upstream.is_file():
-        _run_deck(
+        upstream_log = _run_deck(
             workdir,
             upstream,
             version=version,
@@ -125,6 +147,7 @@ def solve(
             processes=processes,
             timeout_seconds=timeout_seconds,
             output_name="upstream.out",
+            extra=extra,
         )
     dat = workdir / "model.dat"
     if not dat.is_file():
@@ -139,7 +162,18 @@ def solve(
             details={"executable": str(binary)},
         )
 
-    command = [str(binary), "-b", "-np", str(processes), "-i", dat.name, "-o", OUTPUT_NAME]
+    command = [
+        str(binary),
+        "-b",
+        *extra,
+        *(("-j", PSD_JOB) if psd else ()),
+        "-np",
+        str(processes),
+        "-i",
+        dat.name,
+        "-o",
+        OUTPUT_NAME,
+    ]
     try:
         finished = subprocess.run(
             command,
@@ -161,7 +195,7 @@ def solve(
     if output.is_file():
         artifacts.append(ArtifactSpec("solve_out", output))
 
-    result = workdir / RESULT_NAME
+    result = workdir / (PSD_RESULT if psd else RESULT_NAME)
     if not result.is_file():
         raise _diagnose(log, finished.returncode, artifacts)
     artifacts.append(ArtifactSpec("rst", result))
@@ -173,8 +207,53 @@ def solve(
 
     return StageResult(
         artifacts=artifacts,
-        summary={"solver_seconds": _elapsed(log)},
+        summary={
+            "solver_seconds": _elapsed(log),
+            # 질량 요약은 모달 쪽에 적힌다 — 랜덤이면 앞 덱의 로그다.
+            **(mass_summary(workdir, log) or mass_summary(workdir, upstream_log)),
+        },
         detail=f"MAPDL {version} · {processes} 코어",
+    )
+
+
+def _recipe(workdir: Path) -> str:
+    """모델링이 남긴 해석 종류(`boundary.json` 의 `recipe`) — 못 읽으면 빈 것."""
+    import json
+
+    try:
+        saved = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(saved.get("recipe") or "") if isinstance(saved, dict) else ""
+
+
+#: MAPDL 이 `PRECISE MASS SUMMARY` 에 적는 전체 질량 — 세션 단위계의 질량(mm · N · t 면 톤).
+_TOTAL_MASS = re.compile(r"TOTAL MASS\s*=\s*([-+0-9.Ee]+)")
+
+
+def mass_summary(workdir: Path, log: str) -> dict[str, object]:
+    """**솔버가 셈한 전체 질량**(`solve.out` 의 `TOTAL MASS`)을 kg 로 옮겨 모델링이 셈한 질량
+    (형상 부피 x 밀도, `boundary.json`)과 견준다 — `solver_mass_kg` · `mass_warning`
+    (`unit_checks.mass_check`, CalculiX 와 같은 말). 못 읽으면 빈 것."""
+    import json
+
+    from app.core import unit_checks, units
+
+    found = _TOTAL_MASS.search(log)
+    if found is None:
+        return {}
+    try:
+        saved = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+        # 단위계를 모르면(옛 경계 파일) 옮기지 않는다 — SI 로 짐작하면 그 짐작이 틀린 질량이다.
+        if not isinstance(saved, dict) or not saved.get("unit_system"):
+            return {}
+        system = units.resolve(saved["unit_system"])
+        solver_kg = system.mass_kg(float(found.group(1)))
+    except (OSError, ValueError, units.UnknownUnitSystem):
+        return {}
+    ours = saved.get("mass_kg")
+    return unit_checks.mass_check(
+        solver_kg, float(ours) if isinstance(ours, int | float) else None
     )
 
 

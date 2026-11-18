@@ -662,6 +662,39 @@ def test_사인_스윕은_주파수별_배율로_흔들고_측정점의_절대_�
     assert top["phase_deg"] == pytest.approx(-90, abs=5)
     low = min(result["points"], key=lambda one: abs(one["frequency_hz"] - 200))
     assert low["probes_accel_g"]["측정점"] == pytest.approx(0.571, abs=0.05)
+    # 잔여 벡터를 더했고(이 기둥은 모드가 범위 안이라 몫이 작다), 봉우리의 상당응력은 기둥
+    # 뿌리(z 12.5)에서 난다 — 실측 1.105 MPa(2026-11-18).
+    assert result["residual"] is True
+    stress = result["stress"]
+    assert stress["frequency_hz"] == pytest.approx(top_hz := result["peak"]["frequency_hz"])
+    assert stress["max_von_mises_mpa"] == pytest.approx(1.105, rel=0.05) and top_hz > 1200
+    assert stress["point"][2] == pytest.approx(12.5, abs=1.0)
+
+
+def test_조화_응답의_위상은_하중을_실수부_허수부로_나눠_건다(
+    ready: None, tmp_path: Path
+) -> None:
+    """`조건_측면가진` 의 끝 힘을 하나 더 건다 — 위상 0° 면 2배, 90° 면 √2 배, 180° 면 0(실측
+    2026-11-18: 1.4565 · 1.0299 · 2e-20 mm, Ansys 1.4063 · 0.9944 · 0 mm)."""
+    peaks: dict[float, float] = {}
+    for phase in (0.0, 90.0, 180.0):
+        work = tmp_path / f"phase-{int(phase)}"
+        work.mkdir()
+        shutil.copy(SIDE_SHAKE / "points" / "p0001.step", work / "input.step")
+        payload = json.loads(
+            (SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8")
+        )
+        first = payload["conditions"]["loads"][0]
+        first["phase"] = 0.0
+        payload["conditions"]["loads"].append({**first, "name": "측면 가진 2", "phase": phase})
+        (work / "topology.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        _run(work, {**SPEC, "recipe": "harmonic"})
+        result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        peaks[phase] = float(result["peak"]["max_displacement"])
+    assert peaks[90.0] == pytest.approx(peaks[0.0] / math.sqrt(2), rel=1e-3)
+    assert peaks[180.0] < 1e-9 * peaks[0.0]
 
 
 RANDOM = FIXTURES / "doe" / "조건_랜덤진동"
@@ -701,6 +734,15 @@ def test_랜덤_진동은_측정점_Grms_가_손셈과_맞고_조화_응답과_�
     assert len(result["curves"]["probes"]["측정점"]) == len(result["curves"]["frequency_hz"])
     assert "warning" not in result, result.get("warning")
     assert (shaken / "mode_01.vtp").is_file()
+    # 상당응력 1σ(Segalman) — 사인 스윕 봉우리와 같은 자리(기둥 뿌리). 한 모드가 거의 다 내므로
+    # 응력 / 변위 비가 사인 스윕 봉우리의 비와 같다(실측 183.1 · 181.9 MPa/mm).
+    stress = result["stress"]
+    assert stress["method"] == "segalman" and stress["point"][2] == pytest.approx(
+        12.5, abs=1.0
+    )
+    assert stress["max_von_mises_mpa"] / tip["displacement_1sigma_mm"] == pytest.approx(
+        182, rel=0.03
+    )
 
     swept = tmp_path / "sweep"
     swept.mkdir()
@@ -714,20 +756,27 @@ def test_랜덤_진동은_측정점_Grms_가_손셈과_맞고_조화_응답과_�
     plan = random_model.read(json.loads((shaken / "boundary.json").read_text("utf-8")))
     assert plan is not None
     modes = random_model.gather(naturals, tables.participation_factors(report), plan.shakes)
-    # 모드 블록 뒤에 잔여 벡터의 1 g 정적 블록이 붙는다(가진마다 하나). 조화 응답(ccx)에는 잔여
-    # 벡터가 없으니 모드 몫만 견준다 — 이 기둥은 모드가 대역 안이라 잔여 몫이 작다.
+    # 모드 블록 뒤에 잔여 벡터의 1 g 정적 블록이 붙는다(가진마다 하나) — 마지막 변위 블록.
     assert result["residual"] is True and plan.residual_steps == 1
     blocks = [one for one in frd.read(shaken / "model.frd") if one.kind == "DISP"]
     end = len(blocks) - plan.residual_steps
     phis = [one.values[tip["node"]][:3] for one in blocks[end - len(naturals) : end]]
+    # 사인 스윕도 이제 잔여 벡터를 더한다(2026-11-18) — 우리 쪽에도 같은 몫(1 g 정적 -
+    # 모드의 정적 몫)을 「모드」 하나로 끼워 견준다(`random_vibration.with_residual`).
+    joined, used = random_model.with_residual(
+        modes,
+        [{tip["node"]: phi} for phi in phis],
+        [{tip["node"]: blocks[-1].values[tip["node"]][:3]}],
+        list(plan.shakes),
+    )
     compared = 0
     for point in harmonic["points"]:
         if point["frequency_hz"] < 800:
             continue  # 사인 스윕의 배율이 1 인 곳만
         _, accel = random_model.transfer(
-            phis,
-            modes.participation["X 랜덤"],
-            naturals,
+            [one[tip["node"]] for one in used],
+            joined.participation["X 랜덤"],
+            joined.naturals,
             (1.0, 0.0, 0.0),
             point["frequency_hz"],
             plan.damping_ratio,

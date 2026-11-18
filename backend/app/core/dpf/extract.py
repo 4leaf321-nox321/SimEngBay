@@ -275,6 +275,7 @@ def _describe_modes(rst: Path, workdir: Path, modes: list[dict[str, Any]]) -> No
     절점 수로 센다(옛 방식).
     """
     try:
+        import numpy as np
         from ansys.dpf import core as dpf
 
         model = dpf.Model(str(rst))
@@ -292,7 +293,7 @@ def _describe_modes(rst: Path, workdir: Path, modes: list[dict[str, Any]]) -> No
                 continue
             field = model.results.displacement.on_time_scoping([int(one["number"])]).eval()[0]
             # **메시 절점 순서로 맞춘다**(`fields.py`) — 필드의 순서는 메시와 다르다.
-            vectors = fields.ordered_by(mesh.nodes.scoping.ids, field)
+            vectors = fields.ordered_by(np.array(mesh.nodes.scoping.ids, copy=True), field)
             one.update(metrics.describe(vectors, weights, parts))
             # **설계점 사이에서 같은 모드를 잇는 열쇠**(core/modes). 만드는 데 메시가
             # 필요하고 그것은 여기에만 있다 — 잇는 계산은 서버가 지문만으로 한다.

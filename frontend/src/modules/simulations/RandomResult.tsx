@@ -127,6 +127,14 @@ export function RandomResult({ simulationId, result, artifacts }: Props) {
             {largest !== undefined ? `${shown(largest, 'mm')} · 3σ ${shown(largest * 3, 'mm')}` : '—'}
           </dd>
         </div>
+        {result.stress && (
+          <div>
+            <dt className="text-muted-foreground text-xs">최대 상당응력 1σ</dt>
+            <dd className="font-medium">
+              {shown(result.stress.max_von_mises_mpa, 'MPa')} · 3σ {shown(result.stress.max_von_mises_mpa * 3, 'MPa')}
+            </dd>
+          </div>
+        )}
         <div>
           <dt className="text-muted-foreground text-xs">감쇠비 · 가진 대역</dt>
           <dd className="font-medium">
@@ -144,7 +152,9 @@ export function RandomResult({ simulationId, result, artifacts }: Props) {
             모드는 {RANGE_FROM[result.range_from]} {rangeText(searched)} 안에서 찾은 것만 썼습니다.
           </>
         )}
-        {result.residual === undefined
+        {result.solver === 'ansys'
+          ? ' Ansys(Mechanical 의 Random Vibration)로 풀었습니다 — 빠진 높은 모드의 정적 몫(잔여 벡터)을 더하지 않고 상당응력 1σ 도 내지 않습니다. 모드 수가 모자라면 고유진동수가 대역보다 훨씬 높은 부품의 응답이 작게 나옵니다.'
+          : result.residual === undefined
           ? null
           : result.residual
             ? ' 빠진 높은 모드의 정적 몫(잔여 벡터)을 더했습니다 — 고유진동수가 대역보다 훨씬 높은 부품도 모드 수와 상관없이 맞습니다.'

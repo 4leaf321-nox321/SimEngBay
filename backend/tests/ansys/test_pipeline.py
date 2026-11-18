@@ -332,6 +332,16 @@ def test_파트마다_다른_물성을_바디마다_붙인다(workdir: Path) -> 
             # 알아볼 수 없다.
             assert summary["material_bodies"] == "받침판=SS400 · 블록=AL6061"
             assert float(summary["mass_kg"]) == pytest.approx(0.3219, rel=0.005)
+            # **단위 점검**(2026-11-18, CalculiX 와 같은 말) — 덱에 쓴 물성을 바디와 함께 적고,
+            # 형상 부피가 CAD 와 같다(경고 없음).
+            assert (
+                "받침판" in summary["deck_materials"] and "블록" in summary["deck_materials"]
+            )
+            assert "size_warning" not in summary, summary.get("size_warning")
+        if stage == "solving":
+            # MAPDL 이 덱으로 셈한 전체 질량(`TOTAL MASS`, 세션 단위계 → kg)이 손셈과 같다.
+            assert float(result.summary["solver_mass_kg"]) == pytest.approx(0.3219, rel=0.01)
+            assert "mass_warning" not in result.summary
 
     result = json.loads((workdir / "result.json").read_text(encoding="utf-8"))
     assert result["boundary"] == "constrained"
@@ -1304,3 +1314,102 @@ def test_갈린_원통면과_모서리_반쪽_구멍을_축에서_돌린다_Ansy
         result = json.loads((work / "result.json").read_text(encoding="utf-8"))
         assert result["max_displacement"] == pytest.approx(turn * reach, rel=0.01)
         assert result["max_von_mises"] < (1.0 if edge else 20.0)
+
+
+SINE_SWEEP = FIXTURES / "doe" / "조건_사인스윕"
+
+
+def _harmonic_once(
+    workdir: Path, folder: Path, name: str, patch: Any = None, spec_recipe: str = "harmonic"
+) -> dict[str, Any]:
+    """CAD 점 하나를 Ansys 조화 응답(또는 `spec_recipe`)으로 — `patch(point)` 로 조건을
+    바꿔서."""
+    work = workdir / name
+    work.mkdir()
+    point = json.loads((folder / "points" / "p0001.json").read_text(encoding="utf-8"))
+    if patch is not None:
+        patch(point)
+    shutil.copy(folder / "points" / "p0001.step", work / "input.step")
+    (work / "topology.json").write_text(
+        json.dumps(point, ensure_ascii=False), encoding="utf-8"
+    )
+    spec = {
+        "recipe": spec_recipe,
+        "solver": "ansys",
+        "mesh": {"element_size_mm": 5},
+        "modes": 6,
+    }
+    (work / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    runner = _executor()
+    for stage in STAGES:
+        runner.run(StageContext(stage=stage, spec=spec, workdir=work))
+    loaded: dict[str, Any] = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    return loaded
+
+
+def test_조화_응답의_주파수별_배율과_위상이_Ansys_에서도_먹는다(workdir: Path) -> None:
+    """**가진 프로파일**(CompCore 2026-11-17)을 Ansys 로 풀어 본다(실측 2026-11-18, 2025 R2).
+
+    - 배율 표(Tabular Data): 「조건_사인스윕」 의 220 Hz 응답이 표가 없을 때의 0.5857 배(표의
+      배율 0.5 + 120/700 x 0.5)다. 봉우리(배율 1)는 같다 — 1,260 Hz · 기둥 끝 0.005854 mm
+      (CalculiX 1,263 Hz · 0.006074 mm, 3.6 % — 측면가진의 두 솔버 차이와 같다).
+    - 위상(PhaseAngle): 「조건_측면가진」 의 끝 힘을 하나 더 걸어 위상 180° 면 응답이 0, 90° 면
+      √2 배다. **성분의 위상각은 필드라** 값을 바로 넣으면 「property is read-only」 로 막혔다
+      (`_phase`).
+    """
+
+    def flat(point: dict[str, Any]) -> None:
+        point["conditions"]["loads"][0]["frequency_table"] = None
+
+    profiled = _harmonic_once(workdir, SINE_SWEEP, "table")
+    plain = _harmonic_once(workdir, SINE_SWEEP, "flat", flat)
+
+    def at(result: dict[str, Any], hz: float) -> float:
+        row = min(result["points"], key=lambda one: abs(one["frequency_hz"] - hz))
+        return float(row["probes"]["측정점"])
+
+    assert at(profiled, 220) / at(plain, 220) == pytest.approx(0.5 + 120 / 700 * 0.5, rel=1e-3)
+    assert at(profiled, 1260) == pytest.approx(at(plain, 1260), rel=1e-6)
+
+    def twin(phase: float) -> Any:
+        def change(point: dict[str, Any]) -> None:
+            first = point["conditions"]["loads"][0]
+            first["phase"] = 0.0
+            point["conditions"]["loads"].append(
+                {**first, "name": "측면 가진 2", "phase": phase}
+            )
+
+        return change
+
+    single = _harmonic_once(workdir, SIDE_SHAKE, "single")["peak"]["max_displacement"]
+    cancel = _harmonic_once(workdir, SIDE_SHAKE, "opposed", twin(180.0))
+    quarter = _harmonic_once(workdir, SIDE_SHAKE, "quarter", twin(90.0))
+    assert cancel["peak"]["max_displacement"] < 1e-9 * single
+    assert quarter["peak"]["max_displacement"] == pytest.approx(
+        math.sqrt(2) * single, rel=1e-3
+    )
+
+
+RANDOM_FOLDER = FIXTURES / "doe" / "조건_랜덤진동"
+
+
+def test_랜덤_진동을_Mechanical_의_Random_Vibration_으로_풀면_CalculiX_셈과_같다(
+    workdir: Path,
+) -> None:
+    """**두 셈이 서로 독립이다** — CalculiX 경로는 모드를 풀고 우리가 PSD 를 셈하고(잔여 벡터
+    까지), 여기는 Mechanical 의 Random Vibration(MAPDL PSD)이 셈한 1σ 를 읽는다(2026-11-18).
+
+    「조건_랜덤진동」(요소 5 mm, 모드 6): 기둥 끝 가속도 1σ(절대) Ansys 36.7645 · CalculiX
+    36.721 g(0.12 %), 기둥 끝 1σ 변위 0.00577941 · 0.0058046 mm(0.43 %), 1차 1,266.4 ·
+    1,263.4 Hz.
+    지킬 것은 `mechanical.build.localized_random_deck`(경로 · g) 와 `solve.mapdl`(`-smp` ·
+    `-j psd`)이다."""
+    result = _harmonic_once(workdir, RANDOM_FOLDER, "random", spec_recipe="random")
+    tip = next(one for one in result["probes"] if one["name"] == "측정점")
+    assert result["solver"] == "ansys" and result["acceleration"] == "absolute"
+    assert tip["value"] == pytest.approx(36.721, rel=0.01) and tip["unit"] == "g"
+    assert tip["displacement_1sigma_mm"] == pytest.approx(0.0058046, rel=0.01)
+    assert result["inputs"][0]["grms"] == pytest.approx(6.058, abs=1e-3)
+    assert result["modes"][0]["frequency_hz"] == pytest.approx(1263.4, rel=0.01)
+    deck = (workdir / "random" / "model.dat").read_text(encoding="utf-8", errors="replace")
+    assert "resume,file,db" in deck and "ACCG,9806.65" in deck

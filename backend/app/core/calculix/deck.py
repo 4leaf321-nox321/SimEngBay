@@ -137,6 +137,10 @@ class Plan:
     #: 고유치 단계 뒤에 붙인 **1 g 정적 단계의 방향**(랜덤 진동의 잔여 벡터) — 차례대로
     #: `.frd` 의 마지막 변위 블록들이다. 비었으면 붙이지 않았다.
     residual: list[tuple[float, float, float]] = field(default_factory=list)
+    #: 조화 응답의 **잔여 벡터 하중**(차례대로) — 하중마다 정적 단계 · 거의 0 Hz 훑기 단계를
+    #: 붙였다(`write_harmonic`). 이름 · 배율 표 · 위상(도). 추출이 `boundary.json` 에서
+    #: 읽는다(`calculix/harmonic_read.py`).
+    harmonic_loads: list[dict[str, Any]] = field(default_factory=list)
 
 
 #: 탄성 · 압축 전용 지지 영역 → 절점마다 (맡은 넓이 mm², 면의 바깥 단위 법선) — 모델링이
@@ -435,8 +439,12 @@ def write_modal(
     stress_mpa: float = 1.0,
     bolt_stage: tuple[list[str], list[str], list[str]] | None = None,
     residual: Sequence[tuple[float, float, float]] = (),
+    stress: bool = False,
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
+
+    `stress` 면 고유치 단계 · 잔여 벡터 정적 단계에 **응력도 적는다**(랜덤 진동의 상당응력 1σ
+    재료 — `random_read`).
 
     `residual` 을 주면(랜덤 진동) 고유치 단계 뒤에 **방향마다 1 g 정적 단계**를 하나씩 붙인다 —
     모드 중첩이 빠뜨린 모드의 정적 몫(잔여 벡터)을 셈할 재료다(`random_vibration`). 선응력 ·
@@ -546,6 +554,7 @@ def write_modal(
         f"{modes}",
         "*NODE FILE",
         "U",
+        *(["*EL FILE", "S"] if stress else []),
         "*END STEP",
     ]
     if residual and not (preload or bolt_stage) and "*CONTACT PAIR" not in "\n".join(lines):
@@ -564,6 +573,7 @@ def write_modal(
                 ),
                 "*NODE FILE",
                 "U",
+                *(["*EL FILE", "S"] if stress else []),
                 "*END STEP",
             ]
             plan.residual.append(direction)
@@ -1002,8 +1012,11 @@ def _head(
         lines.append(f"*SURFACE, NAME={tie.name}M, TYPE=ELEMENT")
         lines += [f"{element}, {face.replace('P', 'S')}" for element, face in tie.master_faces]
         lines += [
-            f"*TIE, NAME={tie.name}, POSITION TOLERANCE={tie.tolerance:.6g}, "
-            f"ADJUST={'YES' if tie.adjust else 'NO'}",
+            # **옮기는 것이 ccx 의 기본이다** — ccx 2.21 은 `ADJUST=NO` 만 알아듣고
+            # `ADJUST=YES` 는 「parameter not recognized」 로 건너뛴다(실측 2026-11-18). 옮길
+            # 때는 아무것도 쓰지 않는다.
+            f"*TIE, NAME={tie.name}, POSITION TOLERANCE={tie.tolerance:.6g}"
+            + ("" if tie.adjust else ", ADJUST=NO"),
             f"{tie.name}S, {tie.name}M",
         ]
         plan.applied.append(f"tie:{tie.contact}")
@@ -1993,11 +2006,16 @@ def write_harmonic(
         penalty=contact_stiffness(materials, element_size_mm),
     )
 
-    # ① 모드를 푸고 남긴다.
+    # ① 모드를 푸고 남긴다. **모드 형상 · 모드 응력도 적는다** — 추출이 잔여 벡터를 빼고
+    # 응력을 중첩하는 재료다(`harmonic_read`).
     lines += [
         "*STEP",
         "*FREQUENCY, SOLVER=SPOOLES, STORAGE=YES",
         f"{modes}",
+        "*NODE FILE",
+        "U",
+        "*EL FILE",
+        "S",
         "*END STEP",
     ]
 
@@ -2017,6 +2035,8 @@ def write_harmonic(
     ]
     applied_loads = 0
     amplitudes: list[list[str]] = []
+    # 하중마다 배율 1 · 위상 0 의 줄 — 잔여 벡터 단계가 하나씩 건다(아래 ③).
+    units: list[tuple[condition_model.Load, list[str]]] = []
     for load in given.loads:
         if load.kind in ("rotational_velocity", "bolt_pretension"):
             # 흔드는 하중이 아니다 — 조화 응답은 모드 위의 가진만 본다(조이거나 돌린 상태는
@@ -2074,6 +2094,19 @@ def write_harmonic(
         if why is not None:
             plan.refused.append(why)
             continue
+        plain, _ = _load_rows(
+            replace(load, phase=None),
+            load_faces,
+            load_areas,
+            load_nodes,
+            nodes,
+            shapes,
+            plan.local_frames,
+            _elsets(body_of, shells),
+            given.frames,
+            length_mm,
+        )
+        units.append((load, plain))
         plan.applied.append(f"{load.kind}:{load.region}")
         applied_loads += 1
     if amplitudes:
@@ -2098,11 +2131,55 @@ def write_harmonic(
         plan.refused.append(
             condition_model.Note(f"접촉 「{pair.name}」({pair.kind})", "모르는 접촉입니다.")
         )
-    lines += ["*NODE FILE", "U", "*END STEP"]
+    # 훑기 단계에는 응력을 안 적는다 — 앞 단계의 `*EL FILE` 이 이어져 주파수 점마다 모든 절점의
+    # 응력이 실린다(실측 2026-11-18: `.frd` 1,000만 줄). 응력은 추출이 모드로 중첩한다.
+    lines += ["*NODE FILE", "U", "*EL FILE, FREQUENCY=0", "S", "*END STEP"]
+    # ③ **잔여 벡터** — 하중마다 (정적 단계, 거의 0 Hz 훑기 단계). 정적 해에서 모드들이 이미
+    # 낸 정적 몫(거의 0 Hz 응답)을 뺀 것이 빠진 높은 모드의 몫이다. 준정적 부품(고유진동수 ≫
+    # 범위)은 이것이 없으면 모드 수만큼 작게 나왔다(시험_진동_150Hz: 모드 20 · 40 개에
+    # -29.5 · -13 %). 앞 단계의 하중은 지운다(`OP=NEW`).
+    for load, plain in units:
+        lines += [
+            "*STEP",
+            "*STATIC",
+            "*CLOAD, OP=NEW",
+            "*DLOAD, OP=NEW",
+            *plain,
+            "*NODE FILE",
+            "U",
+            "*EL FILE",
+            "S",
+            "*END STEP",
+            "*STEP",
+            "*MODAL DAMPING",
+            f"1, {modes}, {plan_of.damping_ratio:.6g}",
+            "*STEADY STATE DYNAMICS",
+            f"{RESIDUAL_HZ:.6g}, {2 * RESIDUAL_HZ:.6g}, 2, 1",
+            "*CLOAD, OP=NEW",
+            "*DLOAD, OP=NEW",
+            *plain,
+            "*NODE FILE",
+            "U",
+            "*EL FILE, FREQUENCY=0",
+            "S",
+            "*END STEP",
+        ]
+        plan.harmonic_loads.append(
+            {
+                "name": load.name,
+                "table": [list(one) for one in load.frequency_table or ()],
+                "phase_deg": float(load.phase or 0.0),
+            }
+        )
     plan.text = _finish(
         lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
     )
     return plan
+
+
+#: 잔여 벡터의 「거의 0 Hz」 훑기 주파수 — 모드 응답 hₘ 가 정적 값과 (f / fₘ)² 만큼만 다르면
+#: 된다. 고유진동수 1 Hz 인 모드도 10⁻⁶ 이다.
+RESIDUAL_HZ = 1e-3
 
 
 def _amplitude_lines(name: str, table: tuple[tuple[float, float], ...]) -> list[str]:

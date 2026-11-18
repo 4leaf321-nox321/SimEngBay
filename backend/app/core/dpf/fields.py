@@ -17,8 +17,11 @@ def ordered_by(node_ids: Any, field: Any) -> Any:
     """`node_ids` 순서에 맞춘 (n, 3) 배열. 값이 없는 절점은 0 이다."""
     import numpy as np
 
-    wanted = np.asarray(node_ids)
-    source = np.asarray(field.scoping.ids)
+    # **복사해서 받는다** — DPF 의 `scoping.ids` 는 그 scoping 의 메모리를 그대로 보는
+    # 배열이라, 임시 scoping 이 풀리면 풀린 메모리를 읽어 프로세스가 죽었다(Windows access
+    # violation, 실측 2026-11-18 — 「구속이 여럿이어도 원격 변위의 반력」 정적 추출).
+    wanted = np.array(node_ids, copy=True)
+    source = np.array(field.scoping.ids, copy=True)
     values = np.asarray(field.data, dtype=float).reshape(-1, 3)
 
     lookup = np.full(int(max(source.max(), wanted.max())) + 1, -1, dtype=np.int64)

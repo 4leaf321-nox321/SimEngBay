@@ -866,10 +866,11 @@ async def job_result(ctx: Context, job_id: str, detail: bool = False) -> Any:
     - 정적: `max_displacement_mm` · `max_von_mises_mpa` · `reactions_n`(영역 → [Fx, Fy, Fz]) ·
       측정점 `probes_mm` · `probe_vectors_mm` · `probe_strains` · `relative_mm`(같은 자리 두
       바디의 미끄럼).
-    - 조화: `peak_hz` · `peak_displacement_mm` · 측정점별 봉우리(`probes_mm` ·
-      `probe_peaks_hz`).
+    - 조화: `peak_hz` · `peak_displacement_mm` · `max_von_mises_mpa`(봉우리의 최대
+      상당응력) · 측정점별 봉우리(`probes_mm` · `probe_peaks_hz`).
     - 랜덤 진동(모두 1σ — 3σ 는 세 배): `probe_grms`(측정점 절대 가속도, g) ·
-      `probes_mm`(측정점 1σ 변위) · `max_displacement_mm`(최대 1σ 변위, 지지부 기준).
+      `probes_mm`(측정점 1σ 변위) · `max_displacement_mm`(최대 1σ 변위, 지지부 기준) ·
+      `max_von_mises_mpa`(최대 상당응력 1σ, Segalman).
 
     **최대 응력은 구속 모서리의 수치적 첨두일 수 있다** — 판단에 쓰기 전에 메시 수렴
     (`convergence_start`)을 권한다. `detail=true` 면 결과 파일(`result.json`) 원본도 싣는다

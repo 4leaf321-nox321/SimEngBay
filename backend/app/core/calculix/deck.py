@@ -218,6 +218,23 @@ class Tie:
 
 
 @dataclass(frozen=True)
+class Lever:
+    """두 면을 **간극을 둔 채** 묶는다 — 종 절점마다 x · y · z 구속식 셋(`lever.py`,
+    2026-11-20). 절점을 옮기지 않는다(`*TIE` 의 옮김은 얇은 요소를 뒤집고 질량을 늘렸다).
+
+    덱 쓰기는 자리만 둔다 — 아무것도 쓰지 않는다. 식은 **덱을 다 쓴 뒤** `lever.apply` 가 그
+    덱의 구속(고정 자유도 · 다른 구속식의 종속)을 읽고 넣는다. 칸 이름은 `Tie` 와 같다(묶음을
+    세는 쪽이 둘을 같이 다룬다)."""
+
+    contact: str
+    name: str
+    slave_nodes: frozenset[int]
+    master_faces: list[tuple[int, str]]
+    tolerance: float
+    """mm — 이 거리 안의 종 절점만 묶는다(pinball)."""
+
+
+@dataclass(frozen=True)
 class Slide:
     """두 면을 **법선으로만** 묶는다 — 떨어지지 않고 미끄러진다(Mechanical 의 No Separation).
 
@@ -432,7 +449,7 @@ def write_modal(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: Sequence[Tie | Slide] = (),
+    ties: Sequence[Tie | Slide | Lever] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     springs: Springs | None = None,
@@ -685,7 +702,7 @@ def write_static(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: Sequence[Tie | Slide] = (),
+    ties: Sequence[Tie | Slide | Lever] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     large_deflection: bool = False,
@@ -942,7 +959,7 @@ def _head(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: Sequence[Tie | Slide] = (),
+    ties: Sequence[Tie | Slide | Lever] = (),
 ) -> list[str]:
     """절점 · 요소 · 물성 — 레시피가 달라도 같은 부분이다."""
     lines: list[str] = [
@@ -1002,9 +1019,18 @@ def _head(
             "쉘 %s → 요소 %s · 두께 %s mm", sheet.part, len(sheet.elements), sheet.thickness
         )
     for tie in ties:
+        if isinstance(tie, Lever):
+            # 식은 덱을 다 쓴 뒤 넣는다(`lever.apply`) — 적용 여부도 거기서 센다.
+            continue
         if isinstance(tie, Slide):
             lines += tie.lines()
             plan.applied.append(f"{'tie' if tie.bonded else 'no_separation'}:{tie.contact}")
+            continue
+        if not tie.slave_nodes:
+            # **종 절점이 없는 묶음은 걸지 않는다** — 걸면 「적용」 으로 적히는데 그 쌍의
+            # 바디는 떨어진 채 풀린다(앞 접촉이 같은 종 면을 가져갔을 때, r2 의 질량이 떴다 —
+            # 2026-11-20).
+            # 까닭은 본딩이 적는다(`bonding._declared`).
             continue
         lines += _nset(f"{tie.name}S", set(tie.slave_nodes))
         lines += [f"*SURFACE, NAME={tie.name}S, TYPE=NODE", f"{tie.name}S"]
@@ -1972,7 +1998,7 @@ def write_harmonic(
     second_order: bool,
     rigid: tuple[RigidBody, ...] | list[RigidBody] = (),
     shells: tuple[ShellSection, ...] | list[ShellSection] = (),
-    ties: Sequence[Tie | Slide] = (),
+    ties: Sequence[Tie | Slide | Lever] = (),
     centers: dict[str, tuple[float, float, float]] | None = None,
     length_mm: float = 1.0,
     springs: Springs | None = None,

@@ -41,15 +41,19 @@ def test_반경_안의_절점만_고른다() -> None:
     assert near_nodes(nodes, set(), [(1, 2, 3)], 0.01) == set()
 
 
-def test_본딩_방식은_기본이_TIE_이고_옛_방식을_고를_수_있다(
+def test_본딩_방식은_기본이_lever_이고_TIE_와_옛_방식을_고를_수_있다(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """기본은 간극을 둔 채 구속식(`lever`, 2026-11-20 — 전에는 `tie`). 셋 다 바디를 따로
+    메시하지만 `shared` 만 쪼개 절점을 공유시킨다."""
     monkeypatch.delenv(bonding.BONDING_ENV, raising=False)
-    assert bonding.bonding_mode() == "tie"
+    assert bonding.bonding_mode() == "lever" and bonding.separate_meshes()
+    monkeypatch.setenv(bonding.BONDING_ENV, "tie")
+    assert bonding.bonding_mode() == "tie" and bonding.separate_meshes()
     monkeypatch.setenv(bonding.BONDING_ENV, "shared")
-    assert bonding.bonding_mode() == "shared"
+    assert bonding.bonding_mode() == "shared" and not bonding.separate_meshes()
     monkeypatch.setenv(bonding.BONDING_ENV, "아무거나")
-    assert bonding.bonding_mode() == "tie"
+    assert bonding.bonding_mode() == "lever"
 
 
 def test_CompCore_가_알린_틈은_쌍마다_가장_작은_것이다() -> None:

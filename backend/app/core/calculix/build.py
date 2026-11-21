@@ -28,7 +28,7 @@ from app.core import materials as material_model
 from app.core import random_vibration as random_model
 from app.core import touching as touch
 from app.core.bodies import match_bodies, place_settings, without
-from app.core.calculix import bonding
+from app.core.calculix import bonding, lever
 from app.core.calculix import deck as deck_writer
 from app.core.calculix.mesh import (
     Probe,
@@ -78,6 +78,13 @@ MESH_LIMIT = (
 )
 TOPOLOGY_NAME = "topology.json"
 DECK_NAME = "model.inp"
+#: lever 본딩이 한 절점도 못 묶은 쌍의 말 — 반경 안에 주 면이 없거나, 종 절점의 자유도가 모두
+#: 고정 · 다른 구속에 묶였다.
+_UNBONDED = (
+    "lever 본딩이 **한 절점도 묶지 못했습니다** — 반경(pinball) 안에 상대 면이 없거나 종 "
+    "절점이 모두 고정 · 다른 구속에 묶였습니다. 이 접촉으로만 이어진 바디는 떨어진 채 "
+    "풀립니다."
+)
 #: 형상 맞춤 허용오차의 기본(mm) — CompCore 형상 점검의 「바디 사이 틈」 기본값과 같다
 #: (`checks.contact_gap`, 2026-11-13). 그 아래가 「CAD 가 남긴 틈」 이다(`_boolean_tolerance`).
 BOOLEAN_TOLERANCE_MM = 0.001
@@ -140,9 +147,10 @@ def build(
     # 절점 공유로 붙고 접촉 쌍은 마찰면 하나뿐이다 — 셋 다 접촉 쌍으로 걸던 볼트 조립(본딩 둘 +
     # 판 사이 마찰)은 첫 증분조차 12분에 못 넘었다. 강체 파트가 끼거나 면이 떨어져 있으면
     # 전처럼 쪼개지 않고 접촉 쌍으로 건다.
-    # **본딩은 따로 메시하고 `*TIE` 로 묶는다**(`bonding.py`, 2026-11-16) — 메시를 쪼개지
-    # 않는다. `CALCULIX_BONDING=shared` 면 옛 방식(쪼개 절점 공유)이다.
-    tie_mode = bonding.bonding_mode() == "tie"
+    # **본딩은 따로 메시하고 구속식으로 묶는다**(`bonding.py`, 2026-11-16) — 메시를 쪼개지
+    # 않는다. 기본은 간극을 둔 채 lever 식(`lever.py`, 2026-11-20), `CALCULIX_BONDING=tie` 면
+    # `*TIE`(종 절점을 옮긴다), `shared` 면 옛 방식(쪼개 절점 공유)이다.
+    tie_mode = bonding.separate_meshes()
     flush = use_contact and _touching(topology, frictional, given)
     opened = not tie_mode and flush
     # **맞닿은 마찰면은 절점-면 접촉 · 평균 힘 기준으로 푼다** — 옛 방식이 그 면을 갈라 풀던
@@ -248,7 +256,7 @@ def build(
     shell_ties, rigid, tied, shell_notes = _ties(
         topology, given, mesh, shells, rigid, modal=not isinstance(spec, StaticSpec)
     )
-    ties: list[deck_writer.Tie | deck_writer.Slide] = list(shell_ties)
+    ties: list[deck_writer.Tie | deck_writer.Slide | deck_writer.Lever] = list(shell_ties)
     # 미끄럼으로 푼 쉘 접촉 — 0 Hz 모드의 까닭을 짚는 재료(`boundary.json` 의 `connections`).
     by_name = {one.name: one for one in given.contacts}
     shell_sliding = [
@@ -520,6 +528,21 @@ def build(
             details={"refused": [f"{one.what}: {one.why}" for one in plan.refused]},
         )
 
+    # **lever 본딩 — 덱을 다 쓴 뒤 그 덱의 구속을 읽고 식을 넣는다**(`lever.py`). 고정 자유도 ·
+    # 다른 구속식의 종속을 피하고, 종속이 우변에 나오면 대입하고, 쓴 뒤 강체 운동으로 잰다.
+    levers = [one for one in ties if isinstance(one, deck_writer.Lever)]
+    leveled: lever.Result | None = None
+    if levers:
+        elements = {number: ids for rows in mesh.solids.values() for number, ids in rows}
+        leveled = lever.apply(plan.text, mesh.nodes, elements, levers)
+        plan.text = leveled.text
+        plan.applied += [f"lever:{row['contact']}" for row in leveled.rows if row["tied"]]
+        plan.skipped += [
+            condition_model.Note(f"접촉 「{row['contact']}」", _UNBONDED)
+            for row in leveled.rows
+            if not row["tied"]
+        ]
+        plan.skipped += [condition_model.Note("lever 본딩", one) for one in leveled.notes]
     path = workdir / DECK_NAME
     path.write_text(plan.text, encoding="utf-8")
     boundary: dict[str, Any] = {
@@ -615,7 +638,23 @@ def build(
         json.dumps(boundary, ensure_ascii=False), encoding="utf-8"
     )
     # 쌍마다 몇 절점이 묶였나는 ccx 가 안다 — 솔브가 로그와 맞대어 보고한다.
-    bonding.write_ties(workdir, ties, bonded.applied if bonded is not None else [])
+    bonding.write_ties(
+        workdir,
+        ties,
+        bonded.applied if bonded is not None else [],
+        levers=leveled.rows if leveled is not None else (),
+        empty=bonded.empty if bonded is not None else (),
+        check=(
+            {
+                "equations": leveled.equations,
+                "rigid_residual": leveled.rigid_residual,
+                "rigid_failed": leveled.rigid_failed,
+                "overlaps": leveled.overlaps,
+            }
+            if leveled is not None
+            else None
+        ),
+    )
     sized = _size_warning(topology, body_of, mesh, skip=set(given.suppressed))
     deck_materials = _deck_materials(plan.text, body_of, shells)
     return StageResult(
@@ -648,7 +687,7 @@ def build(
             **({"deck_materials": deck_materials} if deck_materials else {}),
             # **바디를 어떻게 붙였나** — `tie`(따로 메시하고 구속식) · `shared`(쪼개 절점
             # 공유).
-            **({"bonding": "tie" if tie_mode else "shared"} if len(mesh.solids) > 1 else {}),
+            **({"bonding": bonding.bonding_mode()} if len(mesh.solids) > 1 else {}),
             # **맞닿았는데 접촉이 없는 바디 쌍** — 선언한 쌍만 묶으므로 떨어진 채로 풀었다.
             **({"unbonded_touching": touch.line(untied)} if untied else {}),
             **(

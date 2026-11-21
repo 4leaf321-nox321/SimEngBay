@@ -1,4 +1,5 @@
-"""**본딩을 `*TIE` 로** — 바디를 따로 메시하고 묶는다(`calculix/bonding.py`, 2026-11-16).
+"""**본딩을 구속식으로** — 바디를 따로 메시하고 묶는다(`calculix/bonding.py`, 2026-11-16 ·
+lever 식 `calculix/lever.py`, 2026-11-20).
 
 운영에서 막힌 넷: ① CAD 의 본딩 접촉 쌍이 쓰이지 않았다(맞닿은 면은 전부 붙었다) ② 형상이
 정확히
@@ -11,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -89,10 +91,13 @@ def _result(work: Path) -> dict[str, Any]:
     return found
 
 
-def test_선언한_본딩은_pinball_안의_간극만_묶는다(ready: None, tmp_path: Path) -> None:
+def test_선언한_본딩은_pinball_안의_간극만_묶는다(
+    ready: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """기둥이 0.3 mm 떠 있다. pinball 0.5 mm 면 묶여 맞닿은 모델과 같은 1차가 나오고, 0.1 mm 면
-    안 묶여 기둥이 떠서 0 Hz 모드가 나온다. pinball 이 없으면 요소 크기의 절반(2.5 mm)이라
-    묶인다. 종 절점은 늘 주 면에 붙인다(ccx 의 기본 — `ADJUST=NO` 를 안 쓴다)."""
+    안 묶여 기둥이 떠서 0 Hz 모드가 나온다 — 그 접촉은 「적용」 으로 적히지 않는다. pinball 이
+    없으면 요소 크기의 절반(2.5 mm)이라 묶인다. lever 는 절점을 옮기지 않고 간극을 지레로
+    잇는다."""
     touching = tmp_path / "touching"
     _lifted(touching, 0.0)
     _run(touching, SPEC)
@@ -107,16 +112,27 @@ def test_선언한_본딩은_pinball_안의_간극만_묶는다(ready: None, tmp
             assert not _floating(work), pinball
             first = next(one for one in result["modes"] if not one["rigid_body"])
             assert first["frequency_hz"] == pytest.approx(base["frequency_hz"], rel=0.01)
+            assert "lever:기둥-판" in summary["constrained_regions"]
         else:
             assert _floating(work), pinball
-        assert "tie:기둥-판" in summary["constrained_regions"]
+            # **한 절점도 못 묶은 접촉은 「적용」 이 아니다** — 그렇다고 적는다.
+            assert "lever:기둥-판" not in summary["constrained_regions"]
+            assert "한 절점도 묶지 못했습니다" in summary["conditions_skipped"]
+            assert "기둥-판 0/" in summary["bonded_pairs"] and "bond_warning" in summary
 
-    # **CAD 가 「Adjust to Touch」 를 안 적어도 옮긴다** — 안 옮기면 종 절점이 주 면에서 떨어진
-    # 만큼 구속식이 회전 강체 모드를 잡는다(`bonding.py`, 아래 자유-자유 시험).
-    # ccx 는 옮기는 것이 기본이고 `ADJUST=NO` 만 알아듣는다 — `ADJUST=YES` 는 「parameter not
-    # recognized」 로 건너뛴다. 그래서 아무것도 안 쓴다.
     deck = (tmp_path / "pinball-None" / "model.inp").read_text(encoding="utf-8")
+    assert "*TIE" not in deck and "*EQUATION" in deck
+
+    # **`CALCULIX_BONDING=tie` 는 v0.30 의 `*TIE`(종 절점을 주 면 위로 옮긴다)** — ccx 는
+    # 옮기는 것이 기본이고 `ADJUST=NO` 만 알아듣는다(`ADJUST=YES` 는 「parameter not
+    # recognized」 로 건너뛴다). 그래서 아무것도 안 쓴다.
+    monkeypatch.setenv("CALCULIX_BONDING", "tie")
+    moved = tmp_path / "tie"
+    _lifted(moved, 0.3, contact={"pinball": None})
+    summary = _run(moved, SPEC)
+    deck = (moved / "model.inp").read_text(encoding="utf-8")
     assert "*TIE, NAME=" in deck and "ADJUST" not in deck
+    assert "tie:기둥-판" in summary["constrained_regions"]
 
 
 def test_선언이_없으면_미세_간극은_묶고_CompCore_가_알린_틈새는_남긴다(
@@ -133,7 +149,7 @@ def test_선언이_없으면_미세_간극은_묶고_CompCore_가_알린_틈새�
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
     summary = _run(loose, SPEC)
-    assert any(one.startswith("tie:auto:") for one in summary["constrained_regions"])
+    assert any(one.startswith("lever:auto:") for one in summary["constrained_regions"])
     assert not _floating(loose)
 
     designed = tmp_path / "designed"
@@ -145,7 +161,7 @@ def test_선언이_없으면_미세_간극은_묶고_CompCore_가_알린_틈새�
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
     summary = _run(designed, SPEC)
-    assert not any(one.startswith("tie:auto:") for one in summary["constrained_regions"])
+    assert not any(one.startswith("lever:auto:") for one in summary["constrained_regions"])
     assert _floating(designed)
 
 
@@ -391,21 +407,149 @@ def _free_free(folder: Path, work: Path) -> dict[str, Any]:
 def test_자유_자유_본딩은_강체_모드가_여섯이고_구속식이_회전을_잡지_않는다(
     ready: None, tmp_path: Path
 ) -> None:
-    """**종 절점을 주 면 위로 옮긴다**(ccx 의 기본 — `ADJUST=NO` 를 안 쓴다, 2026-11-17).
-    안 옮기면 종 절점이 주 면에서 떨어진 만큼(2차 곡면의 현 오차 · 미세 간극) 구속식이 강체
-    회전을 잡는다.
-    「조건_볼트예압_판본딩」(본딩 셋, 나사 물림은 원통면) 자유-자유의 회전 셋이 0.23 · 0.30 ·
-    0.30 Hz 였고(옮기면 0.003 Hz, 절점 공유와 같다), 64쌍 조립은 1 Hz 를 넘어 강체 모드가
-    3개로 셌다."""
+    """**lever 식은 강체 운동을 그대로 만족한다**(`lever.py`, 2026-11-20) — 종 절점을 옮기지
+    않고 u종 = Σ N u주 + θ x d 로 묶는다. 병진만 묶으면(v0.28 `ADJUST=NO`) 종 절점이 주 면에서
+    떨어진 만큼(2차 곡면의 현 오차 · 미세 간극) 강체 회전을 잡았다 — 「조건_볼트예압_판본딩」
+    (본딩 셋, 나사 물림은 원통면) 자유-자유의 회전 셋이 0.23 · 0.30 · 0.30 Hz 였고, 64쌍
+    조립은 1 Hz 를 넘어 강체 모드가 3개로 셌다. v0.30 은 옮겨서 풀었다(0.003 Hz) — lever 는
+    옮기지 않고 같은 0 Hz 다(실측 2026-11-20: 식 11,721 개 · 강체 잔차 2.4e-12 · 탄성
+    18,244.81 Hz, 옮김은 18,244.82 Hz)."""
     bolted = tmp_path / "bolted"
     result = _free_free(FIXTURES / "doe" / "조건_볼트예압_판본딩", bolted)
     deck = (bolted / "model.inp").read_text(encoding="utf-8")
-    assert deck.count("*TIE, NAME=") == 3 and "ADJUST" not in deck
-    assert "parameter not recognized" not in (bolted / "ccx.out").read_text(encoding="utf-8")
+    assert "*TIE" not in deck and deck.count("*EQUATION") == 1
+    ties = json.loads((bolted / "ties.json").read_text(encoding="utf-8"))
+    assert [row["method"] for row in ties["ties"]] == ["lever"] * 3
+    assert all(row["tied"] == len(row["slaves"]) for row in ties["ties"])
+    check = ties["lever"]
+    assert check["rigid_failed"] == 0 and check["overlaps"] == 0
+    assert check["rigid_residual"] < 1e-9
     rigid = [one for one in result["modes"] if one["rigid_body"]]
     assert len(rigid) == 6 and not any(one.get("held_rigid") for one in rigid)
     assert max(one["frequency_hz"] for one in rigid) < 0.05
+    first = next(one for one in result["modes"] if not one["rigid_body"])
+    assert first["frequency_hz"] == pytest.approx(18244.8, rel=0.001)
     assert "warning" not in result, result.get("warning")
+
+
+def test_간극을_둔_lever_는_절점을_옮기지_않아_질량_주파수가_그대로다(
+    ready: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """기둥을 0.3 mm 띄우고 pinball 0.5 mm 로 묶는다(간극이 0.005 mm 를 넘는 CompCore 의 본딩
+    쌍). **v0.30 의 `*TIE` 는 종 절점을 옮겨** 기둥 아래 요소를 늘이고 그 부피만큼 질량을
+    더했다 — 얇은 요소면 뒤집혀 「nonpositive jacobian」 으로 멈췄다. lever 는 형상 그대로라
+    솔버 질량이 CAD 와 같고, 1차가 맞닿은 모델과 같다(실측 2026-11-20: 맞닿음 1263.94 · lever
+    1264.58 · 옮김 1255.54 Hz, 옮김의 질량 +0.015 %)."""
+    touching = tmp_path / "touching"
+    _lifted(touching, 0.0)
+    _run(touching, SPEC)
+    base = next(one for one in _result(touching)["modes"] if not one["rigid_body"])
+
+    work = tmp_path / "lever"
+    _lifted(work, 0.3, contact={"pinball": 0.5})
+    summary = _run(work, SPEC)
+    first = next(one for one in _result(work)["modes"] if not one["rigid_body"])
+    assert first["frequency_hz"] == pytest.approx(base["frequency_hz"], rel=0.002)
+    assert summary["solver_mass_kg"] == pytest.approx(summary["mass_kg"], rel=1e-5)
+    assert "간극 최대 0.3 mm" in summary["bonded_pairs"]
+    deck = (work / "model.inp").read_text(encoding="utf-8")
+    assert "*TIE" not in deck
+
+    # 옮기는 길(v0.30)은 질량이 는다 — 간극을 메운 부피다.
+    monkeypatch.setenv("CALCULIX_BONDING", "tie")
+    moved = tmp_path / "tie"
+    _lifted(moved, 0.3, contact={"pinball": 0.5})
+    shifted = _run(moved, SPEC)
+    assert shifted["solver_mass_kg"] > shifted["mass_kg"] * (1 + 1e-4)
+
+
+def _two_columns(work: Path) -> None:
+    """받침판 위에 기둥 둘 — **두 접촉이 판 윗면 하나를 종 면으로 나눠 쓴다**(r2 의 꼴). 판은
+    바닥이 고정이라 종은 늘 판 윗면이다."""
+    work.mkdir(parents=True)
+    geo = work / "two.geo"
+    geo.write_text(
+        'SetFactory("OpenCASCADE");\n'
+        "Box(1) = {-40, -40, 0, 80, 80, 10};\n"
+        "Box(2) = {-25, -5, 10, 10, 10, 80};\n"
+        "Box(3) = {15, -5, 10, 10, 10, 80};\n",
+        encoding="utf-8",
+    )
+    tools.run(
+        tools.gmsh_bin(),
+        [str(geo), "-0", "-o", str(work / "input.step"), "-v", "1"],
+        cwd=work,
+        timeout_seconds=120,
+        what="gmsh",
+    )
+    payload = json.loads((SIDE_SHAKE / "points" / "p0001.json").read_text(encoding="utf-8"))
+    column = next(one for one in payload["bodies"] if one["name"] == "기둥")
+    plate = next(one for one in payload["bodies"] if one["name"] == "받침판")
+    bodies = [plate]
+    for name, x in (("기둥1", -20.0), ("기둥2", 20.0)):
+        one = json.loads(json.dumps(column))
+        one["name"], one["centroid"] = name, [x, 0.0, 50.0]
+        one["bbox"] = [[x - 5, -5.0, 10.0], [x + 5, 5.0, 90.0]]
+        bodies.append(one)
+    payload["bodies"] = bodies
+    payload["regions"] = {
+        "바닥": payload["regions"]["바닥"],
+        "판 윗면": [
+            {
+                "centroid": [0.0, 0.0, 10.0],
+                "area": 6400.0,
+                "normal": [0.0, 0.0, 1.0],
+                "body": "받침판",
+            }
+        ],
+        **{
+            f"기둥{at} 바닥": [
+                {
+                    "centroid": [x, 0.0, 10.0],
+                    "area": 100.0,
+                    "normal": [0.0, 0.0, -1.0],
+                    "body": f"기둥{at}",
+                }
+            ]
+            for at, x in ((1, -20.0), (2, 20.0))
+        },
+    }
+    conditions = payload["conditions"]
+    for material in conditions["materials"]:
+        if material["apply_to"] == ["기둥"]:
+            material["apply_to"] = ["기둥1", "기둥2"]
+    conditions["named_selections"] = [
+        one for one in conditions["named_selections"] if one["name"] == "바닥"
+    ]
+    conditions["loads"] = []
+    base = conditions["contacts"][0]
+    conditions["contacts"] = [
+        {**base, "name": f"판-기둥{at}", "source": "판 윗면", "target": f"기둥{at} 바닥"}
+        for at in (1, 2)
+    ]
+    (work / "topology.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("mode", ["lever", "tie"])
+def test_한_종_면을_두_접촉이_나눠_쓰면_절점마다_가까운_주_면에_묶는다(
+    ready: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """**앞 접촉이 판 윗면의 절점을 다 가져가면** 뒤 접촉은 0개인데도 「적용」 으로 적혔고 그
+    기둥이 떴다(r2 의 질량이 떴다, 2026-11-20). 절점마다 가까운 주 면의 접촉에 준다 — 두 방식
+    모두. 기둥 둘이 다 붙어 0 Hz 모드가 없다."""
+    monkeypatch.setenv("CALCULIX_BONDING", mode)
+    work = tmp_path / mode
+    _two_columns(work)
+    summary = _run(work, {**SPEC, "modes": 6})
+    result = _result(work)
+    assert all(one["frequency_hz"] > 100 for one in result["modes"])
+    for at in (1, 2):
+        assert f"{mode}:판-기둥{at}" in summary["constrained_regions"]
+        tied = re.search(rf"판-기둥{at} (\d+)/", summary["bonded_pairs"])
+        assert tied is not None and int(tied.group(1)) > 0
+    assert "bond_warning" not in summary
 
 
 def test_쉘_솔리드_본딩은_구속식으로_묶어_회전을_잡지_않는다(

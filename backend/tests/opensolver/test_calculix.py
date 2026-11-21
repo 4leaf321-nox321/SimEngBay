@@ -97,10 +97,11 @@ def test_CAD_폴더를_오픈소스_솔버로_끝까지_푼다(ready: None, tmp_
     # CAD 물성이 바디마다 붙었다 — 강판과 알루미늄이 섞여 있어야 질량이 맞는다.
     assert summary["material_from"] == "cad"
     assert summary["mass_kg"] == pytest.approx(0.5238, rel=0.02)
-    # **CAD 의 본딩 접촉은 그 쌍만 `*TIE` 로 묶는다**(`bonding.py`) — 바디를 따로 메시한다.
-    # 전에는 맞닿은 면을 쪼개 절점을 공유시켰고, 선언한 쌍은 쓰이지 않았다.
-    assert summary["bonding"] == "tie"
-    assert any(one.startswith("tie:") for one in summary["constrained_regions"])
+    # **CAD 의 본딩 접촉은 그 쌍만 구속식으로 묶는다**(`bonding.py`) — 바디를 따로 메시한다.
+    # 전에는 맞닿은 면을 쪼개 절점을 공유시켰고, 선언한 쌍은 쓰이지 않았다. 기본은 간극을 둔
+    # 채 lever 식이다(`lever.py`, 2026-11-20).
+    assert summary["bonding"] == "lever"
+    assert any(one.startswith("lever:") for one in summary["constrained_regions"])
 
     result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert result["solver"] == "calculix", "어느 솔버로 풀었는지 결과에 도장이 있어야 한다"
@@ -1017,8 +1018,8 @@ def test_고유치에는_접촉을_넣지_않고_그렇게_말한다(ready: None
     0.002 · 0.0022 Hz)가 나왔다 — 블록이 떠 있었다. `*STEP, PERTURBATION` 으로 비선형 정적
     뒤에 붙여도 여덟 모드가 전부 0 Hz 였다. 접촉 요소는 비선형 단계에서만 만들어진다.
 
-    그래서 모달의 마찰은 **면을 묶어**(`*TIE`) 붙은 것으로 풀고 그 사실을 요약에 적는다. Ansys
-    도 닫힌 마찰 접촉을 붙여 풀지만 벌칙 강성만큼 물러 5.3% 낮다(접착 27,940.6 · 마찰
+    그래서 모달의 마찰은 **면을 묶어**(lever 구속식) 붙은 것으로 풀고 그 사실을 요약에 적는다.
+    Ansys 도 닫힌 마찰 접촉을 붙여 풀지만 벌칙 강성만큼 물러 5.3% 낮다(접착 27,940.6 · 마찰
     26,472.8 Hz) — CalculiX 실측(2026-11-16): 28,138.5 Hz(접착과 같다).
     """
     spec = dict(SPEC)
@@ -1031,7 +1032,7 @@ def test_고유치에는_접촉을_넣지_않고_그렇게_말한다(ready: None
 
     deck = (work / "model.inp").read_text(encoding="utf-8")
     assert "*CONTACT PAIR" not in deck, "고유치 덱에 접촉을 넣으면 바디가 뜬다"
-    assert "*TIE" in deck
+    assert "*EQUATION" in deck and "*TIE" not in deck
     assert "붙은 것으로" in summary["conditions_skipped"]
     assert "ansys" in summary["conditions_skipped"].lower()
     result = json.loads((work / "result.json").read_text(encoding="utf-8"))
@@ -1501,11 +1502,11 @@ def test_반복_솔버는_강체_묶음이_없는_정적만_같게_푼다(
     ready: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """메모리가 모자랄 것 같으면 정적을 반복 솔버(`ITERATIVE CHOLESKY`)로 푼다
-    (`solve.plan_solver`). 본딩을 `*TIE` 로 묶은 「조건_두바디_두재료」 는 직접 솔버와 같은
-    답을 낸다(반력 2,400 N). **강체 묶음 · 국부 좌표계가 든 덱은 반복 솔버를 시켜도 직접 솔버로
-    남는다** — 「조건_반쪽구멍」(원격 변위의 `*RIGID BODY` · 원통 지지의 `*TRANSFORM`)을 반복
-    솔버로 풀면 수렴했다고 끝나는데 반력이 [553, 983, -307] N 이었다(직접 솔버 [0, 1100, 0],
-    2026-11-13)."""
+    (`solve.plan_solver`). 본딩을 구속식(lever, 2026-11-20 — 전에는 `*TIE`)으로 묶은
+    「조건_두바디_두재료」 는 직접 솔버와 같은 답을 낸다(반력 2,400 N). **강체 묶음 · 국부
+    좌표계가 든 덱은 반복 솔버를 시켜도 직접 솔버로 남는다** — 「조건_반쪽구멍」(원격 변위의
+    `*RIGID BODY` · 원통 지지의 `*TRANSFORM`)을 반복 솔버로 풀면 수렴했다고 끝나는데 반력이
+    [553, 983, -307] N 이었다(직접 솔버 [0, 1100, 0], 2026-11-13)."""
     monkeypatch.setenv("CALCULIX_LINEAR_SOLVER", "iterative")
     static = {key: value for key, value in SPEC.items() if key != "modes"}
     static["recipe"] = "static"
@@ -1518,7 +1519,7 @@ def test_반복_솔버는_강체_묶음이_없는_정적만_같게_푼다(
     summary = _run(plain, {**static, "mesh": {"element_size_mm": 8}})
     assert summary["linear_solver"] == "iterative"
     deck = (plain / "model.inp").read_text(encoding="utf-8")
-    assert "ITERATIVE CHOLESKY" in deck and "*TIE" in deck
+    assert "ITERATIVE CHOLESKY" in deck and "*EQUATION" in deck
     result = json.loads((plain / "result.json").read_text(encoding="utf-8"))
     assert result["reactions"]["바닥"] == pytest.approx([0.0, 0.0, 2400.0], abs=0.5)
     assert result["max_displacement"] == pytest.approx(5.204e-4, rel=0.05)

@@ -22,6 +22,6 @@ def sample(mesh: Any, vectors: Any) -> list[float]:
         # 들어오면 지문이 조용히 틀리고, 그 지문은 설계점 사이의 모드를 엉뚱하게 잇는다.
         raise ValueError(f"절점 {len(nodes)} 개와 변위 {len(values)} 개가 맞지 않습니다")
 
-    targets = centers(nodes.min(axis=0), nodes.max(axis=0))
+    targets = centers(nodes.min(axis=0).tolist(), nodes.max(axis=0).tolist())
     picked = [int(np.argmin(((nodes - np.asarray(one)) ** 2).sum(axis=1))) for one in targets]
     return fingerprint(values[index] for index in picked)

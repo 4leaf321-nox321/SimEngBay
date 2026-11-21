@@ -1,4 +1,4 @@
-"""본딩 — **바디를 따로 메시하고 `*TIE` 로 묶는다**(2026-11-16).
+"""본딩 — **바디를 따로 메시하고 구속식으로 묶는다**(2026-11-16 · lever 식 2026-11-20).
 
 ## 왜 절점 공유를 버렸나
 
@@ -24,14 +24,15 @@
 - 검색 반경은 pinball 이 오면 그것, 아니면 선언한 쌍은 요소 크기의 절반(그 두 면 사이에서만
   찾으므로 넉넉해도 엉뚱한 면에 안 붙는다), 자동은 형상 맞춤 허용오차와 요소 크기의 2 % 중 큰
   것 — CompCore 가 그 두 바디 사이의 틈을 알렸으면 그 0.4 배 아래(설계 틈새를 묶지 않는다).
-- **본딩 `*TIE` 는 늘 종 절점을 주 면 위로 옮긴다**(2026-11-17) — ccx 의 기본이라
-  `ADJUST=NO` 를 안 쓴다(ccx 2.21 은 `ADJUST=YES` 를 모르는 값으로 건너뛴다). ccx 의
-  구속식은 u종 = Σ N·u주 라, 종 절점이 주 면에서 δ 떨어져 있으면 강체 회전 ω 에서 ω x δ 만큼
-  어긋나 **회전 강체 모드를 잡는다**. 따로 메시한 2차 곡면의 현 오차 · CAD 의 미세 간극만으로
-  생긴다 — 자유-자유 「조건_볼트예압_판본딩」 의 회전 셋이 0.23 · 0.30 · 0.30 Hz 로 올라왔고
-  (옮기면 0.003 Hz, 절점 공유와 같다), 64쌍 조립은 1 Hz 를 넘어 강체 모드가 3개로 셌다.
-  Mechanical 의 본딩(MPC)은 간극을 둔 채로 강체 운동에 맞는 구속식을 세운다 — ccx 에서 그와
-  같아지는 길이 이것이다. 옮기는 거리는 검색 반경 안이다(맞닿게 그린 면이면 현 오차뿐).
+- **기본은 간극을 둔 채 lever 식**(`lever.py`, 2026-11-20) — 종 절점을 옮기지 않고 u종 =
+  Σ N·u주 + θ x δ 로 묶어 강체 운동을 그대로 만족한다. ccx 의 `*TIE` 구속식은 u종 = Σ N·u주
+  라, 종 절점이 주 면에서 δ 떨어져 있으면 강체 회전 ω 에서 ω x δ 만큼 어긋나 **회전 강체 모드를
+  잡는다**(v0.28 `ADJUST=NO` — 자유-자유 「조건_볼트예압_판본딩」 의 회전 셋이 0.23 · 0.30 ·
+  0.30 Hz, 64쌍 조립은 1 Hz 를 넘어 강체 모드가 3개로 셌다). v0.30 은 그래서 종 절점을 주 면
+  위로 옮겼는데(ccx 의 기본 — ccx 2.21 은 `ADJUST=YES` 를 모르는 값으로 건너뛴다), 간극이 0.005
+  mm 를 넘는 쌍에서 얇은 요소가 뒤집혀(「nonpositive jacobian」) 멈추고 간극 부피만큼 질량이
+  늘었다. Mechanical 의 본딩(MPC)처럼 간극을 둔 채 강체 운동에 맞는 식을 세우는 길이 lever 다.
+  옮기는 `*TIE` 는 `CALCULIX_BONDING=tie` 로 남아 있다(견줄 때).
 - **강체가 낀 묶음은 `*TIE` 를 쓰지 않고 상대 절점을 그 강체에 넣는다** — 강체 표면에 묶으면
   구속이 사슬이 되어 ccx 가 기준점 반력에 그 몫을 안 넣었다(쉘 묶음과 같은 까닭,
   `build._ties`).
@@ -40,8 +41,10 @@
   나사 구멍을 주로 두었더니 볼트 조립의 바닥 반력이 600 N 이 아니라 428 N 이었다
   (2026-11-16). 구속 절점이 적은 쪽을 주로 고르고, 그래도 남으면 그 절점이 든 주 요소면을
   뺀다. 종 쪽의 구속 절점은 ccx 가 묶지 않는다.
-- 한 절점은 한 묶음의 종이다 — 먼저 묶인 절점은 뒤 묶음의 종에서 뺀다(ccx 는 두 번째를 건너뛰며
-  경고를 낸다).
+- 한 절점은 한 묶음의 종이다 — **한 종 면이 두 접촉에 걸리면 절점마다 가까운 주 면의 접촉에**
+  준다(`_share_slaves`, 2026-11-20). 전에는 먼저 묶인 접촉이 그 면의 절점을 다 가져가 뒤 접촉은
+  0개인데도 「적용」 으로 적혔고 그 바디가 떴다(r2 의 질량). 종 절점이 안 남은 접촉은 걸지 않고
+  알린다(`Bonding.empty` → `bond_warning`).
 
 ## 묶지 않은 것도 말한다(2026-11-16, CompCore 의 조립 점검)
 
@@ -76,8 +79,10 @@ from app.core.regions import match_regions
 
 logger = logging.getLogger(__name__)
 
-#: 본딩 방식 — `tie`(따로 메시하고 `*TIE`, 기본) · `shared`(옛 방식: 쪼개 절점 공유).
+#: 본딩 방식 — `lever`(따로 메시하고 간극을 둔 채 구속식, 기본 — `lever.py`) · `tie`(따로
+#: 메시하고 `*TIE` 로 종 절점을 주 면 위로 옮긴다, v0.30) · `shared`(옛 방식: 쪼개 절점 공유).
 BONDING_ENV = "CALCULIX_BONDING"
+BONDING_MODES = ("lever", "tie", "shared")
 #: 묶음마다 종 절점 · 반경 — 모델링이 쓰고 솔브가 ccx 로그와 맞대어 쌍마다 몇 개가 묶였나 센다.
 TIES_NAME = "ties.json"
 #: 선언한 본딩의 기본 검색 반경 = 요소 크기 x 이것(pinball 이 없을 때).
@@ -104,16 +109,23 @@ SLIDING_NOTE = {
 
 
 def bonding_mode() -> str:
-    """`tie` 또는 `shared`. 모르는 값은 `tie` 다."""
+    """`lever` · `tie` · `shared`. 모르는 값은 `lever` 다(2026-11-20 — 전에는 `tie`)."""
     mode = os.environ.get(BONDING_ENV, "").strip().lower()
-    return "shared" if mode == "shared" else "tie"
+    return mode if mode in BONDING_MODES else "lever"
+
+
+def separate_meshes() -> bool:
+    """바디를 따로 메시하나 — `lever` · `tie`. `shared` 만 쪼개 절점을 공유시킨다."""
+    return bonding_mode() != "shared"
 
 
 @dataclass
 class Bonding:
     """묶은 것 — 덱에 넘길 묶음, 고친 강체, 처리한 접촉, 사람에게 할 말."""
 
-    ties: list[deck_writer.Tie | deck_writer.Slide] = field(default_factory=list)
+    ties: list[deck_writer.Tie | deck_writer.Slide | deck_writer.Lever] = field(
+        default_factory=list
+    )
     rigid: list[deck_writer.RigidBody] = field(default_factory=list)
     handled: set[str] = field(default_factory=set)
     """`*TIE` · 강체로 처리한 접촉 이름 — 덱의 접촉 쌍에서 뺀다."""
@@ -127,6 +139,8 @@ class Bonding:
     """맞닿았는데 접촉이 없는 바디 쌍 — `{a, b, nodes, at}`(선언이 있을 때만 잰다)."""
     sliding: list[dict[str, Any]] = field(default_factory=list)
     """미끄럼으로 푼 접촉 — `{contact, kind, bodies}`."""
+    empty: list[str] = field(default_factory=list)
+    """종 절점이 하나도 안 남아 **걸지 않은** 접촉 — 요약의 `bond_warning` 에 든다."""
 
 
 def bond(
@@ -214,6 +228,19 @@ def _reported_gaps(topology: dict[str, Any]) -> dict[frozenset[str], float]:
     return found
 
 
+@dataclass
+class _Pairing:
+    """선언한 접촉 하나를 어떻게 묶을지 — 종 · 주 면, 강체, 반경(묶기 전)."""
+
+    index: int
+    pair: condition_model.Contact
+    what: str
+    slave_side: list[int]
+    master_side: list[int]
+    owner: int | None
+    radius: float
+
+
 def _declared(
     topology: dict[str, Any],
     contacts: list[condition_model.Contact],
@@ -237,6 +264,8 @@ def _declared(
     wanted = sorted({one.source for one in pairs} | {one.target for one in pairs})
     found = match_regions(topology, mesh.faces, wanted_regions=wanted)
     lookup = element_faces(mesh)
+    lever_mode = bonding_mode() == "lever"
+    plans: list[_Pairing] = []
     for index, pair in enumerate(pairs, start=1):
         what = f"접촉 「{pair.name}」({pair.kind})"
         if pair.kind not in deck_writer.LINEARIZED_CONTACTS:
@@ -273,11 +302,33 @@ def _declared(
         ):
             # **구속 절점이 적은 쪽이 주다** — 주 면의 구속 절점은 반력에서 종의 몫을 잃는다.
             slave_side, master_side = target, source
+        radius = (
+            pair.pinball * length_mm
+            if pair.pinball is not None and pair.pinball > 0
+            else max(PINBALL_RATIO * size, tolerance)
+        )
         owner = owners[0] if owners[0] is not None else owners[1]
-        slaves: set[int] = set()
-        for face in slave_side:
-            slaves |= mesh.face_nodes.get(face, set())
-        slaves -= used
+        plans.append(_Pairing(index, pair, what, slave_side, master_side, owner, radius))
+
+    # **종 절점을 접촉에 나눈다** — 한 종 면이 두 접촉에 걸리면 절점마다 가까운 주 면의 접촉
+    # 하나에(2026-11-20). 전에는 앞 접촉이 그 면의 절점을 다 가져가 뒤 접촉은 0개인데도
+    # 「적용」 으로 적혔고, 그 접촉으로만 이어진 바디는 떠서 질량이 떴다(r2).
+    assigned = _share_slaves(mesh, plans, used)
+    for plan in plans:
+        pair, what, owner, radius = plan.pair, plan.what, plan.owner, plan.radius
+        slaves = assigned[plan.index]
+        if not slaves:
+            made.notes.append(
+                condition_model.Note(
+                    what,
+                    "묶을 종 절점이 없어 **걸지 않았습니다** — 그 종 면의 절점은 다른 "
+                    "접촉의 주 면에 더 가깝거나 이미 다른 구속에 묶였습니다. 이 접촉으로만 "
+                    "이어진 바디는 떨어진 채 풀립니다.",
+                )
+            )
+            made.empty.append(pair.name)
+            made.dropped.add(pair.name)
+            continue
         if owner is not None:
             held = made.rigid[owner]
             made.rigid[owner] = replace(held, nodes=held.nodes | frozenset(slaves))
@@ -286,16 +337,16 @@ def _declared(
                 "접촉 %s → 절점 %s 를 강체 %s 에 넣었습니다", pair.name, len(slaves), held.part
             )
         elif _sliding(pair, modal):
-            radius = (
-                pair.pinball * length_mm
-                if pair.pinball is not None and pair.pinball > 0
-                else max(PINBALL_RATIO * size, tolerance)
-            )
-            rings = [ring for face in master_side for ring in mesh.face_rings.get(face, [])]
+            rings = [
+                ring for face in plan.master_side for ring in mesh.face_rings.get(face, [])
+            ]
             rows = slide_rows(mesh.nodes, slaves - fixed, rings, radius)
             made.ties.append(
                 deck_writer.Slide(
-                    contact=pair.name, name=f"SLIDE{index}", rows=tuple(rows), tolerance=radius
+                    contact=pair.name,
+                    name=f"SLIDE{plan.index}",
+                    rows=tuple(rows),
+                    tolerance=radius,
                 )
             )
             slaves = {row[0] for row in rows}
@@ -316,32 +367,40 @@ def _declared(
             masters = _free_faces(
                 [
                     (triangle, hit)
-                    for face in master_side
+                    for face in plan.master_side
                     for triangle in mesh.face_triangles.get(face, [])
                     if (hit := lookup.get(frozenset(triangle))) is not None
                 ],
                 fixed,
             )
-            radius = (
-                pair.pinball * length_mm
-                if pair.pinball is not None and pair.pinball > 0
-                else max(PINBALL_RATIO * size, tolerance)
-            )
-            made.ties.append(
-                deck_writer.Tie(
-                    contact=pair.name,
-                    name=f"BOND{index}",
-                    slave_nodes=frozenset(slaves),
-                    master_faces=masters,
-                    tolerance=radius,
-                    # 늘 옮긴다 — 안 옮기면 회전 강체 모드를 잡는다(맨 위 「본딩 `*TIE` 는 늘
-                    # 주 면 위로 옮긴다」).
-                    adjust=True,
+            if lever_mode:
+                # **간극을 둔 채 구속식으로** — 식은 덱을 다 쓴 뒤 넣는다(`lever.apply`).
+                made.ties.append(
+                    deck_writer.Lever(
+                        contact=pair.name,
+                        name=f"BOND{plan.index}",
+                        slave_nodes=frozenset(slaves),
+                        master_faces=masters,
+                        tolerance=radius,
+                    )
                 )
-            )
+            else:
+                made.ties.append(
+                    deck_writer.Tie(
+                        contact=pair.name,
+                        name=f"BOND{plan.index}",
+                        slave_nodes=frozenset(slaves),
+                        master_faces=masters,
+                        tolerance=radius,
+                        # `tie` 는 옮긴다 — 안 옮기면 회전 강체 모드를 잡는다(맨 위
+                        # 「본딩 `*TIE` 는 늘 주 면 위로 옮긴다」).
+                        adjust=True,
+                    )
+                )
             logger.info(
-                "접촉 %s → TIE 종 절점 %s · 주 요소면 %s · 반경 %.4g mm",
+                "접촉 %s → %s 종 절점 %s · 주 요소면 %s · 반경 %.4g mm",
                 pair.name,
+                "lever" if lever_mode else "TIE",
                 len(slaves),
                 len(masters),
                 radius,
@@ -351,6 +410,53 @@ def _declared(
         note = _linearized(pair, modal, sliding=owner is None and _sliding(pair, modal))
         if note is not None:
             made.notes.append(condition_model.Note(what, note))
+
+
+def _share_slaves(mesh: Any, plans: list[_Pairing], used: set[int]) -> dict[int, set[int]]:
+    """종 절점을 접촉에 나눈다 — **한 절점은 가장 가까운 주 면의 접촉 하나에만**.
+
+    한 접촉의 종 면에만 든 절점은 그 접촉의 것이다. 두 접촉 이상의 종 면에 든 절점은 주
+    면까지의 거리(그 접촉의 반경 안)가 가장 짧은 접촉에 — 어느 주 면에도 반경 안에 없으면 먼저
+    선언한 접촉에(그 접촉이 「반경 밖이라 안 묶임」 으로 센다)."""
+    members: dict[int, set[int]] = {}
+    owners: dict[int, list[int]] = defaultdict(list)
+    for plan in plans:
+        nodes: set[int] = set()
+        for face in plan.slave_side:
+            nodes |= mesh.face_nodes.get(face, set())
+        nodes -= used
+        members[plan.index] = nodes
+        for node in nodes:
+            owners[node].append(plan.index)
+    shared = {node for node, ids in owners.items() if len(ids) > 1}
+    if not shared:
+        return members
+    distance: dict[int, dict[int, float]] = {}
+    for plan in plans:
+        wanted = members[plan.index] & shared
+        if not wanted:
+            continue
+        triangles = [
+            triangle
+            for face in plan.master_side
+            for triangle in mesh.face_triangles.get(face, [])
+        ]
+        distance[plan.index] = near_distances(mesh.nodes, wanted, triangles, plan.radius)
+    out: dict[int, set[int]] = {plan.index: set() for plan in plans}
+    for node, ids in owners.items():
+        best = min(
+            ids, key=lambda one: (distance.get(one, {}).get(node, math.inf), ids.index(one))
+        )
+        out[best].add(node)
+    moved = {plan.index: len(members[plan.index]) - len(out[plan.index]) for plan in plans}
+    for plan in plans:
+        if moved[plan.index]:
+            logger.info(
+                "접촉 %s — 종 절점 %s 개는 다른 접촉의 주 면이 더 가까워 그쪽에 묶습니다",
+                plan.pair.name,
+                moved[plan.index],
+            )
+    return out
 
 
 def _sliding(pair: condition_model.Contact, modal: bool) -> bool:
@@ -513,19 +619,28 @@ def _automatic(
                 made.applied.append(label)
             else:
                 count += 1
+                faces = _free_faces(
+                    [
+                        (one, hit)
+                        for one in triangles
+                        if (hit := lookup.get(frozenset(one))) is not None
+                    ],
+                    fixed or set(),
+                )
                 made.ties.append(
-                    deck_writer.Tie(
+                    deck_writer.Lever(
                         contact=label,
                         name=f"AUTO{count}",
                         slave_nodes=frozenset(near),
-                        master_faces=_free_faces(
-                            [
-                                (one, hit)
-                                for one in triangles
-                                if (hit := lookup.get(frozenset(one))) is not None
-                            ],
-                            fixed or set(),
-                        ),
+                        master_faces=faces,
+                        tolerance=reach_here,
+                    )
+                    if bonding_mode() == "lever"
+                    else deck_writer.Tie(
+                        contact=label,
+                        name=f"AUTO{count}",
+                        slave_nodes=frozenset(near),
+                        master_faces=faces,
                         tolerance=reach_here,
                         adjust=True,
                     )
@@ -635,22 +750,37 @@ def untied_pairs(
 
 
 def write_ties(
-    workdir: Path, ties: Sequence[deck_writer.Tie | deck_writer.Slide], rigid: list[str]
+    workdir: Path,
+    ties: Sequence[deck_writer.Tie | deck_writer.Slide | deck_writer.Lever],
+    rigid: list[str],
+    *,
+    levers: Sequence[dict[str, Any]] = (),
+    empty: Sequence[str] = (),
+    check: dict[str, Any] | None = None,
 ) -> None:
     """묶음을 적어 둔다 — 솔브가 ccx 로그에서 「묶이지 않은 절점」 을 세어 쌍마다 보고한다
-    (`connection_report`). 강체에 넣은 묶음은 ccx 가 안 보므로 이름만."""
-    rows = [
-        {
+    (`connection_report`). 강체에 넣은 묶음은 ccx 가 안 보므로 이름만. **lever 묶음은 ccx 가
+    아니라 lever 단계가 센다**(`levers` — 묶인 수 · 반경 밖 · 가장 큰 간극). `empty` 는 종
+    절점이 안 남아 걸지 않은 접촉, `check` 는 lever 식의 검사(강체 잔차 · 종속 겹침)."""
+    counted = {str(row.get("name")): row for row in levers}
+    rows: list[dict[str, Any]] = []
+    for one in ties:
+        row: dict[str, Any] = {
             "name": one.name,
             "contact": one.contact,
             "radius": one.tolerance,
             "slaves": sorted(one.slave_nodes),
         }
-        for one in ties
-    ]
-    (workdir / TIES_NAME).write_text(
-        json.dumps({"ties": rows, "rigid": rigid}, ensure_ascii=False), encoding="utf-8"
-    )
+        if isinstance(one, deck_writer.Lever):
+            row["method"] = "lever"
+            lever_row = counted.get(one.name) or {}
+            for key in ("tied", "far", "max_gap_mm"):
+                row[key] = lever_row.get(key, 0)
+        rows.append(row)
+    payload: dict[str, Any] = {"ties": rows, "rigid": rigid, "empty": list(empty)}
+    if check:
+        payload["lever"] = check
+    (workdir / TIES_NAME).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 #: ccx 가 반경 밖의 종 절점에 찍는 말 — `no tied MPC generated for node N … too far away`.
@@ -673,21 +803,41 @@ def connection_report(workdir: Path, log: str) -> dict[str, str]:
         return {}
     far = {int(one) for one in _FAR.findall(log)}
     shown: list[str] = []
-    empty: list[str] = []
+    empty: list[str] = [str(one) for one in saved.get("empty") or []]
     for row in saved.get("ties") or []:
         slaves = set(row.get("slaves") or [])
         if not slaves:
             empty.append(str(row.get("contact")))
             continue
-        tied = len(slaves - far)
         radius = float(row.get("radius") or 0)
-        shown.append(f"{row.get('contact')} {tied}/{len(slaves)} 절점(반경 {radius:.3g} mm)")
+        if row.get("method") == "lever":
+            # lever 묶음은 ccx 가 아니라 lever 단계가 셌다 — 간극은 옮기지 않고 둔 거리다.
+            tied = int(row.get("tied") or 0)
+            gap = float(row.get("max_gap_mm") or 0)
+            shown.append(
+                f"{row.get('contact')} {tied}/{len(slaves)} 절점(lever · 반경 {radius:.3g} mm"
+                f" · 간극 최대 {gap:.3g} mm)"
+            )
+        else:
+            tied = len(slaves - far)
+            shown.append(
+                f"{row.get('contact')} {tied}/{len(slaves)} 절점(반경 {radius:.3g} mm)"
+            )
         if tied == 0:
             empty.append(str(row.get("contact")))
     shown += [f"{one} → 강체에 넣음" for one in saved.get("rigid") or []]
     found: dict[str, str] = {}
     if shown:
         found["bonded_pairs"] = " · ".join(shown)
+    check = saved.get("lever") or {}
+    if check.get("rigid_failed") or check.get("overlaps"):
+        residual = float(check.get("rigid_residual") or 0)
+        found["lever_check"] = (
+            f"lever 식 {check.get('equations', 0)}개 중 강체 운동을 어긴 식 "
+            f"{check.get('rigid_failed', 0)}개(잔차 최대 {residual:.3g}) · "
+            f"종속 겹침 {check.get('overlaps', 0)}곳 — 그 자리에서 가짜 강성이나 ccx 의 "
+            "거절이 날 수 있습니다."
+        )
     if empty:
         found["bond_warning"] = (
             f"{', '.join(empty)} 는 한 절점도 묶이지 않았습니다 — 반경 안에 상대 면이 없거나 "
@@ -771,8 +921,18 @@ def near_nodes(
     radius: float,
 ) -> set[int]:
     """`candidates` 중 삼각형들에서 `radius` 안에 든 절점 — 격자로 가려 가까운 것만 잰다."""
+    return set(near_distances(nodes, candidates, triangles, radius))
+
+
+def near_distances(
+    nodes: dict[int, tuple[float, float, float]],
+    candidates: set[int],
+    triangles: list[tuple[int, int, int]],
+    radius: float,
+) -> dict[int, float]:
+    """`candidates` 중 삼각형들에서 `radius` 안에 든 절점 → 가장 가까운 삼각형까지의 거리."""
     if not candidates or not triangles:
-        return set()
+        return {}
     edges = [
         math.dist(nodes[one[0]], nodes[one[1]])
         for one in triangles[: min(len(triangles), 500)]
@@ -787,7 +947,7 @@ def near_nodes(
             for j in range(low[1], high[1] + 1):
                 for k in range(low[2], high[2] + 1):
                     grid[(i, j, k)].append(index)
-    found: set[int] = set()
+    found: dict[int, float] = {}
     for node in candidates:
         point = nodes[node]
         key = (
@@ -796,9 +956,9 @@ def near_nodes(
             math.floor(point[2] / cell),
         )
         for index in grid.get(key, ()):
-            if _distance(point, *corners[index]) <= radius:
-                found.add(node)
-                break
+            gap = _distance(point, *corners[index])
+            if gap <= radius and gap < found.get(node, math.inf):
+                found[node] = gap
     return found
 
 

@@ -49,12 +49,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core import cleanup, executors, materials, random_vibration, units
 from app.core import conditions as condition_model
 from app.core import convergence as core_convergence
 from app.core import measured as core_measured
 from app.core import values as core_values
+from app.core.calculix import ste, tools
 from app.core.doe import DoeFolder, DoePoint, listing, read_folder, resolve_inside
 from app.core.doe.browse import OutsideRoots
 from app.core.doe.browse import find as find_studies
@@ -78,6 +79,7 @@ from app.core.stages import (
 )
 from app.modules.accounts.models import User
 from app.modules.ontology import services as ontology_services
+from app.modules.server import runtime
 from app.modules.simulations import analysis as study_analysis
 from app.modules.simulations import frequency as study_frequency
 from app.modules.simulations.models import (
@@ -1045,8 +1047,13 @@ def create(
     source_kind: str = "upload",
     source_ref: str | None = None,
     source_meta: dict[str, Any] | None = None,
+    run_settings: dict[str, str] | None = None,
 ) -> Simulation:
     """작업을 건다.
+
+    **서버 설정 중 결과를 바꾸는 값을 이 작업에 고정한다**(`run_settings` —
+    `server/runtime.py`). 주지 않으면 지금 값이다. DOE 가져오기는 한 번 잰 것을 점마다, 메시
+    점검 · 모드 바꿔 다시 돌리기는 원래 작업의 것을 준다.
 
     **스펙 검증은 여기서** — 워커가 집어 들고 나서 실패하면 사람은 「왜」 를 목록에서 찾아야
     한다. 구속이 있는데 영역 지문이 없는 것도 같은 부류라 여기서 막는다: 그대로 보내면
@@ -1058,6 +1065,15 @@ def create(
             code("SIMULATIONS", 2),
             f"「{spec.recipe}」 레시피는 아직 실행할 수 없습니다. "
             f"지금은 {', '.join(RUNNABLE_RECIPES)} 만 됩니다.",
+            status=400,
+        )
+
+    if spec.solve_on == "ste" and not ste_ready(db):
+        # 걸어 두면 솔브 단계에서 `ste_auth` 로 끝난다 — 만들 때 말한다.
+        raise AppError(
+            code("SIMULATIONS", 41),
+            "이 서버에 STE 가 설정돼 있지 않아 STE 에서 풀 수 없습니다 — 풀 곳을 "
+            "「이 서버」 로 고르세요(관리자: 서버 화면의 STE 주소 · .env 의 STE_SSO_SECRET).",
             status=400,
         )
 
@@ -1111,6 +1127,7 @@ def create(
         owner_workspace_id=owner_workspace_id,
         requested_by_id=user.id,
         stages=_initial_stages(),
+        run_settings=dict(run_settings) if run_settings else runtime.snapshot(db),
     )
     db.add(simulation)
     db.flush()
@@ -1516,6 +1533,8 @@ def _stored_spec(spec: AnySpec) -> dict[str, Any]:
     # 못 읽고, 칸이 없으면 끈 것으로 읽는다(그때까지의 뜻 그대로).
     if "large_deflection" in stored and stored["large_deflection"] is None:
         del stored["large_deflection"]
+    if stored.get("solve_on") == "local":
+        del stored["solve_on"]
     return stored
 
 
@@ -1743,6 +1762,9 @@ def import_doe(
             already[number] = one
 
     created: list[uuid.UUID] = []
+    # **한 번 재서 모든 점에** — 가져오는 사이 서버 설정이 바뀌어도 한 DOE 의 점들은 같은
+    # 값으로 푼다.
+    fixed = runtime.snapshot(db)
     skipped: list[DoePointPreview] = []
     for point in chosen:
         if not point.usable:
@@ -1830,6 +1852,7 @@ def import_doe(
                 source_kind="design" if doe.single else "doe_point",
                 source_ref=f"{doe.name}/p{point.number:04d}",
                 source_meta=meta,
+                run_settings=fixed,
             )
         created.append(simulation.id)
         if point.number in earlier:
@@ -2845,6 +2868,8 @@ def request_convergence(
                 midsurface=midsurface,
                 source_kind="mesh_check",
                 source_ref=f"{original.id}",
+                # 수준끼리 견주려면 원래 작업과 같은 설정으로 푼다.
+                run_settings=original.run_settings or None,
                 source_meta={
                     "convergence_of": str(original.id),
                     "element_size_mm": size,
@@ -3679,7 +3704,57 @@ def default_executor() -> executors.Executor:
         # **형상 캐시는 작업 폴더들과 나란히 둔다** — 설계점마다 폴더가 다르므로 같은 형상을
         # 나눠 쓰려면 한 자리여야 한다. 지우면 다음 작업이 다시 만든다(덤이다).
         shape_cache=work_root() / ".shape-cache",
+        extra_env=machine_env(settings),
+        ste_env=ste_env(settings),
     )
+
+
+def machine_env(settings: Settings) -> tuple[tuple[str, str], ...]:
+    """**기계마다 다른 자리**(`GMSH_BIN` · `CCX_BIN` · `OPENSOLVER_LD_PATH`)를 코어가 읽는
+    이름으로 — 실행기가 자식 환경에, 워커가 도구 점검에 쓴다. 워커마다 이미지 · 경로가 달라
+    서버 설정(모든 워커가 같이 본다)이 아니라 그 워커의 환경 · `.env` 에서 온다. 해석을
+    조정하는 값은 `stage_env` 다."""
+    pairs = {
+        tools.GMSH_ENV: settings.gmsh_bin,
+        tools.CCX_ENV: settings.ccx_bin,
+        tools.LD_ENV: settings.opensolver_ld_path,
+    }
+    return tuple((key, value.strip()) for key, value in pairs.items() if value.strip())
+
+
+def ste_env(settings: Settings) -> tuple[tuple[str, str], ...]:
+    """STE 의 **비밀 쪽**(위임 비밀 · client · 토큰 폴더) — 서버 화면에 두지 않는 것. 실행기가
+    STE 로 푸는 솔브 단계의 자식에만 싣는다. 주소 · 앱 · 폴링은 서버 설정이다(`stage_env`).
+    **비밀이 비면 아무것도 안 싣는다** — 그때 STE 로 건 작업은 자식이 `ste_auth` 로 끝낸다."""
+    if not settings.ste_sso_secret.strip():
+        return ()
+    pairs = {
+        ste.SECRET_ENV: settings.ste_sso_secret.strip(),
+        ste.CLIENT_ENV: settings.ste_sso_client.strip(),
+        ste.TOKEN_DIR_ENV: settings.ste_token_dir.strip(),
+    }
+    return tuple((key, value) for key, value in pairs.items() if value)
+
+
+def ste_ready(db: Session) -> bool:
+    """STE 를 고를 수 있나 — 주소(서버 설정 · 환경)와 비밀(환경)이 다 있을 때."""
+    return bool(
+        runtime.effective(db)["ste_base_url"].value and get_settings().ste_sso_secret.strip()
+    )
+
+
+def stage_env(db: Session, simulation: Simulation, stage: str) -> tuple[tuple[str, str], ...]:
+    """**이 작업의 단계 설정**을 코어가 읽는 환경 이름으로(`StageContext.env` — 프로세스 환경을
+    이긴다). 결과를 바꾸는 값은 작업을 만들 때 고정한 것(`run_settings`, 비면 지금 값), STE
+    연결은 STE 로 푸는 솔브 단계에만 지금 값."""
+    now = runtime.effective(db)
+    fixed = simulation.run_settings or {}
+    values = {key: str(fixed.get(key, now[key].value)) for key in runtime.FROZEN}
+    if stage == "solving" and (simulation.spec or {}).get("solve_on") == "ste":
+        values.update(
+            {knob.key: now[knob.key].value for knob in runtime.KNOBS if not knob.frozen}
+        )
+    return runtime.env_pairs(values)
 
 
 def _set_stage(simulation: Simulation, name: str, **changes: Any) -> None:
@@ -3722,9 +3797,22 @@ def execute(
         _set_stage(simulation, stage, status="running", started_at=_iso(_now()))
         db.commit()
 
-        ctx = StageContext(
-            stage=stage, spec=simulation.spec, workdir=workdir, input_name=INPUT_NAME
+        on_ste = stage == "solving" and (simulation.spec or {}).get("solve_on") == "ste"
+        requester = (
+            db.get(User, simulation.requested_by_id)
+            if on_ste and simulation.requested_by_id
+            else None
         )
+        ctx = StageContext(
+            stage=stage,
+            spec=simulation.spec,
+            workdir=workdir,
+            input_name=INPUT_NAME,
+            requester_email=requester.email if requester else None,
+            requester_name=(requester.display_name or "") if requester else "",
+            env=stage_env(db, simulation, stage),
+        )
+        ledger_at = ste.ledger_size(workdir) if on_ste else None
         try:
             result = runner.run(
                 ctx,
@@ -3734,6 +3822,7 @@ def execute(
                 ),
             )
         except StageCanceled:
+            _note_ste_jobs(db, simulation, stage, workdir, ledger_at, requester)
             if not _still_mine(db, simulation.id, worker_id):
                 # **다른 워커가 되살려 집어 갔다** — 아무것도 쓰지 않고 손을 뗀다.
                 db.rollback()
@@ -3751,6 +3840,7 @@ def execute(
             db.refresh(simulation)
             return simulation
         except StageFailure as failure:
+            _note_ste_jobs(db, simulation, stage, workdir, ledger_at, requester)
             failed_at = stage
             simulation.error_code = failure.code
             simulation.error_message = failure.message
@@ -3770,6 +3860,7 @@ def execute(
                 failure.message,
             )
         except Exception as failure:
+            _note_ste_jobs(db, simulation, stage, workdir, ledger_at, requester)
             failed_at = stage
             simulation.error_code = "internal"
             simulation.error_message = f"{type(failure).__name__}: {failure}"
@@ -3783,6 +3874,7 @@ def execute(
             )
             logger.exception("해석 작업 %s 의 %s 에서 예외", simulation.id, stage)
         else:
+            _note_ste_jobs(db, simulation, stage, workdir, ledger_at, requester)
             for spec in result.artifacts:
                 _register_artifact(db, simulation, stage=stage, spec=spec)
             simulation.summary = {**(simulation.summary or {}), **result.summary}
@@ -3810,6 +3902,46 @@ def execute(
     db.commit()
     db.refresh(simulation)
     return simulation
+
+
+#: 감사 기록의 일 — STE 에 잡을 낸 것(요청서 E-3: 사람 · 작업 id · STE 잡 id).
+STE_SUBMIT = "ste.submit"
+
+
+def _note_ste_jobs(
+    db: Session,
+    simulation: Simulation,
+    stage: str,
+    workdir: Path,
+    offset: int | None,
+    requester: User | None,
+) -> None:
+    """**이 단계가 STE 에 낸 잡**을 단계 기록(`stages[].ste_jobs`)과 감사(`ste.submit`)로
+    옮긴다.
+
+    자식이 작업 폴더의 장부(`.ste-jobs.jsonl`)에 적은 것을 읽는다 — 자식이 실패 · 취소 · 도중에
+    죽어도 낸 잡은 거기 남는다. 커밋은 부르는 쪽(`execute`)이 한다."""
+    if offset is None:
+        return
+    jobs = ste.read_ledger(workdir, offset)
+    if not jobs:
+        return
+    _set_stage(simulation, stage, ste_jobs=jobs)
+    for job in jobs:
+        audit.record(
+            db,
+            action=STE_SUBMIT,
+            actor=requester,
+            target_table="simulations",
+            target_id=simulation.id,
+            target_label=simulation.name,
+            workspace_id=simulation.owner_workspace_id,
+            changes={
+                "ste_job_id": job.get("ste_job_id"),
+                "ste_state": job.get("ste_state"),
+                "stage": stage,
+            },
+        )
 
 
 def _follow_published_original(db: Session, simulation: Simulation) -> None:
@@ -4099,6 +4231,8 @@ def rerun_study(db: Session, *, user: User, study_id: str, modes: int) -> DoeImp
                 source_kind=old.source_kind,
                 source_ref=old.source_ref,
                 source_meta=meta,
+                # 모드 수만 바꿔 다시 — 나머지 설정은 원래 점의 것.
+                run_settings=old.run_settings or None,
             )
         # 사람이 나눠 둔 정리 폴더는 그대로 — 안 그러면 새 점들이 「폴더 없음」 으로 흩어진다.
         simulation.folder = old.folder

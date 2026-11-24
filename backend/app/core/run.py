@@ -57,6 +57,8 @@ def run_stage(
     timeout_seconds: int,
     visual_modes: int,
     cache_dir: Path | None = None,
+    requester_email: str | None = None,
+    requester_name: str = "",
 ) -> StageResult:
     """단계 하나. **Ansys import 는 그 단계에 들어갈 때** — 없는 것을 미리 부르지 않는다."""
     if stage == "fetching":
@@ -86,7 +88,13 @@ def run_stage(
     if stage == "solving" and spec.solver == "calculix":
         from app.core.calculix import solve as solve_open
 
-        return solve_open(workdir, timeout_seconds=timeout_seconds or 3600)
+        return solve_open(
+            workdir,
+            timeout_seconds=timeout_seconds or 3600,
+            solve_on=spec.solve_on,
+            requester_email=requester_email,
+            requester_name=requester_name,
+        )
 
     if stage == "solving":
         from app.core.solve import solve
@@ -179,6 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--visual-modes", type=int, default=6)
     # **형상 캐시 자리** — 안 주면 캐시를 안 쓴다(임포트를 매번 한다).
     parser.add_argument("--shape-cache", type=Path, default=None)
+    # **STE 에서 풀 때 건 사람**(스펙 `solve_on: ste`) — 그 사람 명의로만 잡을 낸다. 비밀 ·
+    # 토큰은 명령줄에 싣지 않는다(ps 에 보인다) — 비밀은 실행기가 환경으로 준다.
+    parser.add_argument("--requester-email", default=None)
+    parser.add_argument("--requester-name", default="")
     args = parser.parse_args(argv)
 
     workdir: Path = args.workdir
@@ -203,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.timeout_seconds,
             visual_modes=args.visual_modes,
             cache_dir=args.shape_cache,
+            requester_email=args.requester_email,
+            requester_name=args.requester_name,
         )
     except StageFailure as failure:
         target.write_text(

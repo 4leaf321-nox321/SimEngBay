@@ -21,10 +21,13 @@ from app import schema_version, version
 from app.config import get_settings
 from app.database import engine, get_db
 from app.modules.accounts.models import User
+from app.modules.server import runtime
 from app.modules.server.schemas import (
     BackupOut,
     DiskOut,
     MaintenanceItemOut,
+    RuntimeSettingIn,
+    RuntimeSettingOut,
     ServerStatusOut,
     TableCountOut,
 )
@@ -120,3 +123,60 @@ def maintenance(
         )
         for item in extensions.maintenance_items(db, user)
     ]
+
+
+# --- 서버에서 고치는 해석 설정 ---------------------------------------------------------
+
+
+def _setting_out(db: Session, one: runtime.Effective) -> RuntimeSettingOut:
+    knob = one.knob
+    who = db.get(User, one.updated_by_id) if one.updated_by_id else None
+    return RuntimeSettingOut(
+        key=knob.key,
+        env=knob.env,
+        label=knob.label,
+        group=knob.group,
+        kind=knob.kind,
+        help=knob.help,
+        choices=list(knob.choices),
+        minimum=knob.minimum,
+        maximum=knob.maximum,
+        unit=knob.unit,
+        default=knob.default,
+        value=one.value,
+        source=one.source,
+        server_value=one.server,
+        env_value=one.env,
+        problem=one.problem,
+        applies="new_jobs" if knob.frozen else "next_stage",
+        updated_at=one.updated_at,
+        updated_by_name=(who.display_name or who.email) if who else None,
+    )
+
+
+@router.get("/settings", response_model=list[RuntimeSettingOut])
+def runtime_settings(
+    _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> list[RuntimeSettingOut]:
+    """**재시작 없이 고치는 해석 설정** — 서버 설정 → 환경 · `.env` → 기본값. 결과를 바꾸는
+    값은 작업을 만들 때 그 작업에 고정된다(`applies`)."""
+    found = runtime.effective(db)
+    return [_setting_out(db, found[knob.key]) for knob in runtime.KNOBS]
+
+
+@router.put("/settings/{key}", response_model=RuntimeSettingOut)
+def update_runtime_setting(
+    key: str,
+    body: RuntimeSettingIn,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RuntimeSettingOut:
+    return _setting_out(db, runtime.update(db, user=user, key=key, raw=body.value))
+
+
+@router.delete("/settings/{key}", response_model=RuntimeSettingOut)
+def clear_runtime_setting(
+    key: str, user: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> RuntimeSettingOut:
+    """서버 설정을 지운다 — 환경 · `.env` · 기본값으로 돌아간다."""
+    return _setting_out(db, runtime.clear(db, user=user, key=key))

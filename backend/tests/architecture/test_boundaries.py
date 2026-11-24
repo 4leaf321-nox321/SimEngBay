@@ -164,6 +164,40 @@ def test_오류_코드_접두사가_하나다() -> None:
     assert not offenders, "오류 코드 접두사가 섞였습니다: " + ", ".join(offenders)
 
 
+def test_코어가_읽는_환경_이름은_워커가_자식에_넘긴다() -> None:
+    """**설정한 단계 값이 단계에 닿아야 한다**(2026-11-25).
+
+    코어는 설정을 모르고 환경 변수만 읽는다(`*_ENV` 상수 · `os.environ.get("…")`). 워커가
+    넘기지 않으면 그 이름은 서버 화면 · `.env` 에 적어도 조용히 안 듣는다 — `.env` 의
+    `CALCULIX_BONDING` · `CCX_BIN` 이 그랬다. 넘기는 길은 셋이다: 서버에서 고치는
+    값(`server/runtime.KNOBS` → `stage_env`), 기계마다 다른 자리(`machine_env`), STE
+    비밀(`ste_env`).
+    """
+    from app.config import Settings
+    from app.modules.server import runtime
+    from app.modules.simulations import services
+
+    read: set[str] = set()
+    for path in (BACKEND / "app" / "core").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        read.update(re.findall(r'^[A-Z][A-Z0-9_]*_ENV\s*=\s*"([A-Z][A-Z0-9_]*)"', text, re.M))
+        read.update(re.findall(r'os\.environ\.get\(\s*"([A-Z][A-Z0-9_]*)"', text))
+    every = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        gmsh_bin="x",
+        ccx_bin="x",
+        opensolver_ld_path="x",
+        ste_sso_secret="x",
+        ste_sso_client="x",
+        ste_token_dir="x",
+    )
+    passed = {name for name, _ in services.machine_env(every) + services.ste_env(every)}
+    passed |= {knob.env for knob in runtime.KNOBS}
+    # PATH 는 이 프로세스의 것을 그대로 물려받는다.
+    missing = sorted(read - passed - {"PATH"})
+    assert not missing, "코어가 읽는데 워커가 넘기지 않는 환경 이름: " + ", ".join(missing)
+
+
 def test_시험이_플랫폼_이름을_손으로_박지_않는다() -> None:
     """**포크한 이름으로도 시험이 돌아야 한다.**
 

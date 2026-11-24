@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -62,3 +63,37 @@ class MaintenanceItemOut(BaseModel):
     link: str | None
     severity: str
     """info · warning. 경고는 색이 붙는다."""
+
+
+class RuntimeSettingOut(BaseModel):
+    """서버에서 고치는 해석 설정 하나 — **지금 값이 무엇이고 어디서
+    왔나**(`server/runtime.py`)."""
+
+    key: str
+    env: str
+    """코어가 읽는 환경 이름 — `.env` 에 같은 이름으로 적은 값이 둘째 단이다."""
+    label: str
+    group: Literal["calculix", "ste"]
+    kind: Literal["choice", "integer", "number", "url", "name"]
+    help: str
+    choices: list[str]
+    minimum: float | None
+    maximum: float | None
+    unit: str
+    default: str
+    """비었을 때 쓰는 값. 빈 글자면 코어가 정한다(허용오차 — CompCore 의 「바디 사이 틈」)."""
+    value: str
+    source: Literal["server", "env", "default"]
+    """`server` 서버 화면에서 고친 값 · `env` 환경 · `.env` · `default` 기본값."""
+    server_value: str | None
+    env_value: str | None
+    problem: str | None
+    applies: Literal["new_jobs", "next_stage"]
+    """`new_jobs` — 결과를 바꾸는 값이라 작업을 만들 때 고정한다(그 뒤에 거는 작업부터).
+    `next_stage` — STE 연결이라 다음에 시작하는 단계부터."""
+    updated_at: datetime | None
+    updated_by_name: str | None
+
+
+class RuntimeSettingIn(BaseModel):
+    value: str

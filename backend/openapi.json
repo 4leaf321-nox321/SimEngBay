@@ -2735,6 +2735,125 @@
         }
       }
     },
+    "/api/server/settings": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Runtime Settings",
+        "description": "**재시작 없이 고치는 해석 설정** — 서버 설정 → 환경 · `.env` → 기본값. 결과를 바꾸는\n값은 작업을 만들 때 그 작업에 고정된다(`applies`).",
+        "operationId": "runtime_settings_api_server_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RuntimeSettingOut"
+                  },
+                  "type": "array",
+                  "title": "Response Runtime Settings Api Server Settings Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/settings/{key}": {
+      "put": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Update Runtime Setting",
+        "operationId": "update_runtime_setting_api_server_settings__key__put",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeSettingIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeSettingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Clear Runtime Setting",
+        "description": "서버 설정을 지운다 — 환경 · `.env` · 기본값으로 돌아간다.",
+        "operationId": "clear_runtime_setting_api_server_settings__key__delete",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeSettingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/recipes": {
       "get": {
         "tags": [
@@ -10777,6 +10896,196 @@
         ],
         "title": "ResonanceMatchOut",
         "description": "실측 공진 하나와 그 짝 — **센서 자리에서 움직이는 모드 중** 가장 가까운 것."
+      },
+      "RuntimeSettingIn": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "title": "RuntimeSettingIn"
+      },
+      "RuntimeSettingOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "env": {
+            "type": "string",
+            "title": "Env"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "group": {
+            "type": "string",
+            "enum": [
+              "calculix",
+              "ste"
+            ],
+            "title": "Group"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "choice",
+              "integer",
+              "number",
+              "url",
+              "name"
+            ],
+            "title": "Kind"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          },
+          "choices": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "default": {
+            "type": "string",
+            "title": "Default"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "server",
+              "env",
+              "default"
+            ],
+            "title": "Source"
+          },
+          "server_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Value"
+          },
+          "env_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Value"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "applies": {
+            "type": "string",
+            "enum": [
+              "new_jobs",
+              "next_stage"
+            ],
+            "title": "Applies"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "updated_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "env",
+          "label",
+          "group",
+          "kind",
+          "help",
+          "choices",
+          "minimum",
+          "maximum",
+          "unit",
+          "default",
+          "value",
+          "source",
+          "server_value",
+          "env_value",
+          "problem",
+          "applies",
+          "updated_at",
+          "updated_by_name"
+        ],
+        "title": "RuntimeSettingOut",
+        "description": "서버에서 고치는 해석 설정 하나 — **지금 값이 무엇이고 어디서\n왔나**(`server/runtime.py`)."
       },
       "SensitivityOut": {
         "properties": {

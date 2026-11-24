@@ -59,6 +59,13 @@ class Simulation(Base):
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """검증을 지난 스펙의 **스냅숏**. 나중에 스펙 형식이 바뀌어도 이 작업이 무엇으로 돌았는지는
     여기 남는다."""
+    run_settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """**작업을 만들 때 고정한 서버 설정** — 본딩 방식 · 선형 솔버 · 허용오차 · 스레드 · STE
+    메모리 상한처럼 결과를 바꾸는 값(`server/runtime.py` 의 `frozen`). 다시 돌려도 같은 값으로
+    풀고, DOE 한 번의 점들은 같은 값을 나눠 쓴다. 비면(이 칸이 생기기 전 작업) 단계 시작 때의
+    값을 쓴다."""
     source_kind: Mapped[str] = mapped_column(
         String(20), default="upload", server_default="upload"
     )

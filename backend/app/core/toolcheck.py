@@ -13,6 +13,7 @@ windows-bridge 는 Ansys 가 Windows 쪽에 있다. WSL 의 워커가 그 자리
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -43,10 +44,19 @@ def _ansys(executor: str, root: Path | None, version: int) -> dict[str, Any]:
     return made
 
 
-def report(*, executor: str, ansys_root: Path | None, ansys_version: int) -> dict[str, Any]:
-    """`{gmsh, ccx, ansys}` — 앞 둘은 경로나 `None`, Ansys 는 확인했는지와 그 까닭까지."""
-    gmsh = tools.which(tools.GMSH_ENV, *tools.GMSH_NAMES)
-    ccx = tools.which(tools.CCX_ENV, *tools.CCX_NAMES)
+def report(
+    *,
+    executor: str,
+    ansys_root: Path | None,
+    ansys_version: int,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """`{gmsh, ccx, ansys}` — 앞 둘은 경로나 `None`, Ansys 는 확인했는지와 그 까닭까지.
+
+    `environ` 은 **단계 자식이 볼 환경**이다(워커가 `.env` 의 `GMSH_BIN` · `CCX_BIN` 을 더해
+    준다) — 그 자리로 찾아야 「깔렸다」 는 답이 단계에서도 맞는다."""
+    gmsh = tools.which(tools.GMSH_ENV, *tools.GMSH_NAMES, environ=environ)
+    ccx = tools.which(tools.CCX_ENV, *tools.CCX_NAMES, environ=environ)
     return {
         "gmsh": str(gmsh) if gmsh else None,
         "ccx": str(ccx) if ccx else None,

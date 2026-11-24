@@ -8,6 +8,7 @@
  */
 
 import { PortalLogin } from '@/modules/server/PortalLogin'
+import { RuntimeSettingsCard } from '@/modules/server/RuntimeSettingsCard'
 import { WorkersCard } from '@/modules/simulations/WorkersCard'
 import { api } from '@/shared/api/client'
 import type { ServerStatus } from '@/shared/api/types'
@@ -161,6 +162,8 @@ export default function ServerPage() {
       </section>
 
       <WorkersCard />
+
+      <RuntimeSettingsCard />
     </div>
   )
 }

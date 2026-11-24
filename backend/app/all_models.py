@@ -25,6 +25,7 @@ from app.modules.ontology.models import (
     OntologySyncRun,
     OntologyType,
 )
+from app.modules.server.models import RuntimeSetting
 from app.modules.simulations.models import (
     Simulation,
     SimulationArtifact,
@@ -49,6 +50,7 @@ __all__ = [
     "PersonalAccessToken",
     "PortalLaunchJti",
     "RefreshToken",
+    "RuntimeSetting",
     "Simulation",
     "SimulationArtifact",
     "SimulationMeasurement",

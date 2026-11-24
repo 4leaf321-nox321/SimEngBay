@@ -56,6 +56,9 @@ export const FAILURE_LABELS: Record<string, string> = {
   out_of_memory:
     '메모리가 모자라 멈췄습니다 — 요소 크기를 키우거나 동시에 도는 해석 수(워커 수)를 줄입니다',
   worker_lost: '워커가 응답하지 않았습니다 — 워커 프로세스를 확인합니다',
+  ste_auth: 'STE 에 건 사람 명의로 들어가지 못했습니다 — STE 권한 · 서버의 STE 설정을 보거나 이 서버에서 다시 풉니다',
+  ste_unavailable: 'STE 가 응답하지 않았습니다 — 잠시 뒤 다시 걸거나 이 서버에서 풉니다',
+  ste_rejected: 'STE 가 업로드 · 제출을 거절했습니다 — 메시지의 STE 사유를 확인합니다',
   internal: '내부 오류입니다 — 서버 로그를 확인합니다',
 }
 

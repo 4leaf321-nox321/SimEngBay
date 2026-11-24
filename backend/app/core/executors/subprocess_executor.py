@@ -88,6 +88,14 @@ class SubprocessOptions:
     visual_modes: int = 6
     """모드 형상(VTP · PNG)을 만들 **탄성 모드 수.** 모드마다 파일 둘이 생긴다."""
     timeouts: dict[str, int] | None = None
+    extra_env: tuple[tuple[str, str], ...] = ()
+    """자식에 더 심을 환경 — 앱이 `.env` 에서 읽은 CalculiX 단계 설정(`services.solver_env`).
+    `.env` 는 앱 설정이 읽을 뿐 프로세스 환경이 아니라서, 여기로 건네야 자식이 본다. **이
+    프로세스 환경에 이미 있는 이름은 그대로 둔다**(설정도 환경을 `.env` 보다 먼저 본다)."""
+    ste_env: tuple[tuple[str, str], ...] = ()
+    """STE 연결(`services.ste_env` — 위임 비밀이 든다). **STE 로 푸는 솔브 단계의 자식에만**
+    싣는다 — 아무 이메일로나 토큰을 찍을 수 있는 열쇠라, 쓰지 않는 자식(Ansys · 모델링)의
+    환경에 두지 않는다. 비밀은 명령줄이 아니라 환경으로 — 명령줄은 `ps` 에 보인다."""
 
     def timeout_for(self, stage: str) -> int:
         return (self.timeouts or {}).get(stage) or DEFAULT_TIMEOUTS[stage]
@@ -170,6 +178,11 @@ class SubprocessExecutor:
             "--visual-modes",
             str(self.options.visual_modes),
         ]
+        if ctx.requester_email:
+            # STE 에서 풀 때만 — 건 사람 명의로 잡을 낸다(`calculix/ste.py`).
+            command += ["--requester-email", ctx.requester_email]
+            if ctx.requester_name:
+                command += ["--requester-name", ctx.requester_name]
         if here:
             # CalculiX 는 형상 캐시 · Ansys 경로를 쓰지 않는다.
             return command
@@ -193,8 +206,9 @@ class SubprocessExecutor:
 
     # --- 돌리기 -------------------------------------------------------------
 
-    def child_env(self) -> dict[str, str]:
-        """자식이 물려받을 환경.
+    def child_env(self, ctx: StageContext | None = None) -> dict[str, str]:
+        """자식이 물려받을 환경. STE 비밀은 `ctx` 가 STE 로 푸는 솔브 단계일 때만(`ste_env`),
+        이 작업의 단계 설정(`ctx.env`)은 프로세스 환경을 덮는다.
 
         **임베디드 Mechanical 은 우리 명령줄 인자를 안 본다** — `App(version=…)` 은 스스로
         `AWP_ROOT<버전>` 을 찾는다. 그래서 설정에 적힌 설치 경로를 그 이름으로 심어 준다.
@@ -206,6 +220,14 @@ class SubprocessExecutor:
         env = dict(os.environ)
         if self.options.ansys_root is not None and not self.windows:
             env[f"AWP_ROOT{self.options.ansys_version}"] = str(self.options.ansys_root)
+        on_ste = (
+            ctx is not None
+            and ctx.stage == "solving"
+            and (ctx.spec or {}).get("solve_on") == "ste"
+        )
+        for key, value in self.options.extra_env + (self.options.ste_env if on_ste else ()):
+            env.setdefault(key, value)
+        env.update(dict(ctx.env) if ctx is not None else {})
         return env
 
     def run(self, ctx: StageContext, should_cancel: CancelCheck | None = None) -> StageResult:
@@ -215,7 +237,7 @@ class SubprocessExecutor:
             child = subprocess.Popen(
                 command,
                 cwd=str(ctx.workdir),
-                env=self.child_env(),
+                env=self.child_env(ctx),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

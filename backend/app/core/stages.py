@@ -40,6 +40,11 @@ FailureCode = Literal[
     # 메모리가 모자라 운영체제(OOM)가 솔버를 강제로 멈췄다 — 요소 크기 · 동시 실행 수를 본다.
     "out_of_memory",
     "worker_lost",  # 워커가 죽어 되살리다 한도를 넘겼다
+    # STE(Slurm 클러스터)에서 풀도록 건 작업 — 요청서 2026-11-24 E-1 · E-3(`calculix/ste.py`).
+    # **어느 것이든 로컬로 물러서지 않는다.**
+    "ste_auth",  # 건 사람 명의의 STE 토큰을 못 받았다(설정 없음 · 건 사람 없음 · STE 거절)
+    "ste_unavailable",  # STE 가 응답이 없거나 5xx 다
+    "ste_rejected",  # STE 가 업로드 · 제출을 4xx 로 거절했다
     "internal",  # 코어의 버그 — 트레이스백이 로그에 있다
 ]
 
@@ -139,3 +144,11 @@ class StageContext:
     workdir: Path
     """이 작업의 폴더. 앞 단계의 산출물이 여기 있고, 이 단계도 여기 쓴다."""
     input_name: str = "input.step"
+    requester_email: str | None = None
+    """작업을 건 사람 — **STE 에서 풀 때만** 싣는다(그 사람 명의로만 잡을 낸다,
+    `calculix/ste.py`). 토큰이 아니라 이메일이다 — 토큰은 자식이 그 자리에서 받는다."""
+    requester_name: str = ""
+    env: tuple[tuple[str, str], ...] = ()
+    """**이 작업의 단계 설정**(코어가 읽는 환경 이름 · 값) — 앱이 서버 설정에서 정한다(작업을
+    만들 때 고정한 본딩 · 선형 솔버 · 허용오차 · 스레드, STE 연결). 자식 환경에서 **프로세스
+    환경을 이긴다** — 워커 하나의 환경이 다르다고 같은 작업이 다르게 풀리면 안 된다."""

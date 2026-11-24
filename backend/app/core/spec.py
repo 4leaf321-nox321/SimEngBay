@@ -49,6 +49,25 @@ def _needs_material[S: _HasMaterial](spec: S) -> S:
     return spec
 
 
+#: 풀 곳 — `local` 이 이 서버(기본), `ste` 가 STE 클러스터(요청서 2026-11-24 E-1 · E-2).
+SolveOn = Literal["local", "ste"]
+
+
+class _HasSolveOn(Protocol):
+    @property
+    def solver(self) -> str: ...
+
+    @property
+    def solve_on(self) -> str: ...
+
+
+def _ste_needs_calculix[S: _HasSolveOn](spec: S) -> S:
+    """STE 로 보내는 것은 **CalculiX 솔브 하나**다 — Ansys(MAPDL)는 요청서의 범위 밖이다."""
+    if spec.solve_on == "ste" and spec.solver != "calculix":
+        raise ValueError("STE 에서 풀 수 있는 것은 CalculiX 뿐입니다(solver=calculix).")
+    return spec
+
+
 class MeshSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -90,6 +109,10 @@ class ModalSpec(BaseModel):
     **어느 쪽으로 풀었는지 도장**을 찍는다. 칸이 없는 **옛 작업은 Ansys 다**(`solver_of`) —
     기본값을 바꿔도 이미 저장된 작업의 솔버는 바뀌지 않는다(저장한 스펙에는 늘 이 칸이
     있다)."""
+    solve_on: SolveOn = "local"
+    """**어디서 풀까** — `local`(이 서버, 기본) · `ste`(STE 클러스터, 건 사람 명의 ·
+    `calculix/ste.py`). STE 를 골랐는데 못 쓰면 실패로 끝난다 — 로컬로 몰래 풀지 않는다.
+    메시 · 덱 · 추출은 어느 쪽이든 이 서버다."""
     material: MaterialSpec | None = None
     """물성 한 벌 — **모든 바디에 같은 것이 붙는다.** 화면은 이 칸을 보내지 않는다: 물성은
     CompCore 가 점 파일에 파트마다 정해 보내고, 한 벌을 조립품 전체에 붙이는 것은 뜻이 없다.
@@ -121,6 +144,10 @@ class ModalSpec(BaseModel):
         return _needs_material(self)
 
     @model_validator(mode="after")
+    def _ste_solver(self) -> Self:
+        return _ste_needs_calculix(self)
+
+    @model_validator(mode="after")
     def _range_order(self) -> Self:
         span = self.frequency_range_hz
         if span is not None and not 0 <= span[0] < span[1]:
@@ -149,6 +176,8 @@ class StaticSpec(BaseModel):
     recipe: Literal["static"] = "static"
     solver: Literal["ansys", "calculix"] = "calculix"
     """무엇으로 풀까 — `ModalSpec.solver` 참고."""
+    solve_on: SolveOn = "local"
+    """어디서 풀까 — `ModalSpec.solve_on` 참고."""
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
@@ -165,6 +194,10 @@ class StaticSpec(BaseModel):
     def _own_material(self) -> Self:
         return _needs_material(self)
 
+    @model_validator(mode="after")
+    def _ste_solver(self) -> Self:
+        return _ste_needs_calculix(self)
+
 
 class HarmonicSpec(BaseModel):
     """조화 응답 — **주파수를 훑으며 흔든다.** 모달이 「어디서 떠는가」 라면 이것은 「그 떨림이
@@ -179,6 +212,8 @@ class HarmonicSpec(BaseModel):
     recipe: Literal["harmonic"] = "harmonic"
     solver: Literal["ansys", "calculix"] = "calculix"
     """무엇으로 풀까 — `ModalSpec.solver` 참고."""
+    solve_on: SolveOn = "local"
+    """어디서 풀까 — `ModalSpec.solve_on` 참고."""
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
@@ -197,6 +232,10 @@ class HarmonicSpec(BaseModel):
     @model_validator(mode="after")
     def _own_material(self) -> Self:
         return _needs_material(self)
+
+    @model_validator(mode="after")
+    def _ste_solver(self) -> Self:
+        return _ste_needs_calculix(self)
 
 
 class RandomSpec(BaseModel):
@@ -218,6 +257,8 @@ class RandomSpec(BaseModel):
     recipe: Literal["random"] = "random"
     solver: Literal["ansys", "calculix"] = "calculix"
     """무엇으로 풀까 — `ModalSpec.solver` 참고(위 「두 솔버가 다르게 푼다」)."""
+    solve_on: SolveOn = "local"
+    """어디서 풀까 — `ModalSpec.solve_on` 참고."""
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
@@ -238,6 +279,10 @@ class RandomSpec(BaseModel):
     @model_validator(mode="after")
     def _own_material(self) -> Self:
         return _needs_material(self)
+
+    @model_validator(mode="after")
+    def _ste_solver(self) -> Self:
+        return _ste_needs_calculix(self)
 
     @model_validator(mode="after")
     def _range_order(self) -> Self:

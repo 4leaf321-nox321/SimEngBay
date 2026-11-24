@@ -1,9 +1,10 @@
 """설정 — DB행 -> 환경변수 -> 기본값 3단 fallback.
 
-세 번째 단(DB행)은 아직 비어 있지만 자리를 지금 만들어 둔다. 자주 바뀌는 값
-(워커 수·타임아웃·임계값)을 나중에 관리 화면에서 고치려면 **읽는 지점이 한 곳**
-이어야 하기 때문이다. os.getenv 가 코드에 흩어지면 값 하나를 바꾸는 데 재배포가
-필요해진다.
+첫 단(DB행)은 **서버 화면에서 고치는 해석 설정**이다(`app/modules/server/runtime.py`,
+2026-11-25 — 본딩 방식 · 선형 솔버 · 허용오차 · 스레드 · STE 연결). 그 값들도 여기 칸이 있어
+`.env` 가 둘째 단이 된다. 다른 값은 아직 이 파일 · `.env` 뿐이다 — 자주 바뀌는 값을 화면으로
+옮길 때는 `runtime.KNOBS` 에 더한다. **읽는 지점이 한 곳**이어야 한다: os.getenv 가 코드에
+흩어지면 값 하나를 바꾸는 데 재배포가 필요해진다.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Protocol
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -185,6 +185,62 @@ class Settings(BaseSettings):
     """모드 형상(VTP · PNG)을 만들 **탄성 모드 수.** 모드마다 파일 둘이 생기므로 전부 그리면
     작업 폴더가 그만큼 커진다. 화면은 여기 있는 것만 그린다."""
 
+    # ── CalculiX 단계가 읽는 값 — 워커가 단계 자식의 **환경으로** 넘긴다 ─────────────────
+    # 코어(`app/core/calculix`)는 설정을 모르고 환경 변수만 읽는다(2026-11-25 전에는 `.env` 에
+    # 적어도 단계에 닿지 않았다). 실행 파일 자리 셋은 워커마다 다르므로 그 워커의 환경 · `.env`
+    # 에서 온다(`services.machine_env`, 프로세스 환경이 이긴다). 그 아래 본딩 · 선형 솔버 ·
+    # 허용오차 · 스레드는 **서버 화면에서 고친 값이 먼저**고 여기는 둘째 단이다 — 작업을 만들
+    # 때 그 작업에 고정한다(`server/runtime.py`).
+    gmsh_bin: str = ""
+    """gmsh 를 손으로 받아 둔 자리(`GMSH_BIN`). 비우면 `PATH`."""
+    ccx_bin: str = ""
+    """CalculiX(ccx)를 손으로 받아 둔 자리(`CCX_BIN`). 비우면 `PATH`."""
+    opensolver_ld_path: str = ""
+    """OS 패키지를 루트 없이 풀어 쓸 때 ccx 가 따라올 라이브러리 자리(`OPENSOLVER_LD_PATH` →
+    ccx 의 `LD_LIBRARY_PATH`)."""
+    omp_num_threads: str = ""
+    """CalculiX 한 점의 스레드 수(`OMP_NUM_THREADS`, STE 잡의 `threads`). 비우면 2 — DOE 를
+    여러 점 동시에 푸는 것이 이 솔버를 쓰는 까닭이라, 한 점이 기계를 독차지하면 안 된다. 글자로
+    둔다 — OpenMP 는 `4,2` 같은 꼴도 받고, 수 칸이면 그런 환경에서 앱이 못 뜬다."""
+    calculix_bonding: str = ""
+    """본딩 — `lever`(기본) · `tie` · `shared`(`CALCULIX_BONDING`, 뒤 둘은 견줄 때만)."""
+    calculix_linear_solver: str = ""
+    """정적의 선형 솔버 — `auto`(기본) · `spooles` · `iterative`(`CALCULIX_LINEAR_SOLVER`)."""
+    calculix_boolean_tolerance_mm: str = ""
+    """형상 맞춤 허용오차(mm, `CALCULIX_BOOLEAN_TOLERANCE_MM`). 비우면 CompCore 의 「바디 사이
+    틈」, 0 이면 끈다."""
+
+    # ── STE(Smart Twin Explorer, Slurm 클러스터)에서 CalculiX 솔브 — 요청서 2026-11-24 ──
+    # 작업마다 「풀 곳」(`solve_on: ste`)을 고르면 ccx 한 번이 STE 잡 한 번이 된다
+    # (`calculix/ste.py`). **작업을 건 사람 명의로만** 낸다 — 아래 비밀로 STE 의
+    # `POST /api/auth/sso` 를 불러 그 사람의 토큰을 받는다. 비우면 STE 를 고른 작업은
+    # `ste_auth` 로 끝난다(로컬로 몰래 풀지 않는다).
+    ste_base_url: str = ""
+    """STE 주소 — 포털 경로(`https://hwax.sec.samsung.net/ste`)나 안쪽 주소. `/api/…` 앞까지.
+    **서버 화면에서 고친 값이 먼저다** — 아래 앱 · 폴링 · 메모리 상한도 같다
+    (`server/runtime.py`).
+    비밀 · client · 토큰 폴더는 화면에 두지 않는다(`.env` 만)."""
+    ste_sso_secret: str = ""
+    """**SimEngBay 전용** STE 위임 비밀(요청서 S-1 — 포털 · 게이트웨이의 `STE_SSO_SECRET` 과
+    다른 값). 요청서와 **따로** 받는다(P-3). 비우면 STE 가 꺼진다."""
+    ste_sso_client: str = ""
+    """`X-Heax-Client` — STE 가 받는 곳마다 비밀 · 토큰을 가른다. 같은 사람의 포털 토큰을
+    죽이지 않으려면 포털 · 게이트웨이와 다른 이름이어야 한다. 비우면 `app_slug`."""
+    ste_calculix_app: str = "calculix"
+    """STE 앱 이름(`apps/<id>/app.yaml`)."""
+    ste_poll_seconds: float = 15.0
+    """잡 상태를 묻는 간격(초)."""
+    ste_poll_grace_seconds: float = 300.0
+    """잡 상태를 못 읽어도 참는 시간(초) — STE 재기동 한 번에 몇 시간짜리 해석을 버리지
+    않는다."""
+    ste_mem_gb_max: int = 64
+    """잡 하나에 청할 메모리 상한(GB). SPOOLES 어림 x 1.5 가 이것을 넘으면 정적은 반복
+    솔버로 푼다."""
+    ste_token_dir: str = ""
+    """같은 기계의 워커가 사람별 STE 토큰을 나눠 둘 폴더(0700, 파일 0600). 비우면
+    `/dev/shm/<client>-ste-<uid>`(메모리) — STE 는 같은 사람 · 같은 client 의 직전 토큰을
+    지우므로, 워커마다 따로 받으면 서로의 토큰을 죽인다."""
+
     work_dir: Path | None = None
     """작업 폴더의 뿌리. 비우면 `filestore_dir/simulations`. **windows-bridge 면 NTFS 쪽**
     (`/mnt/c/simengbay/work`)을 준다 — Ansys 가 `\\wsl$` 에 쓰면 느리고 잠금 문제가 난다."""
@@ -298,6 +354,8 @@ class Settings(BaseSettings):
             )
         if not self.refresh_cookie_name:
             self.refresh_cookie_name = f"{self.app_slug}_refresh"
+        if not self.ste_sso_client.strip():
+            self.ste_sso_client = self.app_slug
         if not self.portal_audience.strip():
             self.portal_audience = self.app_slug
         if not self.portal_issuer.strip():
@@ -349,34 +407,6 @@ class Settings(BaseSettings):
     """개발 서버(Vite)용. 배포에서는 동일 출처라 필요 없다."""
 
 
-class RuntimeSettingProvider(Protocol):
-    """DB 기반 런타임 설정의 자리. runtime_settings 표가 생기면 여기에 끼운다."""
-
-    def get(self, key: str) -> str | None: ...
-
-
-class _NullProvider:
-    def get(self, key: str) -> str | None:
-        return None
-
-
-_provider: RuntimeSettingProvider = _NullProvider()
-
-
-def set_runtime_provider(provider: RuntimeSettingProvider) -> None:
-    global _provider
-    _provider = provider
-
-
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-
-def get_setting(key: str) -> str | None:
-    """3단 fallback 으로 값 하나를 읽는다. DB 행이 있으면 환경변수를 이긴다."""
-    from_db = _provider.get(key)
-    if from_db is not None:
-        return from_db
-    value = getattr(get_settings(), key, None)
-    return None if value is None else str(value)

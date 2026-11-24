@@ -39,15 +39,19 @@ logger = logging.getLogger(__name__)
 GMSH_ENV = "GMSH_BIN"
 CCX_ENV = "CCX_BIN"
 LD_ENV = "OPENSOLVER_LD_PATH"
+#: 한 점의 스레드 수 — 비우면 2(`run`).
+THREADS_ENV = "OMP_NUM_THREADS"
 
 
-def which(env: str, *names: str) -> Path | None:
+def which(env: str, *names: str, environ: Mapping[str, str] | None = None) -> Path | None:
     """환경 변수 → `PATH` 순으로 찾는다. **없으면 `None`** — 화면에 「깔렸나」 를 답할 때 쓴다.
 
     환경 변수가 있는데 그 자리에 파일이 없으면 `None` 이다(`PATH` 로 물러서지 않는다) — 사람이
     가리킨 자리가 틀린 것을 다른 자리의 것으로 덮으면 그 오타를 영영 모른다.
+
+    `environ` 을 주면 그것을 본다 — 워커가 `.env` 의 자리를 더해 점검할 때(`toolcheck`).
     """
-    given = os.environ.get(env)
+    given = (os.environ if environ is None else environ).get(env)
     if given:
         path = Path(given)
         return path if path.is_file() else None
@@ -110,7 +114,7 @@ def run(
         "HOME": str(cwd),
         # 스레드 수를 비워 두면 CalculiX 가 코어를 전부 쥔다 — DOE 를 여러 점 동시에 돌리는
         # 것이 이 솔버를 쓰는 이유이므로, 한 점이 기계를 독차지하면 안 된다.
-        "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", "2"),
+        THREADS_ENV: os.environ.get(THREADS_ENV, "2"),
     }
     extra = os.environ.get(LD_ENV)
     if extra:

@@ -16,10 +16,10 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from app.core import unit_checks
-from app.core.calculix import bonding, tables, tools
+from app.core.calculix import bonding, ste, tables, tools
 from app.core.modes import search as mode_search
 from app.core.stages import ArtifactSpec, StageFailure, StageResult
 
@@ -147,7 +147,7 @@ def available_mb(
     return min(found) if found else None
 
 
-def plan_solver(text: str, available: float | None) -> SolverPlan:
+def plan_solver(text: str, available: float | None, *, dof: int | None = None) -> SolverPlan:
     """**정적이면 메모리를 어림해 솔버를 고른다** — 넘칠 것 같으면 반복 솔버.
 
     ⚠️ 전에는 직접 솔버(SPOOLES)만 써서 운영체제가 SIGKILL 로 끊은 뒤에야 알았다(운영 보고,
@@ -156,7 +156,7 @@ def plan_solver(text: str, available: float | None) -> SolverPlan:
     upper = text.upper()
     static = "*STATIC" in upper
     can_iterate = static and not any(mark in upper for mark in _DIRECT_ONLY)
-    dof = degrees_of_freedom(text)
+    dof = degrees_of_freedom(text) if dof is None else dof
     estimate = spooles_mb(dof)
     mode = os.environ.get(LINEAR_SOLVER_ENV, "auto").strip().lower()
     if mode == "iterative":
@@ -239,7 +239,80 @@ def with_modes(text: str, count: int) -> str:
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
-def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> StageResult:
+class LocalCcx:
+    """이 기계의 ccx — 지금까지의 길. **쓸 수 있는 메모리는 기계가 남긴
+    것**(`available_mb`)."""
+
+    where = "local"
+
+    def available_mb(self, estimate_mb: float) -> float | None:
+        return available_mb()
+
+    def run(
+        self, deck: Path, *, timeout_seconds: int, env_extra: dict[str, str] | None
+    ) -> Any:
+        return tools.run(
+            tools.ccx_bin(),
+            [deck.stem],
+            cwd=deck.parent,
+            timeout_seconds=timeout_seconds,
+            what="CalculiX",
+            env_extra=env_extra,
+        )
+
+    def summary(self) -> dict[str, object]:
+        return {}
+
+    def detail(self) -> str:
+        return ""
+
+
+class Ccx(Protocol):
+    """ccx 를 부르는 자리 — `LocalCcx` 또는 STE(`ste.SteCcx`). 판정은 부른 쪽(`_judged`)이
+    한다."""
+
+    where: str
+
+    def available_mb(self, estimate_mb: float) -> float | None: ...
+
+    def run(
+        self, deck: Path, *, timeout_seconds: int, env_extra: dict[str, str] | None
+    ) -> Any: ...
+
+    def summary(self) -> dict[str, object]: ...
+
+    def detail(self) -> str: ...
+
+
+#: 풀 곳 — 스펙의 `solve_on`(요청서 E-2). 기본은 이 서버.
+SOLVE_ON = ("local", "ste")
+
+
+def ccx_for(
+    workdir: Path,
+    solve_on: str = "local",
+    *,
+    requester_email: str | None = None,
+    requester_name: str = "",
+) -> Ccx:
+    """풀 곳 → ccx 자리. **STE 를 골랐는데 못 쓰면 실패다** — 로컬로 물러서지
+    않는다(`ste_auth`)."""
+    if solve_on == "ste":
+        return ste.SteCcx.start(workdir, email=requester_email, name=requester_name)
+    if solve_on != "local":
+        raise StageFailure("internal", f"모르는 풀 곳입니다: {solve_on!r}")
+    return LocalCcx()
+
+
+def solve(
+    workdir: Path,
+    *,
+    timeout_seconds: int = 3600,
+    solve_on: str = "local",
+    requester_email: str | None = None,
+    requester_name: str = "",
+    **_ignored: object,
+) -> StageResult:
     """`model.inp` 를 푼다. 로그는 폴더에 남긴다 — 나중에 사람이 읽을 유일한 단서다.
 
     **메모리를 먼저 어림한다**(`plan_solver`). 정적이면 넘칠 것 같을 때 반복 솔버로 풀고,
@@ -248,20 +321,28 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
 
     모달에 **찾을 주파수 범위**가 있으면(`modes.search`) 범위 안이 모자랄 때 모드 수를 늘려
     다시 푼다 — 덱에 범위를 주지 않으므로 낮은 것부터 구한다.
+
+    **풀 곳**(`solve_on`)이 `ste` 면 ccx 한 번이 STE 잡 한 번이다(`ste.py`) — 위의 판정 ·
+    재시도 · 모드 찾기는 그대로 이 코드가 한다. 쓸 수 있는 메모리는 잡에 청한 메모리다.
     """
     deck = workdir / DECK_NAME
     if not deck.is_file():
         raise StageFailure("solver_failed", f"솔버 입력 파일이 없습니다: {DECK_NAME}")
 
     text = deck.read_text(encoding="utf-8", errors="replace")
-    plan = plan_solver(text, available_mb())
+    ccx = ccx_for(
+        workdir, solve_on, requester_email=requester_email, requester_name=requester_name
+    )
+    dof = degrees_of_freedom(text)
+    plan = plan_solver(text, ccx.available_mb(spooles_mb(dof)), dof=dof)
     iterative = plan.iterative
     if iterative:
         deck.write_text(with_iterative(text), encoding="utf-8")
     logger.info(
-        "CalculiX 자유도 %s · SPOOLES 어림 %.0f MB · 남은 메모리 %s MB → %s",
+        "CalculiX 자유도 %s · SPOOLES 어림 %.0f MB · %s 메모리 %s MB → %s",
         f"{plan.dof:,}",
         plan.estimate_mb,
+        "STE 잡" if ccx.where == "ste" else "남은",
         f"{plan.available_mb:.0f}" if plan.available_mb is not None else "?",
         "반복 솔버" if iterative else "직접 솔버",
     )
@@ -269,14 +350,7 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
     retried = False
     started = time.perf_counter()
     try:
-        done = tools.run(
-            tools.ccx_bin(),
-            [deck.stem],
-            cwd=workdir,
-            timeout_seconds=timeout_seconds,
-            what="CalculiX",
-            env_extra=env_extra,
-        )
+        done = ccx.run(deck, timeout_seconds=timeout_seconds, env_extra=env_extra)
     except StageFailure as failure:
         forced = os.environ.get(LINEAR_SOLVER_ENV, "").strip().lower() == "spooles"
         if failure.code != "out_of_memory" or iterative or not plan.can_iterate or forced:
@@ -286,14 +360,7 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
         deck.write_text(with_iterative(text), encoding="utf-8")
         iterative = retried = True
         try:
-            done = tools.run(
-                tools.ccx_bin(),
-                [deck.stem],
-                cwd=workdir,
-                timeout_seconds=timeout_seconds,
-                what="CalculiX",
-                env_extra=env_extra,
-            )
+            done = ccx.run(deck, timeout_seconds=timeout_seconds, env_extra=env_extra)
         except StageFailure as again:
             raise _with_estimate(again, plan) from again
     _judged(workdir, done)
@@ -318,14 +385,7 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
                 more,
             )
             deck.write_text(with_modes(current, more), encoding="utf-8")
-            done = tools.run(
-                tools.ccx_bin(),
-                [deck.stem],
-                cwd=workdir,
-                timeout_seconds=timeout_seconds,
-                what="CalculiX",
-                env_extra=env_extra,
-            )
+            done = ccx.run(deck, timeout_seconds=timeout_seconds, env_extra=env_extra)
             _judged(workdir, done)
             passes += 1
             solved = more
@@ -353,12 +413,14 @@ def solve(workdir: Path, *, timeout_seconds: int = 3600, **_ignored: object) -> 
     # **쌍마다 연결 결과** — 몇 절점이 묶였나(반경 밖이라 ccx 가 안 묶은 절점을 뺀다).
     log = (workdir / LOG_NAME).read_text(encoding="utf-8", errors="replace")
     summary.update(bonding.connection_report(workdir, log))
+    summary.update(ccx.summary())
     return StageResult(
         artifacts=artifacts,
         summary=summary,
         detail=f"CalculiX {seconds:.1f}초"
         + (" · 반복 솔버" if iterative else "")
-        + (f" · 범위 찾기 {passes}번" if passes > 1 else ""),
+        + (f" · 범위 찾기 {passes}번" if passes > 1 else "")
+        + ccx.detail(),
     )
 
 

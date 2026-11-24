@@ -115,6 +115,8 @@ class Worker:
             executor=executor.name,
             ansys_root=settings.ansys_root,
             ansys_version=settings.ansys_version,
+            # **단계 자식이 볼 환경으로** 찾는다 — `.env` 의 `CCX_BIN` 은 이 프로세스에 없다.
+            environ={**dict(services.machine_env(settings)), **os.environ},
         )
         solvers = solvers_for(settings.simulation_solvers, executor=executor.name, tools=tools)
         if solvers == ():

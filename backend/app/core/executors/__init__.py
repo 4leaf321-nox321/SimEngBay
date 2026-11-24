@@ -42,6 +42,8 @@ def resolve(
     shape_cache: Path | None = None,
     wrapper: tuple[str, ...] = (),
     visual_modes: int = 6,
+    extra_env: tuple[tuple[str, str], ...] = (),
+    ste_env: tuple[tuple[str, str], ...] = (),
 ) -> Executor:
     """이름 → 실행기.
 
@@ -62,6 +64,8 @@ def resolve(
         shape_cache=shape_cache,
         wrapper=wrapper,
         visual_modes=visual_modes,
+        extra_env=extra_env,
+        ste_env=ste_env,
     )
     if name == "local":
         return SubprocessExecutor("local", options)

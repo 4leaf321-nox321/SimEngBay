@@ -200,6 +200,12 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
   잡았다(셸모델_시트받침조립 자유-자유 2.62 · 5.04 · 12.8 Hz, `ADJUST` 로도 안 풀림). 구속식은 원래 쉘 절점
   (펼친 절점의 평균 = 중간면)에 걸려 강체 운동과 맞는다 — 쉘 절점을 솔리드 면에 투영한 자리의 형상함수로
   x · y · z 를 묶는다(분리 없음의 법선 구속식과 같은 재료, `bonding.slide_rows`).
+- **STE 에서 풀 때 ccx 한 번이 STE 잡 한 번이다**(`calculix/ste.py`, 스펙 `solve_on: ste`, 2026-11-24) — 판정 ·
+  재시도 · 모드 찾기는 로컬과 같은 `solve()` 코드가 하고 `SteCcx` 는 결과 파일을 같은 이름으로 내려놓기만 한다.
+  **건 사람 명의로만** 낸다(`requested_by` → `--requester-email`, 비밀은 환경으로) — 못 받으면 `ste_auth` 로 끝내고
+  **로컬로 물러서지 않는다.** 토큰은 `/dev/shm` 의 사람별 파일로 워커끼리 나눠 쓴다(STE 가 같은 사람 · client 의 직전
+  토큰을 지운다). STE 계약 중 제출 · 상태 · 취소 경로는 짐작이다 — `ENDPOINTS` · `_submit_form` · `_state` 와 가짜
+  STE(`tests/fake_ste.py`)를 함께 고친다.
 - **CalculiX 고유치 덱은 SPOOLES 를 한 스레드로 푼다**(`calculix/solve.EIGEN_ENV`, 2026-11-17) — 같은
   모달 덱을 4 스레드로 12번 풀었더니 6번 고유치가 어긋났다(최대 3%, 가짜 0 Hz 모드까지). SPOOLES 만 한
   스레드면(`CCX_NPROC_EQUATION_SOLVER=1`, 조립 · 응력은 그대로 여러 스레드) 12번 모두 같았고 시간도 거의
@@ -336,6 +342,18 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
 - `deploy.sh` 에는 MCP 서버 · 동기화 타이머 자리가 남아 있다 — 번들에 `mcp_server/` 나
   `sync.*.template` 이 없으면 **건너뛴다.** 나중에 AI 가 해석을 거는 MCP 서버를 두게 되면
   그 자리를 그대로 쓴다(StandardPlatform 의 `mcp_server/` 가 본보기).
+- **해석 조정값은 서버 화면에서 고친다 — 재시작 없이, 결과를 바꾸는 값은 작업을 만들 때 고정**
+  (`app/modules/server/runtime.py` 의 `KNOBS`, `runtime_settings` 표, 2026-11-25). 읽는 순서는 서버 설정 →
+  환경 · `.env` → 기본값. 결과를 바꾸는 값(`frozen` — 본딩 · 선형 솔버 · 허용오차 · 스레드 · STE 메모리 상한)은
+  `create` 가 작업의 `run_settings` 에 적는다: 다시 돌리기는 같은 행이라 그대로, 메시 점검 · 모드 바꿔 다시
+  돌리기는 원래 작업의 것, DOE 가져오기는 한 번 잰 것을 모든 점에. STE 연결(주소 · 앱 · 폴링)은 단계 시작 때
+  지금 값. 기계마다 다른 자리(`CCX_BIN` · `GMSH_BIN` · `OPENSOLVER_LD_PATH`)와 STE 비밀은 화면에 두지 않는다
+  (`machine_env` · `ste_env`, `.env`).
+- **코어는 설정을 모르고 환경 변수만 읽는다** — 넘기는 길은 셋: 작업의 단계 설정(`services.stage_env` →
+  `StageContext.env`, **프로세스 환경을 이긴다** — 워커 하나의 환경이 같은 작업을 다르게 풀면 안 된다), 기계 자리
+  (`machine_env` → 실행기 `extra_env`, 프로세스 환경이 이긴다), STE 비밀(`ste_env` — STE 로 푸는 솔브 단계에만).
+  워커의 도구 점검도 같은 환경으로 본다. 코어가 새 이름을 읽기 시작하면 셋 중 하나에 더한다 — 구조 시험
+  (「코어가 읽는 환경 이름은…」)이 빠진 것을 잡는다.
 - `.env` 는 **BOM 없이** 저장한다. BOM 이 붙으면 **첫 줄 키만 조용히 무시된다.**
 - **`.env` 를 이미지에 굽지 않는다.** bind-mount 로 넣는다.
 - **이미지 루트는 읽기 전용이다.** 앱이 쓰는 곳은 `/data/filestore` 와 `/data/logs` 뿐이다.

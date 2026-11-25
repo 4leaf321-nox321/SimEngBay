@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.core import units
+from app.core import contract, units
 
 MANIFEST = "manifest.csv"
 STUDY = "study.json"
@@ -285,11 +285,13 @@ def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
 
     has_conditions = False
     unit_system = ""
+    contract_problem = ""
     if point_file is not None:
         try:
             loaded = json.loads(point_file.read_text(encoding="utf-8"))
             conditions = loaded.get("conditions")
             has_conditions = bool(conditions)
+            contract_problem = contract.problem(loaded) or ""
             if isinstance(conditions, dict):
                 declared = (conditions.get("units") or {}).get("system")
                 unit_system = str(declared or "").strip()
@@ -311,7 +313,7 @@ def _point(folder: Path, row: dict[str, str], factors: list[str]) -> DoePoint:
         has_conditions=has_conditions,
         unit_system=unit_system,
     )
-    point.skip_reason = _skip_reason(point, row)
+    point.skip_reason = _skip_reason(point, row) or contract_problem
     return point
 
 

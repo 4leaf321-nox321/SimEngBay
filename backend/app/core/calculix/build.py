@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import excitation, unit_checks, units
+from app.core import contract, excitation, unit_checks, units
 from app.core import materials as material_model
 from app.core import random_vibration as random_model
 from app.core import touching as touch
@@ -114,6 +114,7 @@ def build(
         raise StageFailure("geometry_import", f"입력 형상이 없습니다: {input_name}")
 
     topology = _topology(workdir)
+    contract.require(topology)
     system = units.declared_in(topology) if topology else units.DEFAULT
     given = _declared_conditions(spec, topology)
     loose = condition_model.sheet_gap(topology, given, from_cad=spec.conditions_from == "cad")

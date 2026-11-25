@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import excitation, materials, unit_checks, units
+from app.core import contract, excitation, materials, unit_checks, units
 from app.core import random_vibration as random_model
 from app.core import touching as touch
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
@@ -104,6 +104,7 @@ def build(
     # **CAD 의 선언을 먼저 읽는다** — 세션을 그 계로 세우기 때문에 형상을 넣기 전에 알아야
     # 한다. 선언이 모르는 이름이면 여기서 멈춘다(Mechanical 을 띄우기 전에).
     topology = _topology(workdir)
+    contract.require(topology)
     system = _declared_system(workdir)
     # **CAD 가 보낸 물성**. 읽을 수 없으면 여기서 멈춘다 — 빠진 물성은 Mechanical 이 기본값
     # (구조용 강)으로 풀고, 그 사실은 고유진동수가 틀린 뒤에야 드러난다.

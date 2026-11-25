@@ -46,6 +46,7 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from app.core import contract
 from app.core.regions.match import not_a_face
 
 #: 우리가 Mechanical 에 걸 수 있는 구속 — CompCore 의 7종 그대로.
@@ -424,6 +425,12 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     # **제안은 조건 밖에 온다** — 조건이 비어도(형상만 보낸 폴더) 전역 크기는 쓸 수 있다.
     made.suggested_size_mm, made.suggested_basis = _suggestion(payload)
     if not block:
+        return made
+    # **모르는 판이면 아무것도 안 읽는다** — 칸의 자리가 다르면 비어 있는 것과 못 찾은 것을 못
+    # 가린다(`contract.py`).
+    unknown = contract.problem(payload)
+    if unknown:
+        made.refused.append(Note("조건의 판", unknown))
         return made
 
     regions = set(_dict(payload).get("regions") or {})

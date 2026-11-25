@@ -51,7 +51,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
-from app.core import cleanup, executors, materials, random_vibration, units
+from app.core import cleanup, contract, executors, materials, random_vibration, units
 from app.core import conditions as condition_model
 from app.core import convergence as core_convergence
 from app.core import measured as core_measured
@@ -1091,6 +1091,11 @@ def create(
             details={"regions": [one.region for one in spec.constraints]},
         )
     payload = parse_topology(topology) if topology is not None else None
+    # **판부터 본다** — 모르는 판이면 물성 · 조건 점검의 말(「물성이 없다」)이 틀린 까닭이
+    # 된다.
+    unknown = contract.problem(payload)
+    if unknown:
+        raise AppError(code("SIMULATIONS", 43), unknown, status=400)
     gap = material_gap(spec, payload)
     if gap:
         raise AppError(code("SIMULATIONS", 28), gap, status=400)
@@ -1795,7 +1800,8 @@ def import_doe(
         # 만들어지고 이 점에서 400 이 나 요약도 못 받는다(다시 가져오면 「이미 가져온 점」
         # 이다).
         gap = (
-            material_gap(spec, payload)
+            contract.problem(payload)
+            or material_gap(spec, payload)
             or conditions_gap(spec, payload)
             or size_gap(spec, payload)
             or sheet_gap(spec, payload)

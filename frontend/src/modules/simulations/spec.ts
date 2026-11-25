@@ -94,6 +94,8 @@ export interface SpecInput {
   modalRange: RangeInput
   /** 랜덤 진동 — 없으면 기본값(감쇠비 2%). */
   random?: RandomInput
+  /** 풀 곳(요청서 E-2) — 비우면 이 서버. STE 는 CalculiX 만이라 Ansys 면 싣지 않는다. */
+  solveOn?: 'local' | 'ste'
 }
 
 /** 화면의 입력 → 서버 스펙. 레시피가 받지 않는 칸은 싣지 않는다. */
@@ -106,6 +108,8 @@ export function buildSpec(input: SpecInput): Record<string, unknown> {
     mesh: { ...(size ? { element_size_mm: Number(size) } : {}), order: input.order },
     constraints: input.constraints.map((region) => ({ region, kind: 'fixed' })),
   }
+  // **기본(이 서버)이면 싣지 않는다** — 서버도 기본값이면 저장하지 않는다(옛 워커가 읽게).
+  if (input.solveOn === 'ste' && input.solver === 'calculix') spec.solve_on = 'ste'
   if (searchesModes(input.recipe)) {
     spec.modes = Number(input.modes)
     const range = rangeOf(input.modalRange)

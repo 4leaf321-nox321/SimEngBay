@@ -36,6 +36,8 @@ export type FrequencyRequirementInput = NonNullable<
 export type WorkersOverview = components['schemas']['WorkersOut']
 export type WorkerRow = components['schemas']['WorkerOut']
 export type SolverAvailability = components['schemas']['SolverAvailabilityOut']
+/** 풀 곳마다 지금 이 사람이 고를 수 있나(요청서 E-2). */
+export type SolvePlace = components['schemas']['SolvePlaceOut']
 export type Convergence = components['schemas']['ConvergenceOut']
 export type ConvergenceLocalSize = components['schemas']['ConvergenceLocalSizeOut']
 export type ConditionsPreview = components['schemas']['ConditionsPreviewOut']
@@ -387,7 +389,9 @@ export const simulationApi = {
     if (input.name) form.append('name', input.name)
     return api.postForm<Simulation>('/simulations', form)
   },
-  retry: (id: string) => api.post<Simulation>(`/simulations/${id}/retry`),
+  /** 다시 건다 — `solveOn` 을 주면 풀 곳을 바꿔서(「이 서버에서 다시 풀기」). */
+  retry: (id: string, solveOn?: 'local' | 'ste') =>
+    api.post<Simulation>(`/simulations/${id}/retry`, solveOn ? { solve_on: solveOn } : undefined),
   /** 끝난 작업을 게시한다 — 누구나 본다(읽기만). 메시 수렴 수준도 함께. */
   publish: (id: string) => api.post<Simulation>(`/simulations/${id}/publish`),
   /** 게시를 해제한다 — 다시 건 사람과 시스템 관리자만 본다. */
@@ -525,6 +529,7 @@ export const simulationApi = {
   workers: () => api.get<WorkersOverview>('/simulations/workers'),
   /** 솔버마다 집을 워커가 살아 있나 — 작업을 거는 창이 경고에 쓴다. */
   solvers: () => api.get<SolverAvailability[]>('/simulations/solvers'),
+  solvePlaces: () => api.get<SolvePlace[]>('/simulations/solve-places'),
   /**
    * DOE 비교 표 — CSV 와 같은 머리 · 줄(mm · MPa · N · Hz). **화면은 클립보드로 복사한다** — 사내 DRM 으로
    * 파일을 내려받지 못한다(엑셀에 붙여 넣는다). CSV 파일(`export.csv`)은 연계 스크립트용으로 남아 있다.

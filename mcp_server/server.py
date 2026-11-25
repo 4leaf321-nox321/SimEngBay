@@ -521,12 +521,17 @@ async def recipe_schema(ctx: Context) -> Any:
     형상으로 셈한 제안값을 보낸다(`folder_preview` 의 `suggested_element_size_mm` ·
     `suggested_element_size_from`). 사람이 크기를 정해 달라고 할 때만 `mesh.element_size_mm`
     을 준다 — 그 값이 CAD 의 전역 크기를 덮는다.
-    집을 워커가 없는 솔버로 걸면 작업이 대기에서 움직이지 않는다."""
+    집을 워커가 없는 솔버로 걸면 작업이 대기에서 움직이지 않는다.
+
+    `solve_places` — **어디서 풀 수 있나**(`local` 이 서버 · `ste` STE 클러스터). STE 는 **이
+    사람 명의로** 물어 본 답이다: 못 고르면 `reason`(사람에게 그대로 전한다), 고를 수 있으면
+    `queue`(남은 코어 · 내 대기 잡). STE 는 CalculiX 만, 메시 · 추출은 이 서버에서 한다."""
     recipes = await _get(ctx, "/api/simulations/recipes")
     if _failed(recipes):
         return recipes
     solvers = await _get(ctx, "/api/simulations/solvers")
-    return {"recipes": recipes, "solvers": solvers}
+    places = await _get(ctx, "/api/simulations/solve-places")
+    return {"recipes": recipes, "solvers": solvers, "solve_places": places}
 
 
 # --------------------------------------------------------------------------- #
@@ -703,6 +708,7 @@ async def jobs_create(
     numbers: list[int] | None = None,
     name: str | None = None,
     workspace_slug: str | None = None,
+    solve_on: str | None = None,
 ) -> Any:
     """CAD 폴더의 설계점에 해석을 건다 — **점마다 작업 하나.**
 
@@ -713,6 +719,9 @@ async def jobs_create(
     - `numbers`: 고른 설계점 번호. 비우면 걸 수 있는 전부(설계 하나면 그 하나).
     - `name`: 작업 이름 — 비우면 폴더 이름 · 「폴더 pNNNN (변수 값)」.
     - `workspace_slug`: 작업의 부서 꼬리표 — 비우면 화면처럼 내 대표 부서(없으면 첫 소속).
+    - `solve_on`: **어디서 풀까** — `local`(이 서버, 기본) · `ste`(STE 클러스터 — 건 사람
+      명의로 잡을 낸다, CalculiX 만). 한 번 건 DOE 의 점은 모두 같은 곳에서 푼다. 고를 수
+      있나는 `recipe_schema` 의 `solve_places` 가 말한다(사용자가 STE 를 말할 때만 준다).
 
     돌려주는 것: `study_id` · 만든 작업 id(`created`) · 걸지 못한 점과 까닭(`skipped`) · 알아야
     할 것(`notes` — 사람에게 그대로 전한다). 해석은 워커가 돌린다 — 끝났다고 말하지 말고
@@ -724,6 +733,8 @@ async def jobs_create(
     `notes` 가 알린다(10개 권장)."""
     if not workspace_slug:
         workspace_slug = await _home_workspace(ctx)
+    if solve_on:
+        spec = {**spec, "solve_on": solve_on}
 
     async def create(folder: str) -> Any:
         return await _post(
@@ -905,10 +916,18 @@ async def job_result(ctx: Context, job_id: str, detail: bool = False) -> Any:
 
 
 @mcp.tool()
-async def job_retry(ctx: Context, job_id: str) -> Any:
+async def job_retry(ctx: Context, job_id: str, solve_on: str | None = None) -> Any:
     """실패하거나 멈춘 작업을 **같은 스펙으로 다시** 건다(처음 단계부터). 조건 거절로 실패한
-    작업은 다시 걸어도 같은 곳에서 멈춘다 — 까닭부터 고친다. 건 사람이나 시스템 관리자만."""
-    got = await _post(ctx, f"/api/simulations/{job_id}/retry")
+    작업은 다시 걸어도 같은 곳에서 멈춘다 — 까닭부터 고친다. 건 사람이나 시스템 관리자만.
+
+    `solve_on` 을 주면 **풀 곳을 바꿔** 다시 건다 — STE 가 안 돼(`ste_auth` · `ste_unavailable`
+    · `ste_rejected`) 실패한 작업을 `local`(이 서버)로. 서버는 STE 가 안 될 때 몰래 이 서버로
+    풀지 않는다 — 바꾸는 것은 사용자가 그렇게 하자고 할 때만."""
+    got = await _post(
+        ctx,
+        f"/api/simulations/{job_id}/retry",
+        {"solve_on": solve_on} if solve_on else None,
+    )
     return _job_view(got) if isinstance(got, dict) and not _failed(got) else got
 
 

@@ -18,6 +18,10 @@ class StageOut(BaseModel):
     detail: str = ""
     error_code: str | None = None
     error_message: str | None = None
+    ste_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    """STE 에서 푼 솔브 단계가 낸 잡(`calculix/ste.py` 의 장부) — `ste_job_id` · `ste_state` ·
+    `queued_s` · `run_s` · `max_rss_mb` · `mem_gb` · `ccx_sha256`. 재시도 · 모드 찾기면
+    여럿이다."""
 
 
 class ArtifactOut(BaseModel):
@@ -48,6 +52,8 @@ class SimulationSummaryOut(BaseModel):
     """DOE 면 스터디 · 점 번호 · 바꾼 변수. 비교 화면이 이것으로 묶는다."""
     solver: str = "ansys"
     """스펙의 솔버 — 칸이 없는 옛 작업은 Ansys 다(`claim_next` 와 같다)."""
+    solve_on: str = "local"
+    """어디서 풀었나 — `local` 이 서버 · `ste` STE 클러스터(요청서 E-2, 스펙의 `solve_on`)."""
     owner_workspace_id: uuid.UUID | None
     owner_workspace_name: str | None
     requested_by_id: uuid.UUID | None
@@ -499,6 +505,7 @@ class StudyPointOut(BaseModel):
     published: bool = False
     recipe: str = "modal"
     solver: str = "ansys"
+    solve_on: str = "local"
     first_elastic_hz: float | None = None
     mass_kg: float | None = None
     mass_by_body: dict[str, float] = Field(default_factory=dict)
@@ -781,6 +788,38 @@ class WorkersOut(BaseModel):
     """**해석 작업 기준**이다 — 사람이 따로 연 Mechanical 이나 다른 플랫폼이 쥔 것은 못
     본다."""
     alive: int
+
+
+class SteQueueOut(BaseModel):
+    """STE 대기열 요약(요청서 S-3) — STE 가 준 것만 찬다."""
+
+    partition: str | None = None
+    cpus_total: int | None = None
+    cpus_allocated: int | None = None
+    cpus_idle: int | None = None
+    jobs_pending: int | None = None
+    jobs_running: int | None = None
+    mine_running: int | None = None
+    mine_pending: int | None = None
+
+
+class SolvePlaceOut(BaseModel):
+    """풀 곳 하나를 **지금 이 사람이** 고를 수 있나(요청서 E-2). 못 고르면 까닭을 그대로
+    보인다."""
+
+    place: Literal["local", "ste"]
+    label: str
+    available: bool
+    reason: str | None = None
+    queue: SteQueueOut | None = None
+    note: str = ""
+
+
+class RetryIn(BaseModel):
+    """다시 걸 때 풀 곳을 바꾼다 — STE 가 안 돼 실패한 작업을 「이 서버에서 다시」(요청서 E-2).
+    비우면 그대로."""
+
+    solve_on: Literal["local", "ste"] | None = None
 
 
 class SolverAvailabilityOut(BaseModel):

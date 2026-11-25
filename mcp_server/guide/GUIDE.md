@@ -1,6 +1,6 @@
 # SimEngBay MCP 안내서
 
-GUIDE_VERSION: 2026-11-22
+GUIDE_VERSION: 2026-11-25
 
 `get_guide` 가 이 파일을 `<!--@ 주제 -->` 로 갈라 준다. **서버가 쥔다** — 고치면 다음 호출부터
 그대로 나간다(재시작 없이).
@@ -127,6 +127,11 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
   화면에서 한다.
 - 실패: `job_get` 의 `error_message` · `stages[].error_message` 를 사람에게 전한다. 조건 거절이면
   다시 걸어도 같다 — 솔버를 바꾸거나 CAD 쪽에서 고친다. 일시적인 것이면 `job_retry`.
+- **풀 곳**: 기본은 이 서버다. 사용자가 STE 클러스터를 말하면 `recipe_schema` 의 `solve_places` 로
+  고를 수 있나 보고(못 고르면 `reason` 을 그대로 전한다) `jobs_create(…, solve_on="ste")` — CalculiX 만,
+  솔브만 STE 에서 하고 잡은 **그 사람 명의**로 나간다. STE 가 안 돼 실패하면(`ste_auth` ·
+  `ste_unavailable` · `ste_rejected`) 서버는 몰래 이 서버로 풀지 않는다 — 사용자가 원하면
+  `job_retry(job_id, solve_on="local")`.
 
 <!--@ conditions -->
 ## 조건 — CAD 가 보낸 것이 어떻게 걸리나

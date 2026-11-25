@@ -25,6 +25,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import uuid
 import zipfile
 from collections import Counter
@@ -124,9 +125,11 @@ from app.modules.simulations.schemas import (
     RegionOut,
     SimulationOut,
     SimulationSummaryOut,
+    SolvePlaceOut,
     SolverAvailabilityOut,
     SolverQueueOut,
     StageOut,
+    SteQueueOut,
     StudyAnalysisOut,
     StudyMatchOut,
     StudyMeasurementOut,
@@ -257,6 +260,7 @@ def to_summary(db: Session, simulation: Simulation) -> SimulationSummaryOut:
         source_ref=simulation.source_ref,
         source_meta=simulation.source_meta,
         solver=solver_of(simulation),
+        solve_on=solve_on_of(simulation),
         owner_workspace_id=simulation.owner_workspace_id,
         owner_workspace_name=workspace_name,
         requested_by_id=simulation.requested_by_id,
@@ -1958,6 +1962,11 @@ def _in_study(study_id: str) -> ColumnElement[bool]:
     )
 
 
+def solve_on_of(simulation: Simulation) -> str:
+    """어디서 풀었나 — 스펙에 칸이 없으면(기본값이라 안 적었거나 옛 작업) 이 서버."""
+    return "ste" if (simulation.spec or {}).get("solve_on") == "ste" else "local"
+
+
 def solver_of(simulation: Simulation) -> str:
     """그 작업의 솔버. 칸이 없는 옛 작업은 Ansys 다(`claim_next` 의 `COALESCE` 와 같다)."""
     return str((simulation.spec or {}).get("solver") or "ansys")
@@ -2188,6 +2197,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         published=simulation.published_at is not None,
         recipe=simulation.recipe,
         solver=solver_of(simulation),
+        solve_on=solve_on_of(simulation),
         first_elastic_hz=summary.get("first_elastic_hz"),
         mass_kg=_mass_of(summary),
         mass_by_body=_masses_of(summary),
@@ -2460,8 +2470,14 @@ def study_csv(db: Session, *, user: User, study_id: str) -> tuple[str, str]:
     return f"{study.name}.csv", buffer.getvalue()
 
 
-def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
-    """실패한 작업을 처음부터 다시 건다. 단계별 재시도(솔버만 다시)는 5단계."""
+def retry(
+    db: Session, *, user: User, simulation_id: uuid.UUID, solve_on: str | None = None
+) -> Simulation:
+    """실패한 작업을 처음부터 다시 건다. 단계별 재시도(솔버만 다시)는 5단계.
+
+    `solve_on` 을 주면 **풀 곳을 바꿔** 다시 건다 — STE 가 안 돼 실패한 작업을 「이 서버에서
+    다시」(요청서 E-2: STE 가 안 되면 몰래 바꾸지 않고, 사람이 고르게 한다). 다른 설정(작업을
+    만들 때 고정한 값)은 그대로다."""
     simulation = get_visible(db, user=user, simulation_id=simulation_id)
     _require_owner(user, simulation)
     if simulation.status not in ("failed", "canceled"):
@@ -2481,6 +2497,8 @@ def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
             status=409,
             details={"superseded_by": replaced},
         )
+    if solve_on is not None:
+        _move_solve_place(db, user, simulation, solve_on)
     simulation.status = "queued"
     simulation.stages = _initial_stages()
     simulation.summary = None
@@ -2502,6 +2520,49 @@ def retry(db: Session, *, user: User, simulation_id: uuid.UUID) -> Simulation:
     if get_settings().jobs_inline:
         execute(db, simulation, worker_id="inline")
     return simulation
+
+
+def _move_solve_place(db: Session, user: User, simulation: Simulation, solve_on: str) -> None:
+    """작업의 풀 곳을 바꾼다 — 스펙과 작업 폴더의 `spec.json`(자식이 읽는다)을 함께. 바뀐 것은
+    `source_meta.solve_on_changes` 에 남긴다(결과 목록의 「어디서 풀었나」 가 사람을 속이지
+    않게)."""
+    before = str((simulation.spec or {}).get("solve_on") or "local")
+    if solve_on == before:
+        return
+    spec = dict(simulation.spec or {})
+    if solve_on == "ste":
+        if solver_of(simulation) != "calculix":
+            raise AppError(
+                code("SIMULATIONS", 42),
+                "STE 에서 풀 수 있는 것은 CalculiX 작업뿐입니다.",
+                status=400,
+            )
+        if not ste_ready(db):
+            raise AppError(
+                code("SIMULATIONS", 41),
+                "이 서버에 STE 가 설정돼 있지 않아 STE 에서 풀 수 없습니다.",
+                status=400,
+            )
+        spec["solve_on"] = "ste"
+    else:
+        spec.pop("solve_on", None)
+    simulation.spec = spec
+    meta = dict(simulation.source_meta or {})
+    meta["solve_on_changes"] = [
+        *(meta.get("solve_on_changes") or []),
+        {
+            "from": before,
+            "to": solve_on,
+            "at": _iso(_now()),
+            "by": user.display_name or user.email,
+        },
+    ]
+    simulation.source_meta = meta
+    workdir = _work_dir_of(simulation)
+    if workdir is not None:
+        (workdir / "spec.json").write_text(
+            json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 # --- 집기 ------------------------------------------------------------------------
@@ -3741,6 +3802,91 @@ def ste_ready(db: Session) -> bool:
     return bool(
         runtime.effective(db)["ste_base_url"].value and get_settings().ste_sso_secret.strip()
     )
+
+
+def ste_config(db: Session) -> ste.SteConfig | None:
+    """API 쪽에서 STE 를 부를 설정 — 서버 설정(주소 · 앱 · 폴링 · 메모리 상한) + `.env`(비밀 ·
+    client · 토큰 폴더). 자식은 같은 값을 환경으로 받는다(`stage_env` · `ste_env`). 주소나
+    비밀이 비면 `None`."""
+    settings = get_settings()
+    now = runtime.effective(db)
+    base = now["ste_base_url"].value.strip().rstrip("/")
+    secret = settings.ste_sso_secret.strip()
+    if not base or not secret:
+        return None
+    client = settings.ste_sso_client.strip()
+    given = settings.ste_token_dir.strip()
+    return ste.SteConfig(
+        base_url=base,
+        secret=secret,
+        client=client,
+        app=now["ste_calculix_app"].value,
+        poll_seconds=float(now["ste_poll_seconds"].value),
+        poll_grace_seconds=float(now["ste_poll_grace_seconds"].value),
+        mem_gb_max=int(now["ste_mem_gb_max"].value),
+        token_dir=Path(given) if given else ste.default_token_dir(client),
+    )
+
+
+SOLVE_PLACE_LABELS = {"local": "이 서버", "ste": "STE 클러스터"}
+#: 고를 수 있나를 다시 묻는 간격(초) — 창을 열 때마다 STE 를 부르지 않는다.
+PROBE_SECONDS = 30.0
+_probes: dict[tuple[str, str, str], tuple[float, ste.Probe]] = {}
+
+
+def solve_places(db: Session, *, user: User) -> list[SolvePlaceOut]:
+    """**풀 곳마다 지금 이 사람이 고를 수 있나**(요청서 E-2). STE 는 그 사람 명의로 토큰을 받아
+    대기열을 물어 본다 — 설정이 없거나 · STE 가 그 사람을 거절하거나(그 문장을 그대로) · 응답이
+    없으면 까닭을 단다. 30초 동안은 같은 답을 쓴다."""
+    local = SolvePlaceOut(
+        place="local",
+        label=SOLVE_PLACE_LABELS["local"],
+        available=True,
+        note="메시 · 솔브 · 추출을 모두 이 서버에서 합니다.",
+    )
+    note = "메시 · 추출은 이 서버, 솔브(ccx)만 STE 에서 — 건 사람 명의로 잡을 냅니다."
+    config = ste_config(db)
+    if config is None:
+        return [
+            local,
+            SolvePlaceOut(
+                place="ste",
+                label=SOLVE_PLACE_LABELS["ste"],
+                available=False,
+                reason="이 서버에 STE 가 설정돼 있지 않습니다 — 관리자가 서버 화면의 STE "
+                "주소와 .env 의 STE_SSO_SECRET 을 정해야 합니다.",
+                note=note,
+            ),
+        ]
+    key = (user.email, config.base_url, config.client)
+    cached = _probes.get(key)
+    if cached is not None and time.monotonic() - cached[0] < PROBE_SECONDS:
+        found = cached[1]
+    else:
+        found = ste.probe(config, user.email, user.display_name or "")
+        _probes[key] = (time.monotonic(), found)
+    queue: SteQueueOut | None = None
+    if found.queue:
+        mine = found.queue.get("mine") or {}
+        try:
+            queue = SteQueueOut(
+                **{key: value for key, value in found.queue.items() if key != "mine"},
+                mine_running=mine.get("running"),
+                mine_pending=mine.get("pending"),
+            )
+        except ValidationError:
+            queue = None
+    return [
+        local,
+        SolvePlaceOut(
+            place="ste",
+            label=SOLVE_PLACE_LABELS["ste"],
+            available=found.available,
+            reason=found.reason,
+            queue=queue,
+            note=note,
+        ),
+    ]
 
 
 def stage_env(db: Session, simulation: Simulation, stage: str) -> tuple[tuple[str, str], ...]:

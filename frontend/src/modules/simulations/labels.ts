@@ -24,6 +24,21 @@ export const SOLVER_LABELS: Record<string, string> = {
 }
 
 /** 솔버 칸이 없는 옛 작업은 Ansys 로 돌았다(서버의 `COALESCE(spec->>'solver','ansys')` 와 같다). */
+/** 풀 곳(요청서 E-2) — 스펙의 `solve_on`. 칸이 없으면 이 서버다. */
+export type SolveOn = 'local' | 'ste'
+
+export const SOLVE_ON_LABELS: Record<SolveOn, string> = {
+  local: '이 서버',
+  ste: 'STE 클러스터',
+}
+
+export function solveOnOf(spec: Record<string, unknown> | null | undefined): SolveOn {
+  return spec?.solve_on === 'ste' ? 'ste' : 'local'
+}
+
+/** STE 가 안 돼 실패한 코드 — 「이 서버에서 다시 풀기」 를 권한다(서버는 몰래 바꾸지 않는다). */
+export const STE_FAILURES = new Set(['ste_auth', 'ste_unavailable', 'ste_rejected'])
+
 export function solverOf(spec: Record<string, unknown> | null | undefined): string {
   const value = spec?.solver
   return typeof value === 'string' && value ? value : 'ansys'

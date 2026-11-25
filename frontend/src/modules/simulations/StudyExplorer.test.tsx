@@ -25,6 +25,7 @@ function point(number: number, thickness: number, width: number, mm: number): St
     published: false,
     recipe: 'static',
     solver: 'calculix',
+    solve_on: 'local',
     frequencies: [],
     mass_kg: thickness * width * 0.01,
     max_displacement_mm: mm,

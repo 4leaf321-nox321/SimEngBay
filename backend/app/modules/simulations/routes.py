@@ -40,8 +40,10 @@ from app.modules.simulations.schemas import (
     PublishOut,
     RecipeOut,
     RemovedOut,
+    RetryIn,
     SimulationOut,
     SimulationSummaryOut,
+    SolvePlaceOut,
     SolverAvailabilityOut,
     StudyAnalysisOut,
     StudyMeasurementOut,
@@ -122,6 +124,17 @@ def solvers(
     """솔버마다 **집을 워커가 살아 있나** — 작업을 거는 화면이 경고에 쓴다. 집을 워커가 없는
     솔버로 걸면 작업은 대기에서 영원히 안 움직이고, 그 사실을 아무도 말해 주지 않는다."""
     return services.solver_availability(db)
+
+
+@router.get("/solve-places", response_model=list[SolvePlaceOut])
+def solve_places(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[SolvePlaceOut]:
+    """**풀 곳마다 지금 고를 수 있나** — 이 서버 · STE 클러스터(요청서 E-2). STE 는 그 사람
+    명의로 물어 보고, 못 고르면 까닭 · 고를 수 있으면 대기열 요약을 단다. 작업을 거는 창이
+    묻는다."""
+    return services.solve_places(db, user=user)
 
 
 @router.get("/measurements/template.csv", include_in_schema=False)
@@ -635,10 +648,20 @@ def request_convergence(
 @router.post("/{simulation_id}/retry", response_model=SimulationOut)
 def retry(
     simulation_id: uuid.UUID,
+    body: RetryIn | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SimulationOut:
-    return services.to_out(db, services.retry(db, user=user, simulation_id=simulation_id))
+    """다시 건다. `solve_on` 을 주면 풀 곳을 바꿔서(「이 서버에서 다시」)."""
+    return services.to_out(
+        db,
+        services.retry(
+            db,
+            user=user,
+            simulation_id=simulation_id,
+            solve_on=body.solve_on if body is not None else None,
+        ),
+    )
 
 
 @router.post("/studies/{study_id}/tidy")

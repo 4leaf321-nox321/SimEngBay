@@ -180,6 +180,13 @@ class FakeSte:
         self.submitted_params: list[dict[str, Any]] = []
         #: 길 이름(`sso` · `submit` · `status` …) → 다음에 낼 상태 코드들 — 5xx 를 흉내 낸다.
         self.faults: dict[str, list[int]] = {}
+        #: 대기열 요약(`GET /api/cluster`) — 11-24 `cluster_info` 의 숫자. `None` 이면 없는 길.
+        self.cluster: dict[str, Any] | None = {
+            "partition": "alpha",
+            "cpus_total": 2944,
+            "cpus_allocated": 2722,
+            "jobs_pending": 3,
+        }
         self.seq = 0
 
     # --- 바깥에서 부르는 것 ---
@@ -212,6 +219,7 @@ class FakeSte:
             ("GET", r"/api/jobs/(?P<job>[^/]+)", self._status),
             ("POST", r"/api/jobs/(?P<job>[^/]+)/cancel", self._cancel),
             ("GET", r"/api/jobs/(?P<job>[^/]+)/result/file/(?P<name>.+)", self._file),
+            ("GET", r"/api/cluster", self._cluster),
         ]
         for want, pattern, route in routes:
             matched = re.fullmatch(pattern, path)
@@ -369,6 +377,24 @@ class FakeSte:
         if "/" in name or not target.is_file():
             return _json({"detail": "파일이 없다"}, 404)
         return httpx.Response(200, content=target.read_bytes())
+
+    def _cluster(self, request: httpx.Request) -> httpx.Response:
+        """대기열 요약 — 요청서 S-3 이 바라는 꼴. `cluster` 가 `None` 이면 이 길이 없는 STE."""
+        owner = self._owner(request)
+        if owner is None:
+            return _json({"detail": "인증이 필요하다"}, 401)
+        if self.cluster is None:
+            return _json({"detail": "없는 길"}, 404)
+        mine = [one for one in self.jobs.values() if one.owner == owner]
+        return _json(
+            {
+                **self.cluster,
+                "mine": {
+                    "running": sum(one.state == "RUNNING" for one in mine),
+                    "pending": sum(one.state == "PENDING" for one in mine),
+                },
+            }
+        )
 
     # --- 잡 ---
 

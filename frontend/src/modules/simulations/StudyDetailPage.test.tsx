@@ -52,6 +52,7 @@ function point(number: number, status: string): StudyPoint {
     published: false,
     recipe: 'modal',
     solver: 'calculix',
+    solve_on: 'local',
     frequencies: [],
   }
 }

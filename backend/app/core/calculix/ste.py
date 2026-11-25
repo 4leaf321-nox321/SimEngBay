@@ -102,6 +102,9 @@ ENDPOINTS = {
     "job": "/api/jobs/{job}",
     "cancel": "/api/jobs/{job}/cancel",
     "result_file": "/api/jobs/{job}/result/file/{name}",
+    # 대기열 요약 — `cluster_info` 가 쓰는 길(포털 게이트웨이 점검이 `GET /api/cluster` 를
+    # 부른다). 응답 꼴은 요청서 S-3 이 바라는 것으로 읽는다(`_queue`) — 모르는 칸은 버린다.
+    "cluster": "/api/cluster",
 }
 
 #: 결과로 받아 올 파일 — 로컬 ccx 가 작업 폴더에 남기는 것과 같은 이름(요청서 A-2).
@@ -168,11 +171,11 @@ class SteConfig:
             poll_seconds=float(env.get(POLL_ENV, "") or POLL_SECONDS),
             poll_grace_seconds=float(env.get(POLL_GRACE_ENV, "") or POLL_GRACE_SECONDS),
             mem_gb_max=int(env.get(MEM_MAX_ENV, "") or MEM_GB_MAX),
-            token_dir=Path(given) if given else _default_token_dir(client),
+            token_dir=Path(given) if given else default_token_dir(client),
         )
 
 
-def _default_token_dir(client: str) -> Path | None:
+def default_token_dir(client: str) -> Path | None:
     """메모리 파일시스템이 있으면 그 아래 — 같은 기계의 워커(Apptainer 도 호스트의 `/dev/shm`
     을 본다)가 나눠 쓴다. 없으면 프로세스 안에서만."""
     shm = Path("/dev/shm")
@@ -448,6 +451,75 @@ def _state(status: dict[str, Any]) -> str:
     if state == "FAILED" and reason == "timeout":
         return "TIMEOUT"
     return state or slurm
+
+
+# --- 고를 수 있나(요청서 E-2) -------------------------------------------------------
+
+#: 화면이 기다리는 한도 — 고르는 창이 STE 를 오래 기다리면 안 된다.
+PROBE_TIMEOUT = httpx.Timeout(8.0, connect=5.0)
+#: 대기열 요약에서 읽는 칸(요청서 S-3) — STE 가 다른 이름을 쓰면 여기만 고친다.
+QUEUE_KEYS = (
+    "partition",
+    "cpus_total",
+    "cpus_allocated",
+    "cpus_idle",
+    "jobs_pending",
+    "jobs_running",
+)
+
+
+@dataclass(frozen=True)
+class Probe:
+    """이 사람 명의로 STE 를 쓸 수 있나 — 못 쓰면 까닭(사람이 읽을 한 줄), 쓰면 대기열."""
+
+    available: bool
+    reason: str | None = None
+    queue: dict[str, Any] | None = None
+
+
+def probe(config: SteConfig, email: str, name: str = "") -> Probe:
+    """**그 사람의 토큰을 받아** 대기열 요약을 묻는다. 토큰은 워커와 같은 자리에 나눠 둔 것을
+    쓴다(`Tokens`) — 살아 있으면 새로 받지 않는다(새로 받으면 그 사람의 돌던 잡의 토큰이
+    바뀐다 — 그래도 워커는 나눠 둔 것을 다시 읽어 잇는다). 요약 길이 없으면(404) 쓸 수는 있다고
+    본다."""
+    http = httpx.Client(timeout=PROBE_TIMEOUT, transport=TRANSPORT)
+    try:
+        session = SteSession(config, email, name=name, http=http, tokens=Tokens(config, http))
+        response = session.call("GET", ENDPOINTS["cluster"], what="대기열 요약")
+    except StageFailure as failure:
+        return Probe(False, failure.message)
+    finally:
+        http.close()
+    if response.status_code >= 400:
+        return Probe(True)
+    try:
+        body = response.json()
+    except ValueError:
+        return Probe(True)
+    return Probe(True, None, _queue(body))
+
+
+def _queue(body: Any) -> dict[str, Any] | None:
+    """`GET /api/cluster` → `{partition, cpus_total, cpus_allocated, cpus_idle, jobs_pending,
+    jobs_running, mine: {running, pending}}` 중 있는 것만. 남은 코어는 없으면 셈한다."""
+    if not isinstance(body, dict):
+        return None
+    summary = body.get("summary")
+    source: dict[str, Any] = summary if isinstance(summary, dict) else body
+    found: dict[str, Any] = {
+        key: source[key]
+        for key in QUEUE_KEYS
+        if isinstance(source.get(key), int | float | str)
+    }
+    total, allocated = found.get("cpus_total"), found.get("cpus_allocated")
+    if "cpus_idle" not in found and isinstance(total, int) and isinstance(allocated, int):
+        found["cpus_idle"] = total - allocated
+    mine = source.get("mine")
+    if isinstance(mine, dict):
+        found["mine"] = {
+            key: mine[key] for key in ("running", "pending") if isinstance(mine.get(key), int)
+        }
+    return found or None
 
 
 # --- ccx 한 번 ------------------------------------------------------------------------------

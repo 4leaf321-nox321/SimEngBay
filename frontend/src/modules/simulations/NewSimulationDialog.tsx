@@ -60,8 +60,10 @@ import {
 } from '@/modules/simulations/spec'
 import type { HarmonicInput, MeshOrder, RandomInput, RangeInput, RecipeName } from '@/modules/simulations/spec'
 import { HarmonicFields, MeshFields, RandomFields, RecipeSelect } from '@/modules/simulations/SpecFields'
+import { SolveOnSelect } from '@/modules/simulations/SolveOnSelect'
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
 import { MAX_TRACKS } from '@/modules/simulations/studyTable'
+import type { SolveOn } from '@/modules/simulations/labels'
 import type { Solver } from '@/modules/simulations/SolverSelect'
 import { StudyOntology } from '@/modules/simulations/StudyOntology'
 import { ApiError } from '@/shared/api/client'
@@ -139,6 +141,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
   const [recipe, setRecipe] = useState<RecipeName>('modal')
   // **CalculiX 가 기본이다**(2026-10-08) — 라이선스 없이 서버에서 바로, 여러 점을 함께 푼다.
   const [solver, setSolver] = useState<Solver>('calculix')
+  // **풀 곳** — 기본은 이 서버(요청서 E-2). DOE 면 모든 점이 같은 곳에서 푼다.
+  const [solveOn, setSolveOn] = useState<SolveOn>('local')
   const [modes, setModes] = useState('10')
   const [largeDeflection, setLargeDeflection] = useState(false)
   const [harmonic, setHarmonic] = useState<HarmonicInput>(HARMONIC_DEFAULTS)
@@ -209,6 +213,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
   const input = {
     recipe,
     solver,
+    solveOn,
     conditionsFrom: useCadConditions ? ('cad' as const) : ('spec' as const),
     elementSize,
     order,
@@ -829,6 +834,7 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                   <RecipeSelect id="sim-recipe" value={recipe} onChange={(next) => void changeRecipe(next)} suggested={suggested} />
                   <SolverSelect id="sim-solver" value={solver} onChange={setSolver} />
                 </div>
+                <SolveOnSelect id="sim-solve-on" value={solveOn} solver={solver} onChange={setSolveOn} />
 
                 {recipe !== 'modal' && !hasLoads && (
                   <p className="text-xs text-amber-700 dark:text-amber-400">

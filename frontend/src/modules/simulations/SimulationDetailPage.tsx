@@ -32,11 +32,15 @@ import {
   FAILURE_LABELS,
   RECIPE_LABELS,
   SOLVER_LABELS,
+  SOLVE_ON_LABELS,
   STAGE_LABELS,
+  STE_FAILURES,
   shownDuration,
   shownSize,
+  solveOnOf,
   solverOf,
 } from '@/modules/simulations/labels'
+import type { SolveOn } from '@/modules/simulations/labels'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ownsWork } from '@/shared/auth/roles'
@@ -329,6 +333,16 @@ interface Checked {
  * 응답이 새 작업 위에 남고, 새 작업을 못 받으면 앞 작업이 오류 없이 그대로 보였다(그 위의
  * 취소 · 정리 단추는 새 id 에 건다). 열쇠로 묶어 상태 전부를 작업과 함께 버린다(2026-10-05 리뷰).
  */
+/** STE 잡 한 줄 — 번호 · 끝난 상태 · 대기 · 실행 · 청한 메모리(요청서 E-1 의 단계 기록). */
+function steJobLine(job: Record<string, unknown>): string {
+  const seconds = (value: unknown) => (typeof value === 'number' ? `${Math.round(value)}초` : '—')
+  const parts = [`STE 잡 ${String(job.ste_job_id ?? '?')}`, String(job.ste_state ?? '제출함')]
+  parts.push(`대기 ${seconds(job.queued_s)} · 실행 ${seconds(job.run_s)}`)
+  if (typeof job.mem_gb === 'number') parts.push(`메모리 ${job.mem_gb} GB`)
+  if (typeof job.max_rss_mb === 'number') parts.push(`최대 ${Math.round(job.max_rss_mb)} MB`)
+  return parts.join(' · ')
+}
+
 export default function SimulationDetailPage() {
   const { id = '' } = useParams()
   return <SimulationDetail key={id} id={id} />
@@ -431,11 +445,11 @@ function SimulationDetail({ id }: { id: string }) {
   const navigate = useNavigate()
   const [removing, setRemoving] = useState(false)
 
-  async function retry() {
+  async function retry(solveOn?: SolveOn) {
     setBusy(true)
     setError(null)
     try {
-      setLive(await simulationApi.retry(id))
+      setLive(await simulationApi.retry(id, solveOn))
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
@@ -498,6 +512,8 @@ function SimulationDetail({ id }: { id: string }) {
             {RECIPE_LABELS[simulation.recipe] ?? simulation.recipe} ·{' '}
             {/* **스펙에서 읽는다** — 요약의 솔버 도장은 CalculiX 만 찍고, 끝나기 전에는 없다. */}
             {SOLVER_LABELS[solverOf(simulation.spec)] ?? solverOf(simulation.spec)} ·{' '}
+            {/* **어디서 풀었나**(요청서 E-2) — 이 서버가 기본이라 STE 일 때만 적는다. */}
+            {solveOnOf(simulation.spec) === 'ste' && `${SOLVE_ON_LABELS.ste} · `}
             {simulation.owner_workspace_name ?? '전역'} · {simulation.requested_by_name ?? '—'} ·{' '}
             {shownDateTime(simulation.created_at)} · 소요{' '}
             {shownDuration(simulation.started_at, simulation.finished_at)}
@@ -532,11 +548,22 @@ function SimulationDetail({ id }: { id: string }) {
             )}
             {/* 다시 가져와 대신한 작업이 있으면 그쪽에서 다시 건다 — 서버도 막는다(SIMULATIONS-0031). */}
             {mine && (simulation.status === 'failed' || simulation.status === 'canceled') && !replacedBy(simulation) && (
-              <Button size="sm" onClick={retry} disabled={busy}>
+              <Button size="sm" onClick={() => void retry()} disabled={busy}>
                 <RotateCcw className="size-4" />
                 다시 실행
               </Button>
             )}
+            {/* **STE 가 안 돼 실패했으면 이 서버에서 다시** — 서버는 몰래 바꾸지 않는다(요청서 E-2). */}
+            {mine &&
+              simulation.status === 'failed' &&
+              solveOnOf(simulation.spec) === 'ste' &&
+              STE_FAILURES.has(simulation.error_code ?? '') &&
+              !replacedBy(simulation) && (
+                <Button variant="outline" size="sm" onClick={() => void retry('local')} disabled={busy}>
+                  <RotateCcw className="size-4" />
+                  이 서버에서 다시 풀기
+                </Button>
+              )}
             {mine && finished && (
               <Button variant="outline" size="sm" onClick={tidy} disabled={busy}>
                 <Eraser className="size-4" />
@@ -664,6 +691,14 @@ function SimulationDetail({ id }: { id: string }) {
                   )}
                   {stage.detail && <p className="text-muted-foreground text-sm">{stage.detail}</p>}
                   {stage.error_message && <p className="text-destructive text-sm">{stage.error_message}</p>}
+                  {/* **STE 에 낸 잡** — 재시도 · 모드 찾기면 여럿이다. STE 화면에서 찾을 번호다. */}
+                  {(stage.ste_jobs ?? []).length > 0 && (
+                    <ul className="text-muted-foreground mt-1 space-y-0.5 text-xs">
+                      {(stage.ste_jobs ?? []).map((job) => (
+                        <li key={String(job.ste_job_id)}>{steJobLine(job)}</li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               ))}
             </ol>

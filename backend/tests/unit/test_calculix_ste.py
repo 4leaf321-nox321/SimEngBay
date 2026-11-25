@@ -391,3 +391,15 @@ def test_실행기는_건_사람을_명령줄로_비밀을_환경으로_준다(t
     )
     modeling = StageContext(stage="modeling", spec=ctx.spec, workdir=tmp_path)
     assert ste.SECRET_ENV not in runner.child_env(modeling), "솔브 밖 단계에도"
+
+
+def test_대기열_요약은_있는_칸만_읽고_남은_코어를_셈한다() -> None:
+    assert ste._queue(
+        {"partition": "alpha", "cpus_total": 2944, "cpus_allocated": 2722, "nodes": [1, 2]}
+    ) == {"partition": "alpha", "cpus_total": 2944, "cpus_allocated": 2722, "cpus_idle": 222}
+    assert ste._queue({"summary": {"jobs_pending": 3, "mine": {"pending": 2}}}) == {
+        "jobs_pending": 3,
+        "mine": {"pending": 2},
+    }
+    assert ste._queue({"nodes": []}) is None
+    assert ste._queue(["alpha"]) is None

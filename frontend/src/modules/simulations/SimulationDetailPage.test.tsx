@@ -30,6 +30,7 @@ vi.mock('@/modules/simulations/api', async (importOriginal) => {
       unpublish: vi.fn(),
       downloadAll: vi.fn(),
       remove: vi.fn(),
+      retry: vi.fn(),
       solvers: vi.fn().mockResolvedValue([]),
     },
   }
@@ -339,5 +340,38 @@ describe('해석 작업 화면', () => {
     expect(screen.getByText('솔버 질량')).toBeInTheDocument()
     // 질량 둘(형상 부피 x 밀도 · 솔버)이 같다 — 같은 글자가 둘 이상(한눈에 보기 줄에도 있다).
     expect(screen.getAllByText('186.5 g').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('STE 가 안 돼 실패한 작업은 이 서버에서 다시 풀 수 있고, STE 잡을 단계 옆에 보인다', async () => {
+    const failed = job('failed')
+    failed.spec = { recipe: 'modal', solver: 'calculix', solve_on: 'ste' }
+    failed.error_code = 'ste_unavailable'
+    failed.stages = failed.stages.map((one) =>
+      one.name === 'solving'
+        ? {
+            ...one,
+            status: 'failed',
+            ste_jobs: [{ ste_job_id: 'j0007', ste_state: 'FAILED', queued_s: 42, run_s: 3, mem_gb: 4 }],
+          }
+        : one,
+    )
+    vi.mocked(simulationApi.get).mockResolvedValue(failed)
+    vi.mocked(simulationApi.status).mockResolvedValue(failed)
+    vi.mocked(simulationApi.retry).mockResolvedValue(job('queued'))
+    show()
+    expect(await screen.findByText(/STE 클러스터 ·/)).toBeInTheDocument()
+    expect(screen.getByText(/STE 잡 j0007 · FAILED · 대기 42초 · 실행 3초 · 메모리 4 GB/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /이 서버에서 다시 풀기/ }))
+    await waitFor(() => expect(simulationApi.retry).toHaveBeenCalledWith('sim', 'local'))
+  })
+
+  it('이 서버에서 푼 작업에는 「이 서버에서 다시 풀기」 가 없다', async () => {
+    const failed = job('failed')
+    failed.error_code = 'solver_failed'
+    vi.mocked(simulationApi.get).mockResolvedValue(failed)
+    vi.mocked(simulationApi.status).mockResolvedValue(failed)
+    show()
+    expect(await screen.findByRole('button', { name: /다시 실행/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /이 서버에서 다시 풀기/ })).toBeNull()
   })
 })

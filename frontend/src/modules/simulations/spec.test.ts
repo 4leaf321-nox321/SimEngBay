@@ -122,3 +122,11 @@ describe('목록의 결과 칸', () => {
     expect(shownOutcome(row('random', { max_displacement_1sigma_mm: 0.0058 }))).toBe('최대 1σ 변위 0.0058 mm')
   })
 })
+
+describe('풀 곳(요청서 E-2)', () => {
+  it('STE 를 고른 CalculiX 만 스펙에 싣는다 — 이 서버는 기본이라 안 싣는다', () => {
+    expect(buildSpec({ ...BASE, solver: 'calculix', solveOn: 'ste' }).solve_on).toBe('ste')
+    expect(buildSpec({ ...BASE, solver: 'calculix', solveOn: 'local' })).not.toHaveProperty('solve_on')
+    expect(buildSpec({ ...BASE, solver: 'ansys', solveOn: 'ste' })).not.toHaveProperty('solve_on')
+  })
+})

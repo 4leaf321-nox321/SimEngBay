@@ -334,6 +334,27 @@ def test_걸기는_폴더_가져오기로_스펙을_dict_그대로_보낸다() -
     assert json.loads(seen[0].content)["workspace_slug"] == "qa"
 
 
+def test_풀_곳은_스펙에_싣고_다시_걸기는_바꿀_때만_몸통을_보낸다() -> None:
+    """STE 는 사용자가 말할 때만 — `solve_on` 을 주면 스펙에 싣고, 다시 걸기는 바꿀 곳만
+    보낸다."""
+    seen = _route(
+        {
+            ("POST", "/api/simulations/doe/import"): {"study_id": "s", "created": ["j1"]},
+            ("POST", "/api/simulations/j1/retry"): {"id": "j1", "status": "queued"},
+        }
+    )
+    spec = {"recipe": "modal"}
+    _run(server.jobs_create, spec, path="/d", workspace_slug="qa", solve_on="ste")
+    assert json.loads(seen[0].content)["spec"] == {"recipe": "modal", "solve_on": "ste"}
+    assert spec == {"recipe": "modal"}, "받은 스펙은 그대로 둔다"
+
+    seen.clear()
+    _run(server.job_retry, "j1")
+    assert seen[0].content == b"", "그대로 다시 걸면 몸통이 없다"
+    _run(server.job_retry, "j1", solve_on="local")
+    assert json.loads(seen[1].content) == {"solve_on": "local"}
+
+
 def test_찾기는_스터디_id_나_이름을_보내고_못_찾으면_무엇을_할지_말한다() -> None:
     """사용자는 공유 폴더 경로를 모른다 — CompCore 의 스터디 id 나 이름으로 찾는다. 못 찾으면
     「CompCore 에서 내보내기」 를 말한다(0건을 「없다」 로만 전하지 않게)."""

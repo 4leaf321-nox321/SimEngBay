@@ -5,7 +5,7 @@
 import { Link } from 'react-router-dom'
 
 import type { StudyPoint } from '@/modules/simulations/api'
-import { SOLVER_LABELS } from '@/modules/simulations/labels'
+import { SOLVE_ON_LABELS, SOLVER_LABELS } from '@/modules/simulations/labels'
 import { PublishedBadge } from '@/modules/simulations/Publishing'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { StatusBadge } from '@/shared/components/StatusBadge'
@@ -63,7 +63,10 @@ export function StudyPoints({
               <StatusBadge kind="simulation" value={point.status} />
             </TableCell>
             <TableCell className="text-destructive font-mono text-xs">{point.error_code ?? ''}</TableCell>
-            <TableCell>{SOLVER_LABELS[point.solver] ?? point.solver}</TableCell>
+            <TableCell>
+              {SOLVER_LABELS[point.solver] ?? point.solver}
+              {point.solve_on === 'ste' && ` · ${SOLVE_ON_LABELS.ste}`}
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>

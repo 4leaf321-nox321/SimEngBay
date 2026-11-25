@@ -3096,6 +3096,32 @@
         }
       }
     },
+    "/api/simulations/solve-places": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Solve Places",
+        "description": "**풀 곳마다 지금 고를 수 있나** — 이 서버 · STE 클러스터(요청서 E-2). STE 는 그 사람\n명의로 물어 보고, 못 고르면 까닭 · 고를 수 있으면 대기열 요약을 단다. 작업을 거는 창이\n묻는다.",
+        "operationId": "solve_places_api_simulations_solve_places_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SolvePlaceOut"
+                  },
+                  "type": "array",
+                  "title": "Response Solve Places Api Simulations Solve Places Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/measurements/{measurement_id}": {
       "delete": {
         "tags": [
@@ -4928,6 +4954,7 @@
           "simulations"
         ],
         "summary": "Retry",
+        "description": "다시 건다. `solve_on` 을 주면 풀 곳을 바꿔서(「이 서버에서 다시」).",
         "operationId": "retry_api_simulations__simulation_id__retry_post",
         "parameters": [
           {
@@ -4941,6 +4968,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RetryIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -10897,6 +10941,28 @@
         "title": "ResonanceMatchOut",
         "description": "실측 공진 하나와 그 짝 — **센서 자리에서 움직이는 모드 중** 가장 가까운 것."
       },
+      "RetryIn": {
+        "properties": {
+          "solve_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "ste"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve On"
+          }
+        },
+        "type": "object",
+        "title": "RetryIn",
+        "description": "다시 걸 때 풀 곳을 바꾼다 — STE 가 안 돼 실패한 작업을 「이 서버에서 다시」(요청서 E-2).\n비우면 그대로."
+      },
       "RuntimeSettingIn": {
         "properties": {
           "value": {
@@ -11281,6 +11347,11 @@
             "title": "Solver",
             "default": "ansys"
           },
+          "solve_on": {
+            "type": "string",
+            "title": "Solve On",
+            "default": "local"
+          },
           "owner_workspace_id": {
             "anyOf": [
               {
@@ -11536,6 +11607,11 @@
             "title": "Solver",
             "default": "ansys"
           },
+          "solve_on": {
+            "type": "string",
+            "title": "Solve On",
+            "default": "local"
+          },
           "owner_workspace_id": {
             "anyOf": [
               {
@@ -11685,6 +11761,60 @@
         "title": "SimulationSummaryOut",
         "description": "목록 한 줄. 스펙 · 단계 · 산출물은 싣지 않는다 — 50줄에 그것까지 실으면 목록이\n무겁다."
       },
+      "SolvePlaceOut": {
+        "properties": {
+          "place": {
+            "type": "string",
+            "enum": [
+              "local",
+              "ste"
+            ],
+            "title": "Place"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SteQueueOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "place",
+          "label",
+          "available"
+        ],
+        "title": "SolvePlaceOut",
+        "description": "풀 곳 하나를 **지금 이 사람이** 고를 수 있나(요청서 E-2). 못 고르면 까닭을 그대로\n보인다."
+      },
       "SolverAvailabilityOut": {
         "properties": {
           "solver": {
@@ -11809,6 +11939,14 @@
               }
             ],
             "title": "Error Message"
+          },
+          "ste_jobs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Ste Jobs"
           }
         },
         "type": "object",
@@ -11926,6 +12064,101 @@
           "unit"
         ],
         "title": "StaticMatchOut"
+      },
+      "SteQueueOut": {
+        "properties": {
+          "partition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partition"
+          },
+          "cpus_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus Total"
+          },
+          "cpus_allocated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus Allocated"
+          },
+          "cpus_idle": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus Idle"
+          },
+          "jobs_pending": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobs Pending"
+          },
+          "jobs_running": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobs Running"
+          },
+          "mine_running": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mine Running"
+          },
+          "mine_pending": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mine Pending"
+          }
+        },
+        "type": "object",
+        "title": "SteQueueOut",
+        "description": "STE 대기열 요약(요청서 S-3) — STE 가 준 것만 찬다."
       },
       "StudyAnalysisOut": {
         "properties": {
@@ -12396,6 +12629,11 @@
             "type": "string",
             "title": "Solver",
             "default": "ansys"
+          },
+          "solve_on": {
+            "type": "string",
+            "title": "Solve On",
+            "default": "local"
           },
           "first_elastic_hz": {
             "anyOf": [

@@ -25,7 +25,7 @@ import type { DoeImport, Item, ItemKind, ListScope, StudyPoint } from '@/modules
 import { bulkNotice, eachOf } from '@/modules/simulations/bulk'
 import { ChosenActions } from '@/modules/simulations/ChosenActions'
 import { shownOutcome, shownValue } from '@/modules/simulations/format'
-import { RECIPE_LABELS, SOLVER_LABELS, shownDuration } from '@/modules/simulations/labels'
+import { RECIPE_LABELS, SOLVER_LABELS, SOLVE_ON_LABELS, shownDuration } from '@/modules/simulations/labels'
 import { NewSimulationDialog } from '@/modules/simulations/NewSimulationDialog'
 import { PublishedBadge } from '@/modules/simulations/Publishing'
 import { ScopeTabs, workScope } from '@/modules/simulations/SimulationsLayout'
@@ -449,6 +449,7 @@ function JobCells({ item, space }: { item: Item; space: Space }) {
         {RECIPE_LABELS[one.recipe] ?? one.recipe}
         <span className="text-muted-foreground block text-xs">
           {SOLVER_LABELS[one.solver ?? 'ansys'] ?? one.solver}
+          {one.solve_on === 'ste' && ` · ${SOLVE_ON_LABELS.ste}`}
         </span>
       </TableCell>
       <TableCell>

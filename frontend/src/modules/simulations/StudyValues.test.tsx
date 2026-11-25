@@ -32,6 +32,7 @@ function point(number: number, friction: number, force: number, slip: number): S
     published: false,
     recipe: 'static',
     solver: 'calculix',
+    solve_on: 'local',
     frequencies: [],
     mass_kg: 0.31,
     max_displacement_mm: 0.04,

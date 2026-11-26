@@ -1286,8 +1286,9 @@ def _apply_loads(
     # **볼트가 있으면 두 단계다**(`_static_steps`) — 1단계에 볼트만 조이고, 2단계에 그 길이를
     # 잠근 채 다른 하중을 건다. 한 단계로 풀면 볼트 힘이 끝까지 예압 그대로 묶인 채 외력을
     # 받아, CalculiX(두 단계)와 외력이 볼트 힘을 바꾸는 모델에서 갈렸다(2026-10-26). 중력은
-    # 단계마다 끌 수 없다(Mechanical 에 그 칸이 없다) — 조일 때도 있는 하중이라 두 단계에
-    # 다 걸고, CalculiX 도 그렇게 한다.
+    # 단계마다 끌 수 없다(Mechanical 에 그 칸이 없다 — 실측 2026-11-26: `EarthGravity` 에
+    # `SetActivateAtLoadStep` 이 없고, 가속도 · 회전 속도에는 있어 꺼진다) — 조일 때도 있는
+    # 하중이라 두 단계에 다 걸고, CalculiX 도 그렇게 한다.
     bolted = steps > 1
     for load in given.loads:
         maker = _LOAD_MAKERS.get(load.kind)

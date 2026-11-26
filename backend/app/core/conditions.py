@@ -492,6 +492,7 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
             )
             continue
         _constraint(row, regions, made)
+    wrong = misplaced(payload)
     for row in _rows(block, "contacts"):
         ends = [str(row.get(key) or "") for key in ("source", "target")]
         hit = next((gone[one] for one in ends if one in gone), None)
@@ -510,7 +511,16 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
         if stuck is not None:
             made.refused.append(Note(f"접촉 「{row.get('name') or '이름 없는 접촉'}」", stuck))
             continue
+        flagged = wrong.pop(_contact_key(row), None)
+        if flagged is not None:
+            made.refused.append(
+                Note(f"접촉 「{row.get('name') or '이름 없는 접촉'}」", flagged)
+            )
+            continue
         _contact(row, regions, made)
+    for (name, _source, _target), why in wrong.items():
+        # 판정은 있는데 조건에 그 접촉이 없다 — 두 목록이 어긋났다. 모르는 채로 풀지 않는다.
+        made.refused.append(Note(f"접촉 「{name or '이름 없는 접촉'}」", why))
     for row in _rows(block, "mesh_hints"):
         _mesh_hint(row, made, _dict(_dict(payload).get("regions")), entities)
     for row in _rows(block, "loads"):
@@ -667,6 +677,46 @@ def _constraint(row: dict[str, Any], regions: set[str], made: Conditions) -> Non
             behavior=str(row.get("behavior") or "deformable"),
         )
     )
+
+
+#: CompCore 가 **잘못 걸렸다고 판정한 접촉**(점 파일 `quality.misplaced_contacts`, CompCore
+#: v0.31.1 — 2026-11-26). 접촉 자동 찾기가 면의 중심으로 규칙을 지어(v0.26.0 ~ v0.31.0) 본딩
+#: 면이 딴 면에 걸렸다 — 중심이 구멍 속인 면, 딴 바디와 자리가 같은 면(판 구멍 ↔ 볼트 몸통).
+#: 면 지문은 그 딴 면과 맞으므로 우리 짝짓기로는 못 가린다. 저장된 규칙이라 다시 내보내도
+#: 남는다.
+MISPLACED_TEXT = {
+    "same_face": "두 그룹이 같은 면을 가리킵니다 — 면이 제 자신과 묶일 뿐 바디는 안 묶입니다",
+    "apart": "두 그룹이 맞닿아 있지 않습니다 — 떨어지지 않는 접촉인데 묶을 면이 없습니다",
+}
+
+
+def _contact_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("name") or ""),
+        str(row.get("source") or ""),
+        str(row.get("target") or ""),
+    )
+
+
+def misplaced(payload: Any) -> dict[tuple[str, str, str], str]:
+    """`quality.misplaced_contacts` → (이름, 접촉면, 대상면) → 막는 까닭. CompCore 가 「틀림」
+    만 싣는다(같은 면은 늘, 맞닿지 않음은 본딩 · 분리 없음일 때만) — **실린 것은 모두
+    막는다.**"""
+    rows = _dict(_dict(payload).get("quality")).get("misplaced_contacts")
+    out: dict[tuple[str, str, str], str] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        problem = str(row.get("problem") or "")
+        what = MISPLACED_TEXT.get(
+            problem, f"CompCore 가 잘못 걸린 접촉으로 판정했습니다({problem})"
+        )
+        source, target = row.get("source") or "", row.get("target") or ""
+        out[_contact_key(row)] = (
+            f"{what}(접촉면 「{source}」 · 대상면 「{target}」, CompCore 판정). CompCore 에서 "
+            "그 선택 그룹을 고쳐 다시 내보내세요."
+        )
+    return out
 
 
 def _contact(row: dict[str, Any], regions: set[str], made: Conditions) -> None:

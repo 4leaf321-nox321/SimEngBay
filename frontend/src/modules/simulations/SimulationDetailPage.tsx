@@ -333,10 +333,22 @@ interface Checked {
  * 응답이 새 작업 위에 남고, 새 작업을 못 받으면 앞 작업이 오류 없이 그대로 보였다(그 위의
  * 취소 · 정리 단추는 새 id 에 건다). 열쇠로 묶어 상태 전부를 작업과 함께 버린다(2026-10-05 리뷰).
  */
-/** STE 잡 한 줄 — 번호 · 끝난 상태 · 대기 · 실행 · 청한 메모리(요청서 E-1 의 단계 기록). */
+/** STE 상태 중 Slurm 낱말이 아닌 것 — 이 서버가 적는다(요청서 E-4). */
+const STE_STATE_WORDS: Record<string, string> = {
+  CANCEL_REQUESTED: '취소를 청함(멈춘 것은 못 봄)',
+}
+
+/** STE 잡 한 줄 — 번호 · 끝난 상태 · 대기 · 실행 · 청한 메모리(요청서 E-1 의 단계 기록). 이
+ * 서버가 취소했으면 그렇다고, 이미 끝나 있어 결과를 버렸으면 그렇다고 붙인다(E-4). ccx 지문이
+ * 이 서버와 다르면 그것도(E-5). */
 function steJobLine(job: Record<string, unknown>): string {
   const seconds = (value: unknown) => (typeof value === 'number' ? `${Math.round(value)}초` : '—')
-  const parts = [`STE 잡 ${String(job.ste_job_id ?? '?')}`, String(job.ste_state ?? '제출함')]
+  const state = String(job.ste_state ?? '제출함')
+  const parts = [`STE 잡 ${String(job.ste_job_id ?? '?')}`, STE_STATE_WORDS[state] ?? state]
+  if (job.canceled_by === 'server') parts.push('이 서버가 취소함')
+  if (job.discarded === true) parts.push('결과 버림')
+  // 고르기 전 점검을 지나도 STE 앱이 그사이 바뀔 수 있다(E-5) — 결과 끝자리가 갈릴 수 있다.
+  if (job.ccx_matches_local === false) parts.push('⚠ ccx 지문이 이 서버와 다름')
   parts.push(`대기 ${seconds(job.queued_s)} · 실행 ${seconds(job.run_s)}`)
   if (typeof job.mem_gb === 'number') parts.push(`메모리 ${job.mem_gb} GB`)
   if (typeof job.max_rss_mb === 'number') parts.push(`최대 ${Math.round(job.max_rss_mb)} MB`)

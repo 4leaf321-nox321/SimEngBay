@@ -320,6 +320,7 @@ def _queue_of(db: Session, simulation: Simulation) -> QueueOut | None:
         people=max(1, int(people)),
         running=int(running or 0),
         workers_alive=_workers_for(db, solver),
+        held=_ste_hold(db, simulation),
     )
 
 
@@ -1080,6 +1081,8 @@ def create(
             "「이 서버」 로 고르세요(관리자: 서버 화면의 STE 주소 · .env 의 STE_SSO_SECRET).",
             status=400,
         )
+    if spec.solve_on == "ste":
+        _refuse_ste_build(db, user)
 
     # **레시피부터 본다.** `static` 은 구속을 필수로 받는 스펙이라 순서가 거꾸로면 「실행기가
     # 없다」 대신 「지문이 없다」 고 답하고, 사람은 지문을 만들어 다시 왔다가 또 거절당한다.
@@ -2549,6 +2552,7 @@ def _move_solve_place(db: Session, user: User, simulation: Simulation, solve_on:
                 "이 서버에 STE 가 설정돼 있지 않아 STE 에서 풀 수 없습니다.",
                 status=400,
             )
+        _refuse_ste_build(db, user)
         spec["solve_on"] = "ste"
     else:
         spec.pop("solve_on", None)
@@ -2626,6 +2630,51 @@ def _close_queued(simulation: Simulation) -> None:
     ]
 
 
+#: STE 로 풀 작업인가(SQL) — `solve_on` 이 없으면 이 서버다.
+STE_ROW = "COALESCE({row}.spec->>'solve_on', 'local') = 'ste'"
+#: STE 동시 한도의 셈과 집기를 한 줄로 세우는 잠금 번호(`pg_advisory_xact_lock`) — 「STE」.
+STE_CLAIM_LOCK = 0x535445
+
+
+def ste_limits(db: Session) -> tuple[int, int]:
+    """STE 동시 작업 한도(전체, 사람별) — 서버 설정 → `.env` → 0(한도 없음). 요청서 E-6."""
+    now = runtime.effective(db)
+    return (
+        int(now["ste_solve_max_inflight"].value or 0),
+        int(now["ste_solve_max_inflight_per_user"].value or 0),
+    )
+
+
+def _ste_hold(db: Session, simulation: Simulation) -> str | None:
+    """대기 중인 STE 작업이 **한도에 걸려 서 있나** — 그 까닭 한 줄(`QueueOut.held`)."""
+    if solve_on_of(simulation) != "ste":
+        return None
+    total, per_user = ste_limits(db)
+    if not total and not per_user:
+        return None
+    on_ste = (
+        func.coalesce(Simulation.spec["solve_on"].astext, "local") == "ste",
+        Simulation.deleted_at.is_(None),
+        Simulation.status.in_(RUNNING_STATUSES),
+    )
+    if total:
+        running = db.scalar(select(func.count()).where(*on_ste)) or 0
+        if running >= total:
+            return (
+                f"STE 동시 작업 한도(이 서버 전체 {total}개)가 찼습니다 — 도는 STE 작업이 "
+                "끝나면 집힙니다."
+            )
+    if per_user:
+        mine = Simulation.requested_by_id.is_not_distinct_from(simulation.requested_by_id)
+        running = db.scalar(select(func.count()).where(*on_ste, mine)) or 0
+        if running >= per_user:
+            return (
+                f"이 사람의 STE 동시 작업 한도({per_user}개)가 찼습니다 — 그 사람의 도는 STE "
+                "작업이 끝나면 집힙니다."
+            )
+    return None
+
+
 def claim_next(
     db: Session, worker_id: str, *, solvers: tuple[str, ...] | None = None
 ) -> Simulation | None:
@@ -2657,6 +2706,26 @@ def claim_next(
         "r.requested_by_id IS NOT DISTINCT FROM s.requested_by_id AND r.deleted_at IS NULL "
         "AND COALESCE(r.spec->>'solver', 'ansys') = COALESCE(s.spec->>'solver', 'ansys')"
     )
+    total, per_user = ste_limits(db)
+    if total or per_user:
+        # **STE 동시 한도**(요청서 E-6) — 찬 STE 작업은 건너뛰고 다른 작업을 집는다. 셈과
+        # 집기를 한 줄로 세운다: 워커 둘이 같은 빈자리를 함께 보면 한도를 넘는다(SKIP LOCKED
+        # 는 서로의 집기를 못 본다). 잠금은 커밋에서 풀린다.
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": STE_CLAIM_LOCK})
+        on_ste = (
+            f"{STE_ROW.format(row='r')} AND r.deleted_at IS NULL AND r.status IN ({running})"
+        )
+        full = []
+        if total:
+            full.append(f"(SELECT count(*) FROM simulations r WHERE {on_ste}) >= :ste_total")
+            params["ste_total"] = total
+        if per_user:
+            full.append(
+                f"(SELECT count(*) FROM simulations r WHERE {on_ste} "
+                "AND r.requested_by_id IS NOT DISTINCT FROM s.requested_by_id) >= :ste_user"
+            )
+            params["ste_user"] = per_user
+        where += f" AND NOT ({STE_ROW.format(row='s')} AND ({' OR '.join(full)}))"
     picked = db.execute(
         text(
             f"SELECT s.id FROM simulations s WHERE {where} "
@@ -2727,6 +2796,7 @@ def requeue_stale(db: Session) -> int:
         )
     ]
     for simulation in stale:
+        _close_stale_ste_jobs(db, simulation)
         if simulation.cancel_requested_at is not None:
             simulation.status = "canceled"
             simulation.error_message = "취소를 요청받은 채 워커가 멈췄습니다."
@@ -2744,6 +2814,27 @@ def requeue_stale(db: Session) -> int:
             simulation.heartbeat_at = None
     db.commit()
     return len(stale)
+
+
+def _close_stale_ste_jobs(db: Session, simulation: Simulation) -> None:
+    """**죽은 워커가 STE 에 남긴 잡을 멈춘다**(요청서 E-4) — 되살리면 처음부터 다시 풀고,
+    취소 · 실패로 끝내면 아무도 그 결과를 안 읽는다. 어느 쪽이든 옛 잡은 클러스터에서 그
+    사람의 몫을 쓴다. **기다리지 않는다** — 취소만 청한다(워커의 집기 줄을 붙들지 않는다).
+    못 닿으면 다음에 다시 해 보지 않는다(장부에 「취소를 청함」 으로 남는다)."""
+    if (simulation.spec or {}).get("solve_on") != "ste" or simulation.work_dir is None:
+        return
+    workdir = work_root() / simulation.work_dir
+    if not ste.open_jobs(workdir):
+        return
+    requester = (
+        db.get(User, simulation.requested_by_id) if simulation.requested_by_id else None
+    )
+    try:
+        _close_ste_jobs(db, simulation, workdir, 0, requester, wait_seconds=0)
+    except Exception:  # 되살리기는 막지 않는다
+        logger.warning(
+            "해석 작업 %s 의 STE 잡을 닫지 못했습니다", simulation.id, exc_info=True
+        )
 
 
 # --- 메시 수렴 ---------------------------------------------------------------------
@@ -3882,17 +3973,130 @@ def solve_places(db: Session, *, user: User) -> list[SolvePlaceOut]:
             )
         except ValidationError:
             queue = None
+    available, reason = found.available, found.reason
+    if available:
+        fingerprint = ste_fingerprint(db, config, user)
+        note = f"{note} {fingerprint.note}"
+        if fingerprint.problem:
+            available, reason = False, fingerprint.problem
     return [
         local,
         SolvePlaceOut(
             place="ste",
             label=SOLVE_PLACE_LABELS["ste"],
-            available=found.available,
-            reason=found.reason,
+            available=available,
+            reason=reason,
             queue=queue,
             note=note,
         ),
     ]
+
+
+# --- ccx 지문(요청서 E-5) --------------------------------------------------------------
+
+#: STE 앱 정보를 다시 묻는 간격 — 요청서 「기동할 때와 하루 한 번」. 프로세스가 처음 고를 때
+#: 묻고(기동 때는 물을 사람이 없다 — 앱 정보도 그 사람 명의로 묻는다) 하루 동안 쓴다.
+FINGERPRINT_SECONDS = 86400.0
+_fingerprints: dict[tuple[str, str], tuple[float, str | None]] = {}
+
+
+@dataclass(frozen=True)
+class CcxFingerprint:
+    """STE 의 ccx 와 이 서버 워커의 ccx 가 같은 빌드인가."""
+
+    remote: str | None
+    """STE 앱의 지문 — 앱 정보(`app`)나 마지막 STE 잡(`job`)에서. 모르면 `None`."""
+    source: str
+    local: tuple[str, ...]
+    """CalculiX 를 집는 살아 있는 워커들의 지문(`toolcheck.report`)."""
+    problem: str | None
+    """다르면 STE 를 못 고르는 까닭."""
+    note: str
+
+
+def ste_fingerprint(db: Session, config: ste.SteConfig, user: User) -> CcxFingerprint:
+    """**STE 의 ccx 가 이 서버의 ccx 와 같은 빌드인가**(요청서 E-5 · 받아들임 1). 다르면 같은
+    덱도 결과 끝자리가 갈린다 — 그때 STE 를 못 고른다. 어느 한쪽을 모르면 막지 않고 그렇다고
+    적는다(STE 가 앱 정보에 지문을 안 실으면 첫 STE 잡이 끝난 뒤에야 안다)."""
+    key = (config.base_url, config.app)
+    cached = _fingerprints.get(key)
+    if cached is None or time.monotonic() - cached[0] > FINGERPRINT_SECONDS:
+        cached = (
+            time.monotonic(),
+            ste.app_fingerprint(config, user.email, user.display_name or ""),
+        )
+        _fingerprints[key] = cached
+    remote, source = cached[1], "app"
+    if remote is None:
+        remote, source = _last_ste_job_fingerprint(db), "job"
+    local = _local_ccx_fingerprints(db)
+    if remote is None:
+        return CcxFingerprint(
+            None,
+            "",
+            local,
+            None,
+            "ccx 지문: STE 쪽을 아직 모릅니다(앱 정보에 없고 끝난 STE 잡이 없습니다) — 첫 "
+            "STE 잡이 끝나면 견줍니다.",
+        )
+    if not local:
+        return CcxFingerprint(
+            remote,
+            source,
+            local,
+            None,
+            f"ccx 지문: 이 서버 워커 쪽을 모릅니다(STE {remote[:12]}…).",
+        )
+    if remote not in local:
+        return CcxFingerprint(
+            remote,
+            source,
+            local,
+            f"STE 의 ccx(지문 {remote[:12]}…)가 이 서버 워커의 ccx"
+            f"({' · '.join(one[:12] + '…' for one in local)})와 다른 빌드입니다 — 같은 덱도 "
+            "결과 끝자리가 갈릴 수 있어 STE 를 막았습니다. STE 앱 관리자에게 같은 빌드(요청서 "
+            "A-1)를 청하세요.",
+            f"ccx 지문이 다릅니다(STE {remote[:12]}…).",
+        )
+    return CcxFingerprint(
+        remote, source, local, None, f"ccx 지문이 이 서버와 같습니다({remote[:12]}…)."
+    )
+
+
+def _local_ccx_fingerprints(db: Session) -> tuple[str, ...]:
+    now = _now()
+    found = {
+        str(row.tools.get("ccx_sha256"))
+        for row in db.scalars(select(SimulationWorker))
+        if _alive(row, now) and _takes(row, "calculix") and (row.tools or {}).get("ccx_sha256")
+    }
+    return tuple(sorted(found))
+
+
+def _last_ste_job_fingerprint(db: Session) -> str | None:
+    """마지막으로 끝난 STE 잡이 알려 준 지문(잡 출력 첫 줄 · 상태 — 요청서 A-2)."""
+    found = db.execute(
+        text(
+            "SELECT job->>'ccx_sha256' FROM simulations s "
+            "CROSS JOIN LATERAL jsonb_array_elements(s.stages) AS stage "
+            "CROSS JOIN LATERAL jsonb_array_elements("
+            "  CASE WHEN jsonb_typeof(stage->'ste_jobs') = 'array' "
+            "  THEN stage->'ste_jobs' ELSE '[]'::jsonb END) AS job "
+            f"WHERE {STE_ROW.format(row='s')} AND job->>'ccx_sha256' IS NOT NULL "
+            "ORDER BY s.finished_at DESC NULLS LAST LIMIT 1"
+        )
+    ).scalar()
+    return str(found).lower() if found else None
+
+
+def _refuse_ste_build(db: Session, user: User) -> None:
+    """작업을 STE 로 걸 때 — **지문이 다르면 거절한다**(설정이 없는 것은 앞에서 거절했다)."""
+    config = ste_config(db)
+    if config is None:
+        return
+    problem = ste_fingerprint(db, config, user).problem
+    if problem:
+        raise AppError(code("SIMULATIONS", 44), problem, status=400)
 
 
 def stage_env(db: Session, simulation: Simulation, stage: str) -> tuple[tuple[str, str], ...]:
@@ -3974,7 +4178,8 @@ def execute(
                 ),
             )
         except StageCanceled:
-            _note_ste_jobs(db, simulation, stage, workdir, ledger_at, requester)
+            # STE 잡을 먼저 멈춘다 — `CANCELLED` 를 본 뒤에 단계를 「취소」 로 둔다(E-4).
+            closed = _note_ste_jobs(db, simulation, stage, workdir, ledger_at, requester)
             if not _still_mine(db, simulation.id, worker_id):
                 # **다른 워커가 되살려 집어 갔다** — 아무것도 쓰지 않고 손을 뗀다.
                 db.rollback()
@@ -3984,7 +4189,13 @@ def execute(
                 return simulation
             # **실패가 아니다.** 사람이 멈춘 것이라 「남은 일」 에 안 올리고 실패로
             # 세지도 않는다.
-            _set_stage(simulation, stage, status="canceled", finished_at=_iso(_now()))
+            _set_stage(
+                simulation,
+                stage,
+                status="canceled",
+                finished_at=_iso(_now()),
+                **({"detail": _closed_detail(closed)} if closed else {}),
+            )
             simulation.status = "canceled"
             simulation.finished_at = _now()
             db.commit()
@@ -4058,6 +4269,90 @@ def execute(
 
 #: 감사 기록의 일 — STE 에 잡을 낸 것(요청서 E-3: 사람 · 작업 id · STE 잡 id).
 STE_SUBMIT = "ste.submit"
+#: 이쪽이 STE 잡을 취소한 것(요청서 E-4) — 낸 사람 명의로 취소하므로 그 사람으로 남긴다.
+STE_CANCEL = "ste.cancel"
+
+
+def _close_ste_jobs(
+    db: Session,
+    simulation: Simulation,
+    workdir: Path,
+    offset: int,
+    requester: User | None,
+    *,
+    wait_seconds: float,
+) -> list[dict[str, Any]]:
+    """**끝을 못 적은 STE 잡을 STE 에서 취소한다**(요청서 E-4) — 자식이 취소 · 단계 시간 초과 ·
+    죽음으로 멈추면 그 잡은 클러스터에서 계속 돈다(그 사람의 몫을 쓰며). 낸 사람 명의로
+    취소하고 장부에 끝을 적는다(`ste.close_open`). 감사 `ste.cancel` 은 잡마다. 커밋은
+    부르는 쪽이 한다."""
+    pending = ste.open_jobs(workdir, offset)
+    if not pending:
+        return []
+    config = ste_config(db)
+    if config is None or requester is None:
+        # 낸 뒤에 STE 설정이나 건 사람이 지워졌다 — 이 서버로는 닫을 길이 없다.
+        why = (
+            "STE 설정이 없어 취소하지 못했습니다"
+            if config is None
+            else "건 사람이 없어 그 명의로 취소하지 못했습니다"
+        )
+        closed: list[dict[str, Any]] = []
+        for job in pending:
+            entry = {
+                "ste_job_id": job["ste_job_id"],
+                "ste_state": ste.CANCEL_REQUESTED,
+                "canceled_by": ste.CANCELED_HERE,
+                "cancel_error": f"{why} — STE 화면에서 멈추세요.",
+            }
+            ste.append_ledger(workdir, {"event": "end", **entry, "at": time.time()})
+            closed.append(entry)
+        logger.warning("해석 작업 %s 의 STE 잡을 닫지 못했습니다: %s", simulation.id, why)
+        return closed
+    closed = ste.close_open(
+        config,
+        workdir,
+        offset,
+        email=requester.email,
+        name=requester.display_name or "",
+        wait_seconds=wait_seconds,
+    )
+    for entry in closed:
+        audit.record(
+            db,
+            action=STE_CANCEL,
+            actor=requester,
+            target_table="simulations",
+            target_id=simulation.id,
+            target_label=simulation.name,
+            workspace_id=simulation.owner_workspace_id,
+            changes={
+                key: entry[key]
+                for key in ("ste_job_id", "ste_state", "discarded", "cancel_error")
+                if key in entry
+            },
+        )
+    return closed
+
+
+def _closed_detail(closed: list[dict[str, Any]]) -> str:
+    """취소한 단계에 붙일 한 줄 — STE 잡이 정말 멈췄나."""
+    stopped = [one["ste_job_id"] for one in closed if one.get("ste_state") == "CANCELLED"]
+    done = [one["ste_job_id"] for one in closed if one.get("discarded")]
+    unsure = [
+        one["ste_job_id"] for one in closed if one.get("ste_state") == ste.CANCEL_REQUESTED
+    ]
+    parts = []
+    if stopped:
+        parts.append(f"STE 잡 {' · '.join(stopped)} 을 STE 에서 취소했습니다(CANCELLED 확인)")
+    if done:
+        parts.append(f"STE 잡 {' · '.join(done)} 은 이미 끝나 있어 결과를 버렸습니다")
+    if unsure:
+        parts.append(
+            f"STE 잡 {' · '.join(unsure)} 은 취소를 청했지만 멈춘 것을 못 봤습니다 — STE "
+            "화면에서 확인하세요"
+        )
+    return ". ".join(parts) + "." if parts else ""
 
 
 def _note_ste_jobs(
@@ -4067,17 +4362,21 @@ def _note_ste_jobs(
     workdir: Path,
     offset: int | None,
     requester: User | None,
-) -> None:
+) -> list[dict[str, Any]]:
     """**이 단계가 STE 에 낸 잡**을 단계 기록(`stages[].ste_jobs`)과 감사(`ste.submit`)로
-    옮긴다.
+    옮긴다 — 그 전에 **끝을 못 적은 잡은 STE 에서 취소한다**(`_close_ste_jobs`, 요청서 E-4).
+    돌려주는 것은 그렇게 닫은 잡들이다.
 
     자식이 작업 폴더의 장부(`.ste-jobs.jsonl`)에 적은 것을 읽는다 — 자식이 실패 · 취소 · 도중에
     죽어도 낸 잡은 거기 남는다. 커밋은 부르는 쪽(`execute`)이 한다."""
     if offset is None:
-        return
+        return []
+    closed = _close_ste_jobs(
+        db, simulation, workdir, offset, requester, wait_seconds=ste.CANCEL_CONFIRM_SECONDS
+    )
     jobs = ste.read_ledger(workdir, offset)
     if not jobs:
-        return
+        return closed
     _set_stage(simulation, stage, ste_jobs=jobs)
     for job in jobs:
         audit.record(
@@ -4094,6 +4393,7 @@ def _note_ste_jobs(
                 "stage": stage,
             },
         )
+    return closed
 
 
 def _follow_published_original(db: Session, simulation: Simulation) -> None:

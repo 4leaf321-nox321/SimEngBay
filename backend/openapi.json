@@ -10710,6 +10710,17 @@
           "workers_alive": {
             "type": "integer",
             "title": "Workers Alive"
+          },
+          "held": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Held"
           }
         },
         "type": "object",

@@ -365,6 +365,34 @@ describe('해석 작업 화면', () => {
     await waitFor(() => expect(simulationApi.retry).toHaveBeenCalledWith('sim', 'local'))
   })
 
+  it('이 서버가 취소한 STE 잡 · 멈춘 것을 못 본 잡 · ccx 지문이 다른 잡을 그렇다고 보인다', async () => {
+    const canceled = job('canceled')
+    canceled.spec = { recipe: 'modal', solver: 'calculix', solve_on: 'ste' }
+    canceled.stages = canceled.stages.map((one) =>
+      one.name === 'solving'
+        ? {
+            ...one,
+            status: 'canceled',
+            ste_jobs: [
+              { ste_job_id: 'j0008', ste_state: 'CANCELLED', canceled_by: 'server', mem_gb: 2 },
+              { ste_job_id: 'j0009', ste_state: 'CANCEL_REQUESTED', canceled_by: 'server' },
+              { ste_job_id: 'j0010', ste_state: 'COMPLETED', canceled_by: 'server', discarded: true },
+              { ste_job_id: 'j0011', ste_state: 'COMPLETED', ccx_matches_local: false },
+              { ste_job_id: 'j0012', ste_state: 'COMPLETED', ccx_matches_local: true },
+            ],
+          }
+        : one,
+    )
+    vi.mocked(simulationApi.get).mockResolvedValue(canceled)
+    vi.mocked(simulationApi.status).mockResolvedValue(canceled)
+    show()
+    expect(await screen.findByText(/STE 잡 j0008 · CANCELLED · 이 서버가 취소함 · 대기/)).toBeInTheDocument()
+    expect(screen.getByText(/STE 잡 j0009 · 취소를 청함\(멈춘 것은 못 봄\) · 이 서버가 취소함/)).toBeInTheDocument()
+    expect(screen.getByText(/STE 잡 j0010 · COMPLETED · 이 서버가 취소함 · 결과 버림/)).toBeInTheDocument()
+    expect(screen.getByText(/STE 잡 j0011 · COMPLETED · ⚠ ccx 지문이 이 서버와 다름/)).toBeInTheDocument()
+    expect(screen.getByText(/STE 잡 j0012 · COMPLETED · 대기/)).toBeInTheDocument()
+  })
+
   it('이 서버에서 푼 작업에는 「이 서버에서 다시 풀기」 가 없다', async () => {
     const failed = job('failed')
     failed.error_code = 'solver_failed'

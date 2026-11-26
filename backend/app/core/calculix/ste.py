@@ -26,7 +26,20 @@ STE 서버 소스는 공개 저장소에 없다. HWAXPortal(`ste_credential.py`,
   받는다), 결과 `GET /api/jobs/{id}/result/file/{파일}`, 오류 본문 `{"detail": …}`.
 - 짐작 — **`ENDPOINTS` · `_submit_form` · `_state` 세 곳만 고치면 된다**: 제출 `POST
   /api/jobs`(폼 `app` · `upload_id` · `params`), 상태 `GET /api/jobs/{id}`(`state` ·
-  `exit_code` · `max_rss_mb` · `ccx_sha256`), 취소 `POST /api/jobs/{id}/cancel`.
+  `exit_code` · `max_rss_mb` · `ccx_sha256`), 취소 `POST /api/jobs/{id}/cancel`, 앱 정보
+  `GET /api/apps/{app}`(메타의 `ccx_sha256` — `sha_in`).
+
+## 취소를 STE 까지 (E-4, 2026-11-26)
+
+자식은 SIGTERM 에 곧바로 죽어 낸 잡의 「끝」 을 장부에 못 적는다 — 그 잡은 클러스터에서 계속
+돈다. **닫는 것은 워커다**(`close_open`): 장부에서 끝이 없는 잡을 낸 사람 명의로 취소하고
+`CANCELLED` 를 볼 때까지 묻는다. 부르는 곳은 `simulations.services._note_ste_jobs` ·
+`_close_stale_ste_jobs`.
+
+## ccx 지문 (E-5)
+
+잡마다 STE 가 알려 준 지문과 이 기계의 ccx 지문을 견줘 남긴다(`ccx_matches_local`). 고르기
+전의 점검(앱 정보 · 마지막 잡 ↔ 워커들의 지문)은 `simulations.services.ste_fingerprint`.
 
 ## 토큰을 왜 기계 안에서 나눠 쓰나
 
@@ -41,6 +54,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import hashlib
 import json
 import logging
@@ -102,6 +116,9 @@ ENDPOINTS = {
     "job": "/api/jobs/{job}",
     "cancel": "/api/jobs/{job}/cancel",
     "result_file": "/api/jobs/{job}/result/file/{name}",
+    # 앱 정보 — 앱이 쓰는 ccx 의 sha256(요청서 A-2 「앱 정보(`app.yaml` 메타)」).
+    # 길은 짐작이다.
+    "app": "/api/apps/{app}",
     # 대기열 요약 — `cluster_info` 가 쓰는 길(포털 게이트웨이 점검이 `GET /api/cluster` 를
     # 부른다). 응답 꼴은 요청서 S-3 이 바라는 것으로 읽는다(`_queue`) — 모르는 칸은 버린다.
     "cluster": "/api/cluster",
@@ -135,6 +152,7 @@ RUNNING = frozenset({"RUNNING", "COMPLETING"})
 #: `ste_credential._NAME_SAFE` 와 같은 규칙 — 한글 이름이면 httpx 가 머리를 못 싣는다).
 _NAME_SAFE = "".join(c for c in string.printable if c not in "%\t\n\r\x0b\x0c")
 _SHA = re.compile(r"sha256\s*[:=]\s*([0-9a-f]{64})", re.IGNORECASE)
+_HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -499,6 +517,33 @@ def probe(config: SteConfig, email: str, name: str = "") -> Probe:
     return Probe(True, None, _queue(body))
 
 
+def app_fingerprint(config: SteConfig, email: str, name: str = "") -> str | None:
+    """**STE 앱이 쓰는 ccx 의 sha256**(요청서 E-5 · A-2) — 그 사람 명의로 앱 정보를 묻는다.
+    길이 없거나(404) · 칸이 없거나 · 못 닿으면 `None`(모른다 — 다르다가 아니다)."""
+    http = httpx.Client(timeout=PROBE_TIMEOUT, transport=TRANSPORT)
+    try:
+        session = SteSession(config, email, name=name, http=http, tokens=Tokens(config, http))
+        response = session.call("GET", ENDPOINTS["app"].format(app=config.app), what="앱 정보")
+    except StageFailure:
+        return None
+    finally:
+        http.close()
+    if response.status_code >= 400:
+        return None
+    return sha_in(_json_dict(response))
+
+
+def sha_in(body: dict[str, Any]) -> str | None:
+    """앱 정보에서 ccx 지문 — 맨 위 · `meta` · `metadata` 의 `ccx_sha256`(STE 가 어디에
+    싣든)."""
+    for holder in (body, body.get("meta"), body.get("metadata")):
+        if isinstance(holder, dict):
+            value = str(holder.get("ccx_sha256") or "").strip().lower()
+            if _HEX64.fullmatch(value):
+                return value
+    return None
+
+
 def _queue(body: Any) -> dict[str, Any] | None:
     """`GET /api/cluster` → `{partition, cpus_total, cpus_allocated, cpus_idle, jobs_pending,
     jobs_running, mine: {running, pending}}` 중 있는 것만. 남은 코어는 없으면 셈한다."""
@@ -639,6 +684,14 @@ class SteCcx:
             max_rss_mb=status.get("max_rss_mb"),
             ccx_sha256=status.get("ccx_sha256") or (found.group(1) if found else None),
         )
+        # **잡마다 지문을 견줘 남긴다**(요청서 E-5) — 고르기 전 점검을 지나도 STE 앱이 그사이
+        # 바뀔 수 있다.
+        local = _local_ccx_sha()
+        if local and record["ccx_sha256"]:
+            record.update(
+                local_ccx_sha256=local,
+                ccx_matches_local=str(record["ccx_sha256"]).lower() == local,
+            )
         self.jobs.append(record)
         self._ledger({"event": "end", **record, "at": time.time()})
         return self._outcome(record, log)
@@ -817,8 +870,121 @@ class SteCcx:
         )
 
     def _ledger(self, entry: dict[str, Any]) -> None:
-        with (self.workdir / LEDGER_NAME).open("a", encoding="utf-8") as out:
-            out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        append_ledger(self.workdir, entry)
+
+
+def append_ledger(workdir: Path, entry: dict[str, Any]) -> None:
+    with (workdir / LEDGER_NAME).open("a", encoding="utf-8") as out:
+        out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+# --- 취소를 STE 까지(요청서 E-4) ---------------------------------------------------------
+
+#: 취소한 뒤 `CANCELLED` 를 기다리는 시간(초) — 요청서 받아들임 7 「다음 폴링 안에」. 넘으면
+#: 「취소를 청함」 으로 적고 이쪽은 끝낸다(사람을 붙들지 않는다).
+CANCEL_CONFIRM_SECONDS = 60.0
+#: 그동안 묻는 간격 — 폴링 간격(15초)보다 짧게.
+CANCEL_POLL_SECONDS = 3.0
+#: 취소를 청했는데 끝을 못 본 잡의 상태 — Slurm 낱말이 아니다.
+CANCEL_REQUESTED = "CANCEL_REQUESTED"
+#: 장부의 `canceled_by` — 이 서버가 취소했다(STE 화면 · 관리자가 멈춘 것과 가른다).
+CANCELED_HERE = "server"
+
+
+def open_jobs(workdir: Path, offset: int = 0) -> list[dict[str, Any]]:
+    """**낸 뒤 끝을 못 적은 잡** — 자식이 취소 · 단계 시간 초과 · 죽음으로 멈췄다. 자식은 낸
+    즉시 장부에 적으므로(`SteCcx.run`) 여기 없는 잡은 STE 에도 없다 — 제출 답을 받기 전에
+    죽은 한 번만 빼고."""
+    return [one for one in read_ledger(workdir, offset) if not one.get("ste_state")]
+
+
+def close_open(
+    config: SteConfig,
+    workdir: Path,
+    offset: int = 0,
+    *,
+    email: str,
+    name: str = "",
+    wait_seconds: float = CANCEL_CONFIRM_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[dict[str, Any]]:
+    """**끝을 못 적은 잡을 STE 에서 취소한다**(요청서 E-4) — 낸 사람 명의(워커끼리 나눠 쓰는
+    같은 토큰)로 취소하고, `CANCELLED` 를 볼 때까지 `wait_seconds` 동안 묻는다. 끝을 장부에
+    적고 그 줄들을 돌려준다.
+
+    이미 끝나 있던 잡은 그 상태를 적고 **결과를 버린다**(`discarded` — 받아 오지 않는다, 이쪽
+    작업은 취소다). 예외를 던지지 않는다 — 못 닫은 것은 `cancel_error` 로 남고 상태는
+    `CANCEL_REQUESTED` 다."""
+    pending = open_jobs(workdir, offset)
+    if not pending:
+        return []
+    http = http_client()
+    try:
+        session = SteSession(config, email, name=name, http=http, tokens=Tokens(config, http))
+        return [
+            _close_one(session, workdir, str(job["ste_job_id"]), wait_seconds, sleep)
+            for job in pending
+        ]
+    finally:
+        http.close()
+
+
+def _close_one(
+    session: SteSession,
+    workdir: Path,
+    job: str,
+    wait_seconds: float,
+    sleep: Callable[[float], None],
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {"ste_job_id": job, "canceled_by": CANCELED_HERE}
+    state = ""
+    deadline = time.monotonic() + wait_seconds
+    try:
+        response = session.call("POST", ENDPOINTS["cancel"].format(job=job), what="잡 취소")
+        if response.status_code < 400:
+            state = _state(_json_dict(response))
+        # 취소의 답이 끝을 말하지 않으면(4xx — 이미 끝남 · 409 도) 상태를 따로 묻는다.
+        while state not in FINISHED:
+            status = session.call("GET", ENDPOINTS["job"].format(job=job), what="잡 상태")
+            if status.status_code >= 400:
+                raise StageFailure(
+                    "ste_rejected",
+                    f"STE 가 잡 {job} 의 상태를 주지 않습니다(HTTP {status.status_code}): "
+                    f"{_detail(status)}",
+                )
+            state = _state(_json_dict(status))
+            if state in FINISHED or time.monotonic() >= deadline:
+                break
+            sleep(min(session.config.poll_seconds, CANCEL_POLL_SECONDS))
+    except StageFailure as failure:
+        entry["cancel_error"] = failure.message
+    entry["ste_state"] = state if state in FINISHED else CANCEL_REQUESTED
+    if state in FINISHED and state != "CANCELLED":
+        entry["discarded"] = True
+    append_ledger(workdir, {"event": "end", **entry, "at": time.time()})
+    logger.info(
+        "STE 잡 %s 를 취소했습니다(%s 명의) → %s", job, session.email, entry["ste_state"]
+    )
+    return entry
+
+
+def _json_dict(response: httpx.Response) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+@functools.cache
+def _local_ccx_sha() -> str | None:
+    """이 기계의 ccx 지문 — 자식 하나에서 한 번만 잰다. ccx 가 없으면 `None`."""
+    from app.core.toolcheck import sha256_of  # 순환 import 를 피한다
+
+    try:
+        return sha256_of(tools.ccx_bin())
+    except StageFailure:
+        return None
 
 
 def _threads(given: str) -> int:

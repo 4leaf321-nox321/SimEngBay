@@ -236,6 +236,12 @@ class Settings(BaseSettings):
     ste_mem_gb_max: int = 64
     """잡 하나에 청할 메모리 상한(GB). SPOOLES 어림 x 1.5 가 이것을 넘으면 정적은 반복
     솔버로 푼다."""
+    ste_solve_max_inflight: int = 0
+    """동시에 도는 STE 작업 수 상한 — 이 서버 전체(요청서 E-6, `STE_SOLVE_MAX_INFLIGHT`). 넘는
+    STE 작업은 이 서버 대기열에서 기다린다. 0 이면 한도 없음(워커 수가 곧 한도)."""
+    ste_solve_max_inflight_per_user: int = 0
+    """사람마다의 같은 상한(`STE_SOLVE_MAX_INFLIGHT_PER_USER`). 0 이면 한도 없음. STE 쪽 한도
+    (요청서 S-5)와 겹쳐도 둔다 — DOE 한 번이 그 사람의 STE 몫을 다 쓰지 않게."""
     ste_token_dir: str = ""
     """같은 기계의 워커가 사람별 STE 토큰을 나눠 둘 폴더(0700, 파일 0600). 비우면
     `/dev/shm/<client>-ste-<uid>`(메모리) — STE 는 같은 사람 · 같은 client 의 직전 토큰을

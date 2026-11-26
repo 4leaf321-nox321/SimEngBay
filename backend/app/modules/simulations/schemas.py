@@ -192,6 +192,9 @@ class QueueOut(BaseModel):
     workers_alive: int
     """그 솔버를 집는 살아 있는 워커. -1 은 모른다(신호를 적는 워커가 없는 설치), 0 이면 워커가
     뜰 때까지 움직이지 않는다."""
+    held: str | None = None
+    """STE 동시 작업 한도(요청서 E-6)에 걸려 서 있으면 그 까닭 — 워커가 비어도 이 작업은
+    안 집힌다(다른 작업은 집힌다)."""
 
 
 class SimulationOut(SimulationSummaryOut):

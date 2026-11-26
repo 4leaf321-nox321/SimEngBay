@@ -210,6 +210,18 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
   명의로 STE 를 물어 본 답이다(거절이면 STE 의 문장). STE 가 안 돼 실패하면 몰래 이 서버로 풀지 않는다 — 사람이
   「이 서버에서 다시 풀기」(`retry` 의 `solve_on`)를 누른다. 풀 곳을 바꾸면 작업 폴더의 `spec.json` 도 같이 바꾼다
   (자식은 그것을 읽는다).
+- **STE 잡은 자식이 아니라 워커가 닫는다**(요청서 E-4, 2026-11-26) — 자식은 SIGTERM 에 바로 죽어 낸 잡의 「끝」 을
+  못 적는다. 워커가 단계를 적기 전에(취소 · 실패 · 예외 모두) 장부(`.ste-jobs.jsonl`)에서 끝이 없는 잡을 찾아 **낸
+  사람 명의로** STE 에서 취소하고 `CANCELLED` 를 본 뒤에 「취소」 로 둔다(`ste.close_open`, 60초까지). 죽은 워커의
+  작업은 `requeue_stale` 이 기다리지 않고 취소만 청한다. 자식이 잡을 낸 뒤 장부에 적기 전에 죽은 한 번은 못 닫는다.
+- **STE 동시 한도는 집을 때 센다**(E-6, `ste_solve_max_inflight` · `…_per_user`, 서버 화면, 0 = 없음) — 도는 STE
+  작업(메시부터 결과까지)을 세어 찬 STE 작업만 건너뛰고 다른 작업은 집는다. 셈과 집기를 `pg_advisory_xact_lock` 으로
+  한 줄로 세운다(SKIP LOCKED 만으로는 워커 둘이 같은 빈자리를 본다). 대기 화면에 까닭(`QueueOut.held`).
+- **ccx 지문이 다르면 STE 를 못 고른다**(E-5) — 이 서버 쪽은 CalculiX 워커가 기동 때 잰 `tools.ccx_sha256`, STE
+  쪽은 앱 정보 메타(`ENDPOINTS["app"]`, 짐작 — 하루 한 번)나 마지막 STE 잡의 지문. 한쪽을 모르면 막지 않는다.
+  고르기 · 작업 만들기 · DOE 가져오기 · 「STE 로 다시」 가 같은 검사(SIMULATIONS-0044)다. 잡마다 `ccx_matches_local`.
+- **E-7 회귀는 `scripts/ste_regression.py`** — 픽스처의 덱을 한 번 만들어 둘로 뜨고 솔브 · 추출만 이 서버와 STE 로
+  따로 푼다. `--fake` 는 틀 점검(늘 같아야 한다), 진짜 STE 는 `--email`(그 사람 명의).
 - **모르는 조건 판은 읽지 않고 막는다**(`app/core/contract.py`, 2026-11-25) — CompCore 의 v2(`cases[]`)가 오면 구속 0 ·
   하중 0 · modal 로 조용히 읽혔다. `schema_version` · `version` 이 1 이 아니거나 `cases` 가 있으면 폴더의 설계점 · 작업
   만들기(SIMULATIONS-0043) · 두 솔버의 모델링 · 조건 읽기가 막는다. 「CAD 조건 사용」 을 꺼도 막는다 — 같은 블록의 물성 ·

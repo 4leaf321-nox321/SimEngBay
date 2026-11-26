@@ -36,6 +36,17 @@ export function QueueNotice({ queue }: { queue: Queue }) {
       </Alert>
     )
   }
+  if (queue.held) {
+    // **워커가 비어도 이 작업은 안 집힌다** — STE 동시 한도(요청서 E-6). 다른 작업은 집힌다.
+    return (
+      <Alert>
+        <AlertTitle>STE 동시 한도에 걸려 기다립니다</AlertTitle>
+        <AlertDescription>
+          {queue.held} {queueLine(queue)}.
+        </AlertDescription>
+      </Alert>
+    )
+  }
   return (
     <div className="bg-muted/40 text-muted-foreground rounded-md border px-3 py-2 text-sm">
       대기 중 — {queueLine(queue)}

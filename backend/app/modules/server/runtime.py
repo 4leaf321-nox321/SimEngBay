@@ -70,6 +70,14 @@ class Knob:
     minimum: float | None = None
     maximum: float | None = None
     unit: str = ""
+    child: bool = True
+    """단계 자식에 환경으로 넘기나 — 워커가 읽는 값(STE 동시 한도)은 넘기지 않는다."""
+
+
+#: STE 동시 작업 한도(요청서 E-6) — 워커가 작업을 집을 때 읽는다(`claim_next`). 자식에는
+#: 안 간다.
+INFLIGHT_ENV = "STE_SOLVE_MAX_INFLIGHT"
+INFLIGHT_PER_USER_ENV = "STE_SOLVE_MAX_INFLIGHT_PER_USER"
 
 
 KNOBS: tuple[Knob, ...] = (
@@ -176,6 +184,36 @@ KNOBS: tuple[Knob, ...] = (
         minimum=0.0,
         maximum=3600.0,
         unit="초",
+    ),
+    Knob(
+        "ste_solve_max_inflight",
+        INFLIGHT_ENV,
+        "STE 동시 작업 한도",
+        "ste",
+        "integer",
+        "0",
+        "이 서버 전체에서 동시에 도는 STE 작업 수. 넘는 것은 이 서버 대기열에서 기다린다. "
+        "0 이면 한도 없음(워커 수가 곧 한도).",
+        frozen=False,
+        minimum=0,
+        maximum=10000,
+        unit="개",
+        child=False,
+    ),
+    Knob(
+        "ste_solve_max_inflight_per_user",
+        INFLIGHT_PER_USER_ENV,
+        "STE 사람별 동시 작업 한도",
+        "ste",
+        "integer",
+        "0",
+        "한 사람이 동시에 돌리는 STE 작업 수 — DOE 한 번이 그 사람의 STE 몫을 다 쓰지 "
+        "않게. 0 이면 한도 없음.",
+        frozen=False,
+        minimum=0,
+        maximum=10000,
+        unit="개",
+        child=False,
     ),
 )
 BY_KEY: dict[str, Knob] = {knob.key: knob for knob in KNOBS}
@@ -287,7 +325,9 @@ def snapshot(db: Session, settings: Settings | None = None) -> dict[str, str]:
 def env_pairs(values: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
     """열쇠 → 값을 코어가 읽는 환경 이름으로. 빈 값은 싣지 않는다(코어의 기본값)."""
     return tuple(
-        (BY_KEY[key].env, value) for key, value in values.items() if key in BY_KEY and value
+        (BY_KEY[key].env, value)
+        for key, value in values.items()
+        if key in BY_KEY and BY_KEY[key].child and value
     )
 
 

@@ -13,6 +13,7 @@ windows-bridge 는 Ansys 가 Windows 쪽에 있다. WSL 의 워커가 그 자리
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -60,5 +61,20 @@ def report(
     return {
         "gmsh": str(gmsh) if gmsh else None,
         "ccx": str(ccx) if ccx else None,
+        "ccx_sha256": sha256_of(ccx) if ccx else None,
         "ansys": _ansys(executor, ansys_root, ansys_version),
     }
+
+
+def sha256_of(path: Path) -> str | None:
+    """실행 파일의 지문 — **STE 의 ccx 와 같은 빌드인가**를 견준다(요청서 E-5 · A-1). 링크는
+    따라간다(`/usr/bin/ccx` → `ccx_2.21`). 감싼 스크립트(`CCX_BIN` 이 셸 스크립트)면 그
+    스크립트의 지문이라 STE 와 다르게 나온다. 못 읽으면 `None`(모른다)."""
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()

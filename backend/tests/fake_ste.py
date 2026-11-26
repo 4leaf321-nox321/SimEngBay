@@ -160,8 +160,15 @@ class FakeSte:
         lazy: bool = True,
         ccx_sha256: str | None = None,
         token_seconds: int = 43200,
+        hold: bool = False,
     ) -> None:
         self.secrets = secrets_by_client or {CLIENT: "ste-secret"}
+        #: 잡을 끝내지 않고 RUNNING 에 둔다 — 취소(E-4)를 보는 시험.
+        self.hold = hold
+        #: 취소를 받고도 상태를 안 바꾼다 — 「멈춘 것을 못 봤다」 를 보는 시험.
+        self.ignore_cancel = False
+        #: 앱 정보(`GET /api/apps/{app}`, 요청서 A-2 의 메타) — `None` 이면 없는 길(404).
+        self.app_info: dict[str, Any] | None = None
         self.runner = runner or ccx_runner
         self.lazy = lazy
         self.ccx_sha256 = ccx_sha256
@@ -220,6 +227,7 @@ class FakeSte:
             ("POST", r"/api/jobs/(?P<job>[^/]+)/cancel", self._cancel),
             ("GET", r"/api/jobs/(?P<job>[^/]+)/result/file/(?P<name>.+)", self._file),
             ("GET", r"/api/cluster", self._cluster),
+            ("GET", r"/api/apps/(?P<app>[^/]+)", self._app),
         ]
         for want, pattern, route in routes:
             matched = re.fullmatch(pattern, path)
@@ -356,7 +364,7 @@ class FakeSte:
         if self.lazy and found.state == "PENDING":
             found.state = "RUNNING"
             found.started_at = time.time()
-        elif self.lazy and found.state == "RUNNING":
+        elif self.lazy and found.state == "RUNNING" and not self.hold:
             self._finish(found)
         return _json(found.view(self._sha()))
 
@@ -364,7 +372,7 @@ class FakeSte:
         found = self._job(request, job)
         if isinstance(found, httpx.Response):
             return found
-        if found.state not in FINISHED:
+        if found.state not in FINISHED and not self.ignore_cancel:
             found.state = "CANCELLED"
             found.ended_at = time.time()
         return _json(found.view(self._sha()))
@@ -396,6 +404,15 @@ class FakeSte:
             }
         )
 
+    def _app(self, request: httpx.Request, app: str) -> httpx.Response:
+        """앱 정보 — 앱이 쓰는 ccx 의 지문을 메타에 싣는다(E-5 가 읽는다)."""
+        owner = self._owner(request)
+        if owner is None:
+            return _json({"detail": "인증이 필요하다"}, 401)
+        if self.app_info is None or app != "calculix":
+            return _json({"detail": "없는 길"}, 404)
+        return _json({"id": app, **self.app_info})
+
     # --- 잡 ---
 
     def _run(self, job: Job) -> None:
@@ -405,6 +422,8 @@ class FakeSte:
                 return
             job.state = "RUNNING"
             job.started_at = time.time()
+        if self.hold:
+            return
         self._finish(job)
 
     def _finish(self, job: Job) -> None:

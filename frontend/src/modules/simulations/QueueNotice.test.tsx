@@ -30,6 +30,13 @@ describe('QueueNotice', () => {
     )
   })
 
+  it('STE 동시 한도에 걸렸으면 그 까닭을 앞에 보인다', () => {
+    const held = 'STE 동시 작업 한도(이 서버 전체 8개)가 찼습니다 — 도는 STE 작업이 끝나면 집힙니다.'
+    render(<QueueNotice queue={{ ...line, held }} />)
+    expect(screen.getByText('STE 동시 한도에 걸려 기다립니다')).toBeInTheDocument()
+    expect(screen.getByText(/이 서버 전체 8개\)가 찼습니다/)).toBeInTheDocument()
+  })
+
   it('집을 워커가 없으면 기다리라고 하지 않고 경고한다', () => {
     render(<QueueNotice queue={{ ...line, workers_alive: 0 }} />)
     expect(screen.getByText('이 솔버를 집는 워커가 없습니다')).toBeInTheDocument()

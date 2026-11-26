@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ import pytest
 
 from app.core.calculix import ste, tables, tools
 from app.core.executors.subprocess_executor import SubprocessExecutor, SubprocessOptions
-from app.core.stages import StageContext, StageFailure
+from app.core.stages import StageCanceled, StageContext, StageFailure
 from tests.fake_ste import CLIENT, FakeSte, serve
 
 pytestmark = pytest.mark.opensolver
@@ -214,3 +215,49 @@ def test_ERROR_덱은_로컬과_같은_실패로_끝난다(
         failures.append((caught.value.code, caught.value.message))
     assert failures[0] == failures[1]
     assert [one.state for one in fake.jobs.values()] == ["FAILED"], "STE 화면에도 실패로(A-4)"
+
+
+def test_취소하면_자식을_멈추고_STE_잡도_다음_폴링_안에_CANCELLED(
+    tmp_path: Path, ready: None
+) -> None:
+    """요청서 E-4 · 받아들임 7. 자식은 SIGTERM 으로 바로 죽는다 — 낸 잡의 「끝」 줄이 없다.
+    워커가 그 장부를 보고 낸 사람 명의로 취소한다(`ste.close_open` ·
+    `services._note_ste_jobs`)."""
+    fake = FakeSte(secrets_by_client={CLIENT: SECRET}, lazy=False, hold=True)
+    server, url = serve(fake)
+    tokens = tmp_path / "tokens"
+    try:
+        options = SubprocessOptions(
+            ste_env=(
+                (ste.BASE_URL_ENV, url),
+                (ste.SECRET_ENV, SECRET),
+                (ste.CLIENT_ENV, CLIENT),
+                (ste.POLL_ENV, "0.2"),
+                (ste.TOKEN_DIR_ENV, str(tokens)),
+            )
+        )
+        work, spec = _folder(tmp_path, "ste", "static", "ste")
+
+        def running() -> bool:
+            return any(one.state == "RUNNING" for one in fake.jobs.values())
+
+        with pytest.raises(StageCanceled):
+            SubprocessExecutor("local", options).run(
+                StageContext(stage="solving", spec=spec, workdir=work, requester_email=ME),
+                should_cancel=running,
+            )
+        [job] = fake.jobs.values()
+        assert job.state == "RUNNING", "자식이 죽어도 STE 잡은 계속 돈다 — 그래서 닫는다"
+        [opened] = ste.open_jobs(work)
+        assert opened["ste_job_id"] == job.id
+
+        config = ste.SteConfig(
+            base_url=url, secret=SECRET, client=CLIENT, poll_seconds=15.0, token_dir=tokens
+        )
+        began = time.monotonic()
+        [closed] = ste.close_open(config, work, email=ME)
+        assert closed["ste_state"] == "CANCELLED" and job.state == "CANCELLED"
+        assert time.monotonic() - began < config.poll_seconds, "다음 폴링 안에"
+        assert fake.mints == [(ME, CLIENT)], "자식이 받은 토큰을 그대로 — 새로 받지 않는다"
+    finally:
+        server.shutdown()

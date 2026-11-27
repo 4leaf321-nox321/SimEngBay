@@ -12,11 +12,13 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.core import cases, conditions
+from app.core.mechanical.build import _add_static, _lead_plan, _static_steps, staged_plan
 
 DOE = Path(__file__).resolve().parents[1] / "fixtures" / "doe"
 
@@ -280,3 +282,57 @@ def _chains_of(payload: dict[str, Any]) -> list[cases.Chain]:
     found, broken = cases.chains(payload)
     assert not broken
     return found
+
+
+def _bent_modal() -> conditions.Conditions:
+    """「정적」(볼트 예압 + 끌어올림, **큰 변형**) → 「모달」 — 설정이 기본값이 아니라 v1 으로
+    못 접혀 앞 정적 하나가 단계(`stages`)로 온다. 끝 케이스(모달)의 하중은 비어 있다."""
+    payload = copy.deepcopy(_point("조건_볼트예압_사슬_정적모달"))
+    payload["conditions"]["cases"][0]["analysis"]["large_deflection"] = True
+    chain = _chain(payload, "모달")
+    assert cases.problem(chain) == ""
+    return conditions.read(cases.view(payload, chain), recipe="modal")
+
+
+def test_앞_정적_하나뿐인_모달도_Ansys_는_그_하중을_단계로_건다() -> None:
+    """Ansys 의 선응력 정적은 앞 정적 케이스의 하중을 건다 — 전에는 다단을 「정적 케이스 둘
+    이상」 으로 갈라 하나뿐이면 끝 케이스의 하중(없음)만 걸었다: 선응력 없는 모달이 오류
+    없이 나왔다. 큰 변형 · 초기 부단계도 앞 정적의 것이다."""
+    given = _bent_modal()
+    assert given.prestressed and given.loads == []
+    assert [one.name for one in given.all_loads] == ["볼트 예압", "끌어올림"]
+    assert _static_steps(given) == 2
+    total, entries, _ends = staged_plan(given)
+    assert total == 2
+    assert [(load.name, active, tighten) for load, active, tighten in entries] == [
+        ("볼트 예압", set(), 1),
+        ("끌어올림", {2}, None),
+    ]
+    lead = _lead_plan(given)
+    assert lead is not None and lead.large_deflection is True
+    # 판 1 의 선응력은 앞 정적의 설정을 읽지 않는다.
+    folded = _read("조건_볼트예압_사슬_정적모달", "모달")
+    assert folded.stages == [] and _lead_plan(folded) is None
+
+
+class _Snippet:
+    def __init__(self) -> None:
+        self.text = ""
+
+    def AppendText(self, text: str) -> None:
+        self.text += text
+
+
+def test_선응력_정적에_큰_변형을_켜도_재시작_파일을_남긴다() -> None:
+    snippet = _Snippet()
+    settings = SimpleNamespace()
+    static = SimpleNamespace(AnalysisSettings=settings, AddCommandSnippet=lambda: snippet)
+    app = SimpleNamespace(Model=SimpleNamespace(AddStaticStructuralAnalysis=lambda: static))
+    _add_static(app, restart=True, large_deflection=True, steps=2)
+    assert "RESCONTROL,LINEAR" in snippet.text
+    assert settings.LargeDeflection is True and settings.NumberOfSteps == 2
+    # 판 1 의 선응력 — 큰 변형 칸은 건드리지 않는다.
+    plain = SimpleNamespace(AnalysisSettings=SimpleNamespace(), AddCommandSnippet=_Snippet)
+    app = SimpleNamespace(Model=SimpleNamespace(AddStaticStructuralAnalysis=lambda: plain))
+    _add_static(app, restart=True)
+    assert not hasattr(plain.AnalysisSettings, "LargeDeflection")

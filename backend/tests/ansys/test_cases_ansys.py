@@ -54,22 +54,33 @@ def _point(folder: str) -> dict[str, Any]:
     return loaded
 
 
-def _solve(payload: dict[str, Any], folder: str, place: Path, size: float) -> dict[str, Any]:
+def _solve(
+    payload: dict[str, Any],
+    folder: str,
+    place: Path,
+    size: float | None,
+    recipe: str = "static",
+    end: str | None = None,
+) -> dict[str, Any]:
+    """사슬(끝 케이스 `end`, 비면 하나뿐인 사슬)의 보기를 작업 폴더로 — 네 단계를 돈다.
+    `size` 가 비면 CAD 의 메시 힌트 그대로다."""
     found, broken = cases.chains(payload)
     assert not broken
-    [chain] = found
+    if end is None:
+        [chain] = found
+    else:
+        chain = next(one for one in found if one.name == end)
     assert cases.problem(chain) == ""
     place.mkdir()
     shutil.copy(DOE / folder / "points" / "p0001.step", place / "input.step")
     (place / "topology.json").write_text(
         json.dumps(cases.view(payload, chain), ensure_ascii=False), "utf-8"
     )
-    spec: dict[str, Any] = {
-        "recipe": "static",
-        "solver": "ansys",
-        "case": chain.name,
-        "mesh": {"element_size_mm": size},
-    }
+    spec: dict[str, Any] = {"recipe": recipe, "solver": "ansys", "case": chain.name}
+    if size is not None:
+        spec["mesh"] = {"element_size_mm": size}
+    if recipe == "modal":
+        spec["modes"] = 6
     parse_spec(spec)
     (place / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     runner = _executor()
@@ -125,3 +136,53 @@ def test_예압_뒤_외력은_v1_볼트_정적과_같다_Ansys(workdir: Path) ->
     assert bolt["tightened_n"] == pytest.approx(1000.0)
     assert bolt["force_n"] == pytest.approx(1066.2, rel=5e-3)
     assert result["reactions"]["바닥"][2] == pytest.approx(-600.0, rel=1e-2)
+
+
+MODAL_CHAIN = "조건_볼트예압_사슬_정적모달"
+
+
+def _first(result: dict[str, Any]) -> float:
+    return float(result["modes"][0]["frequency_hz"])
+
+
+def test_큰_변형_정적_뒤의_모달은_앞_정적의_하중을_큰_변형으로_건다_Ansys(
+    workdir: Path,
+) -> None:
+    """「정적」(볼트 예압 + 끌어올림, 큰 변형) → 「모달」 — 설정이 기본값이 아니라 v1 으로 못
+    접혀 앞 정적 하나가 단계로 온다. 전에는 끝 케이스(모달)의 하중만 걸어 선응력 없이 풀렸다.
+    v1 「조건_볼트예압_선응력모달」 점 1(1차 2235.1 Hz, 2026-10-27)과 같은 대역이다."""
+    payload = copy.deepcopy(_point(MODAL_CHAIN))
+    payload["conditions"]["cases"][0]["analysis"]["large_deflection"] = True
+    place = workdir / "bent"
+    result = _solve(payload, MODAL_CHAIN, place, None, "modal", "모달")
+    deck = (place / "upstream.dat").read_text(encoding="utf-8", errors="replace").lower()
+    assert "nlgeom,on" in deck, "앞 정적이 큰 변형이다"
+    assert "rescontrol,linear" in deck
+    assert _first(result) == pytest.approx(2235.1, rel=0.03)
+
+
+def test_정적_둘_뒤의_모달은_접은_선응력_모달과_같다_Ansys(workdir: Path) -> None:
+    """「중력」 → 「중력 + 볼트 예압」 → 「모달」(다단 — 볼트를 뒤 케이스에서 조인다)과
+    「중력 + 볼트 예압」 → 「모달」(v1 선응력으로 접힌다)은 끝 상태가 같다 — 1차가 같아야 한다.
+    전에는 모달 끝의 다단에서 앞 정적의 하중 자리를 짝짓지 않아 「자리를 못 찾았다」 로
+    멈췄다."""
+    payload = copy.deepcopy(_point(MODAL_CHAIN))
+    first, modal = payload["conditions"]["cases"]
+    bolt = next(one for one in first["loads"] if one["type"] == "bolt_pretension")
+    gravity = {
+        "name": "중력",
+        "type": "standard_earth_gravity",
+        "on": "",
+        "cs": "global",
+        "direction": [0, 0, -1],
+    }
+    folded = copy.deepcopy(payload)
+    folded["conditions"]["cases"][0]["loads"] = [dict(gravity), copy.deepcopy(bolt)]
+    resting = {**copy.deepcopy(first), "name": "중력", "loads": [dict(gravity)]}
+    first["name"], first["depends_on"] = "조임", "중력"
+    first["loads"] = [dict(gravity), bolt]
+    modal["depends_on"] = "조임"
+    payload["conditions"]["cases"] = [resting, first, modal]
+    staged = _solve(payload, MODAL_CHAIN, workdir / "staged", None, "modal", "모달")
+    once = _solve(folded, MODAL_CHAIN, workdir / "folded", None, "modal", "모달")
+    assert _first(staged) == pytest.approx(_first(once), rel=0.02)

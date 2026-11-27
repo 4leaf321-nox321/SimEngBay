@@ -265,12 +265,25 @@ def build(
             upstream = analysis
         else:
             # **선응력이면 정적 해석이 먼저다** — 조여 놓은 상태의 공진을 보려면 그 응력을
-            # 안고 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다.
-            upstream = (
-                _add_static(app, steps=_static_steps(given_conditions))
-                if given_conditions.prestressed
-                else None
-            )
+            # 안고 풀어야 한다(CompCore 의 주 용도). 하중은 그 정적 해석에 걸린다. 판 2 의
+            # 앞 정적 케이스면 그 큰 변형 · 초기 부단계도 건다(`_lead_plan`).
+            upstream = None
+            if given_conditions.prestressed:
+                statics = _lead_plan(given_conditions)
+                nonlinear = statics is not None and (
+                    statics.large_deflection
+                    or any(
+                        one.kind in NONLINEAR_CONTACT_KINDS
+                        for one in given_conditions.contacts
+                    )
+                )
+                upstream = _add_static(
+                    app,
+                    restart=True,
+                    large_deflection=statics.large_deflection if statics is not None else None,
+                    substeps=statics.substeps if statics is not None and nonlinear else None,
+                    steps=_static_steps(given_conditions),
+                )
             analysis = _add_modal(
                 app, spec, constrained=constrained, given=given_conditions, upstream=upstream
             )
@@ -483,10 +496,10 @@ def build(
                     {
                         "loads": " · ".join(
                             f"{one.kind}:{one.region or '전체'}"
-                            for one in given_conditions.loads
+                            for one in given_conditions.all_loads
                         )
                     }
-                    if given_conditions.loads
+                    if given_conditions.all_loads
                     else {}
                 ),
                 # **접촉 없이 맞닿은 쌍** — 접촉을 건 점에서 Mechanical 은 자동 접촉을 지우므로
@@ -1184,9 +1197,23 @@ def _static_steps(given: condition_model.Conditions) -> int:
     """정적 해석의 단계 수 — **볼트가 있으면 둘**(1단계 조임 · 2단계 잠그고 다른 하중,
     `_apply_loads`). CompCore 계약: 「먼저 체결한 뒤 그 길이를 고정한 상태에서 다른 하중을
     적용합니다」. CalculiX 덱도 같은 두 단계다(`calculix.deck._bolt_blocks`)."""
-    if len(given.static_cases()) > 1:
+    if given.stages:
         return staged_plan(given)[0]
     return 2 if any(one.kind == "bolt_pretension" for one in given.loads) else 1
+
+
+def _lead_plan(given: condition_model.Conditions) -> StaticPlan | None:
+    """판 2 의 **앞 정적 케이스**(`stages`)가 정한 정적 설정 — 모드 해석 끝 사슬의 선응력
+    정적에 건다. 큰 변형 · 초기 부단계는 사슬 안에서 같다(`cases.problem`). 판 1 의 선응력은
+    앞 정적의 설정을 읽지 않는다(`None` — 접히는 사슬은 그 설정이 기본값일 때만 접힌다)."""
+    if not given.stages:
+        return None
+    analysis = given.stages[0].analysis
+    return StaticPlan(
+        large_deflection=bool(analysis.large_deflection),
+        substeps=analysis.substeps,
+        source="cad",
+    )
 
 
 def _add_static(
@@ -1196,16 +1223,17 @@ def _add_static(
     substeps: int | None = None,
     steps: int = 1,
     nodal_forces: bool = False,
+    restart: bool = False,
 ) -> Any:
     """정적 해석. 구속과 하중이 여기 걸린다.
 
     `steps` 가 둘이면(볼트, `_static_steps`) 단계 수를 먼저 세우고, 부단계 설정은 단계마다
     같게 건다 — 2단계가 기본값(부단계 하나)으로 돌면 접촉이 열린 채 수렴하지 못한다.
 
-    선응력의 디딤돌로 쓸 때는(모달이 뒤따를 때) **재시작 파일을 남기라고 이른다**
+    선응력의 디딤돌로 쓸 때는(`restart`, 모달이 뒤따를 때) **재시작 파일을 남기라고 이른다**
     (`RESCONTROL,LINEAR`). 그것이 없으면 모달의 재시작 덱이 「multiframe restart 파일이 없다」
     로 죽는다 — MAPDL 이 그렇게 시키라고 적어 준 그대로다. 정적 해석 자체로 풀 때는 필요
-    없으므로 `large_deflection` 을 준 경우(=정적 레시피)에는 안 붙인다.
+    없다. `large_deflection` 이 `None` 이면 그 칸을 건드리지 않는다(판 1 의 선응력).
 
     `substeps`(CAD 의 「초기 부단계 수」)를 주면 자동 시간 단계를 부단계로 정하고 처음을 그
     수로 나눈다(`NSUBST`). 최대는 넉넉히(그 10배 · 적어도 1000) 둬 수렴이 어려우면 더 잘게
@@ -1218,14 +1246,14 @@ def _add_static(
     static = app.Model.AddStaticStructuralAnalysis()
     if steps > 1:
         static.AnalysisSettings.NumberOfSteps = steps
-    if large_deflection is None:
+    if restart:
         snippet = static.AddCommandSnippet()
         snippet.AppendText(
             "! SimEngBay: keep restart files for the modal perturbation\nRESCONTROL,LINEAR\n"
         )
-        return static
     settings = static.AnalysisSettings
-    settings.LargeDeflection = bool(large_deflection)
+    if large_deflection is not None:
+        settings.LargeDeflection = bool(large_deflection)
     if nodal_forces:
         enums = _global("Ansys").Mechanical.DataModel.Enums
         settings.NodalForces = enums.OutputControlsNodalForcesType.Yes
@@ -1313,7 +1341,7 @@ def _apply_loads(
     # 단계마다 끌 수 없다(Mechanical 에 그 칸이 없다 — 실측 2026-11-26: `EarthGravity` 에
     # `SetActivateAtLoadStep` 이 없고, 가속도 · 회전 속도에는 있어 꺼진다) — 조일 때도 있는
     # 하중이라 두 단계에 다 걸고, CalculiX 도 그렇게 한다.
-    if len(given.static_cases()) > 1:
+    if given.stages:
         _apply_staged(app, given, system, places, static, flipped, steps)
         return
     bolted = steps > 1
@@ -2069,7 +2097,7 @@ def _bolted_bodies(
     줄이다(CompCore 2f402f2 — `volume` 이 있다). 원통면 예압은 여기 없다(면으로 짝짓는다)."""
     regions = (topology.get("regions") or {}) if topology else {}
     out: dict[str, str] = {}
-    for load in given.loads:
+    for load in given.all_loads:
         if load.kind != "bolt_pretension" or not load.region:
             continue
         rows = regions.get(load.region)
@@ -2111,7 +2139,8 @@ def _apply_given_conditions(
         | {one.target for one in given.contacts}
         # **하중의 자리도 여기서 함께 짝짓는다** — 빼 두면 선응력에서 「자리를 못 찾았다」 로
         # 늦게 죽는다(실측 2026-10-02). 바디에 건 볼트 예압은 면이 아니라 따로 고른다.
-        | {one.region for one in given.loads if one.region}
+        # 판 2 면 앞 정적 케이스의 하중까지(`all_loads`) — 끝 케이스에 없는 자리도 건다.
+        | {one.region for one in given.all_loads if one.region}
     )
     bolted_bodies = _bolted_bodies(given, topology)
     wanted = [one for one in wanted if one not in bolted_bodies]
@@ -2154,7 +2183,7 @@ def _apply_given_conditions(
     rigid_of = _rigid_owner(bodies, matched.faces, rigid_ids or set())
     on_sheet = _sheet_regions(bodies, matched.faces)
     flipped = _flipped_pressures(given, topology, records, matched.faces, on_sheet)
-    for load in given.loads:
+    for load in given.all_loads:
         if load.region and load.region in rigid_of:
             # 실측(2026-10-04): 강체 면의 힘 · 압력은 `UnderDefined` — 솔브에서 늦게 죽는다.
             raise StageFailure(
@@ -2627,7 +2656,7 @@ def _flipped_pressures(
     """
     by_id = {one.id: one for one in records}
     flipped: set[str] = set()
-    for load in given.loads:
+    for load in given.all_loads:
         if load.kind != "pressure" or load.region not in on_sheet:
             continue
         rows = (topology.get("regions") or {}).get(load.region) or []

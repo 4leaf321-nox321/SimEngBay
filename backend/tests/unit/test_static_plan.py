@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from app.core import conditions as condition_model
 from app.core.calculix import deck
 from app.core.materials import Material
@@ -130,3 +132,19 @@ def test_반력_절점은_축마다_더_많이_막는_구속이_갖고_같으면
     }
     # 다른 구속에 다 넘어간 영역은 뺀다.
     assert "B" not in separate_reactions([("A", 3, ALL_AXES, {1, 2}), ("B", 1, z_only, {1})])
+
+
+#: v0.36.0 뒤에 스펙에 생긴 칸 — 기본값이면 저장하지 않아야 옛 워커(무중단 갱신 중)가 읽는다.
+NEW_SINCE_V036 = {"case"}
+
+
+@pytest.mark.parametrize("recipe", ["modal", "static", "harmonic", "random"])
+def test_사슬이_없는_스펙은_case_칸_없이_저장한다(recipe: str) -> None:
+    """빈 `case` 가 `null` 로 남으면 옛 워커의 스펙(`extra="forbid"`)이 판 1 작업까지
+    거절한다 — B 먼저 그다음 A 로 갱신하는 몇 분 동안 새 서버가 만든 작업을 옛 워커가
+    집는다."""
+    raw: dict[str, Any] = {"recipe": recipe}
+    stored = services._stored_spec(parse_spec(raw))
+    assert not NEW_SINCE_V036 & set(stored), stored
+    chained = services._stored_spec(parse_spec({**raw, "case": "외력"}))
+    assert chained["case"] == "외력"

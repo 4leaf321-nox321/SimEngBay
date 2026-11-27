@@ -1718,6 +1718,9 @@ def _stored_spec(spec: AnySpec) -> dict[str, Any]:
         del stored["large_deflection"]
     if stored.get("solve_on") == "local":
         del stored["solve_on"]
+    # 해석 케이스(판 2)의 사슬 — 판 1 작업에는 없다. 옛 워커(v0.36.0)는 이 칸을 모른다.
+    if stored.get("case") is None:
+        stored.pop("case", None)
     return stored
 
 

@@ -71,7 +71,7 @@ def unsupported(given: condition_model.Conditions) -> list[str]:
     ]
     out += [
         f"하중 「{one.name}」({one.kind})"
-        for one in given.loads
+        for one in given.all_loads
         if one.kind not in SUPPORTED_LOADS
     ]
     return out

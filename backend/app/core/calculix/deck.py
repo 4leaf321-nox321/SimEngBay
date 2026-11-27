@@ -130,6 +130,18 @@ class Plan:
     bolt_model: list[str] = field(default_factory=list)
     bolt_rows: list[str] = field(default_factory=list)
     bolt_locks: list[str] = field(default_factory=list)
+    #: 볼트 이름 → 그 볼트만의 조이는 줄 · 잠그는 줄 — 정적 다단(판 2)에서 그 볼트를 조이는
+    #: 케이스의 단계에만 넣는다(`_staged_steps`).
+    bolt_tighten: dict[str, list[str]] = field(default_factory=dict)
+    bolt_lock: dict[str, list[str]] = field(default_factory=dict)
+    #: 정적 다단(판 2)의 케이스마다 — 이름 · 끝 단계(ccx `*STEP` 차례 = 총 시각) · 반력에 더할
+    #: 몫. `boundary.json` 의 `cases` 이고, 추출이 케이스마다 결과를 이것으로 고른다.
+    cases: list[dict[str, Any]] = field(default_factory=list)
+    #: 정적 다단의 **맨 단계들**(출력 요청 없이, NLGEOM 한 증분 — v1 선응력의 앞 정적과 같은
+    #: 꼴)
+    #: — 선응력 모달 · 랜덤이 그대로 앞에 둔다(`write_modal` 의 `static_steps`). 마지막 단계만
+    #: 변위를 남긴다.
+    static_steps: list[list[str]] = field(default_factory=list)
     #: 볼트 이름 → 결과에서 되읽을 것 — 기준점 집합 둘(① 끝 `BOLTnA` · 끝 `BOLTn`, 같은
     #: 절점이다)과 단면 앞쪽 집합 둘(`BOLTnCUTA` · `BOLTnCUT`), 예압의 꼴(`force` · `length`)과
     #: 값(N · mm), 볼트 축. `boundary.json` 의 `bolts` 다.
@@ -457,6 +469,8 @@ def write_modal(
     bolt_stage: tuple[list[str], list[str], list[str]] | None = None,
     residual: Sequence[tuple[float, float, float]] = (),
     stress: bool = False,
+    static_steps: list[list[str]] | None = None,
+    bolt_model: list[str] | None = None,
 ) -> Plan:
     """모달 덱. 구속 · 물성 · 고유치 단계까지.
 
@@ -529,11 +543,12 @@ def write_modal(
             given.contacts,
             contact_faces,
             plan,
-            nonlinear=bool(preload),
+            nonlinear=bool(preload or static_steps),
             stiffness=contact_stiffness(materials, element_size_mm),
         )
 
-    for load in [] if preload or bolt_stage else given.loads:
+    staged = bool(static_steps)
+    for load in [] if preload or bolt_stage or staged else given.loads:
         # 모달은 하중으로 답이 바뀌지 않는다 — Ansys 쪽과 같은 말을 적는다. **선응력 모달은
         # 다르다** — 그 하중이 앞 정적 단계에서 구조를 조여 답을 바꾼다.
         plan.skipped.append(
@@ -545,7 +560,14 @@ def write_modal(
     # 영역별 메시 힌트는 **메시를 만들 때** 걸린다(`build.py` 의 `_local_sizes`) — 덱에는
     # 남지 않으므로 여기서 할 일이 없다. 못 걸린 힌트는 그 자리에서 경고로 적는다.
 
-    if preload or bolt_stage:
+    if staged:
+        # **정적 다단 → 모드**(판 2 의 사슬) — 앞 정적 케이스들을 차례로 풀고(`write_static` 의
+        # 맨 단계, 하중은 이어지지 않는다) 그 끝 상태에서 선형화해 모드를 뽑는다.
+        lines += bolt_model or []
+        for step in static_steps or []:
+            lines += step
+        lines += ["*STEP, PERTURBATION"]
+    elif preload or bolt_stage:
         if bolt_stage:
             # **볼트를 먼저 조인다** — 단면 · 기준점은 모델 줄이라 단계보다 앞이다. 그다음 그
             # 길이를 잠그고 나머지 하중을 건다(정적 덱과 같은 차례 — `_bolt_blocks`).
@@ -574,7 +596,11 @@ def write_modal(
         *(["*EL FILE", "S"] if stress else []),
         "*END STEP",
     ]
-    if residual and not (preload or bolt_stage) and "*CONTACT PAIR" not in "\n".join(lines):
+    if (
+        residual
+        and not (preload or bolt_stage or staged)
+        and "*CONTACT PAIR" not in "\n".join(lines)
+    ):
         # **잔여 벡터 재료** — 지지부를 그 방향으로 1 g 가속하면 몸은 반대로 눌린다(가속도
         # 하중과 같은 관성 — `_inertia_rows`). 앞 단계의 하중은 없다(`OP=NEW`).
         elsets = _elsets(body_of, shells)
@@ -595,7 +621,10 @@ def write_modal(
             ]
             plan.residual.append(direction)
     plan.text = _finish(
-        lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes or bolt_stage)
+        lines,
+        rigid,
+        shells,
+        points=bool(plan.remote_points or plan.extra_nodes or bolt_stage or bolt_model),
     )
     return plan
 
@@ -781,6 +810,44 @@ def write_static(
                 )
             )
 
+    cases = given.static_cases()
+    if len(cases) > 1:
+        # **정적 다단**(판 2 의 사슬 — 볼트가 아닌 앞 정적). 케이스가 하나면 아래의 길 그대로다
+        # (v1 덱이 한 글자도 안 바뀐다).
+        lines += _staged_steps(
+            cases,
+            plan,
+            nonlinear=nonlinear,
+            substeps=substeps,
+            average_force=average_force,
+            load=lambda one: _load_rows(
+                one,
+                load_faces,
+                load_areas,
+                load_nodes,
+                nodes,
+                shapes,
+                plan.local_frames,
+                _elsets(body_of, shells),
+                given.frames,
+                length_mm,
+            ),
+            rigid_refusal=lambda one: _on_rigid(one, load_nodes, rigid),
+            offsets=lambda pull, spins, rows: _case_offsets(
+                plan, pull, spins, rows, nodes, solids, body_of, materials, shells
+            ),
+        )
+        if not any(case.loads for case in cases) and not given.drives:
+            plan.refused.append(
+                condition_model.Note(
+                    "정적 해석", "하중도 강제 변위도 없습니다 — 전부 0 이 나옵니다."
+                )
+            )
+        plan.text = _finish(
+            lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
+        )
+        return plan
+
     # **비선형(접촉 · 큰 변형)은 증분으로 푼다** — 한 번에 걸면 접촉이 열린 채 수렴하지
     # 못한다.
     step = ["*STEP, NLGEOM" if nonlinear else "*STEP", "*STATIC"]
@@ -797,7 +864,9 @@ def write_static(
     pull = [0.0, 0.0, 0.0]
     spins: list[Spin] = []
     main: list[str] = []
-    for load in given.loads:
+    # 케이스 하나 — 판 1 이면 `given.loads` 그대로, 판 2 의 앞 정적 하나(선응력)면 그 케이스의
+    # 것.
+    for load in cases[0].loads:
         if load.kind == "bolt_pretension":
             continue  # 단면 · 단계를 위에서 세웠다(`_bolt_blocks`).
         refused = _on_rigid(load, load_nodes, rigid)
@@ -1572,7 +1641,8 @@ def _bolt_blocks(
     """
     model: list[str] = []
     forced = False
-    for load in given.loads:
+    # 앞 정적 케이스(판 2)의 볼트까지 — 단면은 모델 줄이라 처음부터 세운다.
+    for load in given.all_loads:
         if load.kind != "bolt_pretension":
             continue
         what = f"하중 「{load.name}」({load.kind})"
@@ -1631,11 +1701,14 @@ def _bolt_blocks(
         }
         if unit in forces:
             forced = True
-            plan.bolt_rows += ["*CLOAD", f"{ref}, 1, {load.preload * forces[unit]:.8g}"]
+            tighten = ["*CLOAD", f"{ref}, 1, {load.preload * forces[unit]:.8g}"]
         else:
             shorten = load.preload * lengths[unit]
-            plan.bolt_rows += ["*BOUNDARY", f"{ref}, 1, 1, {shorten:.8g}"]
+            tighten = ["*BOUNDARY", f"{ref}, 1, 1, {shorten:.8g}"]
+        plan.bolt_rows += tighten
         plan.bolt_locks += ["*BOUNDARY, FIXED", f"{ref}, 1, 1"]
+        plan.bolt_tighten[load.name] = tighten
+        plan.bolt_lock[load.name] = ["*BOUNDARY, FIXED", f"{ref}, 1, 1"]
         plan.applied.append(f"bolt_pretension:{load.region}")
     if forced:
         # 조인 힘을 거둔다 — 길이를 잠갔으니 그 힘은 이제 단면이 스스로 낸다.
@@ -1644,11 +1717,165 @@ def _bolt_blocks(
     return model
 
 
-def _bolt_prints(plan: Plan, suffix: str) -> list[str]:
+def _static_head(
+    nonlinear: bool, substeps: int | None, average_force: float | None
+) -> list[str]:
+    """정적 단계의 머리 — 비선형(접촉 · 큰 변형)이면 증분으로(`write_static` 과 같은 규칙)."""
+    head = ["*STEP, NLGEOM" if nonlinear else "*STEP", "*STATIC"]
+    if nonlinear:
+        head.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
+        if average_force:
+            head[1:1] = [
+                "*CONTROLS, PARAMETERS=FIELD",
+                f"0.005, 0.01, , {average_force:.6g}, 0.02, 1e-5, 1e-3, 1e-8",
+            ]
+    return head
+
+
+def _staged_steps(
+    cases: list[condition_model.StaticCase],
+    plan: Plan,
+    *,
+    nonlinear: bool,
+    substeps: int | None,
+    average_force: float | None,
+    load: Any,
+    rigid_refusal: Any,
+    offsets: Any,
+) -> list[str]:
+    """**정적 다단** — 케이스마다 단계(새로 조이는 볼트가 있으면 「조임 → 잠그고 나머지」 둘).
+
+    뒤 케이스는 앞 케이스의 끝 상태에서 시작하고 **하중은 이어지지 않는다**(CompCore 와 정함
+    2026-11-26) — 케이스의 첫 단계가 `*CLOAD, OP=NEW` · `*DLOAD, OP=NEW` 로 앞 하중을 거두고 그
+    케이스의 하중을 **중력까지 다시** 건다. 조인 볼트는 `*BOUNDARY, FIXED` 로 잠긴 채 이어진다
+    (경계는 다음 단계로 넘어간다). 케이스의 끝 단계마다 반력 · 볼트 힘 · 변위 · 응력을 찍는다 —
+    추출이 케이스마다 고른다(`plan.cases`). 단계의 길이는 1 이라 끝 단계의 차례가 곧 총
+    시각이다.
+    """
+    lines: list[str] = []
+    stage = 0
+    for index, case in enumerate(cases):
+        last = index == len(cases) - 1
+        # 초기 부단계는 사슬 안에서 하나다(`cases.problem`) — 끝 케이스의 것(스펙이 덮을 수
+        # 있다).
+        head = _static_head(nonlinear, substeps or case.analysis.substeps, average_force)
+        clear = ["*CLOAD, OP=NEW", "*DLOAD, OP=NEW"] if index else []
+        gravity: list[str] = []
+        main: list[str] = []
+        pushed: list[str] = []
+        pull = [0.0, 0.0, 0.0]
+        spins: list[Spin] = []
+        for one in case.loads:
+            if one.kind == "bolt_pretension":
+                continue
+            refused = rigid_refusal(one)
+            if refused is not None:
+                plan.refused.append(refused)
+                continue
+            rows, why = load(one)
+            if why is not None:
+                plan.refused.append(why)
+                continue
+            if one.kind == "standard_earth_gravity":
+                gravity += rows
+            else:
+                main += rows
+                pushed += rows
+            plan.applied.append(f"{one.kind}:{one.region}")
+            if one.kind in INERTIAL_LOADS:
+                pull = [
+                    mine + theirs for mine, theirs in zip(pull, _gravity_of(rows), strict=True)
+                ]
+            spin = _spin_of(rows) if one.kind == "rotational_velocity" else None
+            if spin is not None:
+                spins.append(spin)
+        bolts = [one.name for one in case.loads if one.name in plan.bolt_tighten]
+        bare = ["*STEP, NLGEOM", "*STATIC", "1.0, 1.0"]
+        tighten = [row for name in bolts for row in plan.bolt_tighten[name]]
+        locks = [row for name in bolts for row in plan.bolt_lock[name]]
+        if bolts:
+            plan.static_steps.append([*bare, *clear, *tighten, *gravity, "*END STEP"])
+            plan.static_steps.append([*bare, *locks, "*CLOAD, OP=NEW", *main])
+        else:
+            plan.static_steps.append([*bare, *clear, *gravity, *main])
+        plan.static_steps[-1] += [*(["*NODE FILE", "U"] if last else []), "*END STEP"]
+        if bolts:
+            # 그 케이스가 새로 조이는 볼트 — ① 조임(중력과 함께) → ② 잠그고 나머지.
+            lines += [
+                *head,
+                *clear,
+                *(row for name in bolts for row in plan.bolt_tighten[name]),
+                *gravity,
+                *_bolt_prints(plan, "A", bolts),
+                "*END STEP",
+            ]
+            stage += 1
+            lines += [
+                *head,
+                *(row for name in bolts for row in plan.bolt_lock[name]),
+                "*CLOAD, OP=NEW",
+                *main,
+            ]
+        else:
+            lines += [*head, *clear, *gravity, *main]
+        stage += 1
+        for nset in plan.printed_sets:
+            lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY, GLOBAL=YES", "RF"]
+        lines += _bolt_prints(plan, "")
+        lines += ["*NODE FILE", "U", "*EL FILE", "S, E", "*END STEP"]
+        shifted = offsets(pull, spins, pushed)
+        plan.cases.append({"name": case.name, "step": stage, "reaction_offsets": shifted})
+        if last:
+            plan.reaction_offsets = shifted
+            plan.load_rows = pushed
+    return lines
+
+
+def _case_offsets(
+    plan: Plan,
+    pull: list[float],
+    spins: list[Spin],
+    rows: list[str],
+    nodes: dict[int, tuple[float, float, float]],
+    solids: dict[int, list[tuple[int, list[int]]]],
+    body_of: dict[str, int],
+    materials: list[Material],
+    shells: tuple[ShellSection, ...] | list[ShellSection],
+) -> dict[str, list[float]]:
+    """한 케이스의 반력에 더할 몫 — 그 케이스의 관성 하중 · 반력 절점에 직접 건
+    하중(`write_static`
+    의 마지막 단계와 같은 셈)."""
+    if not plan.printed_sets:
+        return {}
+    inertia = (
+        _inertia_offsets(
+            plan.printed_sets, pull, nodes, solids, body_of, materials, shells, spins
+        )
+        if any(pull) or spins
+        else {}
+    )
+    pushed = _load_offsets(plan.printed_sets, rows, nodes, solids, shells, plan.local_frames)
+    zero = [0.0, 0.0, 0.0]
+    out: dict[str, list[float]] = {}
+    for region, names in plan.reaction_sets.items():
+        row = names if isinstance(names, list) else [names, names, names]
+        vector = [
+            inertia.get(name, zero)[axis] + pushed.get(name, zero)[axis] if name else 0.0
+            for axis, name in enumerate(row)
+        ]
+        if any(vector):
+            out[region] = vector
+    return out
+
+
+def _bolt_prints(plan: Plan, suffix: str, only: list[str] | None = None) -> list[str]:
     """단면 앞쪽 절점의 내력 합(볼트 힘) · 기준점의 변위(조임량)를 `.dat` 에 찍는 줄 —
-    `suffix` 가 `A` 면 ① 의 집합이다(`Plan.bolt_report`)."""
+    `suffix` 가 `A` 면 ① 의 집합이다(`Plan.bolt_report`). `only` 를 주면 그 볼트들만(정적
+    다단에서 그 케이스가 새로 조이는 것 — 앞에서 조인 볼트의 「조인 힘」 을 덮지 않게)."""
     out: list[str] = []
-    for row in plan.bolt_report.values():
+    for name, row in plan.bolt_report.items():
+        if only is not None and name not in only:
+            continue
         out += [f"*NODE PRINT, NSET={row['set']}CUT{suffix}, TOTALS=ONLY", "RF"]
         out += [f"*NODE PRINT, NSET={row['set']}{suffix}", "U"]
     return out

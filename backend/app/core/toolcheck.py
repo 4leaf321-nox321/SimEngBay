@@ -14,6 +14,8 @@ windows-bridge 는 Ansys 가 Windows 쪽에 있다. WSL 의 워커가 그 자리
 from __future__ import annotations
 
 import hashlib
+import re
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -62,8 +64,27 @@ def report(
         "gmsh": str(gmsh) if gmsh else None,
         "ccx": str(ccx) if ccx else None,
         "ccx_sha256": sha256_of(ccx) if ccx else None,
+        "ccx_version": ccx_version(ccx) if ccx else None,
         "ansys": _ansys(executor, ansys_root, ansys_version),
     }
+
+
+#: `ccx -v` 의 판 — 「This is Version 2.21」.
+_CCX_VERSION = re.compile(r"Version\s+(\d+(?:\.\d+)*)")
+
+
+def ccx_version(path: Path) -> str | None:
+    """**실제로 푸는 ccx 의 판**(`ccx -v`) — 능력표의 CalculiX `version` 이 이것을 모은다
+    (`services._solver_version`). 워커가 기동할 때 한 번 잰다 — 요청마다 부르지 않는다(API
+    프로세스에는 ccx 가 없을 수 있고, 있어도 워커의 것과 다를 수 있다). 못 읽으면 `None`."""
+    try:
+        done = subprocess.run(
+            [str(path), "-v"], capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = _CCX_VERSION.search(f"{done.stdout}\n{done.stderr}")
+    return found.group(1) if found else None
 
 
 def sha256_of(path: Path) -> str | None:

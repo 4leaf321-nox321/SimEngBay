@@ -10,7 +10,8 @@ import type { HarmonicInput, MeshOrder, RandomInput, RecipeName } from '@/module
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 
-const SELECT = 'border-input bg-background h-9 w-full rounded-md border px-3 text-sm'
+/** 네이티브 고르기 칸의 모양 — 새 작업 창의 다른 고르기(해석 케이스)도 같은 꼴이다. */
+export const SELECT = 'border-input bg-background h-9 w-full rounded-md border px-3 text-sm'
 
 /** 해석 종류 — CAD 가 적은 것을 미리 고르고, 다르게 고르면 무엇이 빠지는지 말한다. */
 export function RecipeSelect({

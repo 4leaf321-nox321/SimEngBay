@@ -106,9 +106,17 @@ class Chain:
 
 
 def is_cases(payload: Any) -> bool:
-    """케이스로 나눈 조건인가(v2)."""
+    """케이스로 나눈 조건인가 — **판이 2 이고** `cases` 가 있을 때만. 다른 판에 `cases` 가
+    있으면 판 검사(`contract.problem`)가 막을 것이라 케이스로 읽지 않는다."""
     block = _block(payload)
-    return isinstance(block.get("cases"), list)
+    keys = ("schema_version", "version")
+    declared = next((block.get(key) for key in keys if key in block), None)
+    return (
+        isinstance(block.get("cases"), list)
+        and isinstance(declared, int | float)
+        and not isinstance(declared, bool)
+        and declared == 2
+    )
 
 
 def picked(payload: Any) -> str | None:
@@ -261,10 +269,17 @@ def problem(chain: Chain) -> str:
                 f"{extra[0].get('name') or _kind(extra[0])}」) — 선응력을 만드는 하중은 앞"
                 " 정적에 적습니다"
             )
-    if _fold(chain) is None:
+    split = {one.analysis.get("substeps") or None for one in statics}
+    if len(split) > 1:
         return (
-            f"{where}: 정적 다단(볼트가 아닌 앞 정적 · 정적 셋 이상 · 케이스마다 다른 해석"
-            " 설정)은 아직 받지 않습니다"
+            f"{where}: 정적 케이스마다 초기 부단계(substeps)가 다릅니다 — 한 사슬에 하나만"
+            " 받습니다"
+        )
+    bent = {bool(one.analysis.get("large_deflection")) for one in statics}
+    if len(bent) > 1:
+        return (
+            f"{where}: 정적 케이스마다 큰 변형(large_deflection)이 다릅니다 — 한 사슬에 하나만"
+            " 받습니다(Ansys 는 한 해석에 하나, CalculiX 는 한 번 켜면 끝까지 갑니다)"
         )
     return ""
 
@@ -273,8 +288,8 @@ def view(payload: dict[str, Any], chain: Chain) -> dict[str, Any]:
     """사슬 하나의 **v1 모양 점 파일** — 공유 칸 + 끝 케이스(접히면 접은 것)의 칸. 걸 수 있는
     사슬만 준다(`problem` 이 빈 것)."""
     folded = _fold(chain)
-    if folded is None:  # pragma: no cover - problem() 이 먼저 막는다
-        raise ValueError(f"케이스 「{chain.name}」 은 v1 한 벌로 접히지 않습니다")
+    if folded is None:
+        folded = _staged(chain)
     block = {
         key: copy.deepcopy(value)
         for key, value in _block(payload).items()
@@ -290,6 +305,35 @@ def view(payload: dict[str, Any], chain: Chain) -> dict[str, Any]:
     out = {key: value for key, value in payload.items() if key != "conditions"}
     out["conditions"] = block
     return out
+
+
+def _staged(chain: Chain) -> dict[str, Any]:
+    """v1 으로 못 접는 사슬 — 맨 위에는 끝 케이스의 칸, `stages` 에 앞 정적 케이스들(차례대로).
+    구속 · 초기조건은 첫 케이스의 것이다(사슬 안에서 같다 — `problem`). 모드 해석의 끝 케이스는
+    `prestressed` 를 켜고, 하중은 그 해석의 가진만 둔다(중력은 앞 정적에 있다)."""
+    end, head = chain.end, chain.cases[0]
+    eigen = end.kind in EIGEN
+    analysis = copy.deepcopy(end.analysis)
+    if eigen:
+        analysis["prestressed"] = True
+    return {
+        "constraints": copy.deepcopy(head.rows("constraints")),
+        "initial": copy.deepcopy(head.rows("initial")),
+        "analysis": analysis,
+        "loads": [
+            copy.deepcopy(row)
+            for row in end.rows("loads")
+            if not (eigen and _kind(row) == GRAVITY)
+        ],
+        "stages": [
+            {
+                "name": one.name,
+                "analysis": copy.deepcopy(one.analysis),
+                "loads": copy.deepcopy(one.rows("loads")),
+            }
+            for one in chain.leads
+        ],
+    }
 
 
 def _fold(chain: Chain) -> dict[str, Any] | None:

@@ -96,6 +96,8 @@ export interface SpecInput {
   random?: RandomInput
   /** 풀 곳(요청서 E-2) — 비우면 이 서버. STE 는 CalculiX 만이라 Ansys 면 싣지 않는다. */
   solveOn?: 'local' | 'ste'
+  /** 해석 케이스로 나뉜 점(판 2)의 사슬 — 작업 하나를 만들 때만 싣는다(여러 점이면 사슬마다 다 건다). */
+  case?: string | null
 }
 
 /** 화면의 입력 → 서버 스펙. 레시피가 받지 않는 칸은 싣지 않는다. */
@@ -110,6 +112,7 @@ export function buildSpec(input: SpecInput): Record<string, unknown> {
   }
   // **기본(이 서버)이면 싣지 않는다** — 서버도 기본값이면 저장하지 않는다(옛 워커가 읽게).
   if (input.solveOn === 'ste' && input.solver === 'calculix') spec.solve_on = 'ste'
+  if (input.case) spec.case = input.case
   if (searchesModes(input.recipe)) {
     spec.modes = Number(input.modes)
     const range = rangeOf(input.modalRange)

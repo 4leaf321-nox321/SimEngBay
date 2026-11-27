@@ -93,10 +93,9 @@ def test_고른_사슬의_v1_보기를_작업에_담는다(
             {"recipe": "static", "solver": "ansys"},
             "대상 솔버는 calculix",
         ),
-        ("조건_외팔보_두케이스", {"recipe": "static"}, "정적 다단"),
         ("조건_볼트예압_사슬_둘", {"recipe": "static", "case": "없는 것"}, "없습니다"),
     ],
-    ids=["레시피가 다름", "대상 솔버가 다름", "정적 다단(다음 판)", "없는 케이스"],
+    ids=["레시피가 다름", "대상 솔버가 다름", "없는 케이스"],
 )
 def test_사슬과_맞지_않는_작업은_까닭과_막는다(
     client: TestClient, member: Signed, folder: str, spec: dict[str, Any], said: str
@@ -162,18 +161,23 @@ def test_DOE_는_사슬마다_작업을_걸고_다시_가져오면_겹치지_않
     _cancel(db, body["created"])
 
 
-def test_못_거는_사슬만_까닭과_함께_빠진다(
+@pytest.mark.parametrize("solver", ["calculix", "ansys"])
+def test_정적_다단은_두_솔버로_건다(
     client: TestClient,
     db: Session,
     member: Signed,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    solver: str,
 ) -> None:
     folder = _study(tmp_path, "조건_외팔보_두케이스", monkeypatch)
-    body = _import(client, member, folder, {"recipe": "static", **MESH})
-    assert body["created"] == []
-    [skipped] = body["skipped"]
-    assert skipped["case"] == "힘 B" and "정적 다단" in skipped["skip_reason"]
+    made = _import(client, member, folder, {"recipe": "static", "solver": solver, **MESH})
+    [job] = made["created"]
+    row = db.get(Simulation, uuid.UUID(job))
+    assert row is not None and row.work_dir is not None and row.spec["solver"] == solver
+    stored = json.loads((services.work_root() / row.work_dir / "topology.json").read_text())
+    assert [one["name"] for one in stored["conditions"]["stages"]] == ["힘 A"]
+    _cancel(db, made["created"])
 
 
 def test_판_1_로_가져온_점을_사슬_하나인_판_2_로_다시_가져와도_겹치지_않는다(
@@ -226,7 +230,9 @@ def test_미리_보기는_사슬을_보이고_고른_사슬로_편다(
     )
     assert preview.status_code == 200, preview.text
     [case] = preview.json()["cases"]
-    assert case["name"] == "힘 B" and "정적 다단" in case["problem"]
+    assert (
+        case["name"] == "힘 B" and case["chain"] == ["힘 A", "힘 B"] and case["problem"] == ""
+    )
 
 
 def test_케이스가_하나뿐인_v2_는_케이스를_안_골라도_건다(
@@ -255,3 +261,56 @@ def test_케이스가_하나뿐인_v2_는_케이스를_안_골라도_건다(
     row = db.get(Simulation, uuid.UUID(made.json()["id"]))
     assert row is not None and row.source_meta["case"] == "하나"
     _cancel(db, [made.json()["id"]])
+
+
+def _two_point_doe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """「조건_볼트예압_사슬_둘」 을 두 점짜리 DOE 로(인자 「예압」) — 점마다 사슬 둘."""
+    folder = _study(tmp_path, "조건_볼트예압_사슬_둘", monkeypatch)
+    study = json.loads((folder / "study.json").read_text(encoding="utf-8"))
+    study["factors"] = [{"name": "예압"}]
+    (folder / "study.json").write_text(json.dumps(study, ensure_ascii=False), encoding="utf-8")
+    shutil.copyfile(folder / "points" / "p0001.json", folder / "points" / "p0002.json")
+    shutil.copyfile(folder / "points" / "p0001.step", folder / "points" / "p0002.step")
+    rows = [
+        "point,status,예압,step_file,point_file,unresolved,interference,warnings,error",
+        "1,ok,1000,points/p0001.step,points/p0001.json,,ok,,",
+        "2,ok,1200,points/p0002.step,points/p0002.json,,ok,,",
+    ]
+    (folder / "manifest.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return folder
+
+
+def test_스터디는_한_케이스씩_견준다(
+    client: TestClient,
+    db: Session,
+    member: Signed,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """점마다 사슬이 둘(모달 · 정적)이면 비교 · 분석은 한 케이스씩 — 섞으면 점 번호가 겹치고
+    해석 종류가 섞인다."""
+    folder = _two_point_doe(tmp_path, monkeypatch)
+    body = _import(client, member, folder, {"recipe": "modal", **MESH})
+    assert len(body["created"]) == 4
+    study_id = json.loads((folder / "study.json").read_text(encoding="utf-8"))["id"]
+    first = client.get(f"/api/simulations/studies/{study_id}", headers=member.headers).json()
+    assert first["cases"] == ["모달 단독", "외력"] and first["case"] == "모달 단독"
+    assert first["recipe"] == "modal"
+    assert [(one["number"], one["case"]) for one in first["points"]] == [
+        (1, "모달 단독"),
+        (2, "모달 단독"),
+    ]
+    other = client.get(
+        f"/api/simulations/studies/{study_id}",
+        params={"case": "외력"},
+        headers=member.headers,
+    ).json()
+    assert other["case"] == "외력" and other["recipe"] == "static"
+    assert {one["case"] for one in other["points"]} == {"외력"}
+    table = client.get(
+        f"/api/simulations/studies/{study_id}/table",
+        params={"case": "외력"},
+        headers=member.headers,
+    )
+    assert table.status_code == 200 and len(table.json()["rows"]) == 2
+    _cancel(db, body["created"])

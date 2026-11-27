@@ -563,6 +563,32 @@ describe('새 해석 작업', () => {
     expect(screen.queryByLabelText('재료 이름')).toBeNull()
   })
 
+  it('해석 케이스로 나뉜 점은 사슬을 고르고, 레시피 · 스펙이 그 사슬을 따른다', async () => {
+    const chains = [
+      { name: '모달 단독', kind: 'modal', solver: '', chain: ['모달 단독'], problem: '' },
+      { name: '외력', kind: 'static', solver: '', chain: ['예압', '외력'], problem: '' },
+    ]
+    vi.mocked(simulationApi.previewConditions).mockImplementation(async (_file, _recipe, kase) => ({
+      ...SHEAR,
+      cases: chains,
+      case: kase ?? '모달 단독',
+      recipe: kase === '외력' ? 'static' : 'modal',
+    }))
+    await openWithPoint()
+    const picker = screen.getByLabelText('해석 케이스') as HTMLSelectElement
+    expect(picker.value).toBe('모달 단독')
+    await userEvent.selectOptions(picker, '외력')
+    await waitFor(() =>
+      expect(simulationApi.previewConditions).toHaveBeenLastCalledWith(expect.any(File), 'static', '외력'),
+    )
+    expect((screen.getByLabelText('해석 종류') as HTMLSelectElement).value).toBe('static')
+    await userEvent.click(screen.getByRole('button', { name: '실행' }))
+    await waitFor(() => expect(simulationApi.create).toHaveBeenCalled())
+    const spec = vi.mocked(simulationApi.create).mock.calls[0][0].spec as Record<string, unknown>
+    expect(spec.case).toBe('외력')
+    expect(spec.recipe).toBe('static')
+  })
+
   it('재료가 빠진 파트가 있으면 실행하지 않는다', async () => {
     // 모델링이 그 자리에서 멈춘다 — 사람이 지정한 한 벌로 메우지 않는다.
     vi.mocked(simulationApi.previewConditions).mockResolvedValue({

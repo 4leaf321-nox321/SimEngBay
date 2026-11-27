@@ -917,3 +917,12 @@ def test_능력표는_솔버를_골라_그대로_묻는다() -> None:
     assert _run(server.capabilities, "ansys") == table
     assert _run(server.capabilities) == table
     assert [dict(one.url.params) for one in seen] == [{"solver": "ansys"}, {}]
+
+
+def test_해석_케이스로_나뉜_DOE_는_케이스를_골라_읽는다() -> None:
+    """CompCore 판 2 — 사슬마다 따로 견준다. 고르지 않으면 서버가 첫 사슬을 준다."""
+    study = {"study_id": "st", "cases": ["모달 단독", "외력"], "case": "외력", "points": []}
+    seen = _route({("GET", "/api/simulations/studies/st"): study})
+    assert _run(server.study_get, "st", "외력")["case"] == "외력"
+    _run(server.study_get, "st")
+    assert [dict(one.url.params) for one in seen] == [{"case": "외력"}, {}]

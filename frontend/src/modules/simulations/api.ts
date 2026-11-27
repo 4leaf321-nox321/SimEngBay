@@ -246,8 +246,22 @@ export interface StaticResult {
   reactions?: Record<string, [number, number, number]>
   /** 볼트 이름 → 조인 힘 · 끝의 힘(N, 인장이 양수) · 조임량(mm). 볼트가 없으면 없다. */
   bolts?: Record<string, BoltRow>
+  /**
+   * 해석 케이스의 사슬(정적 다단)이면 **케이스마다 끝 상태** — 차례대로, 마지막이 맨 위의 값과 같다.
+   * 하중은 케이스 사이에 이어지지 않는다(조인 볼트만 그 길이로 잠긴 채 이어진다).
+   */
+  cases?: StaticCaseResult[]
   warning?: string
   fake?: boolean
+}
+
+/** 정적 다단의 케이스 하나 — 그 케이스 끝의 값(단위는 결과의 `units`). */
+export interface StaticCaseResult {
+  name: string
+  max_displacement: number | null
+  max_von_mises: number | null
+  reactions?: Record<string, [number, number, number]>
+  bolts?: Record<string, BoltRow>
 }
 
 /**
@@ -442,7 +456,11 @@ export const simulationApi = {
     const query = params.toString()
     return api.get<StudySummary[]>(`/simulations/studies${query ? `?${query}` : ''}`)
   },
-  study: (studyId: string) => api.get<Study>(`/simulations/studies/${studyId}`),
+  /** 해석 케이스로 나뉜 DOE(판 2)면 `kase` 로 사슬 하나를 고른다(비우면 첫 사슬). */
+  study: (studyId: string, kase?: string | null) =>
+    api.get<Study>(
+      `/simulations/studies/${studyId}${kase ? `?case=${encodeURIComponent(kase)}` : ''}`,
+    ),
   /**
    * 공용 폴더 훑기 — **설정된 뿌리 아래만.** 경로를 안 주면 첫 뿌리부터.
    *
@@ -461,10 +479,12 @@ export const simulationApi = {
    * CAD 점 파일 한 장을 **작업을 만들기 전에** 서버가 읽어 준다 — 영역 · 물성 · 해석 설정과, 그
    * 해석 종류에서 조건이 어떻게 다뤄지나. 화면이 따로 해석하지 않는다(거는 길과 같은 코드).
    */
-  previewConditions: (file: File, recipe?: string) => {
+  previewConditions: (file: File, recipe?: string, kase?: string | null) => {
     const form = new FormData()
     form.append('file', file)
     if (recipe) form.append('recipe', recipe)
+    // 해석 케이스로 나뉜 점(판 2) — 그 사슬로 편다(비우면 걸 수 있는 첫 사슬).
+    if (kase) form.append('case', kase)
     return api.postForm<ConditionsPreview>('/simulations/conditions/preview', form)
   },
   importDoe: (body: {
@@ -476,9 +496,11 @@ export const simulationApi = {
     name?: string | null
   }) => api.post<DoeImport>('/simulations/doe/import', body),
   /** 폴더의 **설계점 하나**를 점 파일을 올렸을 때와 똑같이 읽어 준다(새 작업 창). */
-  previewDoePoint: (path: string, number: number, recipe?: string) =>
+  previewDoePoint: (path: string, number: number, recipe?: string, kase?: string | null) =>
     api.get<ConditionsPreview>(
-      `/simulations/doe/point?path=${encodeURIComponent(path)}&number=${number}${recipe ? `&recipe=${recipe}` : ''}`,
+      `/simulations/doe/point?path=${encodeURIComponent(path)}&number=${number}${recipe ? `&recipe=${recipe}` : ''}${
+        kase ? `&case=${encodeURIComponent(kase)}` : ''
+      }`,
     ),
   /** 모드 목록 · 단위계 · 참여계수. 아직 없으면 404 와 함께 **왜 없는지**가 온다. */
   result: (id: string) =>
@@ -534,8 +556,12 @@ export const simulationApi = {
    * DOE 비교 표 — CSV 와 같은 머리 · 줄(mm · MPa · N · Hz). **화면은 클립보드로 복사한다** — 사내 DRM 으로
    * 파일을 내려받지 못한다(엑셀에 붙여 넣는다). CSV 파일(`export.csv`)은 연계 스크립트용으로 남아 있다.
    */
-  studyTable: (studyId: string) =>
-    api.get<StudyTable>(`/simulations/studies/${encodeURIComponent(studyId)}/table`),
+  studyTable: (studyId: string, kase?: string | null) =>
+    api.get<StudyTable>(
+      `/simulations/studies/${encodeURIComponent(studyId)}/table${
+        kase ? `?case=${encodeURIComponent(kase)}` : ''
+      }`,
+    ),
   /** 산출물 전부를 ZIP 하나로 — 없는 파일은 묶음 안의 `빠진_파일.txt` 가 말한다. */
   downloadAll: (simulationId: string, filename: string) =>
     downloadFile(`/simulations/${simulationId}/artifacts.zip`, filename),

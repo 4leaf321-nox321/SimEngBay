@@ -120,10 +120,32 @@ def test_보기는_판_1_이고_어느_사슬인지_적는다() -> None:
     assert not cases.is_cases(viewed)
 
 
-def test_정적_다단은_아직_막는다() -> None:
-    """볼트가 아닌 앞 정적(외팔보 「힘 A」 → 「힘 B」) — v1 으로 접히지 않는다."""
+def test_정적_다단은_앞_정적_케이스를_단계로_편다() -> None:
+    """볼트가 아닌 앞 정적(외팔보 「힘 A」 → 「힘 B」) — v1 으로 접히지 않아 단계로 편다.
+    하중은
+    이어지지 않는다: 맨 위는 「힘 B」 의 하중뿐이고 「힘 A」 는 단계에 있다."""
+    payload = _point("조건_외팔보_두케이스")
     [chain] = _chains("조건_외팔보_두케이스")
-    assert "정적 다단" in cases.problem(chain)
+    assert cases.problem(chain) == ""
+    viewed = cases.view(payload, chain)
+    assert [one["name"] for one in viewed["conditions"]["stages"]] == ["힘 A"]
+    given = conditions.read(viewed, recipe="static")
+    assert [one.name for one in given.loads] == ["B"]
+    assert [(one.name, [load.name for load in one.loads]) for one in given.stages] == [
+        ("힘 A", ["A"])
+    ]
+    assert [(one.name, [load.name for load in one.loads]) for one in given.static_cases()] == [
+        ("힘 A", ["A"]),
+        ("힘 B", ["B"]),
+    ]
+    assert given.case == "힘 B" and not given.refused
+
+
+def test_케이스마다_큰_변형이_다르면_막는다() -> None:
+    payload = copy.deepcopy(_point("조건_외팔보_두케이스"))
+    payload["conditions"]["cases"][1]["analysis"]["large_deflection"] = True
+    [chain] = cases.chains(payload)[0]
+    assert "큰 변형" in cases.problem(chain)
 
 
 def _two(**change: Any) -> dict[str, Any]:

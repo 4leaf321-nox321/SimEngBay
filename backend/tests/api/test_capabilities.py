@@ -11,9 +11,12 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core import capabilities, contract
+from app.modules.simulations import services
+from app.modules.simulations.models import SimulationWorker
 from app.version import current
 from tests.api.conftest import Signed
 
@@ -94,3 +97,36 @@ def test_조화의_선응력은_작업을_만들_때_막는다(
     error = refused.json()["error"]
     assert error["code"].endswith("SIMULATIONS-0030"), error
     assert "조화 응답은 선응력을 받지 않습니다" in error["message"]
+
+
+def test_CalculiX_판은_살아_있는_워커들이_잰_ccx_판이_하나일_때만(
+    client: TestClient, db: Session, member: Signed
+) -> None:
+    """요청마다 ccx 를 부르지 않는다 — 워커가 기동 때 잰 판(`toolcheck.ccx_version`)을 모은다.
+    워커가 여럿이고 판이 갈리면 모른다(비운다)."""
+    names = ["cap-worker:1", "cap-worker:2"]
+    try:
+        services.beat(
+            db, names[0], state="idle", solvers=["calculix"], tools={"ccx_version": "2.21"}
+        )
+        shown = client.get(
+            "/api/simulations/capabilities",
+            params={"solver": "calculix"},
+            headers=member.headers,
+        ).json()
+        assert shown[0]["version"] == "2.21"
+        services.beat(
+            db, names[1], state="idle", solvers=["calculix"], tools={"ccx_version": "2.22"}
+        )
+        mixed = client.get(
+            "/api/simulations/capabilities",
+            params={"solver": "calculix"},
+            headers=member.headers,
+        ).json()
+        assert mixed[0]["version"] is None
+    finally:
+        for name in names:
+            row = db.get(SimulationWorker, name)
+            if row is not None:
+                db.delete(row)
+        db.commit()

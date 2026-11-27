@@ -523,6 +523,8 @@ class StudyPointOut(BaseModel):
 
     simulation_id: uuid.UUID
     number: int
+    case: str | None = None
+    """해석 케이스로 나뉜 점(판 2)이면 그 사슬(끝 케이스의 이름) — 판 1 이면 비어 있다."""
     params: dict[str, float | str]
     """바꾼 값. **숫자만이 아니다** — 재료처럼 고르는 인자가 온다."""
     status: str
@@ -590,6 +592,11 @@ class StudyOut(BaseModel):
     study_id: str
     name: str
     factors: list[str]
+    cases: list[str] = Field(default_factory=list)
+    """해석 케이스로 나뉜 DOE(판 2)의 사슬들 — 둘 이상이면 비교 · 분석은 **한 케이스씩** 한다
+    (`case`). 판 1 이면 비어 있다."""
+    case: str | None = None
+    """이 응답이 담은 사슬 — 물은 것, 없으면 첫 사슬."""
     recipe: str = "modal"
     """가장 많은 점의 해석 종류 — 화면이 이것으로 비교 화면을 가른다."""
     solvers: list[str] = Field(default_factory=list)

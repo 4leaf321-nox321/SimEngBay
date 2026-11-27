@@ -80,6 +80,7 @@ def extract(
         # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다.
         forces = _reactions(model, mesh, topology, workdir)
         bolts = _bolts(model, mesh, topology, displacement_unit)
+        staged = _cases(model, mesh, topology, workdir, displacement_unit)
     except StageFailure:
         raise
     except Exception as failure:
@@ -99,6 +100,7 @@ def extract(
         **({"probes": spots} if spots else {}),
         **({"reactions": forces} if forces else {}),
         **({"bolts": bolts} if bolts else {}),
+        **({"cases": staged} if staged else {}),
         "max_von_mises": stress,
         "material": boundary.used_material(workdir, spec),
     }
@@ -193,7 +195,11 @@ def _strains(model: Any) -> Any:
 
 
 def _reactions(
-    model: Any, mesh: Any, topology: dict[str, Any], workdir: Path | None = None
+    model: Any,
+    mesh: Any,
+    topology: dict[str, Any],
+    workdir: Path | None = None,
+    time_set: int | None = None,
 ) -> dict[str, list[float]]:
     """변위로 당긴 · 원격 변위로 붙든 · 탄성 지지로 받친 영역마다 **반력 합**(N). CalculiX 쪽과
     같은 열쇠(`reactions`)로 낸다.
@@ -204,6 +210,8 @@ def _reactions(
     강체 구속은 그것이 유일한 구속일 때만 모델 전체의 반력 합으로 낸다.
     """
     known: dict[str, list[int] | dict[str, list[int]]] = {}
+    # 세트를 줄 때만 넘긴다(정적 다단의 케이스 끝) — 안 주면 DPF 의 기본(마지막 세트).
+    at: dict[str, Any] = {"time_set": time_set} if time_set is not None else {}
     path = workdir / "reaction_nodes.json" if workdir is not None else None
     # **파일이 있으면 그것이 정본이다** — 빠진 영역은 그 절점이 다 다른 구속의 몫이라 뺀 것이다
     # (`statics.separate_reactions`). 평면으로 다시 찾으면 그 절점을 두 번 센다. 평면은 그
@@ -234,12 +242,12 @@ def _reactions(
     found: dict[str, list[float]] = {}
     held = _rigid_hold(given, regions)
     if held is not None and held not in known:
-        total = probes.total_reaction(model)
+        total = probes.total_reaction(model, **at)
         if total is not None:
             found[held] = total
     for rule in given.constraints:
         if rule.region in known and rule.region not in found:
-            total = probes.reaction_on(model, known[rule.region])
+            total = probes.reaction_on(model, known[rule.region], **at)
             if total is not None:
                 found[rule.region] = total
             continue
@@ -248,11 +256,11 @@ def _reactions(
         rows = regions.get(rule.region)
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
             continue
-        total = probes.reaction(model, mesh, rows[0])
+        total = probes.reaction(model, mesh, rows[0], **at)
         if total is not None:
             found[rule.region] = total
     for region, elements in _foundations(workdir).items():
-        total = probes.foundation_on(model, elements)
+        total = probes.foundation_on(model, elements, **at)
         if total is not None:
             found[region] = total
     return found
@@ -276,7 +284,13 @@ PRETENSION_ELEMENT = 179
 
 
 def _bolts(
-    model: Any, mesh: Any, topology: dict[str, Any], displacement_unit: str
+    model: Any,
+    mesh: Any,
+    topology: dict[str, Any],
+    displacement_unit: str,
+    *,
+    first_set: int | None = None,
+    final_set: int | None = None,
 ) -> dict[str, dict[str, float | None]]:
     """볼트 이름 → **조인 힘 · 끝의 힘(N, 인장이 양수) · 조임량(mm)** — CalculiX 쪽과 같은 열쇠
     (`calculix.static_read._bolts`).
@@ -293,7 +307,11 @@ def _bolts(
         given = condition_model.read(topology, recipe="static") if topology else None
     except ValueError:
         return {}
-    bolts = [one for one in (given.loads if given else []) if one.kind == "bolt_pretension"]
+    # 앞 정적 케이스(판 2)의 볼트까지 — Mechanical 이 만든
+    # 차례(`mechanical.build.staged_plan`).
+    bolts = [
+        one for one in (given.all_loads if given else []) if one.kind == "bolt_pretension"
+    ]
     if not bolts:
         return {}
     try:
@@ -318,9 +336,9 @@ def _bolts(
                 if int(node) in nodes
             }
 
-        first_forces = at(model.results.reaction_force, 1)
-        final_forces = at(model.results.reaction_force, last)
-        moved = at(model.results.displacement, last)
+        first_forces = at(model.results.reaction_force, first_set or 1)
+        final_forces = at(model.results.reaction_force, final_set or last)
+        moved = at(model.results.displacement, final_set or last)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("볼트 힘을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return {}
@@ -365,7 +383,7 @@ def _rigid_hold(given: Any, regions: dict[str, Any]) -> str | None:
     return str(rule.region) if bodies and bodies <= given.rigid else None
 
 
-def _von_mises(model: Any) -> tuple[float | None, str]:
+def _von_mises(model: Any, time_set: int | None = None) -> tuple[float | None, str]:
     """최대 상당응력(폰 미세스). **못 읽으면 `None`** — 없는 값을 0 으로 적지 않는다.
 
     DPF 는 같은 값을 부르는 길이 여럿이고 판마다 있는 것이 다르다. 그래서 **차례로 해 본다** —
@@ -373,13 +391,26 @@ def _von_mises(model: Any) -> tuple[float | None, str]:
     """
     from ansys.dpf import core as dpf
 
+    scoped = [time_set] if time_set is not None else None
     attempts: tuple[Any, ...] = (
         lambda: dpf.operators.result.stress_von_mises(
-            data_sources=model.metadata.data_sources
+            data_sources=model.metadata.data_sources, time_scoping=scoped
         ).eval()[0],
-        lambda: model.results.stress().eqv().eval()[0],
+        lambda: (
+            (
+                model.results.stress.on_time_scoping(scoped)
+                if scoped
+                else model.results.stress
+            )()
+            .eqv()
+            .eval()[0]
+        ),
         lambda: dpf.operators.invariant.von_mises_eqv_fc(
-            fields_container=model.results.stress().eval()
+            fields_container=(
+                model.results.stress.on_time_scoping(scoped)
+                if scoped
+                else model.results.stress
+            )().eval()
         ).eval()[0],
     )
     for attempt in attempts:
@@ -392,6 +423,57 @@ def _von_mises(model: Any) -> tuple[float | None, str]:
             return value, unit
     logger.warning("상당응력을 읽지 못했습니다 — 변형만 남깁니다")
     return None, ""
+
+
+def _set_at(model: Any, step: int) -> int:
+    """단계 `step` 의 끝 세트 — 단계의 끝 시각은 단계 번호다(Mechanical 의 기본). 그 시각까지의
+    마지막 세트(부단계마다 세트가 있을 수 있다)."""
+    times = list(model.metadata.time_freq_support.time_frequencies.data)
+    chosen = 0
+    for index, time in enumerate(times):
+        if float(time) <= step + 1e-9:
+            chosen = index
+    return chosen + 1
+
+
+def _cases(
+    model: Any, mesh: Any, topology: dict[str, Any], workdir: Path, displacement_unit: str
+) -> list[dict[str, Any]]:
+    """**정적 다단(판 2)의 케이스마다 끝 상태** — CalculiX 쪽과 같은 열쇠
+    (`calculix.static_read._cases`). 케이스의 끝 단계 · 볼트를 조인 단계는 모델링이 남겼다
+    (`boundary.json` 의 `cases`)."""
+    try:
+        written = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = written.get("cases") or []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        final = _set_at(model, int(row.get("step") or 0))
+        tightened = row.get("tightened")
+        moved = probes.at_set(model.results.displacement, final)
+        peak, _unit = _peak(moved, _body_nodes(mesh))
+        stress, _stress_unit = _von_mises(model, final)
+        case: dict[str, Any] = {
+            "name": str(row.get("name") or ""),
+            "max_displacement": peak,
+            "max_von_mises": stress,
+        }
+        forces = _reactions(model, mesh, topology, workdir, final)
+        if forces:
+            case["reactions"] = forces
+        bolts = _bolts(
+            model,
+            mesh,
+            topology,
+            displacement_unit,
+            first_set=_set_at(model, int(tightened)) if tightened else None,
+            final_set=final,
+        )
+        if bolts:
+            case["bolts"] = bolts
+        out.append(case)
+    return out
 
 
 def _write(workdir: Path, result: dict[str, Any]) -> Path:

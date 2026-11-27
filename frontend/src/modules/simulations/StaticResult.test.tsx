@@ -145,3 +145,31 @@ describe('정적 결과', () => {
     expect(screen.getByText('최대 변형')).toBeDefined()
   })
 })
+
+describe('케이스마다 끝 상태(해석 케이스의 사슬)', () => {
+  it('케이스마다 최대 변형 · 반력을 차례대로 보인다 — 하중은 이어지지 않는다', () => {
+    // CompCore 「조건_외팔보_두케이스」 를 CalculiX 로 푼 값(2026-11-27) — 「힘 A」 100 N +X → 「힘 B」 50 N +Y.
+    const beam: StaticResultData = {
+      recipe: 'static',
+      units: { displacement: 'mm', stress: 'MPa', force: 'N' },
+      max_displacement: 0.0978712,
+      max_von_mises: 29.9956,
+      cases: [
+        { name: '힘 A', max_displacement: 0.195748, max_von_mises: 59.7333, reactions: { 바닥: [-100, 0, 0] } },
+        { name: '힘 B', max_displacement: 0.0978712, max_von_mises: 29.9956, reactions: { 바닥: [0, -50, 0] } },
+      ],
+    }
+    render(<StaticResult simulationId="s1" result={beam} artifacts={[]} />)
+    const table = screen.getByRole('table', { name: '케이스마다 끝 상태' })
+    const rows = table.querySelectorAll('tbody tr')
+    expect([...rows].map((row) => row.querySelector('td')?.textContent)).toEqual(['힘 A', '힘 B'])
+    expect(rows[1]?.textContent).toContain('-50.00')
+    expect(table.textContent).toContain('반력 바닥')
+  })
+
+  it('케이스가 하나면(판 1) 표를 그리지 않는다', () => {
+    render(<StaticResult simulationId="s1" result={{ ...SHEAR, cases: undefined }} artifacts={[]} />)
+    expect(screen.queryByRole('table', { name: '케이스마다 끝 상태' })).toBeNull()
+  })
+})
+

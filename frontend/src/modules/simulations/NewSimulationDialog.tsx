@@ -59,11 +59,11 @@ import {
   specProblem,
 } from '@/modules/simulations/spec'
 import type { HarmonicInput, MeshOrder, RandomInput, RangeInput, RecipeName } from '@/modules/simulations/spec'
-import { HarmonicFields, MeshFields, RandomFields, RecipeSelect } from '@/modules/simulations/SpecFields'
+import { HarmonicFields, MeshFields, RandomFields, RecipeSelect, SELECT } from '@/modules/simulations/SpecFields'
 import { SolveOnSelect } from '@/modules/simulations/SolveOnSelect'
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
 import { MAX_TRACKS } from '@/modules/simulations/studyTable'
-import type { SolveOn } from '@/modules/simulations/labels'
+import { RECIPE_LABELS, type SolveOn } from '@/modules/simulations/labels'
 import type { Solver } from '@/modules/simulations/SolverSelect'
 import { StudyOntology } from '@/modules/simulations/StudyOntology'
 import { ApiError } from '@/shared/api/client'
@@ -139,6 +139,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     user?.home_workspace_slug ?? memberships[0]?.slug ?? GLOBAL,
   )
   const [recipe, setRecipe] = useState<RecipeName>('modal')
+  // 해석 케이스로 나뉜 점(판 2)의 사슬 — 서버가 편 사슬로 시작하고 사람이 바꿀 수 있다.
+  const [kase, setKase] = useState<string | null>(null)
   // **CalculiX 가 기본이다**(2026-10-08) — 라이선스 없이 서버에서 바로, 여러 점을 함께 푼다.
   const [solver, setSolver] = useState<Solver>('calculix')
   // **풀 곳** — 기본은 이 서버(요청서 E-2). DOE 면 모든 점이 같은 곳에서 푼다.
@@ -224,6 +226,8 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     random,
     // CAD 가 범위를 적었으면 그것이 먼저다 — 칸은 잠그고 보내지 않는다(두 값이 갈리면 무엇으로 돌았는지 헷갈린다).
     modalRange: cadRange ? NO_RANGE : modalRange,
+    // **사슬은 작업 하나를 만들 때만** — 여러 점을 가져오면 서버가 사슬마다 작업을 건다.
+    case: source === 'upload' || checked.size <= 1 ? kase : null,
   }
   const problem = specProblem(input)
   // **물성이 막는 자리** — 올린 점 파일, 물성을 안 보낸 폴더, 실행할 점 중 지금 보는 점에 빠진 재료.
@@ -284,18 +288,36 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     asked: RecipeName | undefined,
     use: (found: ConditionsPreview) => void,
     fail?: () => void,
-  ) => ask(simulationApi.previewConditions(next, asked), 'CAD 점 파일을 읽지 못했습니다.', use, fail)
+    chosen: string | null = kase,
+  ) =>
+    ask(
+      // 사슬을 골랐을 때만 싣는다(판 1 점은 케이스가 없다).
+      chosen ? simulationApi.previewConditions(next, asked, chosen) : simulationApi.previewConditions(next, asked),
+      'CAD 점 파일을 읽지 못했습니다.',
+      use,
+      fail,
+    )
   const askPoint = (
     path: string,
     point: number,
     asked: RecipeName | undefined,
     use: (found: ConditionsPreview) => void,
     fail?: () => void,
-  ) => ask(simulationApi.previewDoePoint(path, point, asked), '설계점을 읽지 못했습니다.', use, fail)
+    chosen: string | null = kase,
+  ) =>
+    ask(
+      chosen
+        ? simulationApi.previewDoePoint(path, point, asked, chosen)
+        : simulationApi.previewDoePoint(path, point, asked),
+      '설계점을 읽지 못했습니다.',
+      use,
+      fail,
+    )
 
   /** 서버가 읽은 점 — **CAD 가 적은 것을 미리 채운다**(조용히 쓰면 그쪽 값이 우리 것을 덮는다). */
   function adopt(found: ConditionsPreview) {
     setPreview(found)
+    setKase(found.case ?? null)
     // **조건 줄을 편 종류로 맞춘다** — CAD 가 종류를 안 적었으면 서버는 모달로 폈다. 앞에서 고른
     // 종류를 그대로 두면 칸은 「정적」 인데 조건 · 막힘 판정은 모달 것이다(2026-10-05 리뷰).
     if (isRecipe(found.recipe)) {
@@ -426,6 +448,19 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
     // 비면 「고르세요」 로 읽히고, 보는 점을 다시 눌러도 같은 점이라 아무 일이 없었다(2026-10-05 리뷰).
     if (next === 'folder' && folder && focus !== null) void askPoint(folder.path, focus, recipe, setPreview)
     if (next === 'upload' && pointFile) void askFile(pointFile, recipe, setPreview)
+  }
+
+  /** 사슬을 바꾼다 — 레시피는 그 사슬의 끝 케이스의 해석 종류다(서버가 그 종류로 편다). */
+  async function changeCase(next: string) {
+    setKase(next)
+    const kind = preview?.cases?.find((one) => one.name === next)?.kind
+    const asked = isRecipe(kind) ? kind : recipe
+    if (isRecipe(kind)) setRecipe(kind)
+    if (source === 'folder' && folder && focus !== null) {
+      await askPoint(folder.path, focus, asked, setPreview, undefined, next)
+    } else if (source === 'upload' && pointFile) {
+      await askFile(pointFile, asked, setPreview, undefined, next)
+    }
   }
 
   async function changeRecipe(next: RecipeName) {
@@ -830,6 +865,32 @@ export function NewSimulationDialog({ open, onClose, onCreated, onImported }: Pr
                   </div>
                 </div>
 
+                {(preview?.cases?.length ?? 0) > 1 && (
+                  // **해석 케이스로 나뉜 점** — 사슬 하나가 작업 하나다. 걸 수 없는 사슬은 까닭과 함께 막는다.
+                  <div className="space-y-1">
+                    <label htmlFor="sim-case" className="text-sm font-medium">
+                      해석 케이스
+                    </label>
+                    <select
+                      id="sim-case"
+                      className={SELECT}
+                      value={kase ?? ''}
+                      onChange={(event) => void changeCase(event.target.value)}
+                    >
+                      {(preview?.cases ?? []).map((one) => (
+                        <option key={one.name} value={one.name} disabled={Boolean(one.problem)}>
+                          {one.chain.join(' → ')} ({RECIPE_LABELS[one.kind] ?? one.kind})
+                          {one.problem ? ` — ${one.problem}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {source === 'folder' && checked.size > 1 && (
+                      <p className="text-muted-foreground text-xs">
+                        여러 설계점을 가져오면 점마다 사슬 {preview?.cases?.length}개가 각각 작업이 됩니다.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <RecipeSelect id="sim-recipe" value={recipe} onChange={(next) => void changeRecipe(next)} suggested={suggested} />
                   <SolverSelect id="sim-solver" value={solver} onChange={setSolver} />

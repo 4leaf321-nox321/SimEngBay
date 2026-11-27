@@ -48,9 +48,11 @@ const STUDY_TABS: StudyTab[] = ['compare', 'explore', 'frequency', 'points', 'ch
 
 export default function StudyDetailPage() {
   const { id = '' } = useParams()
-  const study = useResource(() => simulationApi.study(id), [id])
-  const { user } = useAuth()
   const [params, setParams] = useSearchParams()
+  // **해석 케이스로 나뉜 DOE 는 한 케이스씩 견준다** — 주소의 `?case=` 이 정본(비우면 서버가 첫 사슬).
+  const kase = params.get('case')
+  const study = useResource(() => simulationApi.study(id, kase), [id, kase])
+  const { user } = useAuth()
   const [failed, setFailed] = useState<ApiError | Error | null>(null)
   const [tidying, setTidying] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -98,7 +100,7 @@ export default function StudyDetailPage() {
   async function copyTable() {
     setFailed(null)
     try {
-      const table = await simulationApi.studyTable(id)
+      const table = await simulationApi.studyTable(id, study.data?.case ?? kase)
       await copyText(toTsv([table.head, ...table.rows]))
       setNotice(`설계점 ${table.rows.length}개 · 열 ${table.head.length}개를 복사했습니다 — 엑셀에 붙여 넣으세요.`)
     } catch (caught) {
@@ -140,6 +142,12 @@ export default function StudyDetailPage() {
   function setTab(next: StudyTab) {
     const after = new URLSearchParams(params)
     after.set('tab', next)
+    setParams(after, { replace: true })
+  }
+  const cases = study.data.cases ?? []
+  function setCase(next: string) {
+    const after = new URLSearchParams(params)
+    after.set('case', next)
     setParams(after, { replace: true })
   }
   const running = points.filter((one) => !['done', 'failed', 'canceled'].includes(one.status)).length
@@ -393,6 +401,24 @@ export default function StudyDetailPage() {
           이 스터디는 솔버가 섞여 있습니다({solvers.map((one) => SOLVER_LABELS[one] ?? one).join(' · ')}).
           두 솔버의 값은 몇 % 갈리므로 설계점 사이의 차이가 변수의 효과만은 아닙니다.
         </p>
+      )}
+
+      {cases.length > 1 && (
+        // **사슬마다 따로 견준다** — 점마다 케이스가 여럿이면 해석 종류가 섞이고 점 번호가 겹친다.
+        <div className="flex flex-wrap items-center gap-2 text-sm" role="group" aria-label="해석 케이스">
+          <span className="text-muted-foreground text-xs">해석 케이스</span>
+          {cases.map((one) => (
+            <Button
+              key={one}
+              size="sm"
+              variant={one === study.data?.case ? 'default' : 'outline'}
+              aria-pressed={one === study.data?.case}
+              onClick={() => setCase(one)}
+            >
+              {one}
+            </Button>
+          ))}
+        </div>
       )}
 
       <Tabs value={tab} onValueChange={(next) => setTab(next as StudyTab)}>

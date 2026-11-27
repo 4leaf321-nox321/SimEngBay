@@ -442,6 +442,8 @@ def build(
     else:
         preload: list[str] | None = None
         bolt_stage: tuple[list[str], list[str], list[str]] | None = None
+        staged: list[list[str]] | None = None
+        bolt_model: list[str] | None = None
         contact_faces: dict[str, list[tuple[int, str]]] | None = None
         if use_contact or given.prestressed:
             # **선응력 모달** — 비선형 정적을 앞에 두고 그 상태에서 모드를 뽑는다. 하중 줄은
@@ -472,7 +474,12 @@ def build(
                 bolts=bolts,
             )
             preload = ahead.load_rows or None
-            if ahead.bolt_rows:
+            if ahead.static_steps:
+                # 정적 다단(판 2 의 사슬) — 앞 정적 케이스들의 맨 단계를 그대로 앞에 둔다.
+                staged = ahead.static_steps
+                preload = None
+                bolt_model = ahead.bolt_model
+            elif ahead.bolt_rows:
                 bolt_stage = (ahead.bolt_model, ahead.bolt_rows, ahead.bolt_locks)
             # **앞 정적 단계가 못 건 하중은 이 해석의 답을 바꾼다** — 조이는 하중이 빠진 채
             # 선응력 모달이 돌면 그냥 모달과 같은 값이 그럴듯하게 나온다. 그래서 막는다.
@@ -498,6 +505,8 @@ def build(
             residual=[one.direction for one in shaking.shakes] if shaking is not None else (),
             # 랜덤 진동은 모드 응력도 — 상당응력 1σ 의 재료(`random_read`).
             stress=shaking is not None,
+            static_steps=staged,
+            bolt_model=bolt_model,
             second_order=mesh.second_order,
             rigid=rigid,
             shells=shells,
@@ -555,6 +564,9 @@ def build(
     if plan.bolt_report:
         # **볼트 힘 · 조임량을 읽을 자리**(`static_read._bolts`).
         boundary["bolts"] = plan.bolt_report
+    if plan.cases:
+        # **정적 다단의 케이스마다 끝 단계와 반력에 더할 몫** — 추출이 케이스마다 고른다.
+        boundary["cases"] = plan.cases
     if plan.reaction_sets:
         # **반력을 읽을 자리** — 추출 단계가 `.dat` 의 합에서 영역 이름으로 되찾는다.
         boundary["reaction_sets"] = plan.reaction_sets
@@ -1960,7 +1972,7 @@ def _average_force(given: condition_model.Conditions) -> float | None:
     그대로다. 힘 하중이 없으면(변위로만 당김) ccx 의 기본을 쓴다.
     """
     largest = 0.0
-    for load in given.loads:
+    for load in given.all_loads:
         if load.kind == "force" and load.magnitude:
             largest = max(largest, abs(load.magnitude))
         elif load.kind == "bolt_pretension" and load.preload:
@@ -2022,8 +2034,11 @@ def _load_places(
     """
     # 볼트 예압은 면이 아니라 **단면**으로 건다(`_cut_bolts`) — 바디에 건 것도 거기서 푼다
     # (바디 그룹은 면이 아니라 여기서 짝지으면 멈춘다).
+    # 앞 정적 케이스(판 2)의 하중 자리까지 — 케이스마다 단계에서 건다.
     wanted = [
-        load.region for load in given.loads if load.region and load.kind != "bolt_pretension"
+        load.region
+        for load in given.all_loads
+        if load.region and load.kind != "bolt_pretension"
     ]
     if not wanted or not topology:
         return {}, {}, {}
@@ -2293,7 +2308,7 @@ def _cut_bolts(
     out: dict[str, deck_writer.BoltSection | str] = {}
     nodes: Nodes = dict(mesh.nodes)
     solids: Solids = {key: list(rows) for key, rows in mesh.solids.items()}
-    for load in given.loads:
+    for load in given.all_loads:
         if load.kind != "bolt_pretension":
             continue
         shape = shapes.get(load.region) or {}

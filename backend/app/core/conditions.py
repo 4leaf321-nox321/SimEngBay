@@ -345,6 +345,25 @@ class Note:
     why: str
 
 
+@dataclass(frozen=True)
+class Stage:
+    """사슬(판 2)의 **앞 정적 케이스** 하나 — 그 케이스에 걸린 하중과 해석 설정. 뒤 케이스는 그
+    끝 상태에서 시작하고 **하중은 이어지지 않는다**(조인 볼트만 그 길이로 잠긴 채 이어진다)."""
+
+    name: str
+    loads: list[Load]
+    analysis: Analysis
+
+
+@dataclass(frozen=True)
+class StaticCase:
+    """정적으로 풀 케이스 하나(`Conditions.static_cases`) — 이름이 비면 판 1 의 한 벌이다."""
+
+    name: str
+    loads: list[Load]
+    analysis: Analysis
+
+
 @dataclass
 class Conditions:
     """점 파일 한 장에서 읽은 조건 — **걸 것 · 넘길 것 · 막을 것**으로 갈라 둔다."""
@@ -368,6 +387,11 @@ class Conditions:
     body_settings: list[BodySetting] = field(default_factory=list)
     """파트별 설정 — 적힌 파트만. 쉘 파트는 여기 오지 않고 `refused` 에 있다."""
     analysis: Analysis = field(default_factory=Analysis)
+    stages: list[Stage] = field(default_factory=list)
+    """사슬(판 2)의 앞 정적 케이스들 — 차례대로. v1 으로 접히는 사슬과 판 1 은 비어 있다
+    (`app/core/cases.py`)."""
+    case: str = ""
+    """판 2 면 끝 케이스의 이름(보기의 `conditions.case`) — 판 1 이면 빈 글자."""
     skipped: list[Note] = field(default_factory=list)
     """이 레시피에서 답을 바꾸지 않는 것 — 하중처럼."""
     refused: list[Note] = field(default_factory=list)
@@ -439,13 +463,29 @@ class Conditions:
 
     @property
     def driven(self) -> bool:
-        """답을 만들 것이 있나 — 하중이 있거나 강제로 움직인다(정적 · 조화의 점검)."""
-        return bool(self.loads) or self.drives
+        """답을 만들 것이 있나 — 하중이 있거나(앞 정적 케이스의 것까지) 강제로 움직인다(정적 ·
+        조화의 점검)."""
+        return bool(self.all_loads) or self.drives
 
     @property
     def prestressed(self) -> bool:
-        """정적 해석을 먼저 풀어야 하나 — **하중이 있고 선응력을 켰을 때**."""
-        return bool(self.loads) and self.analysis.prestressed
+        """정적 해석을 먼저 풀어야 하나 — **하중이 있고 선응력을 켰을 때**(판 2 면 앞 정적
+        케이스가 있을 때)."""
+        return self.analysis.prestressed and bool(self.loads or self.stages)
+
+    @property
+    def all_loads(self) -> list[Load]:
+        """앞 정적 케이스들의 하중까지 모두 — 하중 자리 · 볼트 단면을 메시에서 세울 때."""
+        return [*(load for stage in self.stages for load in stage.loads), *self.loads]
+
+    def static_cases(self) -> list[StaticCase]:
+        """정적으로 **차례대로** 풀 케이스들 — 앞 정적 케이스(`stages`)와, 끝이 정적이면 끝
+        케이스. 판 1 은 한 벌(선응력 모달이면 그 앞 정적)이다. 모드 해석(모달 · 랜덤)의 끝
+        케이스는 정적으로 풀 것이 없다 — 그 하중은 앞 정적에 있다."""
+        out = [StaticCase(one.name, one.loads, one.analysis) for one in self.stages]
+        if self.analysis.kind == "static" or not self.stages:
+            out.append(StaticCase(self.case, self.loads, self.analysis))
+        return out
 
 
 def read(payload: Any, *, recipe: str = "modal") -> Conditions:
@@ -567,46 +607,75 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     for row in _rows(block, "mesh_hints"):
         _mesh_hint(row, made, _dict(_dict(payload).get("regions")), entities)
     for row in _rows(block, "loads"):
-        place = str(row.get("on") or "")
-        if place in gone:
-            what = f"하중 「{row.get('name') or '이름 없는 하중'}」"
-            why = f"해석에서 뺀 파트({gone[place]})에 걸려 있습니다"
-            if recipe in QUIET_LOADS and not made.analysis.prestressed:
-                made.skipped.append(Note(what, why + " — 모달이라 답과 상관없습니다"))
-            else:
-                made.refused.append(Note(what, why + " — 거기에는 형상이 없습니다"))
-            continue
-        live = not (recipe in QUIET_LOADS and not made.analysis.prestressed)
-        if place in flat and live:
-            made.refused.append(
-                Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", flat[place])
-            )
-            continue
-        bolted_body = (
-            str(row.get("type") or "") == "bolt_pretension" and entities.get(place) == "body"
-        )
-        if place in odd and live and not bolted_body:
-            made.refused.append(
-                Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", odd[place])
-            )
-            continue
-        if bolted_body and live and str(row.get("cs") or "") in GLOBAL_FRAMES:
-            # **바디에 건 예압은 단면을 좌표계로 정한다**(CompCore 2f402f2 — 우리가 고른 (가)):
-            # Z 축이 볼트 축, 원점이 단면 자리. Ansys 의 바디 예압과 같은 뜻이다. 전역이면
-            # 원점(0, 0, 0)을 지나는 평면이라 거의 늘 엉뚱한 자리다 — CompCore 도 저장할 때
-            # 막는다.
-            made.refused.append(
-                Note(
-                    f"하중 「{row.get('name') or '이름 없는 하중'}」",
-                    "바디에 건 볼트 예압은 좌표계가 있어야 합니다 — Z 축이 볼트 축, 원점이 "
-                    "단면 자리입니다",
-                )
-            )
-            continue
-        _load(row, recipe, made)
+        _read_load(row, recipe, made, gone, flat, odd, entities)
     for row in _rows(block, "initial"):
         _initial(row, recipe, made)
+    case = block.get("case")
+    made.case = str(case.get("name") or "") if isinstance(case, dict) else ""
+    for row in _rows(block, "stages"):
+        # **사슬의 앞 정적 케이스**(판 2, `cases.view`) — 하중은 정적으로 읽고 말에는 케이스를
+        # 단다.
+        name = str(row.get("name") or "")
+        part = Conditions(frames=made.frames, analysis=_analysis(_dict(row.get("analysis"))))
+        for one in _rows(row, "loads"):
+            _read_load(one, "static", part, gone, flat, odd, entities)
+        made.stages.append(Stage(name=name, loads=part.loads, analysis=part.analysis))
+        made.refused += [
+            Note(f"케이스 「{name}」 · {one.what}", one.why) for one in part.refused
+        ]
+        made.skipped += [
+            Note(f"케이스 「{name}」 · {one.what}", one.why) for one in part.skipped
+        ]
     return made
+
+
+def _read_load(
+    row: dict[str, Any],
+    recipe: str,
+    made: Conditions,
+    gone: dict[str, str],
+    flat: dict[str, str],
+    odd: dict[str, str],
+    entities: dict[str, str],
+) -> None:
+    """하중 한 줄 — 뺀 파트 · 중간면 · 면이 아닌 자리를 먼저 본 뒤 `_load`."""
+    place = str(row.get("on") or "")
+    if place in gone:
+        what = f"하중 「{row.get('name') or '이름 없는 하중'}」"
+        why = f"해석에서 뺀 파트({gone[place]})에 걸려 있습니다"
+        if recipe in QUIET_LOADS and not made.analysis.prestressed:
+            made.skipped.append(Note(what, why + " — 모달이라 답과 상관없습니다"))
+        else:
+            made.refused.append(Note(what, why + " — 거기에는 형상이 없습니다"))
+        return
+    live = not (recipe in QUIET_LOADS and not made.analysis.prestressed)
+    if place in flat and live:
+        made.refused.append(
+            Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", flat[place])
+        )
+        return
+    bolted_body = (
+        str(row.get("type") or "") == "bolt_pretension" and entities.get(place) == "body"
+    )
+    if place in odd and live and not bolted_body:
+        made.refused.append(
+            Note(f"하중 「{row.get('name') or '이름 없는 하중'}」", odd[place])
+        )
+        return
+    if bolted_body and live and str(row.get("cs") or "") in GLOBAL_FRAMES:
+        # **바디에 건 예압은 단면을 좌표계로 정한다**(CompCore 2f402f2 — 우리가 고른 (가)):
+        # Z 축이 볼트 축, 원점이 단면 자리. Ansys 의 바디 예압과 같은 뜻이다. 전역이면
+        # 원점(0, 0, 0)을 지나는 평면이라 거의 늘 엉뚱한 자리다 — CompCore 도 저장할 때
+        # 막는다.
+        made.refused.append(
+            Note(
+                f"하중 「{row.get('name') or '이름 없는 하중'}」",
+                "바디에 건 볼트 예압은 좌표계가 있어야 합니다 — Z 축이 볼트 축, 원점이 "
+                "단면 자리입니다",
+            )
+        )
+        return
+    _load(row, recipe, made)
 
 
 # --- 갈래마다 ------------------------------------------------------------------

@@ -78,6 +78,8 @@ export function StaticResult({ simulationId, result, artifacts }: Props) {
         </div>
       </dl>
 
+      {result.cases && result.cases.length > 1 && <CaseTable result={result} />}
+
       {/* **센서 자리의 값과 버틴 힘** — 실측과 견줄 수 있는 것은 전체 최대가 아니라 이쪽이다. */}
       <StaticProbeTable probes={result.probes ?? []} />
       <ReactionTable reactions={result.reactions ?? {}} unit={result.units.force} />
@@ -106,3 +108,65 @@ export function StaticResult({ simulationId, result, artifacts }: Props) {
     </section>
   )
 }
+
+/**
+ * **케이스마다 끝 상태** — 해석 케이스의 사슬(정적 다단). 뒤 케이스는 앞 케이스의 끝에서 시작하고 하중은
+ * 이어지지 않으므로, 앞 케이스(예: 볼트를 조인 끝)의 값은 맨 위의 값에 없다.
+ */
+function CaseTable({ result }: { result: StaticResultData }) {
+  const rows = result.cases ?? []
+  const regions = Array.from(new Set(rows.flatMap((one) => Object.keys(one.reactions ?? {}))))
+  const bolts = Array.from(new Set(rows.flatMap((one) => Object.keys(one.bolts ?? {}))))
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm" aria-label="케이스마다 끝 상태">
+        <caption className="text-muted-foreground px-3 pt-2 text-left text-xs">
+          케이스마다 끝 상태 — 하중은 케이스 사이에 이어지지 않습니다(조인 볼트만 잠긴 채 이어집니다)
+        </caption>
+        <thead>
+          <tr className="text-muted-foreground text-left text-xs">
+            <th className="px-3 py-2 font-medium">케이스</th>
+            <th className="px-3 py-2 font-medium">최대 변형</th>
+            <th className="px-3 py-2 font-medium">최대 상당응력</th>
+            {regions.map((name) => (
+              <th key={`r-${name}`} className="px-3 py-2 font-medium">
+                반력 {name} [{result.units.force ?? 'N'}]
+              </th>
+            ))}
+            {bolts.map((name) => (
+              <th key={`b-${name}`} className="px-3 py-2 font-medium">
+                볼트 {name} [N]
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((one) => (
+            <tr key={one.name} className="border-t">
+              <td className="px-3 py-2 font-medium">{one.name}</td>
+              <td className="px-3 py-2">{shown(one.max_displacement, result.units.displacement)}</td>
+              <td className="px-3 py-2">{shown(one.max_von_mises, result.units.stress)}</td>
+              {regions.map((name) => {
+                const force = one.reactions?.[name]
+                return (
+                  <td key={`r-${name}`} className="px-3 py-2 tabular-nums">
+                    {force ? force.map((part) => part.toPrecision(4)).join(' · ') : '—'}
+                  </td>
+                )
+              })}
+              {bolts.map((name) => {
+                const bolt = one.bolts?.[name]
+                return (
+                  <td key={`b-${name}`} className="px-3 py-2 tabular-nums">
+                    {bolt?.force_n != null ? bolt.force_n.toPrecision(5) : '—'}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+

@@ -301,6 +301,9 @@ def build(
             if isinstance(spec, HarmonicSpec)
             else None,
             shaking=shaking,
+            cases=staged_plan(given_conditions)[2]
+            if isinstance(spec, StaticSpec) and len(given_conditions.static_cases()) > 1
+            else None,
         )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -1181,6 +1184,8 @@ def _static_steps(given: condition_model.Conditions) -> int:
     """정적 해석의 단계 수 — **볼트가 있으면 둘**(1단계 조임 · 2단계 잠그고 다른 하중,
     `_apply_loads`). CompCore 계약: 「먼저 체결한 뒤 그 길이를 고정한 상태에서 다른 하중을
     적용합니다」. CalculiX 덱도 같은 두 단계다(`calculix.deck._bolt_blocks`)."""
+    if len(given.static_cases()) > 1:
+        return staged_plan(given)[0]
     return 2 if any(one.kind == "bolt_pretension" for one in given.loads) else 1
 
 
@@ -1308,36 +1313,15 @@ def _apply_loads(
     # 단계마다 끌 수 없다(Mechanical 에 그 칸이 없다 — 실측 2026-11-26: `EarthGravity` 에
     # `SetActivateAtLoadStep` 이 없고, 가속도 · 회전 속도에는 있어 꺼진다) — 조일 때도 있는
     # 하중이라 두 단계에 다 걸고, CalculiX 도 그렇게 한다.
+    if len(given.static_cases()) > 1:
+        _apply_staged(app, given, system, places, static, flipped, steps)
+        return
     bolted = steps > 1
     for load in given.loads:
-        maker = _LOAD_MAKERS.get(load.kind)
-        if maker is None:  # pragma: no cover - 조건 층이 먼저 막는다
-            raise StageFailure("internal", f"못 거는 하중입니다: {load.kind}")
         try:
-            made = getattr(static, maker)()
-            if load.region:
-                place = places.get(load.region)
-                if place is None:
-                    raise StageFailure(
-                        "region_unresolved",
-                        f"하중 「{load.name}」 의 자리 「{load.region}」 를 못 찾았습니다",
-                    )
-                made.Location = place
-            if load.kind == "rotational_velocity":
-                _spin(made, load, given.frames, system, quantity)
-            else:
-                # **방향 성분은 그 좌표계의 것이다** — 전역으로 옮겨 건다(CalculiX 와 같은
-                # `conditions.in_global`). 전에는 `cs` 를 안 보고 전역으로 읽었다.
-                moved = condition_model.in_global(load, given.frames)
-                if isinstance(moved, str):
-                    raise StageFailure("internal", f"하중 「{load.name}」: {moved}")
-                if load.kind == "pressure" and load.region in (flipped or set()):
-                    # 법선이 뒤집힌 쉘 면 — 부호를 크기에 실어 표(주파수별 배율)와 함께 간다.
-                    moved = replace(moved, magnitude=-(moved.magnitude or 0.0))
-                _load_magnitude(made, moved, system, quantity, steps)
-            if load.kind == "bolt_pretension" and load.cs not in condition_model.GLOBAL_FRAMES:
-                # **바디에 건 예압은 좌표계가 단면이다** — Z 축이 볼트 축, 원점이 단면 자리.
-                made.CoordinateSystem = _frame_named(app, load.cs)
+            made = _make_load(
+                app, static, load, given, system, quantity, places, flipped, steps
+            )
             if bolted and load.kind == "bolt_pretension":
                 made.SetDefineBy(
                     2, _global("Ansys").Mechanical.DataModel.Enums.BoltLoadDefineBy.Lock
@@ -1346,6 +1330,129 @@ def _apply_loads(
                 made.SetActivateAtLoadStep(1, False)
             made.Name = load.name
             logger.info("하중 %s(%s) ← %s", load.name, load.kind, load.region or "전체")
+        except StageFailure:
+            raise
+        except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+            raise _translated(
+                failure, "internal", f"하중 「{load.name}」({load.kind})을 걸지 못했습니다"
+            ) from failure
+
+
+def _make_load(
+    app: Any,
+    static: Any,
+    load: condition_model.Load,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    quantity: Any,
+    places: dict[str, Any],
+    flipped: set[str] | None,
+    steps: int,
+) -> Any:
+    """하중 하나를 정적 해석에 만든다 — 자리 · 크기 · 방향(단계마다 같은 값). 단계마다 켜고
+    끄기 ·
+    볼트의 Define By 는 부른 쪽이 정한다."""
+    maker = _LOAD_MAKERS.get(load.kind)
+    if maker is None:  # pragma: no cover - 조건 층이 먼저 막는다
+        raise StageFailure("internal", f"못 거는 하중입니다: {load.kind}")
+    made = getattr(static, maker)()
+    if load.region:
+        place = places.get(load.region)
+        if place is None:
+            raise StageFailure(
+                "region_unresolved",
+                f"하중 「{load.name}」 의 자리 「{load.region}」 를 못 찾았습니다",
+            )
+        made.Location = place
+    if load.kind == "rotational_velocity":
+        _spin(made, load, given.frames, system, quantity)
+    else:
+        # **방향 성분은 그 좌표계의 것이다** — 전역으로 옮겨 건다(CalculiX 와 같은
+        # `conditions.in_global`). 전에는 `cs` 를 안 보고 전역으로 읽었다.
+        moved = condition_model.in_global(load, given.frames)
+        if isinstance(moved, str):
+            raise StageFailure("internal", f"하중 「{load.name}」: {moved}")
+        if load.kind == "pressure" and load.region in (flipped or set()):
+            # 법선이 뒤집힌 쉘 면 — 부호를 크기에 실어 표(주파수별 배율)와 함께 간다.
+            moved = replace(moved, magnitude=-(moved.magnitude or 0.0))
+        _load_magnitude(made, moved, system, quantity, steps)
+    if load.kind == "bolt_pretension" and load.cs not in condition_model.GLOBAL_FRAMES:
+        # **바디에 건 예압은 좌표계가 단면이다** — Z 축이 볼트 축, 원점이 단면 자리.
+        made.CoordinateSystem = _frame_named(app, load.cs)
+    return made
+
+
+def staged_plan(
+    given: condition_model.Conditions,
+) -> tuple[int, list[tuple[condition_model.Load, set[int], int | None]], list[dict[str, Any]]]:
+    """**정적 다단**(판 2)의 단계 배치 — (단계 수, [(하중, 켜는 단계, 볼트를 조이는 단계)],
+    케이스마다 {이름, 끝 단계}). CalculiX 덱(`calculix.deck._staged_steps`)과 같은 차례다: 새로
+    조이는 볼트가 있는 케이스는 「조임 → 잠그고 나머지」 두 단계, 없으면 한 단계. **중력은 첫
+    케이스의 것 하나만** 건다 — Mechanical 은 중력을 단계마다 끄지 못하고(실측), 사슬 안의 정적
+    케이스는 중력이 같다(`cases.problem`)."""
+    step = 0
+    entries: list[tuple[condition_model.Load, set[int], int | None]] = []
+    ends: list[dict[str, Any]] = []
+    for index, case in enumerate(given.static_cases()):
+        bolts = [one for one in case.loads if one.kind == "bolt_pretension"]
+        tighten = step + 1 if bolts else None
+        loaded = step + (2 if bolts else 1)
+        for one in case.loads:
+            if one.kind == "bolt_pretension":
+                entries.append((one, set(), tighten))
+            elif one.kind == "standard_earth_gravity":
+                if index == 0:
+                    entries.append((one, set(), None))
+            else:
+                entries.append((one, {loaded}, None))
+        step = loaded
+        ends.append({"name": case.name, "step": step, "tightened": tighten})
+    return step, entries, ends
+
+
+def _apply_staged(
+    app: Any,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    places: dict[str, Any],
+    static: Any,
+    flipped: set[str] | None,
+    steps: int,
+) -> None:
+    """정적 다단 — 하중은 **자기 케이스의 단계에서만** 켜고(하중은 이어지지 않는다), 볼트는
+    조이는 단계 앞에서는 Open, 그 단계에서는 예압(힘이면 Load · 길이면 Adjustment), 뒤로는 Lock
+    (그 길이로 잠긴 채 이어진다). 중력은 처음부터 끝까지 하나다(`staged_plan`)."""
+    quantity = _global("Quantity")
+    by = _global("Ansys").Mechanical.DataModel.Enums.BoltLoadDefineBy
+    total, entries, _ends = staged_plan(given)
+    for load, active, tighten in entries:
+        try:
+            made = _make_load(
+                app, static, load, given, system, quantity, places, flipped, total
+            )
+            if load.kind == "bolt_pretension" and tighten is not None:
+                length = (
+                    condition_model.preload_unit(load) in condition_model.PRELOAD_LENGTH_UNITS
+                )
+                for number in range(1, total + 1):
+                    if number < tighten:
+                        made.SetDefineBy(number, by.Open)
+                    elif number == tighten:
+                        made.SetDefineBy(number, by.Adjustment if length else by.Load)
+                    else:
+                        made.SetDefineBy(number, by.Lock)
+            elif load.kind != "standard_earth_gravity":
+                for number in range(1, total + 1):
+                    if number not in active:
+                        made.SetActivateAtLoadStep(number, False)
+            made.Name = load.name
+            logger.info(
+                "하중 %s(%s) ← %s · 단계 %s",
+                load.name,
+                load.kind,
+                load.region or "전체",
+                sorted(active) or tighten or "전부",
+            )
         except StageFailure:
             raise
         except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
@@ -1750,6 +1857,7 @@ def _write_boundary(
     mass_kg: float | None = None,
     unit_system: str | None = None,
     shaking: random_model.RandomPlan | None = None,
+    cases: list[dict[str, Any]] | None = None,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
@@ -1785,6 +1893,10 @@ def _write_boundary(
     if connections and any(connections.values()):
         # 0 Hz 모드의 까닭 — 접촉 없이 맞닿은 쌍 · 미끄럼 접촉(`modes.rigid`).
         payload["connections"] = connections
+    if cases:
+        # 정적 다단(판 2)의 케이스마다 끝 단계 · 볼트를 조인 단계 — 추출이 케이스마다 고른다
+        # (`dpf.static._cases`, CalculiX 와 같은 열쇠).
+        payload["cases"] = cases
     if plan is not None:
         payload["damping_ratio"] = plan.damping_ratio
         payload["frequency_range_hz"] = [plan.low, plan.high]

@@ -2164,7 +2164,12 @@ def _latest_per_point(rows: list[Simulation]) -> list[Simulation]:
 
 
 def _study_points(
-    db: Session, user: User, study_id: str, *, every: bool = False
+    db: Session,
+    user: User,
+    study_id: str,
+    *,
+    every: bool = False,
+    case: str | None = None,
 ) -> list[Simulation]:
     """그 스터디의 점들. **목록과 같은 열쇠로 모은다** — `study_id` 가 없는 옛 가져오기는
     목록이 `study_name` 으로 묶으므로 여기서도 그렇게 찾는다. 안 그러면 목록에는 있는데 상세는
@@ -2175,7 +2180,25 @@ def _study_points(
     rows = list(
         db.scalars(_visible(user).where(_in_study(study_id)).order_by(Simulation.created_at))
     )
-    return rows if every else _latest_per_point(rows)
+    if every:
+        return rows
+    latest = _latest_per_point(rows)
+    # **해석 케이스로 나뉜 DOE(판 2)는 한 케이스씩** — 사슬마다 레시피가 다를 수 있고(모달 ·
+    # 정적), 견주는 것은 같은 케이스의 점끼리다. 고른 것이 없으면 첫 사슬.
+    names = study_cases(latest)
+    if len(names) <= 1:
+        return latest
+    chosen = case if case in names else names[0]
+    return [one for one in latest if _case_of(one) == chosen]
+
+
+def study_cases(rows: list[Simulation]) -> list[str]:
+    """그 점들의 사슬 이름(가져온 차례) — 판 1 의 작업은 빈 글자다."""
+    return list(dict.fromkeys(_case_of(one) for one in rows))
+
+
+def _case_of(simulation: Simulation) -> str:
+    return str((simulation.source_meta or {}).get("case") or "")
 
 
 def _in_study(study_id: str) -> ColumnElement[bool]:
@@ -2345,10 +2368,12 @@ def db_result_path(simulation: Simulation) -> Path | None:
     return resolve_work_path(f"{simulation.work_dir}/result.json")
 
 
-def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
-    points = _study_points(db, user, study_id)
+def get_study(db: Session, *, user: User, study_id: str, case: str | None = None) -> StudyOut:
+    points = _study_points(db, user, study_id, case=case)
     if not points:
         raise NotFound(code("SIMULATIONS", 16), "그 DOE 를 찾을 수 없습니다.")
+    every = _latest_per_point(_study_points(db, user, study_id, every=True))
+    cases = [one for one in study_cases(every) if one]
     factors: list[str] = []
     for point in points:
         for name in point.source_meta.get("params") or {}:
@@ -2378,6 +2403,8 @@ def get_study(db: Session, *, user: User, study_id: str) -> StudyOut:
             for one in points
         ],
         ontology=_points_ontology(db, points),
+        cases=cases,
+        case=_case_of(points[0]) or None,
     )
 
 
@@ -2392,10 +2419,12 @@ def analyze_study(
     where: list[str] | None = None,
     x: str | None = None,
     y: str | None = None,
+    case: str | None = None,
 ) -> StudyAnalysisOut:
     """DOE 분석(`analysis.py`) — 비교 화면과 같은 표에서 셈한다. 모르는 열 · 못 읽는 조건은
-    400 으로, **쓸 수 있는 열을 함께** 말한다(AI 가 다시 고를 수 있게)."""
-    study = get_study(db, user=user, study_id=study_id)
+    400 으로, **쓸 수 있는 열을 함께** 말한다(AI 가 다시 고를 수 있게). 해석 케이스로 나뉜
+    DOE 는 한 케이스씩(`case`, 없으면 첫 사슬)."""
+    study = get_study(db, user=user, study_id=study_id, case=case)
     try:
         return study_analysis.analyze(
             study, result=result, objective=objective, goal=goal, where=where, x=x, y=y
@@ -2413,11 +2442,13 @@ def _study_owner(points: list[Simulation]) -> uuid.UUID | None:
 
 def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOut:
     number = int(simulation.source_meta.get("point") or 0)
+    case = _case_of(simulation) or None
     summary = simulation.summary or {}
     found = core_values.read(loaded) if loaded else None
     return StudyPointOut(
         simulation_id=simulation.id,
         number=number,
+        case=case,
         # **숫자로 못 읽는 값도 그대로 낸다**(재료 이름 같은 것). 버리면 두 설계점이 화면에서
         # 똑같아 보이고, 사람은 왜 결과가 다른지 알 수 없다.
         params=dict(simulation.source_meta.get("params") or {}),
@@ -2497,8 +2528,14 @@ def _frequency_row(db: Session, study_id: str) -> StudyFrequencyRequirement | No
     )
 
 
-def _modal_study(db: Session, user: User, study_id: str) -> StudyOut:
-    study = get_study(db, user=user, study_id=study_id)
+def _modal_study(db: Session, user: User, study_id: str, case: str | None = None) -> StudyOut:
+    study = get_study(db, user=user, study_id=study_id, case=case)
+    if case is None and study.recipe != "modal" and len(study.cases) > 1:
+        # 케이스로 나뉜 DOE — 고른 것이 없으면 모달 사슬을 찾아 그것으로 판정한다.
+        for one in study.cases:
+            candidate = get_study(db, user=user, study_id=study_id, case=one)
+            if candidate.recipe == "modal":
+                return candidate
     if study.recipe != "modal":
         raise AppError(
             code("SIMULATIONS", 40),
@@ -2514,10 +2551,11 @@ def frequency_check(
     user: User,
     study_id: str,
     draft: FrequencyRequirementsIn | None = None,
+    case: str | None = None,
 ) -> FrequencyCheckOut:
     """스터디의 주파수 요구 판정. `draft` 를 주면 **저장하지 않고** 그 요구로 셈한다(화면이
     입력을 고칠 때마다 부르는 미리보기 — 같은 셈을 두 벌로 두지 않는다)."""
-    study = _modal_study(db, user, study_id)
+    study = _modal_study(db, user, study_id, case)
     row = _frequency_row(db, study_id)
     if draft is not None:
         requirements: list[FrequencyRequirement] = list(draft.requirements)
@@ -2688,15 +2726,19 @@ def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
     return head, rows
 
 
-def study_csv(db: Session, *, user: User, study_id: str) -> tuple[str, str]:
-    """스터디를 CSV 로 — `(파일 이름, 본문)`. 화면과 같은 권한 · 같은 값이다."""
-    study = get_study(db, user=user, study_id=study_id)
+def study_csv(
+    db: Session, *, user: User, study_id: str, case: str | None = None
+) -> tuple[str, str]:
+    """스터디를 CSV 로 — `(파일 이름, 본문)`. 화면과 같은 권한 · 같은 값이다. 해석 케이스로
+    나뉜 DOE 는 한 케이스씩이고 파일 이름에 케이스가 붙는다."""
+    study = get_study(db, user=user, study_id=study_id, case=case)
     head, rows = study_table(study)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(head)
     writer.writerows(rows)
-    return f"{study.name}.csv", buffer.getvalue()
+    suffix = f" · {study.case}" if study.case and len(study.cases) > 1 else ""
+    return f"{study.name}{suffix}.csv", buffer.getvalue()
 
 
 def retry(
@@ -4063,7 +4105,7 @@ def solver_availability(db: Session) -> list[SolverAvailabilityOut]:
     ]
 
 
-def capabilities(solver: str | None = None) -> list[CapabilitiesOut]:
+def capabilities(db: Session, solver: str | None = None) -> list[CapabilitiesOut]:
     """**능력표** — 솔버마다 CompCore 조건에서 무엇을 받나(CompCore 해석-확장-설계 5장).
     `solver` 를 주면 그 한 장만 — **꼴은 늘 배열**이다(모르는 솔버면 빈 배열, CompCore 와
     정함: 질의에 따라 응답의 꼴이 바뀌지 않게). 표는 받는 코드에서 만든다
@@ -4073,7 +4115,7 @@ def capabilities(solver: str | None = None) -> list[CapabilitiesOut]:
         CapabilitiesOut(
             receiver=settings.app_slug,
             solver=one,
-            version=_solver_version(one, settings),
+            version=_solver_version(db, one, settings),
             receiver_version=app_version.current(),
             contract=list(contract.VERSIONS),
             analyses={
@@ -4086,12 +4128,20 @@ def capabilities(solver: str | None = None) -> list[CapabilitiesOut]:
     ]
 
 
-def _solver_version(solver: str, settings: Settings) -> str | None:
-    """솔버 판 — Ansys 는 설정의 판(252 → 「2025 R2」). CalculiX 는 워커의 ccx 판을 모아 두지
-    않아 비운다(지문은 `tools.ccx_sha256`)."""
-    if solver != "ansys":
-        return None
-    return f"20{settings.ansys_version // 10} R{settings.ansys_version % 10}"
+def _solver_version(db: Session, solver: str, settings: Settings) -> str | None:
+    """솔버 판 — Ansys 는 설정의 판(252 → 「2025 R2」). CalculiX 는 **실제로 푸는 ccx 의 판** —
+    살아 있는 CalculiX 워커가 기동 때 잰 것(`toolcheck.ccx_version`)이 하나로 모이면 그 판,
+    갈리거나
+    모르면 비운다(이 서버 · STE 처럼 워커가 여럿일 수 있다). 요청마다 ccx 를 부르지 않는다."""
+    if solver == "ansys":
+        return f"20{settings.ansys_version // 10} R{settings.ansys_version % 10}"
+    now = _now()
+    found = {
+        str((row.tools or {}).get("ccx_version") or "")
+        for row in db.scalars(select(SimulationWorker))
+        if _alive(row, now) and _takes(row, solver)
+    }
+    return found.pop() if len(found) == 1 and "" not in found else None
 
 
 # --- 돌리기 ----------------------------------------------------------------------

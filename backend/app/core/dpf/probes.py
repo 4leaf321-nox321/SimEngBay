@@ -229,8 +229,21 @@ def body_nodes(mesh: Any, topology: dict[str, Any]) -> dict[str, set[int]]:
     return found
 
 
+def at_set(result: Any, time_set: int | None) -> Any:
+    """결과 하나의 **그 세트**(정적 다단의 케이스 끝 — `dpf.static._cases`) — 세트를 안 주면
+    DPF 의 기본(마지막 세트)."""
+    if time_set is None:
+        return result.eval()[0]
+    return result.on_time_scoping([time_set]).eval()[0]
+
+
 def reaction(
-    model: Any, mesh: Any, region: dict[str, Any], *, tolerance_mm: float = 1e-3
+    model: Any,
+    mesh: Any,
+    region: dict[str, Any],
+    *,
+    tolerance_mm: float = 1e-3,
+    time_set: int | None = None,
 ) -> list[float] | None:
     """그 면의 **반력 합** `[Fx, Fy, Fz]`. 면은 CAD 지문(`centroid` · `normal`)으로 찾는다.
 
@@ -244,7 +257,7 @@ def reaction(
     try:
         import numpy as np
 
-        field = model.results.reaction_force.eval()[0]
+        field = at_set(model.results.reaction_force, time_set)
         places = np.asarray(mesh.nodes.coordinates_field.data, dtype=float).reshape(-1, 3)
         node_ids = np.array(mesh.nodes.scoping.ids, copy=True, dtype=int)
         scale = scale_for(str(mesh.unit or ""))
@@ -264,14 +277,16 @@ def reaction(
     return [significant(float(one)) for one in total]
 
 
-def reaction_on(model: Any, node_ids: list[int] | dict[str, list[int]]) -> list[float] | None:
+def reaction_on(
+    model: Any, node_ids: list[int] | dict[str, list[int]], time_set: int | None = None
+) -> list[float] | None:
     """그 절점들의 **반력 합** `[Fx, Fy, Fz]` — 모델링이 남긴 구속 절점
     (`reaction_nodes.json`). 축마다 절점이 다르면(`{"x": …, "y": …, "z": …}`) 그 축의 성분만
     제 절점에서 더한다(겹친 절점을 축마다 가른 것 — `statics.separate_reactions`)."""
     try:
         import numpy as np
 
-        field = model.results.reaction_force.eval()[0]
+        field = at_set(model.results.reaction_force, time_set)
         ids = np.array(field.scoping.ids, copy=True, dtype=int)
         data = np.asarray(field.data, dtype=float).reshape(-1, 3)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
@@ -288,7 +303,9 @@ def reaction_on(model: Any, node_ids: list[int] | dict[str, list[int]]) -> list[
     ]
 
 
-def foundation_on(model: Any, element_ids: list[int]) -> list[float] | None:
+def foundation_on(
+    model: Any, element_ids: list[int], time_set: int | None = None
+) -> list[float] | None:
     """탄성 지지가 몸을 받친 힘 `[Fx, Fy, Fz]` — 그 면 요소(SURF154)의 **요소 절점력 합**.
 
     Mechanical 은 탄성 지지를 면 요소의 기초 강성(`r,<번호>,,,,<강성>`)으로 건다. 묶인 절점이
@@ -306,7 +323,7 @@ def foundation_on(model: Any, element_ids: list[int]) -> list[float] | None:
         from ansys.dpf import core as dpf
 
         scoping = dpf.Scoping(ids=element_ids, location=dpf.locations.elemental)
-        field = model.results.element_nodal_forces.on_mesh_scoping(scoping).eval()[0]
+        field = at_set(model.results.element_nodal_forces.on_mesh_scoping(scoping), time_set)
         data = np.asarray(field.data, dtype=float).reshape(-1, 3)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("탄성 지지의 요소 절점력을 못 읽었습니다", exc_info=True)
@@ -314,12 +331,12 @@ def foundation_on(model: Any, element_ids: list[int]) -> list[float] | None:
     return [significant(float(one)) for one in data.sum(axis=0)]
 
 
-def total_reaction(model: Any) -> list[float] | None:
+def total_reaction(model: Any, time_set: int | None = None) -> list[float] | None:
     """모델 전체의 **반력 합** `[Fx, Fy, Fz]` — 구속이 하나일 때 그 구속이 버틴 힘이다."""
     try:
         import numpy as np
 
-        field = model.results.reaction_force.eval()[0]
+        field = at_set(model.results.reaction_force, time_set)
         data = np.asarray(field.data, dtype=float).reshape(-1, 3)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("반력을 못 읽었습니다", exc_info=True)

@@ -48,6 +48,9 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
    **`conditions.lines` 의 `refused`** 를 본다.
 3. `recipe_schema` — 스펙 칸. 대개 `{"recipe": …, "solver": …}` 만 주고 나머지(조건 · 물성 ·
    **메시 크기**)는 CAD 값. 요소 크기는 사람이 정해 달라고 할 때만 준다(CAD 의 「전체」 크기를 덮는다).
+   **해석 케이스로 나뉜 점**(`cases` 가 온다 — CompCore 판 2)은 사슬 하나가 작업 하나다. 폴더를 가져오면
+   점마다 사슬 수만큼 작업이 서고(레시피는 사슬에서), 작업 하나만 걸 때는 스펙에 `case`(끝 케이스 이름)를
+   준다. 비교는 사슬마다 따로다 — `study_get(study_id, case=…)` · `study_analyze(…, case=…)`.
    막힌 조건(`refused`)이 솔버 탓인지 보려면 `capabilities(solver)` — 솔버 · 해석마다 받는 종류와 칸이다
    (표에 없으면 그 솔버가 막거나 안 쓴다. 다른 솔버의 표에 있으면 솔버를 바꾸자고 한다).
 4. `jobs_create(spec, study_id=… 또는 path=…, numbers=[…])` — 점마다 작업 하나. 작업 id 가 바로

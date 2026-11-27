@@ -3493,7 +3493,7 @@
           "simulations"
         ],
         "summary": "Get Study",
-        "description": "설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다.",
+        "description": "설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다. 해석 케이스로 나뉜\nDOE 는 한 케이스씩(`cases` 에 사슬들).",
         "operationId": "get_study_api_simulations_studies__study_id__get",
         "parameters": [
           {
@@ -3504,6 +3504,24 @@
               "type": "string",
               "title": "Study Id"
             }
+          },
+          {
+            "name": "case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬",
+              "title": "Case"
+            },
+            "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
           }
         ],
         "responses": {
@@ -3679,6 +3697,24 @@
               ],
               "title": "Y"
             }
+          },
+          {
+            "name": "case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬",
+              "title": "Case"
+            },
+            "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
           }
         ],
         "responses": {
@@ -3722,6 +3758,24 @@
               "type": "string",
               "title": "Study Id"
             }
+          },
+          {
+            "name": "case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬",
+              "title": "Case"
+            },
+            "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
           }
         ],
         "responses": {
@@ -3869,6 +3923,24 @@
               "type": "string",
               "title": "Study Id"
             }
+          },
+          {
+            "name": "case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬",
+              "title": "Case"
+            },
+            "description": "해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
           }
         ],
         "responses": {
@@ -12868,6 +12940,24 @@
             "type": "array",
             "title": "Factors"
           },
+          "cases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Cases"
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe",
@@ -12956,6 +13046,17 @@
           "number": {
             "type": "integer",
             "title": "Number"
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case"
           },
           "params": {
             "additionalProperties": {

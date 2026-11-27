@@ -667,6 +667,7 @@ async def folder_preview(
     number: int | None = None,
     recipe: str | None = None,
     study_id: str | None = None,
+    case: str | None = None,
 ) -> Any:
     """**걸기 전에** 폴더를 읽어 본다. 저장하지 않는다.
 
@@ -681,17 +682,25 @@ async def folder_preview(
       `skipped` 답을 안 바꿔 넘김 · `refused` 아직 못 건다 — 모델링에서 멈춘다).
 
     `recipe` 를 주면 그 해석 종류로 읽는다(비우면 CAD 가 권한 것). `refused` 가 있으면 걸기
-    전에 사람에게 까닭을 말한다."""
+    전에 사람에게 까닭을 말한다.
+
+    **해석 케이스로 나뉜 점**(CompCore 판 2)이면 `cases` 에 사슬들(이름 · 해석 종류 · 앞
+    케이스부터의
+    차례 · 걸 수 없는 까닭)이 온다 — 사슬 하나가 작업 하나다. `case` 로 그 사슬의 조건을 읽는다
+    (비우면 걸 수 있는 첫 사슬). 폴더를 가져오면 점마다 사슬 수만큼 작업이 서고, 작업 하나만 걸
+    때는 `jobs_create` 의 스펙에 `case` 를 준다."""
 
     async def read(folder: str) -> Any:
         if number is None:
             return await _get(
-                ctx, "/api/simulations/doe/preview", {"path": folder, "recipe": recipe}
+                ctx,
+                "/api/simulations/doe/preview",
+                {"path": folder, "recipe": recipe, "case": case},
             )
         return await _get(
             ctx,
             "/api/simulations/doe/point",
-            {"path": folder, "number": number, "recipe": recipe},
+            {"path": folder, "number": number, "recipe": recipe, "case": case},
         )
 
     return await _in_folder(ctx, path, study_id, read)
@@ -978,13 +987,17 @@ async def studies_list(ctx: Context, scope: str | None = None) -> Any:
 
 
 @mcp.tool(meta=_panel_meta("study"), annotations=_READ)
-async def study_get(ctx: Context, study_id: str) -> Any:
+async def study_get(ctx: Context, study_id: str, case: str | None = None) -> Any:
     """스터디 하나의 **설계점 비교** — 점마다 바꾼 값(`params`)과 그 결과(1차 공진 · 질량 ·
     최대 변위 · 최대 응력 · 반력 · 측정점, 늘 mm · MPa · N · Hz), 그리고 모드 추적(치수가
     바뀌어 모드 순서가 뒤바뀌어도 같은 모드끼리 잇는다). 「두께가 늘면 1차 공진이 어떻게
     되나」 같은 물음에 답하는 자리다. `ontology` 는 CAD 가 그 작업에 이은 기준정보다 — 태그와
-    부품 · 지그의 칸(「적용 모델」 …)으로 **무엇의 해석인가**를 말한다(없으면 비어 있다)."""
-    got = await _get(ctx, f"/api/simulations/studies/{study_id}")
+    부품 · 지그의 칸(「적용 모델」 …)으로 **무엇의 해석인가**를 말한다(없으면 비어 있다).
+    해석 케이스로 나뉜 DOE 면 `cases` 의 사슬마다 따로 견준다 — `case` 로 고른다(비우면 첫
+    사슬, 응답의 `case`)."""
+    got = await _get(
+        ctx, f"/api/simulations/studies/{study_id}", {"case": case} if case else None
+    )
     if isinstance(got, dict) and isinstance(got.get("points"), list):
         got["points"] = [_compact(one) for one in got["points"]]
     return got
@@ -1008,6 +1021,7 @@ async def study_analyze(
     where: list[str] | None = None,
     x: str | None = None,
     y: str | None = None,
+    case: str | None = None,
 ) -> Any:
     """DOE 결과를 **서버가 셈해 준다** — `study_get` 의 점들을 받아 손으로 평균 · 상관을 내지
     않는다(점 200개면 문맥을 다 먹고, 셈은 틀리기 쉽다). 화면의 「다변수」 탭과 같은 표다.
@@ -1029,7 +1043,8 @@ async def study_analyze(
     `peak_mm` · 랜덤 `max_mm`(최대 1σ 변위) ·
     `probe-grms:<측정점>` · 공통 `mass_kg`(모델 전체 — 강체 지그까지) · 바디마다
     `mass:<파트>`(시편만 견주려면 이것). 모르는 key 면 쓸 수 있는 열을 알려 준다. 끝난 점만
-    센다."""
+    센다. 해석 케이스로 나뉜 DOE 는 `case` 의 사슬로(비우면 첫 사슬 — `study_get` 의
+    `cases`)."""
     got = await _get(
         ctx,
         f"/api/simulations/studies/{study_id}/analysis",
@@ -1040,6 +1055,7 @@ async def study_analyze(
             "where": where or None,
             "x": x,
             "y": y,
+            "case": case,
         },
     )
     # **결과를 안 고르면 주효과는 뺀다** — 변수 x 결과 x 수준이라 커지고, 요약은 민감도에 있다.

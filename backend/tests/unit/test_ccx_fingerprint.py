@@ -90,3 +90,16 @@ def test_잡마다_이_서버의_ccx_와_같은지_남긴다(
     assert record["ccx_sha256"] == SHA
     assert record.get("ccx_matches_local") is matches
     assert record.get("local_ccx_sha256") == local
+
+
+def test_워커는_ccx_의_판을_잰다(tmp_path: Path) -> None:
+    """능력표의 CalculiX `version` — 실제로 푸는 ccx 의 `-v`(「This is Version 2.21」)."""
+    fake = tmp_path / "ccx"
+    fake.write_text("#!/bin/sh\necho ''\necho 'This is Version 2.21'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    assert toolcheck.ccx_version(fake) == "2.21"
+    silent = tmp_path / "silent"
+    silent.write_text("#!/bin/sh\necho 'no version here'\n", encoding="utf-8")
+    silent.chmod(0o755)
+    assert toolcheck.ccx_version(silent) is None
+    assert toolcheck.ccx_version(tmp_path / "없음") is None

@@ -130,3 +130,12 @@ describe('풀 곳(요청서 E-2)', () => {
     expect(buildSpec({ ...BASE, solver: 'ansys', solveOn: 'ste' })).not.toHaveProperty('solve_on')
   })
 })
+
+describe('해석 케이스(판 2)', () => {
+  it('사슬을 고르면 스펙에 싣고, 안 고르면 싣지 않는다', () => {
+    expect(buildSpec({ ...BASE, recipe: 'static', case: '외력' }).case).toBe('외력')
+    expect('case' in buildSpec(BASE)).toBe(false)
+    expect('case' in buildSpec({ ...BASE, case: null })).toBe(false)
+  })
+})
+

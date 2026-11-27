@@ -90,6 +90,9 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     bolts = _bolts(workdir)
     if bolts:
         result["bolts"] = bolts
+    staged = _cases(workdir, blocks)
+    if staged:
+        result["cases"] = staged
     if mesh_counts:
         result["mesh"] = mesh_counts
     if max_displacement <= 0:
@@ -115,6 +118,50 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
             + (f" · 최대 응력 {max_von_mises:.4g} MPa" if max_von_mises else "")
         ),
     )
+
+
+def _cases(workdir: Path, blocks: list[frd_reader.Block]) -> list[dict[str, Any]]:
+    """**정적 다단(판 2)의 케이스마다 끝 상태** — 최대 변위 · 응력, 반력, 볼트 힘. 케이스의 끝
+    단계(`boundary.json` 의 `cases`)의 마지막 증분을 읽는다. 끝 케이스의 값은 맨 위의 값과
+    같다."""
+    try:
+        written = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = written.get("cases") or []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        step = int(row.get("step") or 0)
+        moved = next(
+            (one for one in reversed(blocks) if one.kind == "DISP" and one.stage == step), None
+        )
+        stressed = next(
+            (one for one in reversed(blocks) if one.kind == "STRESS" and one.stage == step),
+            None,
+        )
+        case: dict[str, Any] = {
+            "name": str(row.get("name") or ""),
+            "max_displacement": significant(
+                max(frd_reader.magnitudes(moved).values(), default=0.0)
+            )
+            if moved is not None
+            else None,
+            "max_von_mises": (
+                significant(max(frd_reader.von_mises(stressed).values(), default=0.0)) or None
+            )
+            if stressed is not None
+            else None,
+        }
+        forces = _reactions(
+            workdir, until=float(step), offsets=row.get("reaction_offsets") or {}
+        )
+        if forces:
+            case["reactions"] = forces
+        bolts = _bolts(workdir, until=float(step))
+        if bolts:
+            case["bolts"] = bolts
+        out.append(case)
+    return out
 
 
 def _probe(
@@ -152,7 +199,11 @@ def _probe(
 _TOTAL = re.compile(r"total force \(fx,fy,fz\) for set (\S+) and time\s+(\S+)")
 
 
-def _reactions(workdir: Path) -> dict[str, list[float]]:
+def _reactions(
+    workdir: Path,
+    until: float | None = None,
+    offsets: dict[str, list[float]] | None = None,
+) -> dict[str, list[float]]:
     """영역 이름 → **반력 합** `[Fx, Fy, Fz]`(N). 증분마다 찍히므로 **마지막 것**을 쓴다.
 
     첫 것을 쓰면 하중의 일부만 걸린 상태다 — `.frd` 에서 이미 밟은 함정이다. 가속도 · 중력이
@@ -168,14 +219,15 @@ def _reactions(workdir: Path) -> dict[str, list[float]]:
     except (OSError, ValueError):
         return {}
     sets = written.get("reaction_sets") or {}
-    offsets = written.get("reaction_offsets") or {}
+    if offsets is None:
+        offsets = written.get("reaction_offsets") or {}
     if not sets:
         return {}
     by_set: dict[str, list[float]] = {}
     lines = data.read_text(encoding="utf-8", errors="replace").splitlines()
     for index, line in enumerate(lines):
         found = _TOTAL.search(line)
-        if not found:
+        if not found or not _before(found.group(2), until):
             continue
         for follow in lines[index + 1 : index + 4]:
             parts = follow.split()
@@ -204,14 +256,26 @@ def _reactions(workdir: Path) -> dict[str, list[float]]:
 _MOVED = re.compile(r"displacements \(vx,vy,vz\) for set (\S+) and time\s+(\S+)")
 
 
+def _before(time: str, until: float | None) -> bool:
+    """`.dat` 머리의 시각이 `until`(케이스의 끝 — 총 시각) 이하인가. `until` 이 없으면 늘
+    참."""
+    if until is None:
+        return True
+    try:
+        return float(time) <= until + 1e-9
+    except ValueError:
+        return False
+
+
 def _last_rows(
-    lines: list[str], pattern: re.Pattern[str], width: int
+    lines: list[str], pattern: re.Pattern[str], width: int, until: float | None = None
 ) -> dict[str, list[float]]:
-    """집합 이름 → 그 머리 뒤 첫 수 줄(칸 `width` 개)의 **마지막 것**(증분마다 찍힌다)."""
+    """집합 이름 → 그 머리 뒤 첫 수 줄(칸 `width` 개)의 **마지막 것**(증분마다 찍힌다).
+    `until` 을 주면 그 시각까지의 마지막 것(정적 다단의 케이스 끝)."""
     found: dict[str, list[float]] = {}
     for index, line in enumerate(lines):
         head = pattern.search(line)
-        if not head:
+        if not head or not _before(head.group(2), until):
             continue
         for follow in lines[index + 1 : index + 4]:
             parts = follow.split()
@@ -230,7 +294,7 @@ def _pull(total: list[float], axis: list[float]) -> float:
     return -sum(part * one for part, one in zip(total, axis, strict=True))
 
 
-def _bolts(workdir: Path) -> dict[str, dict[str, float | None]]:
+def _bolts(workdir: Path, until: float | None = None) -> dict[str, dict[str, float | None]]:
     """볼트 이름 → **조인 힘 · 끝의 힘(N, 인장이 양수) · 조임량(mm)**.
 
     기준점의 1번 자유도가 조임량이고(`deck.BoltSection`), 단면 앞쪽 절점의 내력 합을 축에
@@ -248,8 +312,8 @@ def _bolts(workdir: Path) -> dict[str, dict[str, float | None]]:
     if not report:
         return {}
     lines = data.read_text(encoding="utf-8", errors="replace").splitlines()
-    forces = _last_rows(lines, _TOTAL, 3)
-    moved = _last_rows(lines, _MOVED, 4)
+    forces = _last_rows(lines, _TOTAL, 3, until)
+    moved = _last_rows(lines, _MOVED, 4, until)
     out: dict[str, dict[str, float | None]] = {}
     for name, row in report.items():
         tag = str(row.get("set") or "").upper()

@@ -126,6 +126,28 @@ describe('스터디 상세', () => {
     expect(screen.getByText(/p0003 입력 형상 파일이 없습니다/)).toBeDefined()
   })
 
+  it('해석 케이스로 나뉜 DOE 는 한 케이스씩 — 단추로 고르면 그 케이스로 다시 묻는다', async () => {
+    vi.mocked(simulationApi.study).mockImplementation(async (_id: string, kase?: string | null) => ({
+      ...STUDY,
+      cases: ['모달 단독', '외력'],
+      case: kase ?? '모달 단독',
+      recipe: kase === '외력' ? 'static' : 'modal',
+    }))
+    show()
+    const first = await screen.findByRole('button', { name: '모달 단독' })
+    expect(first.getAttribute('aria-pressed')).toBe('true')
+    expect(simulationApi.study).toHaveBeenLastCalledWith('st', null)
+    await userEvent.click(screen.getByRole('button', { name: '외력' }))
+    await waitFor(() => expect(simulationApi.study).toHaveBeenLastCalledWith('st', '외력'))
+    expect((await screen.findByRole('button', { name: '외력' })).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('케이스가 하나뿐이면(판 1) 고르기를 두지 않는다', async () => {
+    show()
+    await screen.findByText('브래킷')
+    expect(screen.queryByRole('group', { name: '해석 케이스' })).toBeNull()
+  })
+
   it('도는 점이 있거나 정적 DOE 면 다시 걸기를 두지 않는다', async () => {
     vi.mocked(simulationApi.study).mockResolvedValue({ ...STUDY, points: [point(1, 'done'), point(2, 'solving')] })
     const { unmount } = show()

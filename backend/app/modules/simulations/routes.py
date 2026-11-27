@@ -131,12 +131,13 @@ def solvers(
 def capabilities(
     solver: str | None = Query(default=None, description="calculix · ansys — 비우면 둘 다"),
     user: User = Depends(current_user),
+    db: Session = Depends(get_db),
 ) -> list[CapabilitiesOut]:
     """**능력표** — 솔버마다 CompCore 조건에서 무엇을 받나(해석별 구속 · 하중 · 접촉 ·
     초기조건 · 읽는 해석 설정 칸 · 재료 모델). CompCore 가 관리 화면에서 불러 복사본을 두고
     케이스의 대상 솔버로 거른다. 비밀은 없지만 다른 경로처럼 신원을 본다(PAT 읽기 범위로
     된다)."""
-    return services.capabilities(solver)
+    return services.capabilities(db, solver)
 
 
 @router.get("/solve-places", response_model=list[SolvePlaceOut])
@@ -244,11 +245,15 @@ def move_studies(
 @router.get("/studies/{study_id}", response_model=StudyOut)
 def get_study(
     study_id: str,
+    case: str | None = Query(
+        default=None, description="해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> StudyOut:
-    """설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다."""
-    return services.get_study(db, user=user, study_id=study_id)
+    """설계점마다 **바꾼 값과 그 결과**. 비교 화면이 이것으로 그린다. 해석 케이스로 나뉜
+    DOE 는 한 케이스씩(`cases` 에 사슬들)."""
+    return services.get_study(db, user=user, study_id=study_id, case=case)
 
 
 @router.get("/studies/{study_id}/analysis", response_model=StudyAnalysisOut)
@@ -260,6 +265,9 @@ def analyze_study(
     where: list[str] = Query(default=[]),
     x: str | None = None,
     y: str | None = None,
+    case: str | None = Query(
+        default=None, description="해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> StudyAnalysisOut:
@@ -277,18 +285,22 @@ def analyze_study(
         where=where,
         x=x,
         y=y,
+        case=case,
     )
 
 
 @router.get("/studies/{study_id}/frequency", response_model=FrequencyCheckOut)
 def study_frequency(
     study_id: str,
+    case: str | None = Query(
+        default=None, description="해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> FrequencyCheckOut:
     """주파수 요구 판정 — 저장된 목표 주파수 · 회피 대역으로 설계점마다 적합 · 대역 침범 ·
     목표 이탈 · 부적합 · 판정 보류, 보간 자리와 추정(모달 DOE 만)."""
-    return services.frequency_check(db, user=user, study_id=study_id)
+    return services.frequency_check(db, user=user, study_id=study_id, case=case)
 
 
 @router.post("/studies/{study_id}/frequency/check", response_model=FrequencyCheckOut)
@@ -317,12 +329,15 @@ def save_study_frequency(
 @router.get("/studies/{study_id}/table", response_model=StudyTableOut)
 def study_table(
     study_id: str,
+    case: str | None = Query(
+        default=None, description="해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> StudyTableOut:
     """DOE 비교 표 — CSV 와 같은 값 · 같은 단위. 화면이 클립보드로 복사한다(사내 DRM 으로
     파일을 못 내려받는다 — 엑셀에 붙여 넣는다)."""
-    study = services.get_study(db, user=user, study_id=study_id)
+    study = services.get_study(db, user=user, study_id=study_id, case=case)
     head, rows = services.study_table(study)
     return StudyTableOut(name=study.name, head=head, rows=rows)
 
@@ -330,6 +345,9 @@ def study_table(
 @router.get("/studies/{study_id}/export.csv", include_in_schema=False)
 def export_study(
     study_id: str,
+    case: str | None = Query(
+        default=None, description="해석 케이스로 나뉜 DOE 의 사슬 — 비우면 첫 사슬"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -338,7 +356,7 @@ def export_study(
     BOM 을 붙인다 — 안 붙이면 Excel 이 한글을 깬다. 스키마에 안 싣는다 — 파일을 내려받는
     자리지 데이터를 읽는 자리가 아니다(부서 CSV 와 같은 이유).
     """
-    name, text = services.study_csv(db, user=user, study_id=study_id)
+    name, text = services.study_csv(db, user=user, study_id=study_id, case=case)
     # 파일 이름은 둘로 낸다 — ASCII 는 옛 브라우저용, UTF-8 은 한글 이름용.
     disposition = "attachment; filename=\"study.csv\"; filename*=UTF-8''" + quote(name)
     return Response(

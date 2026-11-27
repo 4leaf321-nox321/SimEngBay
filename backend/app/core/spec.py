@@ -124,6 +124,9 @@ class ModalSpec(BaseModel):
     `spec` 은 「내가 지정한 값으로 풀어라」 다 — CAD 가 보낸 것을 일부러 무시한다(그때는
     `material` 이 있어야 한다). 어느 쪽으로 풀었는지는 모델링 단계 요약에 적힌다(안 적으면
     나중에 결과를 믿을 수 없다)."""
+    case: str | None = Field(default=None, min_length=1, max_length=60)
+    """CAD 조건이 **해석 케이스로 나뉘었을 때**(판 2) 풀 사슬 — 끝 케이스의 이름이다
+    (`app/core/cases.py`). 사슬이 하나면 비워도 된다. 판 1 이면 쓰지 않는다."""
     conditions_from: Literal["cad", "spec"] = "cad"
     """구속 · 접촉을 어디서 가져오나. `cad` 면 **CAD 가 보낸 조건이 먼저**고, 없으면 아래
     `constraints` 를 쓴다. `spec` 은 「내가 고른 영역만 완전 고정으로」 다."""
@@ -181,6 +184,9 @@ class StaticSpec(BaseModel):
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
+    case: str | None = Field(default=None, min_length=1, max_length=60)
+    """CAD 조건이 **해석 케이스로 나뉘었을 때**(판 2) 풀 사슬 — 끝 케이스의 이름이다
+    (`app/core/cases.py`). 사슬이 하나면 비워도 된다. 판 1 이면 쓰지 않는다."""
     conditions_from: Literal["cad", "spec"] = "cad"
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     constraints: list[Constraint] = Field(default_factory=list)
@@ -217,6 +223,9 @@ class HarmonicSpec(BaseModel):
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
+    case: str | None = Field(default=None, min_length=1, max_length=60)
+    """CAD 조건이 **해석 케이스로 나뉘었을 때**(판 2) 풀 사슬 — 끝 케이스의 이름이다
+    (`app/core/cases.py`). 사슬이 하나면 비워도 된다. 판 1 이면 쓰지 않는다."""
     conditions_from: Literal["cad", "spec"] = "cad"
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     constraints: list[Constraint] = Field(default_factory=list)
@@ -262,6 +271,9 @@ class RandomSpec(BaseModel):
     material: MaterialSpec | None = None
     """`ModalSpec.material` 참고."""
     material_from: Literal["cad", "spec"] = "cad"
+    case: str | None = Field(default=None, min_length=1, max_length=60)
+    """CAD 조건이 **해석 케이스로 나뉘었을 때**(판 2) 풀 사슬 — 끝 케이스의 이름이다
+    (`app/core/cases.py`). 사슬이 하나면 비워도 된다. 판 1 이면 쓰지 않는다."""
     conditions_from: Literal["cad", "spec"] = "cad"
     mesh: MeshSpec = Field(default_factory=MeshSpec)
     constraints: list[Constraint] = Field(default_factory=list)

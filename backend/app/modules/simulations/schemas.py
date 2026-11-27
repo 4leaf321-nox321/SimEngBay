@@ -140,11 +140,25 @@ class CadBodyOut(BaseModel):
     """파트별 설정 한 줄(「강체 · 요소 4」). 적히지 않은 파트는 빈 글자(기본값)."""
 
 
+class CaseOut(BaseModel):
+    """해석 케이스로 나뉜 점(판 2)의 사슬 하나 — 작업 하나가 된다."""
+
+    name: str = Field(description="끝 케이스의 이름 — 작업 스펙의 `case`")
+    kind: str = Field(description="끝 케이스의 해석 종류 — 작업의 레시피")
+    solver: str = Field(description="대상 솔버(비면 작업의 솔버)")
+    chain: list[str] = Field(description="앞 케이스부터 끝까지의 이름")
+    problem: str = Field(default="", description="작업으로 걸 수 없는 까닭(비면 건다)")
+
+
 class ConditionsPreviewOut(BaseModel):
     """CAD 점 파일 한 장을 **작업을 만들기 전에** 읽은 것 — 무엇이 들었고 어떻게 다뤄지나."""
 
     recipe: str
     """조건 줄을 편 해석 종류(물은 것, 없으면 CAD 가 적은 것, 그것도 없으면 모달)."""
+    cases: list[CaseOut] = Field(default_factory=list)
+    """해석 케이스로 나뉜 점(판 2)이면 사슬들 — 판 1 이면 비어 있다."""
+    case: str | None = None
+    """조건 줄을 편 사슬(물은 것, 없으면 걸 수 있는 첫 사슬)."""
     regions: list[RegionOut]
     unresolved: list[str] = Field(default_factory=list)
     """CAD 가 형상에서 못 푼 이름 — 그 이름으로는 자리가 없다."""
@@ -311,6 +325,9 @@ class DoePointPreview(BaseModel):
     params: dict[str, float | str]
     usable: bool
     skip_reason: str = ""
+    case: str | None = None
+    """해석 케이스로 나뉜 점(판 2)이면 그 사슬(끝 케이스의 이름) — 점 하나에 줄이 사슬
+    수만큼"""
 
 
 class DoePreviewOut(BaseModel):
@@ -330,6 +347,11 @@ class DoePreviewOut(BaseModel):
     points: list[DoePointPreview]
     usable: int
     skipped: int
+    cases: list[CaseOut] = Field(default_factory=list)
+    """첫 점이 해석 케이스로 나뉘었으면(판 2) 그 사슬들 — 가져오면 점마다 사슬 수만큼
+    작업이다."""
+    case: str | None = None
+    """`conditions` 를 편 사슬."""
     suggested_modes: int | None = None
     """CAD 가 적어 보낸 모드 수 — 화면이 **미리 채우고 사람이 고친다.**
 
@@ -850,6 +872,10 @@ class AnalysisCapabilitiesOut(BaseModel):
     initial: list[str | CapabilityNote]
     fields: dict[str, list[str]]
     materials: list[str]
+    follows: list[str] = Field(
+        default_factory=list,
+        description="앞 케이스로 올 수 있는 해석(판 2 의 사슬) — 비면 첫 케이스로만",
+    )
 
 
 class CapabilitiesOut(BaseModel):

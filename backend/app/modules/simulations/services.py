@@ -53,6 +53,7 @@ from sqlalchemy.orm import Session
 from app import version as app_version
 from app.config import Settings, get_settings
 from app.core import capabilities as core_capabilities
+from app.core import cases as core_cases
 from app.core import cleanup, contract, executors, materials, random_vibration, units
 from app.core import conditions as condition_model
 from app.core import convergence as core_convergence
@@ -100,6 +101,7 @@ from app.modules.simulations.schemas import (
     CadBodyOut,
     CadMaterialOut,
     CapabilitiesOut,
+    CaseOut,
     ComparisonOut,
     ConditionLine,
     ConditionsOut,
@@ -1042,6 +1044,112 @@ def _parsed_spec(spec_raw: dict[str, Any]) -> AnySpec:
         ) from failure
 
 
+def case_view(
+    spec: AnySpec, payload: dict[str, Any] | None
+) -> tuple[dict[str, Any] | None, core_cases.Chain | None]:
+    """**해석 케이스로 나뉜 점(판 2)** 이면 스펙이 고른 사슬의 v1 보기와 그 사슬 — 아니면
+    그대로.
+
+    사슬은 스펙의 `case`(끝 케이스의 이름)로 고른다. 사슬이 하나면 비워도 된다. 레시피는 끝
+    케이스의 해석 종류여야 하고, 사슬에 대상 솔버가 적혀 있으면 작업의 솔버와 같아야
+    한다(CompCore
+    와 정함 — 다르면 받는 쪽이 막는다)."""
+    if not payload or not core_cases.is_cases(payload):
+        if spec.case and core_cases.picked(payload) != spec.case:
+            raise AppError(
+                code("SIMULATIONS", 46),
+                f"CAD 조건이 해석 케이스로 나뉘지 않았는데 케이스 「{spec.case}」 를 "
+                "골랐습니다.",
+                status=400,
+            )
+        return payload, None
+    found, broken = core_cases.chains(payload)
+    if broken:
+        raise AppError(code("SIMULATIONS", 43), broken, status=400)
+    names = [one.name for one in found]
+    if spec.case is None and len(found) > 1:
+        raise AppError(
+            code("SIMULATIONS", 46),
+            f"해석 케이스(사슬)가 {len(found)}개입니다 — 하나를 고르세요(case: "
+            f"{' · '.join(names)}).",
+            status=400,
+            details={"cases": names},
+        )
+    chain = next((one for one in found if spec.case in (None, one.name)), None)
+    if chain is None:
+        raise AppError(
+            code("SIMULATIONS", 46),
+            f"케이스 「{spec.case}」 가 없습니다 — 고를 수 있는 것: {' · '.join(names)}",
+            status=400,
+            details={"cases": names},
+        )
+    why = core_cases.problem(chain) or _chain_mismatch(spec.recipe, spec.solver, chain)
+    if why:
+        raise AppError(code("SIMULATIONS", 46), why, status=400, details={"case": chain.name})
+    return core_cases.view(payload, chain), chain
+
+
+def _chain_mismatch(recipe: str, solver: str, chain: core_cases.Chain) -> str:
+    """작업의 레시피 · 솔버가 사슬과 맞나 — 안 맞으면 까닭."""
+    if recipe != chain.kind:
+        return (
+            f"케이스 「{chain.name}」 은 {chain.kind} 입니다 — 작업의 해석 종류({recipe})를 "
+            "맞추세요"
+        )
+    if chain.solver and chain.solver != solver:
+        return (
+            f"케이스 「{chain.name}」 의 대상 솔버는 {chain.solver} 입니다 — 작업의 "
+            f"솔버({solver})와 다릅니다"
+        )
+    return ""
+
+
+def _doe_cases(
+    spec_raw: dict[str, Any], payload: dict[str, Any] | None
+) -> list[tuple[str, dict[str, Any], dict[str, Any] | None, str]]:
+    """점 하나에서 걸 작업들 — (케이스, 스펙, 점 파일, 못 거는 까닭). 판 1 이면 하나(케이스는
+    빈 글자).
+
+    판 2 면 **사슬마다 하나**다. 레시피는 끝 케이스의 해석 종류로 정하고(다른 레시피의 칸은
+    뺀다),
+    대상 솔버가 적힌 사슬은 그 솔버로, 빈 사슬은 고른 솔버로 건다 — 한 번 가져오기에 솔버가
+    섞여도 된다(CompCore 와 정함). 모드 수를 안 줬으면 끝 케이스가 적은 값이다. 스펙에 `case`
+    가 있으면 그 사슬만 건다."""
+    if payload is None or not core_cases.is_cases(payload):
+        return [("", spec_raw, payload, "")]
+    found, broken = core_cases.chains(payload)
+    if broken:
+        return [("", spec_raw, None, broken)]
+    wanted = spec_raw.get("case")
+    out: list[tuple[str, dict[str, Any], dict[str, Any] | None, str]] = []
+    for chain in found:
+        if wanted and chain.name != wanted:
+            continue
+        model = SPEC_MODELS.get(chain.kind)
+        if model is None:
+            out.append(
+                (chain.name, spec_raw, None, f"「{chain.kind}」 해석은 아직 풀 수 없습니다")
+            )
+            continue
+        raw = {key: value for key, value in spec_raw.items() if key in model.model_fields}
+        raw["recipe"] = chain.kind
+        raw["case"] = chain.name
+        if chain.solver:
+            raw["solver"] = chain.solver
+        modes = chain.end.analysis.get("modes")
+        if (
+            "modes" in model.model_fields
+            and "modes" not in spec_raw
+            and isinstance(modes, int)
+        ):
+            raw["modes"] = modes
+        why = core_cases.problem(chain)
+        out.append((chain.name, raw, None if why else core_cases.view(payload, chain), why))
+    if wanted and not out:
+        return [(str(wanted), spec_raw, None, f"케이스 「{wanted}」 가 이 점에 없습니다")]
+    return out
+
+
 def create(
     db: Session,
     *,
@@ -1103,6 +1211,11 @@ def create(
     unknown = contract.problem(payload)
     if unknown:
         raise AppError(code("SIMULATIONS", 43), unknown, status=400)
+    payload, chain = case_view(spec, payload)
+    if chain is not None:
+        # **작업에는 사슬 하나의 v1 보기를 담는다** — 모델링 · 추출은 v1 을 읽던 그대로다.
+        topology = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        source_meta = {**(source_meta or {}), "case": chain.name}
     gap = material_gap(spec, payload)
     if gap:
         raise AppError(code("SIMULATIONS", 28), gap, status=400)
@@ -1304,7 +1417,7 @@ def _read_doe(path_text: str) -> DoeFolder:
 
 
 def preview_doe_point(
-    path_text: str, number: int, *, recipe: str | None = None
+    path_text: str, number: int, *, recipe: str | None = None, case: str | None = None
 ) -> ConditionsPreviewOut:
     """폴더의 **설계점 하나**를 새 작업 창이 올린 점 파일처럼 읽어 준다 — 파트 · 재료 · 조건.
     같은 코드(`preview_conditions`)를 지나므로 두 창이 같은 것을 보인다."""
@@ -1319,19 +1432,29 @@ def preview_doe_point(
             f"{point.skip_reason or 'CAD 폴더를 보세요'}",
             status=400,
         )
-    return preview_conditions(point.point_file.read_bytes(), recipe=recipe)
+    return preview_conditions(point.point_file.read_bytes(), recipe=recipe, case=case)
 
 
 def preview_doe(
-    path_text: str, *, recipe: str | None = None, db: Session | None = None
+    path_text: str,
+    *,
+    recipe: str | None = None,
+    db: Session | None = None,
+    case: str | None = None,
 ) -> DoePreviewOut:
     """걸기 전에 보여 준다 — 점 몇 개, 변수 무엇, 건너뛸 것 몇 개와 그 이유, 그리고 **첫 점의
     조건이 그 해석 종류에서 어떻게 다뤄지나**(반영 · 넘김 · 막음)."""
     doe = _read_doe(path_text)
-    analysis = _doe_analysis(doe)
-    payload = _first_payload(doe)
+    analysis = _doe_analysis(doe, case)
+    raw = _first_payload(doe)
+    chains = cases_out(raw)
+    payload, picked = picked_view(raw, case)
+    if picked is not None and payload is not raw:
+        recipe = next(one.kind for one in chains if one.name == picked)
     wanted = recipe if recipe in RUNNABLE_RECIPES else (analysis.recipe or "modal")
     return DoePreviewOut(
+        cases=chains,
+        case=picked,
         conditions=conditions_out(payload, recipe=wanted) if payload is not None else None,
         path=str(doe.path),
         study_id=doe.study_id,
@@ -1455,17 +1578,59 @@ def _first_payload(doe: DoeFolder) -> dict[str, Any] | None:
     return None
 
 
-def _doe_analysis(doe: DoeFolder) -> _DoeAnalysis:
-    """첫 점에서 읽는다(스터디 전체에 같다)."""
-    payload = _first_payload(doe)
+def _doe_analysis(doe: DoeFolder, case: str | None = None) -> _DoeAnalysis:
+    """첫 점에서 읽는다(스터디 전체에 같다). 판 2 면 고른 사슬(없으면 걸 수 있는 첫 사슬)."""
+    payload, _picked = picked_view(_first_payload(doe), case)
     return _analysis_of(payload) if payload is not None else _DoeAnalysis()
 
 
-def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOut:
+def cases_out(payload: dict[str, Any] | None) -> list[CaseOut]:
+    """판 2 점의 사슬들 — 이름 · 해석 종류 · 대상 솔버 · 작업으로 걸 수 없는 까닭."""
+    if not payload or not core_cases.is_cases(payload):
+        return []
+    found, _broken = core_cases.chains(payload)
+    return [
+        CaseOut(
+            name=one.name,
+            kind=one.kind,
+            solver=one.solver,
+            chain=[case.name for case in one.cases],
+            problem=core_cases.problem(one),
+        )
+        for one in found
+    ]
+
+
+def picked_view(
+    payload: dict[str, Any] | None, case: str | None
+) -> tuple[dict[str, Any] | None, str | None]:
+    """판 2 면 고른 사슬(없으면 걸 수 있는 첫 사슬)의 v1 보기와 그 이름 — 판 1 이면 그대로.
+    걸 수 있는 사슬이 없으면 날것을 그대로 준다(조건 읽기가 「케이스를 골라 읽는다」 로
+    막는다)."""
+    if not payload or not core_cases.is_cases(payload):
+        return payload, None
+    found, _broken = core_cases.chains(payload)
+    for one in found:
+        if case not in (None, one.name) or core_cases.problem(one):
+            continue
+        return core_cases.view(payload, one), one.name
+    return payload, case
+
+
+def preview_conditions(
+    raw: bytes, *, recipe: str | None, case: str | None = None
+) -> ConditionsPreviewOut:
     """CAD 점 파일 한 장을 **작업을 만들기 전에** 읽어 준다 — 영역 · 바디 · 물성 · 해석 설정과,
     그 해석 종류에서 조건이 어떻게 다뤄지나. 화면이 파일을 따로 해석하지 않는다(두 벌이 되면
-    언젠가 갈린다 — 작업을 거는 길과 같은 코드를 지난다)."""
+    언젠가 갈린다 — 작업을 거는 길과 같은 코드를 지난다). 해석 케이스로 나뉜 점(판 2)이면 사슬
+    목록을 싣고, 고른 사슬(`case`)의 보기로 읽는다."""
     payload = parse_topology(raw)
+    chains = cases_out(payload)
+    viewed, picked = picked_view(payload, case)
+    if picked is not None and viewed is not None and viewed is not payload:
+        payload = viewed
+        # 사슬의 레시피는 끝 케이스의 해석 종류다 — 물은 것이 달라도 그것으로 편다.
+        recipe = next(one.kind for one in chains if one.name == picked)
     analysis = _analysis_of(payload)
     wanted = recipe if recipe in RUNNABLE_RECIPES else (analysis.recipe or "modal")
     regions: list[RegionOut] = []
@@ -1491,6 +1656,8 @@ def preview_conditions(raw: bytes, *, recipe: str | None) -> ConditionsPreviewOu
     unresolved = payload.get("unresolved")
     return ConditionsPreviewOut(
         recipe=wanted,
+        cases=chains,
+        case=picked,
         regions=regions,
         unresolved=[str(one) for one in unresolved] if isinstance(unresolved, list) else [],
         bodies=[
@@ -1766,8 +1933,8 @@ def import_doe(
     # 지문을 면으로)를 쓸 길이 이것뿐이다. 옛 작업은 지우지 않고 기록으로 남기고, 새 작업이
     # 그것을 가리킨다(`source_meta.previous`). 스터디는 점마다 마지막 작업으로 견준다
     # (`_latest_per_point`).
-    already: dict[int, Simulation] = {}
-    earlier: dict[int, list[Simulation]] = {}
+    already: dict[tuple[int, str], Simulation] = {}
+    earlier: dict[tuple[int, str], list[Simulation]] = {}
     for one in db.scalars(
         select(Simulation)
         .where(
@@ -1777,11 +1944,14 @@ def import_doe(
         )
         .order_by(Simulation.created_at)
     ):
-        number = int(one.source_meta.get("point") or 0)
+        # **열쇠는 (점, 케이스)** — 판 2 의 점은 사슬마다 작업이 하나다. 판 1 의 작업은
+        # 케이스가
+        # 비어 있다.
+        key = (int(one.source_meta.get("point") or 0), str(one.source_meta.get("case") or ""))
         if one.status in RETRYABLE_BY_IMPORT:
-            earlier.setdefault(number, []).append(one)
+            earlier.setdefault(key, []).append(one)
         else:
-            already[number] = one
+            already[key] = one
 
     created: list[uuid.UUID] = []
     # **한 번 재서 모든 점에** — 가져오는 사이 서버 설정이 바뀌어도 한 DOE 의 점들은 같은
@@ -1792,101 +1962,139 @@ def import_doe(
         if not point.usable:
             skipped.append(_preview_point(point))
             continue
-        if point.number in already:
-            skipped.append(
-                DoePointPreview(
-                    number=point.number,
-                    params=point.params,
-                    usable=False,
-                    skip_reason=_already_imported(db, user, already[point.number]),
-                )
-            )
-            continue
         assert point.step is not None  # usable 이 보장한다
-        topology = point.point_file.read_bytes() if point.point_file else None
-        if topology is not None and doe.checks:
-            topology = _with_checks(topology, doe.checks)
-        # **물성이 빠지거나 못 거는 조건이 있는 점은 걸지 않는다** — 재료를 훑는 DOE 는 점마다
-        # 붙는 재료가 다르고, 걸어 봐야 모델링에서 멈춘다.
-        payload = parse_topology(topology) if topology is not None else None
-        # **중간면도 여기서 본다** — `create` 가 점마다 커밋하므로, 여기서 안 거르면 앞 점들은
-        # 만들어지고 이 점에서 400 이 나 요약도 못 받는다(다시 가져오면 「이미 가져온 점」
-        # 이다).
-        gap = (
-            contract.problem(payload)
-            or material_gap(spec, payload)
-            or conditions_gap(spec, payload)
-            or size_gap(spec, payload)
-            or sheet_gap(spec, payload)
-            or midsurface_gap(payload, has_midsurface=point.mid_step is not None)
-        )
-        if gap:
-            skipped.append(
-                DoePointPreview(
-                    number=point.number, params=point.params, usable=False, skip_reason=gap
+        raw_point = point.point_file.read_bytes() if point.point_file else None
+        targets = _doe_cases(spec_raw, parse_topology(raw_point) if raw_point else None)
+        for case, case_raw, viewed, why in targets:
+            key = (point.number, case)
+            if (
+                key not in already
+                and case
+                and len(targets) == 1
+                and (point.number, "") in already
+            ):
+                # 사슬이 하나뿐인 점 — 케이스가 비어 있는 옛 작업(판 1 로 가져온 것)이 그
+                # 사슬이다.
+                key = (point.number, "")
+            if key in already:
+                skipped.append(
+                    DoePointPreview(
+                        number=point.number,
+                        params=point.params,
+                        usable=False,
+                        skip_reason=_already_imported(db, user, already[key]),
+                        case=case or None,
+                    )
                 )
+                continue
+            case_spec = _parsed_spec(case_raw) if case else spec
+            topology: bytes | None
+            if case:
+                topology = (
+                    json.dumps(viewed, ensure_ascii=False).encode("utf-8") if viewed else None
+                )
+            else:
+                topology = raw_point
+            if topology is not None and doe.checks:
+                topology = _with_checks(topology, doe.checks)
+            # **물성이 빠지거나 못 거는 조건이 있는 점은 걸지 않는다** — 재료를 훑는 DOE 는
+            # 점마다
+            # 붙는 재료가 다르고, 걸어 봐야 모델링에서 멈춘다.
+            payload = parse_topology(topology) if topology is not None else None
+            # **중간면도 여기서 본다** — `create` 가 점마다 커밋하므로, 여기서 안 거르면 앞
+            # 점들은
+            # 만들어지고 이 점에서 400 이 나 요약도 못 받는다(다시 가져오면 「이미 가져온 점」
+            # 이다).
+            gap = (
+                why
+                or contract.problem(payload)
+                or material_gap(case_spec, payload)
+                or conditions_gap(case_spec, payload)
+                or size_gap(case_spec, payload)
+                or sheet_gap(case_spec, payload)
+                or midsurface_gap(payload, has_midsurface=point.mid_step is not None)
             )
-            continue
-        meta = {
-            "study_id": doe.study_id,
-            "study_name": doe.name,
-            "point": point.number,
-            "params": point.params,
-            # **같은 STEP 을 가리키는 점들은 같은 형상이다**(CompCore 2026-09-24 계약).
-            # 조건만 훑는 DOE 는 형상 한 벌을 나눠 쓰므로, 이 값이 같으면 모델링 · 메시를
-            # 다시 할 이유가 없다.
-            "shape_key": point.shape_key,
-            "has_conditions": point.has_conditions,
-            # **CAD 가 선언한 계**. 모델링이 이 계로 세션을 세운다(2026-09-24 결정) — 비어
-            # 있으면 선언이 없었고, 그때는 SI 다.
-            "unit_system": point.unit_system,
-            "folder": str(doe.path),
-        }
-        if doe.ontology.get("tags") or doe.ontology.get("links"):
-            # **대상 작업에 이은 기준정보** — 스터디는 행이 없으므로 점마다 싣는다(이름처럼).
-            meta["ontology"] = doe.ontology
-        if point.number in earlier:
-            # 앞선 시도(실패 · 취소) — 왜 다시 가져왔는지 그 작업에서 읽는다.
-            meta["previous"] = [str(one.id) for one in earlier[point.number]]
-        label = " · ".join(
-            f"{name} {value:g}" if isinstance(value, float) else f"{name} {value}"
-            for name, value in point.params.items()
-        )
-        with point.step.open("rb") as stream:
-            simulation = create(
-                db,
-                user=user,
-                spec_raw=spec_raw,
-                workspace_slug=workspace_slug,
-                # 이름을 줬으면 그것(설계점 하나를 고른 새 작업 창), 설계 하나면 폴더 이름.
-                name=(name or "").strip()
-                or (
-                    doe.name
-                    if doe.single
-                    else f"{doe.name} p{point.number:04d}" + (f" ({label})" if label else "")
-                ),
-                filename=point.step.name,
-                stream=stream,
-                # 점 파일 하나에 영역 · 바디 · 조건이 다 있다. 작업 폴더에는 지금 이름
-                # (`topology.json`)으로 둔다 — 모델링이 `regions` 를 읽는 자리라 그대로 맞는다.
-                topology=topology,
-                midsurface=point.mid_step.read_bytes() if point.mid_step else None,
-                # **설계 하나는 스터디가 아니다** — 비교 · 스터디 목록에 섞이지 않게 가른다.
-                source_kind="design" if doe.single else "doe_point",
-                source_ref=f"{doe.name}/p{point.number:04d}",
-                source_meta=meta,
-                run_settings=fixed,
+            if gap:
+                skipped.append(
+                    DoePointPreview(
+                        number=point.number,
+                        params=point.params,
+                        usable=False,
+                        skip_reason=gap,
+                        case=case or None,
+                    )
+                )
+                continue
+            meta = {
+                "study_id": doe.study_id,
+                "study_name": doe.name,
+                "point": point.number,
+                "params": point.params,
+                # **같은 STEP 을 가리키는 점들은 같은 형상이다**(CompCore 2026-09-24 계약).
+                # 조건만 훑는 DOE 는 형상 한 벌을 나눠 쓰므로, 이 값이 같으면 모델링 · 메시를
+                # 다시 할 이유가 없다.
+                "shape_key": point.shape_key,
+                "has_conditions": point.has_conditions,
+                # **CAD 가 선언한 계**. 모델링이 이 계로 세션을 세운다(2026-09-24 결정) — 비어
+                # 있으면 선언이 없었고, 그때는 SI 다.
+                "unit_system": point.unit_system,
+                "folder": str(doe.path),
+            }
+            if case:
+                meta["case"] = case
+            if doe.ontology.get("tags") or doe.ontology.get("links"):
+                # **대상 작업에 이은 기준정보** — 스터디는 행이 없으므로 점마다
+                # 싣는다(이름처럼).
+                meta["ontology"] = doe.ontology
+            if key in earlier:
+                # 앞선 시도(실패 · 취소) — 왜 다시 가져왔는지 그 작업에서 읽는다.
+                meta["previous"] = [str(one.id) for one in earlier[key]]
+            label = " · ".join(
+                f"{name} {value:g}" if isinstance(value, float) else f"{name} {value}"
+                for name, value in point.params.items()
             )
-        created.append(simulation.id)
-        if point.number in earlier:
-            # **옛 시도에는 대신한 작업을 적는다** — 안 적으면 홈의 「실패한 해석 작업」 에
-            # 영영 남고, 누가 옛 시도를 재시도하면 옛 점 파일로 다시 돌아 새 작업을 가린다.
-            for old in earlier[point.number]:
-                old.source_meta = {
-                    **(old.source_meta or {}),
-                    "superseded_by": str(simulation.id),
-                }
-            db.commit()
+            # **사슬이 여럿이면 이름 끝에 끝 케이스** — CompCore 화면의 케이스 이름 그대로다.
+            suffix = f" · {case}" if case and len(targets) > 1 else ""
+            with point.step.open("rb") as stream:
+                simulation = create(
+                    db,
+                    user=user,
+                    spec_raw=case_raw if case else spec_raw,
+                    workspace_slug=workspace_slug,
+                    # 이름을 줬으면 그것(설계점 하나를 고른 새 작업 창), 설계 하나면 폴더 이름.
+                    name=((name or "").strip() + suffix if (name or "").strip() else "")
+                    or (
+                        doe.name + suffix
+                        if doe.single
+                        else f"{doe.name} p{point.number:04d}"
+                        + (f" ({label})" if label else "")
+                        + suffix
+                    ),
+                    filename=point.step.name,
+                    stream=stream,
+                    # 점 파일 하나에 영역 · 바디 · 조건이 다 있다(판 2 면 그 사슬의 보기). 작업
+                    # 폴더에는 지금 이름(`topology.json`)으로 둔다 — 모델링이 `regions` 를 읽는
+                    # 자리라 그대로 맞는다.
+                    topology=topology,
+                    midsurface=point.mid_step.read_bytes() if point.mid_step else None,
+                    # **설계 하나는 스터디가 아니다** — 비교 · 스터디 목록에 섞이지 않게
+                    # 가른다.
+                    source_kind="design" if doe.single else "doe_point",
+                    source_ref=f"{doe.name}/p{point.number:04d}"
+                    + (f"/{case}" if case else ""),
+                    source_meta=meta,
+                    run_settings=fixed,
+                )
+            created.append(simulation.id)
+            if key in earlier:
+                # **옛 시도에는 대신한 작업을 적는다** — 안 적으면 홈의 「실패한 해석 작업」 에
+                # 영영 남고, 누가 옛 시도를 재시도하면 옛 점 파일로 다시 돌아 새 작업을 가린다.
+                for old in earlier[key]:
+                    old.source_meta = {
+                        **(old.source_meta or {}),
+                        "superseded_by": str(simulation.id),
+                    }
+                db.commit()
     return DoeImportOut(
         study_id=doe.study_id,
         name=doe.name,
@@ -1947,9 +2155,11 @@ def _latest_per_point(rows: list[Simulation]) -> list[Simulation]:
     둘을 다 세면 표에 같은 점이 두 줄 나오고, 결과를 점 번호로 모으는 자리에서는 옛 실패 줄에
     새 결과가 붙는다. `rows` 는 만든 순서여야 한다 — 점의 자리는 처음 나온 순서 그대로 둔다.
     """
-    latest: dict[int, Simulation] = {}
+    latest: dict[tuple[int, str], Simulation] = {}
     for one in rows:
-        latest[int(one.source_meta.get("point") or 0)] = one
+        # 판 2 의 점은 사슬마다 작업이 하나다 — (점, 케이스)마다 마지막 것.
+        key = (int(one.source_meta.get("point") or 0), str(one.source_meta.get("case") or ""))
+        latest[key] = one
     return list(latest.values())
 
 

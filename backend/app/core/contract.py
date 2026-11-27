@@ -23,10 +23,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core import cases
 from app.core.stages import StageFailure
 
-#: 읽을 수 있는 조건의 판. v2(케이스 여럿)를 받게 되면 여기 더하고 읽는 길을 만든다.
-VERSIONS: tuple[int, ...] = (1,)
+#: 읽을 수 있는 조건의 판 — v1(해석 하나) · v2(케이스 여럿, `app/core/cases.py` 가 작업마다
+#: v1 모양 한 벌로 편다).
+VERSIONS: tuple[int, ...] = (1, 2)
 #: 판을 적는 칸 — 지금 CompCore 는 `schema_version`, 설계 문서(해석-확장-설계 2장)는 `version`
 #: 이다. 어느 쪽에 적어도 알아본다(칸 이름이 정해지기 전에 온 것도 막아야 한다).
 KEYS = ("schema_version", "version")
@@ -46,13 +48,19 @@ def problem(payload: Any) -> str | None:
             f"{' · '.join(str(one) for one in VERSIONS)}) — CompCore 에서 케이스 하나인 "
             "조건으로 다시 내보내거나 이 서버를 갱신하세요."
         )
-    cases = block.get("cases")
-    if cases:
-        # 판을 안 적고 모양만 바뀐 것 — 맨 위의 구속 · 하중이 비어 「조건 없음」 으로 읽힌다.
-        count = f" {len(cases)}개" if isinstance(cases, list | dict) else ""
+    declared = next((block.get(key) for key in KEYS if block.get(key) is not None), 1)
+    rows = block.get("cases")
+    if declared == 2:
+        # 케이스를 읽는다 — 점 전체를 막는 것(이름 겹침 · 앞 케이스를 못 찾음 · 갈래)만 여기서.
+        # 사슬마다의 규칙은 작업을 만들 때(`cases.problem`).
+        _found, broken = cases.read(payload)
+        return broken or None
+    if rows:
+        # 판 1 인데 케이스가 있다 — 맨 위의 구속 · 하중이 비어 「조건 없음」 으로 읽힌다.
+        count = f" {len(rows)}개" if isinstance(rows, list | dict) else ""
         return (
-            f"해석 케이스{count}로 나눈 조건을 이 서버가 읽지 못합니다 — CompCore 에서 케이스 "
-            "하나인 조건으로 다시 내보내거나 이 서버를 갱신하세요."
+            f"판 1 인데 해석 케이스{count}로 나눈 조건입니다 — CompCore 에서 다시 내보내세요"
+            "(케이스는 판 2 에서만 적습니다)."
         )
     return None
 
@@ -67,7 +75,14 @@ def _known(declared: Any) -> bool:
 
 
 def require(payload: Any) -> None:
-    """모델링의 문 — 모르는 판이면 멈춘다."""
+    """모델링의 문 — 모르는 판이면 멈춘다. **날 v2 도 멈춘다** — 작업에는 사슬 하나의 v1
+    보기를 담는다(`services.case_view`). 날것이 여기 왔다면 그 길을 안 탔다."""
     found = problem(payload)
     if found:
         raise StageFailure("region_unresolved", found)
+    if cases.is_cases(payload):
+        raise StageFailure(
+            "region_unresolved",
+            "해석 케이스로 나눈 점 파일이 케이스를 고르지 않은 채 왔습니다 — 작업을 다시"
+            " 만드세요(작업을 만들 때 사슬 하나로 폅니다).",
+        )

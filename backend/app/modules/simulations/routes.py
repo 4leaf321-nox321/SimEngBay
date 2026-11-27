@@ -372,13 +372,14 @@ def browse_doe(
 @router.post("/conditions/preview", response_model=ConditionsPreviewOut)
 def preview_conditions(
     recipe: str | None = Form(default=None),
+    case: str | None = Form(default=None),
     topology_file: UploadFile = File(alias="file"),
     user: User = Depends(current_user),
 ) -> ConditionsPreviewOut:
     """CAD 점 파일 한 장을 **작업을 만들기 전에** 읽어 준다 — 영역 · 물성 · 해석 설정과, 그
     해석 종류에서 조건이 어떻게 다뤄지나. 저장하지 않는다."""
     return services.preview_conditions(
-        topology_file.file.read(services.MAX_TOPOLOGY_BYTES + 1), recipe=recipe
+        topology_file.file.read(services.MAX_TOPOLOGY_BYTES + 1), recipe=recipe, case=case
     )
 
 
@@ -386,6 +387,7 @@ def preview_conditions(
 def preview_doe(
     path: str,
     recipe: str | None = None,
+    case: str | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DoePreviewOut:
@@ -394,7 +396,7 @@ def preview_doe(
     폴더는 **서버가 보는 경로**다(공유 스토리지). 브라우저가 파일을 올리는 것이 아니다 —
     설계점 200개면 STEP 만 수십 MB 다.
     """
-    return services.preview_doe(path, recipe=recipe, db=db)
+    return services.preview_doe(path, recipe=recipe, db=db, case=case)
 
 
 @router.post("/doe/import", response_model=DoeImportOut, status_code=201)
@@ -420,12 +422,13 @@ def preview_doe_point(
     path: str,
     number: int,
     recipe: str | None = None,
+    case: str | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ConditionsPreviewOut:
     """폴더의 설계점 하나를 읽어 준다 — 새 작업 창이 「설계점 하나 고르기」 에 쓴다(점 파일을
     올렸을 때와 같은 미리보기)."""
-    return services.preview_doe_point(path, number, recipe=recipe)
+    return services.preview_doe_point(path, number, recipe=recipe, case=case)
 
 
 @router.get("/items", response_model=Page[ItemOut])

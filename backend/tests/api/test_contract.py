@@ -1,7 +1,9 @@
 """모르는 조건 판은 **작업을 만들 때** 거절한다(`app/core/contract.py`, SIMULATIONS-0043).
 
 v2(케이스 여럿)가 오면 구속 0 · 하중 0 · modal 로 조용히 읽혔다. 걸어 두면 DOE 200점이
-자유-자유 모달로 끝까지 돈다.
+자유-자유 모달로 끝까지 돈다. v2 를 받게 된 뒤로는(`app/core/cases.py`) 그 자리를 판 3 이
+잇는다 —
+읽는 판(1 · 2)이 아니면 막는다.
 """
 
 from __future__ import annotations
@@ -27,10 +29,11 @@ STEP = b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"
 MODAL = {"recipe": "modal", "mesh": {"element_size_mm": 8}}
 
 
-def _to_v2(path: Path) -> bytes:
+def _to_unknown(path: Path) -> bytes:
+    """읽지 못하는 판(3) — 모양도 케이스로 나눴다."""
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     block = payload["conditions"]
-    block["schema_version"] = 2
+    block["schema_version"] = 3
     case = {
         key: block.pop(key)
         for key in ("analysis", "loads", "constraints", "initial")
@@ -59,14 +62,14 @@ def test_올린_점_파일의_판을_모르면_CAD_조건을_꺼도_거절한다
         },
         files={
             "file": ("p0001.step", io.BytesIO(STEP), "model/step"),
-            "topology": ("p0001.json", io.BytesIO(_to_v2(point)), "application/json"),
+            "topology": ("p0001.json", io.BytesIO(_to_unknown(point)), "application/json"),
         },
         headers=member.headers,
     )
     assert refused.status_code == 400, refused.text
     error = refused.json()["error"]
     assert error["code"].endswith("SIMULATIONS-0043"), error
-    assert "schema_version = 2" in error["message"] and "읽는 판: 1" in error["message"]
+    assert "schema_version = 3" in error["message"] and "읽는 판: 1 · 2" in error["message"]
     assert len(db.scalars(select(Simulation.id)).all()) == before
 
 
@@ -74,7 +77,7 @@ def test_미리_보기는_판을_막힌_조건으로_보인다(client: TestClien
     point = next(iter(sorted((SWEEP / "points").glob("p*.json"))))
     shown = client.post(
         "/api/simulations/conditions/preview",
-        files={"file": ("p0001.json", io.BytesIO(_to_v2(point)), "application/json")},
+        files={"file": ("p0001.json", io.BytesIO(_to_unknown(point)), "application/json")},
         headers=member.headers,
     )
     assert shown.status_code == 200, shown.text
@@ -97,7 +100,7 @@ def test_DOE_는_모르는_판의_점만_까닭과_함께_뺀다(
     study["id"] = uuid.uuid4().hex
     (folder / "study.json").write_text(json.dumps(study, ensure_ascii=False), encoding="utf-8")
     points = sorted((folder / "points").glob("p*.json"))
-    points[0].write_bytes(_to_v2(points[0]))
+    points[0].write_bytes(_to_unknown(points[0]))
     number = int(points[0].stem[1:])
     monkeypatch.setattr(get_settings(), "doe_roots", str(tmp_path))
 
@@ -116,7 +119,7 @@ def test_DOE_는_모르는_판의_점만_까닭과_함께_뺀다(
     assert made.status_code == 201, made.text
     body = made.json()
     skipped = {row["number"]: row["skip_reason"] for row in body["skipped"]}
-    assert "조건의 판(schema_version = 2)" in skipped[number]
+    assert "조건의 판(schema_version = 3)" in skipped[number]
     assert len(body["created"]) == len([one for one in rows.values() if one["usable"]])
     for job in body["created"]:
         row = db.get(Simulation, uuid.UUID(job))

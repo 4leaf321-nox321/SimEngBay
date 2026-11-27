@@ -4063,6 +4063,22 @@
               ],
               "title": "Recipe"
             }
+          },
+          {
+            "name": "case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case"
+            }
           }
         ],
         "responses": {
@@ -4172,6 +4188,22 @@
                 }
               ],
               "title": "Recipe"
+            }
+          },
+          {
+            "name": "case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case"
             }
           }
         ],
@@ -5748,6 +5780,14 @@
             },
             "type": "array",
             "title": "Materials"
+          },
+          "follows": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Follows",
+            "description": "앞 케이스로 올 수 있는 해석(판 2 의 사슬) — 비면 첫 케이스로만"
           }
         },
         "type": "object",
@@ -6254,6 +6294,17 @@
             ],
             "title": "Recipe"
           },
+          "case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case"
+          },
           "file": {
             "type": "string",
             "contentMediaType": "application/octet-stream",
@@ -6478,6 +6529,48 @@
         ],
         "title": "CapabilityNote",
         "description": "조건이 붙은 항목 — 받되 그때만 쓰이거나 다르게 풀린다(`app/core/capabilities.py`)."
+      },
+      "CaseOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "끝 케이스의 이름 — 작업 스펙의 `case`"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "끝 케이스의 해석 종류 — 작업의 레시피"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver",
+            "description": "대상 솔버(비면 작업의 솔버)"
+          },
+          "chain": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Chain",
+            "description": "앞 케이스부터 끝까지의 이름"
+          },
+          "problem": {
+            "type": "string",
+            "title": "Problem",
+            "description": "작업으로 걸 수 없는 까닭(비면 건다)",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "solver",
+          "chain"
+        ],
+        "title": "CaseOut",
+        "description": "해석 케이스로 나뉜 점(판 2)의 사슬 하나 — 작업 하나가 된다."
       },
       "ChangePasswordRequest": {
         "properties": {
@@ -6744,6 +6837,24 @@
           "recipe": {
             "type": "string",
             "title": "Recipe"
+          },
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/CaseOut"
+            },
+            "type": "array",
+            "title": "Cases"
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case"
           },
           "regions": {
             "items": {
@@ -7604,6 +7715,17 @@
             "type": "string",
             "title": "Skip Reason",
             "default": ""
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case"
           }
         },
         "type": "object",
@@ -7671,6 +7793,24 @@
           "skipped": {
             "type": "integer",
             "title": "Skipped"
+          },
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/CaseOut"
+            },
+            "type": "array",
+            "title": "Cases"
+          },
+          "case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case"
           },
           "suggested_modes": {
             "anyOf": [

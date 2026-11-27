@@ -9,16 +9,20 @@
 
 from __future__ import annotations
 
+import json
 import typing
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.core import capabilities, conditions
+from app.core import capabilities, cases, conditions
 from app.core.calculix import deck as calculix_deck
 from app.core.mechanical.build import unsupported as ansys_unsupported
 from app.core.spec import RUNNABLE_RECIPES, ModalSpec
 from app.modules.simulations import services
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "doe"
 
 #: CompCore 등록부의 종류 전부(CompCore `conditions/registry.py` 의 `ITEMS`) — 표가 고를 우주.
 COMPCORE_ITEMS = {
@@ -266,3 +270,32 @@ def test_솔버마다_갈리는_곳() -> None:
 def test_모르는_솔버는_표를_내지_않는다() -> None:
     with pytest.raises(ValueError, match="모르는 솔버"):
         capabilities.analyses("abaqus")
+
+
+@pytest.mark.parametrize("solver", capabilities.SOLVERS)
+@pytest.mark.parametrize("recipe", capabilities.RECIPES)
+def test_follows_는_받는_코드와_같은_말을_한다(solver: str, recipe: str) -> None:
+    """「볼트 예압 → 그 해석」 사슬 — `follows` 에 정적이 있으면 사슬 규칙 · 만들 때 점검을
+    지나고, 없으면 어느 한쪽이 막는다."""
+    payload = json.loads(
+        (FIXTURES / "조건_볼트예압_두케이스_솔버없음" / "points" / "p0001.json").read_text()
+    )
+    end = payload["conditions"]["cases"][1]
+    end["analysis"] = {"type": recipe}
+    if recipe == "random":
+        end["loads"] = [dict(PSD)]
+    elif recipe == "modal":
+        end["loads"] = []
+    [chain] = cases.chains(payload)[0]
+    why = cases.problem(chain)
+    blocked = bool(why)
+    if not why:
+        given = conditions.read(cases.view(payload, chain), recipe=recipe)
+        refused = given.refused or (
+            calculix_deck.unsupported(given)
+            if solver == "calculix"
+            else ansys_unsupported(given, recipe)
+        )
+        blocked = bool(refused)
+    follows = capabilities.analyses(solver)[recipe]["follows"]
+    assert ("static" in follows) == (not blocked), (solver, recipe, why)

@@ -46,7 +46,7 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
-from app.core import contract
+from app.core import cases, contract
 from app.core.regions.match import not_a_face
 
 #: 우리가 Mechanical 에 걸 수 있는 구속 — CompCore 의 7종 그대로.
@@ -109,6 +109,9 @@ HARMONIC_REFUSED: dict[str, str] = {
     "rotational_velocity": _NOT_EXCITATION,
 }
 HARMONIC_REFUSED_LOADS = tuple(HARMONIC_REFUSED)
+
+#: 케이스로 나눈 조건을 케이스를 고르지 않고 읽으려 할 때.
+CASES_UNPICKED = "해석 케이스로 나눈 조건입니다 — 케이스(사슬)를 골라 읽습니다"
 
 #: 원격 변위의 원격점 자리 — 그룹 중심 · 좌표계 원점(CompCore 계약, 전역 좌표계면 막는다).
 REMOTE_LOCATIONS = ("centroid", "cs_origin")
@@ -462,6 +465,11 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     unknown = contract.problem(payload)
     if unknown:
         made.refused.append(Note("조건의 판", unknown))
+        return made
+    if cases.is_cases(payload):
+        # **케이스로 나눈 조건(v2)은 케이스를 골라 읽는다** — 작업마다 v1 모양 한 벌로 편 것
+        # (`cases.view`)을 읽는다. 날것을 읽으면 맨 위가 비어 「조건 없음」 으로 읽힌다.
+        made.refused.append(Note("해석 케이스", CASES_UNPICKED))
         return made
 
     regions = set(_dict(payload).get("regions") or {})

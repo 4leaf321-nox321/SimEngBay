@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core import cases as core_cases
 from app.core import conditions as condition_model
 from app.core import materials
 from app.core.calculix import deck as calculix_deck
@@ -44,15 +45,23 @@ RECIPES = calculix_deck.SUPPORTED_RECIPES
 #: 접촉 · 지지를 **선형화하는** 해석 — 모드를 풀고 그 위에서 셈한다.
 LINEARIZED = ("modal", "harmonic", "random")
 
+#: note 는 CompCore 화면에 글자 그대로 나간다 — 그쪽 화면 규칙대로 문장을 줄표로 잇지 않는다.
 PRESTRESS_LOAD = (
-    "선응력을 켤 때만 앞 정적에 겁니다 — 끄면 고유진동수를 바꾸지 않아 쓰지 않습니다"
+    "판 1 에서는 선응력을 켤 때만 앞 정적에 겁니다(끄면 고유진동수를 바꾸지 않아 쓰지"
+    " 않습니다). 케이스(판 2)에서는 선응력을 만드는 하중을 앞 정적 케이스에 적습니다."
 )
-TWO_STEP_BOLT = "먼저 조이고, 그 길이를 잠근 채 나머지 하중을 겁니다(두 단계)"
+TWO_STEP_BOLT = (
+    "한 케이스 안에서는 먼저 조이고, 그 길이를 잠근 채 나머지 하중을 겁니다(두 단계)."
+    " 앞 케이스에서 조인 볼트는 뒤 케이스에서 그 길이로 잠긴 채 이어집니다."
+)
 LINEAR_BONDED = "모드 · 주파수 해석에서는 붙은 것으로 풉니다"
 LINEAR_SLIDING = "모드 · 주파수 해석에서는 법선만 묶어 미끄러지게 풉니다"
 LINEAR_SUPPORT = "모드 · 주파수 해석에서는 닿은 채로(같은 강성의 법선 스프링) 풉니다"
-TEMPERATURE = "물성 기준 온도로만 씁니다 — 열 변형은 풀지 않습니다"
-PRESTRESS = "해석 설정의 선응력 반영과 함께 씁니다 — 다른 해석의 단계(from_step)는 아직"
+TEMPERATURE = "물성 기준 온도로만 씁니다. 열 변형은 풀지 않습니다."
+PRESTRESS = (
+    "판 1 에서는 해석 설정의 선응력 반영과 함께 씁니다. 케이스(판 2)에서는 앞 정적 케이스가"
+    " 선응력을 말하므로 적지 않습니다. 다른 해석의 단계(from_step)는 아직 받지 않습니다."
+)
 PSD_AXES_ONLY = "가진 방향은 X · Y · Z 축만 받습니다"
 
 
@@ -91,7 +100,20 @@ def _analysis(solver: str, recipe: str) -> dict[str, Any]:
             "loads": _load_fields(recipe, prestress=prestress),
         },
         "materials": list(materials.MODELS),
+        "follows": follows(solver, recipe),
     }
+
+
+def follows(solver: str, recipe: str) -> list[str]:
+    """앞 케이스로 올 수 있는 해석(판 2 의 사슬) — 비면 사슬의 첫 케이스로만 온다.
+
+    앞 케이스는 정적만이다(`cases.LEADS` — 끝 상태를 남긴다). 정적은 정적 뒤에 오고, 선응력을
+    받는 해석(`prestress_recipes` — 그 솔버가 받는 것)도 정적 뒤에 온다. 조화 응답은 선응력을
+    받지
+    않아 첫 케이스로만 온다."""
+    if recipe == "static" or recipe in prestress_recipes(solver):
+        return list(core_cases.LEADS)
+    return []
 
 
 def _load_fields(recipe: str, *, prestress: bool) -> list[str]:

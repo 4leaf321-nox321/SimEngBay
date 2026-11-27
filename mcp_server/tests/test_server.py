@@ -30,6 +30,7 @@ TOOLS = {
     "get_guide",
     "whoami",
     "recipe_schema",
+    "capabilities",
     "folder_find",
     "folder_browse",
     "folder_preview",
@@ -907,3 +908,12 @@ def test_실측은_표를_파일로_붙이고_대상은_하나만() -> None:
 
     assert "error" in _run(server.measurement_add, table)
     assert "error" in _run(server.measurements_get, job_id="j1", study_id="s1")
+
+
+def test_능력표는_솔버를_골라_그대로_묻는다() -> None:
+    """CompCore 가 부르는 표와 같은 것 — 백엔드가 만들고 MCP 는 묻기만 한다."""
+    table = [{"solver": "ansys", "analyses": {}}]
+    seen = _route({("GET", "/api/simulations/capabilities"): table})
+    assert _run(server.capabilities, "ansys") == table
+    assert _run(server.capabilities) == table
+    assert [dict(one.url.params) for one in seen] == [{"solver": "ansys"}, {}]

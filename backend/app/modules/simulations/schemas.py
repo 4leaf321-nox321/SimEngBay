@@ -833,6 +833,37 @@ class SolverAvailabilityOut(BaseModel):
     queued: int
 
 
+class CapabilityNote(BaseModel):
+    """조건이 붙은 항목 — 받되 그때만 쓰이거나 다르게 풀린다(`app/core/capabilities.py`)."""
+
+    name: str
+    note: str
+
+
+class AnalysisCapabilitiesOut(BaseModel):
+    """해석 하나에서 받는 것 — 묶음마다 종류(CompCore 의 `type` 이름), 읽는 해석 설정 칸, 재료
+    모델. 표에 없는 것은 막거나 그 해석에서 쓰지 않는다."""
+
+    constraints: list[str | CapabilityNote]
+    loads: list[str | CapabilityNote]
+    contacts: list[str | CapabilityNote]
+    initial: list[str | CapabilityNote]
+    fields: dict[str, list[str]]
+    materials: list[str]
+
+
+class CapabilitiesOut(BaseModel):
+    """능력표 한 장 — **솔버 하나**(CompCore 해석-확장-설계 5장). CompCore 가 관리 화면에서
+    불러 복사본을 두고, 케이스의 대상 솔버로 저장 · 내보내기 때 거른다."""
+
+    receiver: str = Field(description="받는 쪽 설치 이름(`app_slug`)")
+    solver: str = Field(description="작업 스펙의 `solver` 값 — calculix · ansys")
+    version: str | None = Field(description="솔버 판(Ansys 「2025 R2」) — 모르면 비운다")
+    receiver_version: str = Field(description="이 설치의 판 — 복사본을 바꿀 때를 안다")
+    contract: list[int] = Field(description="받는 조건 판(`schema_version`)")
+    analyses: dict[str, AnalysisCapabilitiesOut]
+
+
 # --- 메시 수렴 ----------------------------------------------------------------------
 
 

@@ -59,6 +59,7 @@ INSTRUCTIONS = (
     "하려는 일 → 부를 것:\n"
     "  CompCore 에서 만든 스터디를 찾는다 folder_find  (스터디 id · 이름으로)\n"
     "  무엇을 걸 수 있나(칸 · 기본값)   recipe_schema\n"
+    "  CAD 조건 중 무엇을 받나(솔버별)   capabilities\n"
     "  공유 폴더를 둘러본다              folder_browse  (무엇이 있는지 모를 때)\n"
     "  걸기 전에 조건이 어떻게 걸리나   folder_preview  (설계점 하나는 number 를 준다)\n"
     "  해석을 건다                       jobs_create     (study_id 나 path · 점 하나 · 여럿)\n"
@@ -532,6 +533,20 @@ async def recipe_schema(ctx: Context) -> Any:
     solvers = await _get(ctx, "/api/simulations/solvers")
     places = await _get(ctx, "/api/simulations/solve-places")
     return {"recipes": recipes, "solvers": solvers, "solve_places": places}
+
+
+@mcp.tool(annotations=_READ)
+async def capabilities(ctx: Context, solver: str | None = None) -> Any:
+    """**CAD 조건에서 무엇을 받나**(능력표) — 솔버마다 한 장, 해석(modal · static ·
+    harmonic · random)마다 받는 구속 · 하중 · 접촉 · 초기조건의 종류, 읽는 해석 설정 칸
+    (`fields.analysis`), 재료 모델. 항목은 이름이거나 `{name, note}`(조건이 붙는다 — 예:
+    모달의 하중은 선응력일 때만 쓴다). **표에 없는 것은 그 솔버 · 해석이 막거나 쓰지
+    않는다** — CompCore 조건에 그것이 있으면 솔버를 바꾸거나 CAD 쪽을 고치게 한다. 같은
+    표를 CompCore 가 불러 저장할 때 거른다. `solver` 는 calculix · ansys(비우면 둘 다).
+    최종 판정은 작업을 만들 때다(`folder_preview`)."""
+    return await _get(
+        ctx, "/api/simulations/capabilities", {"solver": solver} if solver else None
+    )
 
 
 # --------------------------------------------------------------------------- #

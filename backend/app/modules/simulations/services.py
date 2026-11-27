@@ -50,7 +50,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session
 
+from app import version as app_version
 from app.config import Settings, get_settings
+from app.core import capabilities as core_capabilities
 from app.core import cleanup, contract, executors, materials, random_vibration, units
 from app.core import conditions as condition_model
 from app.core import convergence as core_convergence
@@ -93,9 +95,11 @@ from app.modules.simulations.models import (
     StudyFrequencyRequirement,
 )
 from app.modules.simulations.schemas import (
+    AnalysisCapabilitiesOut,
     ArtifactOut,
     CadBodyOut,
     CadMaterialOut,
+    CapabilitiesOut,
     ComparisonOut,
     ConditionLine,
     ConditionsOut,
@@ -1634,6 +1638,12 @@ def conditions_gap(spec: AnySpec, payload: dict[str, Any] | None) -> str | None:
                 + " · ".join(cannot)
                 + " — 솔버를 ansys 로 바꾸세요."
             )
+    if spec.solver == "ansys":
+        from app.core.mechanical.build import unsupported as ansys_unsupported
+
+        cannot = ansys_unsupported(given, spec.recipe)
+        if cannot:
+            return "Ansys 로는 아직 못 거는 조건이 있습니다: " + " · ".join(cannot)
     return None
 
 
@@ -3841,6 +3851,37 @@ def solver_availability(db: Session) -> list[SolverAvailabilityOut]:
         )
         for name in SOLVERS
     ]
+
+
+def capabilities(solver: str | None = None) -> list[CapabilitiesOut]:
+    """**능력표** — 솔버마다 CompCore 조건에서 무엇을 받나(CompCore 해석-확장-설계 5장).
+    `solver` 를 주면 그 한 장만 — **꼴은 늘 배열**이다(모르는 솔버면 빈 배열, CompCore 와
+    정함: 질의에 따라 응답의 꼴이 바뀌지 않게). 표는 받는 코드에서 만든다
+    (`app/core/capabilities.py`)."""
+    settings = get_settings()
+    return [
+        CapabilitiesOut(
+            receiver=settings.app_slug,
+            solver=one,
+            version=_solver_version(one, settings),
+            receiver_version=app_version.current(),
+            contract=list(contract.VERSIONS),
+            analyses={
+                recipe: AnalysisCapabilitiesOut.model_validate(table)
+                for recipe, table in core_capabilities.analyses(one).items()
+            },
+        )
+        for one in core_capabilities.SOLVERS
+        if solver is None or one == solver
+    ]
+
+
+def _solver_version(solver: str, settings: Settings) -> str | None:
+    """솔버 판 — Ansys 는 설정의 판(252 → 「2025 R2」). CalculiX 는 워커의 ccx 판을 모아 두지
+    않아 비운다(지문은 `tools.ccx_sha256`)."""
+    if solver != "ansys":
+        return None
+    return f"20{settings.ansys_version // 10} R{settings.ansys_version % 10}"
 
 
 # --- 돌리기 ----------------------------------------------------------------------

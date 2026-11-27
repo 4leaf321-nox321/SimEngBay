@@ -48,6 +48,8 @@ CAD(CompCore)가 공용 폴더에 내보낸 **설계점**(형상 STEP + 점 파�
    **`conditions.lines` 의 `refused`** 를 본다.
 3. `recipe_schema` — 스펙 칸. 대개 `{"recipe": …, "solver": …}` 만 주고 나머지(조건 · 물성 ·
    **메시 크기**)는 CAD 값. 요소 크기는 사람이 정해 달라고 할 때만 준다(CAD 의 「전체」 크기를 덮는다).
+   막힌 조건(`refused`)이 솔버 탓인지 보려면 `capabilities(solver)` — 솔버 · 해석마다 받는 종류와 칸이다
+   (표에 없으면 그 솔버가 막거나 안 쓴다. 다른 솔버의 표에 있으면 솔버를 바꾸자고 한다).
 4. `jobs_create(spec, study_id=… 또는 path=…, numbers=[…])` — 점마다 작업 하나. 작업 id 가 바로
    온다.
 5. `job_get(job_id, wait_seconds=25)` — 끝날 때까지 되묻는다. `failed` 면 까닭을 사람에게.

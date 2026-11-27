@@ -2064,14 +2064,12 @@ def write_harmonic(
     # 하중마다 배율 1 · 위상 0 의 줄 — 잔여 벡터 단계가 하나씩 건다(아래 ③).
     units: list[tuple[condition_model.Load, list[str]]] = []
     for load in given.loads:
-        if load.kind in ("rotational_velocity", "bolt_pretension"):
-            # 흔드는 하중이 아니다 — 조화 응답은 모드 위의 가진만 본다(조이거나 돌린 상태는
-            # 정적 · 선응력 모달이 본다).
+        refusal = condition_model.HARMONIC_REFUSED.get(load.kind)
+        if refusal is not None:
+            # 조화가 받지 않는 하중(볼트 · 회전 속도 · 중력) — 조건 층이 작업을 만들 때 먼저
+            # 막는다(`conditions.HARMONIC_REFUSED`). 여기는 그 길을 안 탄 덱의 마지막 둑.
             plan.refused.append(
-                condition_model.Note(
-                    f"하중 「{load.name}」({load.kind})",
-                    "조화 응답의 가진으로 쓰지 않습니다 — 정적 · 선응력 모달에서 겁니다.",
-                )
+                condition_model.Note(f"하중 「{load.name}」({load.kind})", refusal)
             )
             continue
         refused = _on_rigid(load, load_nodes, rigid)

@@ -229,6 +229,18 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
 - **CompCore 가 잘못 걸렸다고 판정한 접촉은 걸지 않는다**(`quality.misplaced_contacts`, `conditions.misplaced`,
   2026-11-26) — 면 지문은 딴 면과도 맞아 우리 짝짓기로는 못 가린다. 실린 것은 판정 값과 상관없이 「막음」 이다(이름이 안 맞아도).
   「CAD 조건 사용」 을 끈 작업은 그 접촉을 안 쓰므로 막지 않는다(선언이 없으니 맞닿은 바디를 메시에서 찾아 묶는다).
+- **능력표는 받는 코드에서 만든다**(`app/core/capabilities.py`, `GET /api/simulations/capabilities` · MCP `capabilities`,
+  2026-11-27) — CompCore 가 복사본을 두고 케이스의 대상 솔버로 거른다. 손으로 적지 않는다: 구속 · 하중 · 접촉은 솔버의
+  표(`calculix.deck.SUPPORTED_*` · `mechanical.build.SUPPORTED_*`), 해석마다 갈리는 것은 그 규칙의 상수
+  (`conditions.PRESTRESS_RECIPES` · `HARMONIC_REFUSED_LOADS` · `ANALYSIS_FIELDS` · `LOAD_FIELDS`, `mechanical.build.PRESTRESS_RECIPES` ·
+  `HARMONIC_REFUSED_LOADS`)에서 끌어온다. **받는 것을 바꾸면 그 상수를 바꾼다** — `tests/unit/test_capabilities.py` 가
+  종류마다 점 파일을 지어 실제 조건 읽기 · 만들 때 점검과 견주므로, 막는 줄만 고치고 상수를 두면 그 시험이 깨진다.
+  솔버만 막는 종류는 모델링이 아니라 만들 때 막는다(`deck.unsupported` · `mechanical.build.unsupported`). `fields.*` 는
+  「그 묶음의 읽는 칸 전부」 라 시험이 읽힌 칸을 센다 — 칸을 새로 읽으면 그 목록에 더한다. 응답은 늘 배열이다.
+- **조화 응답은 선응력을 받지 않는다**(두 솔버, 2026-11-27) — 전에는 말없이 무시했다. `analysis.prestressed` 나 초기조건
+  `prestress` 가 실리면 만들 때 막는다(모달로 적은 점을 조화로 돌려도). **조화가 받지 않는 하중**(`conditions.HARMONIC_REFUSED`)
+  — 볼트 · 회전 속도(가진이 아니다) · 중력(Mechanical 은 「invalid object」 로 못 풀고, CalculiX 는 1 g 가진으로 흔들어
+  「중력이 걸린 채」 로 읽혔다 — 사용자가 두 솔버 모두 막기로 정함) — 도 만들 때 막는다. 1 g 로 흔들려면 가속도 하중이다.
 - **CalculiX 고유치 덱은 SPOOLES 를 한 스레드로 푼다**(`calculix/solve.EIGEN_ENV`, 2026-11-17) — 같은
   모달 덱을 4 스레드로 12번 풀었더니 6번 고유치가 어긋났다(최대 3%, 가짜 0 Hz 모드까지). SPOOLES 만 한
   스레드면(`CCX_NPROC_EQUATION_SOLVER=1`, 조립 · 응력은 그대로 여러 스레드) 12번 모두 같았고 시간도 거의

@@ -3096,6 +3096,62 @@
         }
       }
     },
+    "/api/simulations/capabilities": {
+      "get": {
+        "tags": [
+          "simulations"
+        ],
+        "summary": "Capabilities",
+        "description": "**능력표** — 솔버마다 CompCore 조건에서 무엇을 받나(해석별 구속 · 하중 · 접촉 ·\n초기조건 · 읽는 해석 설정 칸 · 재료 모델). CompCore 가 관리 화면에서 불러 복사본을 두고\n케이스의 대상 솔버로 거른다. 비밀은 없지만 다른 경로처럼 신원을 본다(PAT 읽기 범위로\n된다).",
+        "operationId": "capabilities_api_simulations_capabilities_get",
+        "parameters": [
+          {
+            "name": "solver",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "calculix · ansys — 비우면 둘 다",
+              "title": "Solver"
+            },
+            "description": "calculix · ansys — 비우면 둘 다"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CapabilitiesOut"
+                  },
+                  "title": "Response Capabilities Api Simulations Capabilities Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/simulations/solve-places": {
       "get": {
         "tags": [
@@ -5618,6 +5674,94 @@
         "title": "AccountSummaryOut",
         "description": "활성 시스템 관리자 수.\n\n**1명이면 그 사람이 잠기는 순간 복구 경로가 서버 콘솔뿐이다.** 목록은 쪽\n단위라 화면이 세면 틀린다 — 서버가 센다."
       },
+      "AnalysisCapabilitiesOut": {
+        "properties": {
+          "constraints": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/CapabilityNote"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Constraints"
+          },
+          "loads": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/CapabilityNote"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Loads"
+          },
+          "contacts": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/CapabilityNote"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Contacts"
+          },
+          "initial": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/CapabilityNote"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Initial"
+          },
+          "fields": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Fields"
+          },
+          "materials": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Materials"
+          }
+        },
+        "type": "object",
+        "required": [
+          "constraints",
+          "loads",
+          "contacts",
+          "initial",
+          "fields",
+          "materials"
+        ],
+        "title": "AnalysisCapabilitiesOut",
+        "description": "해석 하나에서 받는 것 — 묶음마다 종류(CompCore 의 `type` 이름), 읽는 해석 설정 칸, 재료\n모델. 표에 없는 것은 막거나 그 해석에서 쓰지 않는다."
+      },
       "AnalysisColumnOut": {
         "properties": {
           "key": {
@@ -6258,6 +6402,82 @@
         ],
         "title": "CadMaterialOut",
         "description": "CAD 가 보낸 물성 한 벌 — 사람이 읽는 단위로."
+      },
+      "CapabilitiesOut": {
+        "properties": {
+          "receiver": {
+            "type": "string",
+            "title": "Receiver",
+            "description": "받는 쪽 설치 이름(`app_slug`)"
+          },
+          "solver": {
+            "type": "string",
+            "title": "Solver",
+            "description": "작업 스펙의 `solver` 값 — calculix · ansys"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version",
+            "description": "솔버 판(Ansys 「2025 R2」) — 모르면 비운다"
+          },
+          "receiver_version": {
+            "type": "string",
+            "title": "Receiver Version",
+            "description": "이 설치의 판 — 복사본을 바꿀 때를 안다"
+          },
+          "contract": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Contract",
+            "description": "받는 조건 판(`schema_version`)"
+          },
+          "analyses": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AnalysisCapabilitiesOut"
+            },
+            "type": "object",
+            "title": "Analyses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "receiver",
+          "solver",
+          "version",
+          "receiver_version",
+          "contract",
+          "analyses"
+        ],
+        "title": "CapabilitiesOut",
+        "description": "능력표 한 장 — **솔버 하나**(CompCore 해석-확장-설계 5장). CompCore 가 관리 화면에서\n불러 복사본을 두고, 케이스의 대상 솔버로 저장 · 내보내기 때 거른다."
+      },
+      "CapabilityNote": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "note"
+        ],
+        "title": "CapabilityNote",
+        "description": "조건이 붙은 항목 — 받되 그때만 쓰이거나 다르게 풀린다(`app/core/capabilities.py`)."
       },
       "ChangePasswordRequest": {
         "properties": {

@@ -260,6 +260,8 @@ def test_쓰기_범위가_없는_토큰은_읽기만_한다(
     """범위는 백엔드가 본다 — MCP 는 그 말을 그대로 전한다."""
     reader = _bot(client, member, ["read"])
     assert reader.call(server.folder_preview, str(folder))["usable"] == 3
+    # 능력표도 읽기다 — CompCore 가 읽기 범위 토큰으로 부른다.
+    assert [one["solver"] for one in reader.call(server.capabilities, "ansys")] == ["ansys"]
     said = reader.refused(server.jobs_create, MODAL, path=str(folder), numbers=[1])
     assert "simulations:write" in said
 

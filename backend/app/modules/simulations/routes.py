@@ -24,6 +24,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.simulations import services
 from app.modules.simulations.schemas import (
+    CapabilitiesOut,
     ConditionsPreviewOut,
     ConvergenceOut,
     ConvergenceRequest,
@@ -124,6 +125,18 @@ def solvers(
     """솔버마다 **집을 워커가 살아 있나** — 작업을 거는 화면이 경고에 쓴다. 집을 워커가 없는
     솔버로 걸면 작업은 대기에서 영원히 안 움직이고, 그 사실을 아무도 말해 주지 않는다."""
     return services.solver_availability(db)
+
+
+@router.get("/capabilities", response_model=list[CapabilitiesOut])
+def capabilities(
+    solver: str | None = Query(default=None, description="calculix · ansys — 비우면 둘 다"),
+    user: User = Depends(current_user),
+) -> list[CapabilitiesOut]:
+    """**능력표** — 솔버마다 CompCore 조건에서 무엇을 받나(해석별 구속 · 하중 · 접촉 ·
+    초기조건 · 읽는 해석 설정 칸 · 재료 모델). CompCore 가 관리 화면에서 불러 복사본을 두고
+    케이스의 대상 솔버로 거른다. 비밀은 없지만 다른 경로처럼 신원을 본다(PAT 읽기 범위로
+    된다)."""
+    return services.capabilities(solver)
 
 
 @router.get("/solve-places", response_model=list[SolvePlaceOut])

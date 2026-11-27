@@ -18,6 +18,7 @@ import pytest
 from app.core import conditions as condition_model
 from app.core.calculix import deck
 from app.core.calculix.build import _split
+from app.core.harmonic import HarmonicPlan
 from app.core.materials import Material
 
 #: 사면체 둘이 면 2-3-4 를 나눠 쓴다. 바닥 면 1-2-3, 끝 면 2-3-5 · 3-4-5 …
@@ -1097,3 +1098,32 @@ def test_원격점은_좌표계_원점에_세울_수_있고_같은_면의_원통
         length_mm=1000.0,
     )
     assert "축이 전역과 달라" in plan.refused[0].why
+
+
+@pytest.mark.parametrize("kind", ["standard_earth_gravity", "rotational_velocity"])
+def test_조화_덱은_조화가_받지_않는_하중을_막는다(kind: str) -> None:
+    """조건 층이 작업을 만들 때 먼저 막는다(`conditions.HARMONIC_REFUSED`) — 덱은 그 길을
+    안 탄 조건의 마지막 둑이다. 전에는 중력을 1 g 가진으로 흔들었다(사용자 결정 2026-11-27 로
+    막음)."""
+    odd = condition_model.Load(
+        name="걸면 안 되는 것", kind=kind, magnitude=10.0, unit="rad/s", direction=(0, 0, 1)
+    )
+    plan = deck.write_harmonic(
+        nodes=NODES,
+        solids=SOLIDS,
+        body_of={"부품": 1, "지그": 2},
+        materials=[_material("부품", "지그")],
+        held_nodes={"바닥": {1, 2, 3}},
+        load_nodes={},
+        load_faces={},
+        load_areas={},
+        given=condition_model.Conditions(constraints=[FIXED], loads=[odd]),
+        plan_of=HarmonicPlan(
+            low=10.0, high=100.0, intervals=2, damping_ratio=0.02, source="spec"
+        ),
+        modes=2,
+        second_order=False,
+    )
+    assert [one.what for one in plan.refused][:1] == [f"하중 「걸면 안 되는 것」({kind})"]
+    assert plan.refused[0].why == condition_model.HARMONIC_REFUSED[kind]
+    assert "GRAV" not in plan.text and "CENTRIF" not in plan.text

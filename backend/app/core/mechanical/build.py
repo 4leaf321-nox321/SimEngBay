@@ -993,6 +993,25 @@ def _limit_range(analysis: Any, searched: mode_search.ModeSearch | None) -> None
 #: Mechanical 의 PSD G 가속도 방향 — 축만 받는다(`NormalOrientationType`).
 PSD_AXES = {(1, 0, 0): "XAxis", (0, 1, 0): "YAxis", (0, 0, 1): "ZAxis"}
 
+#: Ansys 경로가 선응력을 받는 해석 — **모달만**. 랜덤 진동의 선응력은 아직 못 잇는다
+#: (CalculiX 는 받는다 — `conditions.PRESTRESS_RECIPES`).
+PRESTRESS_RECIPES = ("modal",)
+RANDOM_PRESTRESS = "랜덤 진동: 선응력은 아직 Ansys 경로로 못 겁니다 — CalculiX 로 돌리세요."
+
+
+def unsupported(given: condition_model.Conditions, recipe: str) -> list[str]:
+    """Ansys 경로가 **종류부터** 못 거는 조건 — 작업을 만들 때 미리 말한다
+    (`services.conditions_gap`, CalculiX 의 `deck.unsupported` 와 같은 자리). 전에는
+    모델링에서야 멈춰 DOE 면 점마다 같은 말을 했다. 자리 · 방향처럼 값을 봐야 아는 것은
+    모델링이 말한다."""
+    out: list[str] = []
+    if recipe == "random" and given.prestressed and recipe not in PRESTRESS_RECIPES:
+        out.append(RANDOM_PRESTRESS)
+    # 조화가 받지 않는 하중(중력 · 볼트 · 회전 속도 — Mechanical 은 중력 · 회전 속도를
+    # 「invalid object」 로 못 푼다, 실측)은 두 솔버 모두 조건 층이 막는다
+    # (`conditions.HARMONIC_REFUSED`).
+    return out
+
 
 def _random_plan(
     spec: RandomSpec, given: condition_model.Conditions, constrained: bool
@@ -1009,11 +1028,9 @@ def _random_plan(
         raise StageFailure(
             "internal", "랜덤 진동: 고정 지지가 없습니다 — 가속도 PSD 는 지지부를 흔듭니다."
         )
-    if given.prestressed:
-        raise StageFailure(
-            "internal",
-            "랜덤 진동: 선응력은 아직 Ansys 경로로 못 겁니다 — CalculiX 로 돌리세요.",
-        )
+    if given.prestressed and "random" not in PRESTRESS_RECIPES:
+        # 작업을 만들 때 먼저 막는다(`unsupported`) — 여기는 그 길을 안 탄 작업의 마지막 둑.
+        raise StageFailure("internal", RANDOM_PRESTRESS)
     for one in shaking.shakes:
         if _psd_axis(one.direction) is None:
             raise StageFailure(
@@ -1264,6 +1281,8 @@ _LOAD_MAKERS = {
     "acceleration": "AddAcceleration",
     "rotational_velocity": "AddRotationalVelocity",
 }
+#: 능력표가 읽는 이름(`capabilities`) — 만드는 자리 표의 열쇠 그대로.
+SUPPORTED_LOADS = tuple(_LOAD_MAKERS)
 
 
 def _apply_loads(
@@ -2650,6 +2669,19 @@ def _build_frames(
     return made
 
 
+#: 구속 종류 → Mechanical 의 만드는 자리 — 능력표의 구속 목록이 여기서 나온다(`capabilities`).
+_SUPPORT_MAKERS = {
+    "fixed_support": "AddFixedSupport",
+    "displacement": "AddDisplacement",
+    "remote_displacement": "AddRemoteDisplacement",
+    "frictionless": "AddFrictionlessSupport",
+    "cylindrical": "AddCylindricalSupport",
+    "compression_only": "AddCompressionOnlySupport",
+    "elastic_support": "AddElasticSupport",
+}
+SUPPORTED_CONSTRAINTS = tuple(_SUPPORT_MAKERS)
+
+
 def _one_constraint(
     analysis: Any,
     constraint: condition_model.Constraint,
@@ -2661,22 +2693,10 @@ def _one_constraint(
     않는다**(조건 층이 막는다)."""
     kind = constraint.kind
     try:
-        if kind == "fixed_support":
-            support = analysis.AddFixedSupport()
-        elif kind == "frictionless":
-            support = analysis.AddFrictionlessSupport()
-        elif kind == "compression_only":
-            support = analysis.AddCompressionOnlySupport()
-        elif kind == "cylindrical":
-            support = analysis.AddCylindricalSupport()
-        elif kind == "elastic_support":
-            support = analysis.AddElasticSupport()
-        elif kind == "displacement":
-            support = analysis.AddDisplacement()
-        elif kind == "remote_displacement":
-            support = analysis.AddRemoteDisplacement()
-        else:  # pragma: no cover - 조건 층이 먼저 막는다
+        maker = _SUPPORT_MAKERS.get(kind)
+        if maker is None:  # pragma: no cover - 조건 층이 먼저 막는다
             raise StageFailure("internal", f"못 거는 구속입니다: {kind}")
+        support = getattr(analysis, maker)()
         support.Location = place
 
         if kind == "cylindrical":
@@ -2801,6 +2821,7 @@ _CONTACT_TYPES = {
     "frictionless": "Frictionless",
     "rough": "Rough",
 }
+SUPPORTED_CONTACTS = tuple(_CONTACT_TYPES)
 
 
 def _global_size_mm(

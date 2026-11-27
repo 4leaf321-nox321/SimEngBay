@@ -79,6 +79,37 @@ _INERT_IN_MODAL = (
 #: 모드를 풀고 가진은 PSD 로 따로 온다(`Psd`).
 QUIET_LOADS = ("modal", "random")
 
+#: 하중 종류 — CompCore 의 아홉(가속도 PSD 는 랜덤 진동의 가진이라 따로 읽는다, `_psd`).
+LOAD_KINDS = (*_INERT_IN_MODAL, "psd_acceleration")
+
+#: **선응력을 받는 해석** — 같은 하중의 정적을 앞에 풀고 그 응력을 안고 모드를 뽑는다. 솔버가
+#: 더 좁힐 수 있다(Ansys 는 모달만 — `mechanical.build.PRESTRESS_RECIPES`).
+PRESTRESS_RECIPES = ("modal", "random")
+#: 조화 응답의 선응력은 **두 솔버 모두 받지 않는다** — 전에는 말없이 무시했다(CompCore 와 정함
+#: 2026-11-27: CompCore 는 조화에 그 칸을 내지 않고, 우리는 실려 오면 막는다).
+HARMONIC_PRESTRESS = (
+    "조화 응답은 선응력을 받지 않습니다(CalculiX · Ansys 모두) — 선응력은 모달 · 랜덤 "
+    "진동에서 씁니다"
+)
+#: **조화 응답이 받지 않는 하중**과 그 까닭 — 두 솔버 모두 작업을 만들 때 막는다.
+#:
+#: - 볼트 예압 · 회전 속도: 흔드는 하중이 아니다(조이거나 돌린 상태는 정적 · 선응력 모달이
+#:   본다). 전에는 CalculiX 덱이 모델링에서야 막았고 Ansys 는 그대로 조화 쪽에 걸었다.
+#: - 중력: 정적 하중이다. Mechanical 의 조화는 받지 않고(실측 2026-11-27, 2025 R2 — 넣으면
+#:   「invalid object for the current analysis」 로 덜 정의된 채 풀기가 서지 않는다.
+#:   가속도 · 압력 · 힘 · 모멘트 · 베어링은 풀린다), CalculiX 는 1 g **가진**으로 흔들었다 —
+#:   사람은 「중력이 걸린 채」 로 읽는다. 사용자가 두 솔버 모두 막기로 정했다(2026-11-27).
+#:   1 g 로 흔들려면 가속도 하중(배율 표 포함)으로 적는다.
+_NOT_EXCITATION = "조화 응답의 가진으로 쓰지 않습니다 — 정적 · 선응력 모달에서 겁니다."
+HARMONIC_REFUSED: dict[str, str] = {
+    "bolt_pretension": _NOT_EXCITATION,
+    # CompCore 의 저장 점검과 같은 뜻(ec46826).
+    "standard_earth_gravity": "조화 응답에서는 중력을 받지 않습니다(CalculiX · Ansys 모두) — "
+    "정적 중력도 가진도 아닙니다. 1 g 로 흔들려면 가속도 하중으로 적으세요.",
+    "rotational_velocity": _NOT_EXCITATION,
+}
+HARMONIC_REFUSED_LOADS = tuple(HARMONIC_REFUSED)
+
 #: 원격 변위의 원격점 자리 — 그룹 중심 · 좌표계 원점(CompCore 계약, 전역 좌표계면 막는다).
 REMOTE_LOCATIONS = ("centroid", "cs_origin")
 
@@ -436,6 +467,10 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     regions = set(_dict(payload).get("regions") or {})
     # **해석 설정을 먼저 읽는다** — 선응력인지에 따라 하중을 걸지 넘길지가 갈린다.
     made.analysis = _analysis(_dict(block.get("analysis")))
+    if recipe == "harmonic" and made.analysis.prestressed:
+        # 모달로 적은 점 파일을 조화로 돌려도 같다 — 선응력을 빼고 풀면 CAD 가 적은 것과 다른
+        # 해석이다.
+        made.refused.append(Note("해석 설정 (선응력 반영)", HARMONIC_PRESTRESS))
     if made.analysis.kind and made.analysis.kind != recipe:
         # **다른 해석을 하라고 적혀 있다.** 막지는 않는다 — 사람이 모달로 돌려 보는 일은
         # 흔하다. 다만 말해 주지 않으면 「CAD 가 시킨 대로 돈 것」 으로 읽는다.
@@ -1139,8 +1174,16 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
         )
         return
 
+    if recipe == "harmonic" and kind in HARMONIC_REFUSED:
+        made.refused.append(Note(f"하중 「{name}」({kind})", HARMONIC_REFUSED[kind]))
+        return
+
     direction = row.get("direction")
-    table, broken = _frequency_table(row.get("frequency_table"))
+    # **가진 프로파일은 조화 응답에서만 읽는다** — 다른 해석에서는 CompCore 가 비워 보내고(그
+    # 해석의 칸이 아니다), 안 쓰는 칸의 값으로 막지 않는다(능력표의 `fields.loads`).
+    table, broken = (
+        _frequency_table(row.get("frequency_table")) if recipe == "harmonic" else (None, "")
+    )
     if broken:
         made.refused.append(Note(f"하중 「{name}」 의 주파수별 배율", broken))
         return
@@ -1154,10 +1197,8 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
             unit=str(row.get("unit") or ""),
             direction=_triple(direction),
             normal=direction == "normal",
-            preload=_number(row.get("preload")),
-            # 가진 프로파일 — 조화 응답에서만 뜻이 있다(다른 해석에서는 CompCore 가 비워
-            # 보낸다).
-            frequency_table=table if recipe == "harmonic" else None,
+            preload=_number(row.get("preload")) if kind == "bolt_pretension" else None,
+            frequency_table=table,
             phase=_number(row.get("phase")) if recipe == "harmonic" else None,
         )
     )
@@ -1258,8 +1299,10 @@ def _initial(row: dict[str, Any], recipe: str, made: Conditions) -> None:
                     "정적을 앞에 풉니다",
                 )
             )
-        elif recipe != "modal":
-            made.skipped.append(Note("초기조건 (선응력)", "모달에서만 씁니다"))
+        elif recipe == "harmonic":
+            made.refused.append(Note("초기조건 (선응력)", HARMONIC_PRESTRESS))
+        elif recipe not in PRESTRESS_RECIPES:
+            made.skipped.append(Note("초기조건 (선응력)", "모달 · 랜덤 진동에서만 씁니다"))
         elif not made.analysis.prestressed:
             made.skipped.append(
                 Note(
@@ -1269,6 +1312,56 @@ def _initial(row: dict[str, Any], recipe: str, made: Conditions) -> None:
             )
         return
     made.refused.append(Note("초기조건", f"아직 걸 수 없습니다: {kind}"))
+
+
+#: 해석 종류마다 **읽는** 해석 설정 칸(CompCore 의 칸 이름) — 능력표의 `fields.analysis` 다.
+#: 여기 없는 칸(정적의 `steps` · 모든 해석의 `solver` · 조화의 `method`)은 읽지 않는다 —
+#: 능력표가 그것을 「받지 않음」 으로 보이게 한다(CompCore 해석-확장-설계 5장).
+#:
+#: - `modes` — 작업의 모드 수가 비면 이 값(`services._with_cad_modes`, 모드가 있는 스펙 셋).
+#: - `frequency_range` — 모달 · 랜덤은 모드를 찾을 범위(`modes.search`), 조화는 훑을 범위.
+#: - `prestressed` — 모달 · 랜덤(솔버가 더 좁힌다). 조화는 막는다(`HARMONIC_PRESTRESS`).
+#: - `damping_ratio` — 조화(`harmonic.harmonic_plan`) · 랜덤(`random_vibration.plan`).
+#: - `large_deflection` · `substeps` — 정적(`statics.static_plan`).
+#: 하중 칸(CompCore `Load` 의 차례) — `curve` 는 없다: CompCore 가 내보낼 때 곡선을 하중 안의
+#: 표로 풀어 오고 칸은 빼므로(해석-확장-설계 4장) 우리에게 오지 않는다.
+LOAD_FIELD_ORDER = (
+    "name",
+    "type",
+    "on",
+    "cs",
+    "magnitude",
+    "unit",
+    "direction",
+    "preload",
+    "frequency_table",
+    "phase",
+    "psd_table",
+    "grms",
+)
+_STATIC_LOAD_FIELDS = ("name", "type", "on", "cs", "magnitude", "unit", "direction", "preload")
+#: 해석마다 **읽는** 하중 칸 — 능력표의 `fields.loads`(그 해석에서 그 묶음의 읽는 칸 전부).
+#: 모달 · 랜덤은 선응력의 앞 정적에 걸 때의 칸이다(솔버가 선응력을 안 받으면 빠진다).
+#: 볼트 예압의 `preload` 는 볼트에서만, 조화의 배율 · 위상은 조화에서만 읽는다.
+LOAD_FIELDS: dict[str, tuple[str, ...]] = {
+    "modal": _STATIC_LOAD_FIELDS,
+    "static": _STATIC_LOAD_FIELDS,
+    "harmonic": (
+        *(one for one in _STATIC_LOAD_FIELDS if one != "preload"),
+        "frequency_table",
+        "phase",
+    ),
+    "random": _STATIC_LOAD_FIELDS,
+}
+#: 가속도 PSD 의 칸(`_psd`) — 랜덤 진동의 가진. `on` 은 비어야 한다(모든 고정 지지를 흔든다).
+PSD_FIELDS = ("name", "type", "on", "cs", "unit", "direction", "psd_table", "grms")
+
+ANALYSIS_FIELDS: dict[str, tuple[str, ...]] = {
+    "modal": ("modes", "frequency_range", "prestressed"),
+    "static": ("large_deflection", "substeps"),
+    "harmonic": ("modes", "frequency_range", "solution_intervals", "damping_ratio"),
+    "random": ("modes", "frequency_range", "prestressed", "damping_ratio"),
+}
 
 
 def _analysis(block: dict[str, Any]) -> Analysis:

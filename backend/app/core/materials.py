@@ -51,6 +51,11 @@ MODULUS_KEY = "mechanical.youngs_modulus"
 POISSON_KEY = "mechanical.poisson_ratio"
 DENSITY_KEY = "physical.density"
 
+#: 받는 재료 모델 — **선형 등방 탄성 하나**(탄성계수 · 푸아송비 · 밀도). 소성 칸이 와도 아직
+#: 선형으로 푼다(CompCore ②의 재료 모델 — 이름이 정해지면 그것을 따르고, 모르는 모델은 막는다).
+#: 능력표의 `materials` 다(`capabilities`).
+MODELS = ("linear_elastic",)
+
 #: 온도 표에서 고를 기준 온도의 기본값. 여러 점이 오면 기준에 가장 가까운 것을 고르고 **고른
 #: 온도를 적어 둔다**(요약 `material_temperature`). 기준은 CAD 초기조건의 「환경 온도」
 #: (`conditions.initial[]` 의 `environment_temperature`, °C)가 먼저다 — CompCore 계약

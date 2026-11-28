@@ -1841,6 +1841,72 @@
         }
       }
     },
+    "/api/notices/publish-drafts": {
+      "post": {
+        "tags": [
+          "notices"
+        ],
+        "summary": "Publish Drafts",
+        "description": "**배포 안내 초안** 모두 발행 — 배포가 넣은 업데이트 안내(`seed_key`)만 한 번에. 손으로\n쓰다 둔 초안(다음 주 점검 안내처럼 일부러 둔 글)은 하나씩 「발행」 한다 — 함께 나가면\n되돌리기 어렵다. 발행 시각은 `_publish` 의 규칙(그 판의 날짜).",
+        "operationId": "publish_drafts_api_notices_publish_drafts_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticePublishedOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notices/{notice_id}/publish": {
+      "post": {
+        "tags": [
+          "notices"
+        ],
+        "summary": "Publish Notice",
+        "description": "초안 하나를 발행한다(이미 발행했으면 그대로).",
+        "operationId": "publish_notice_api_notices__notice_id__publish_post",
+        "parameters": [
+          {
+            "name": "notice_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Notice Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/notices/{notice_id}/read": {
       "post": {
         "tags": [
@@ -9750,6 +9816,11 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "from_release": {
+            "type": "boolean",
+            "title": "From Release",
+            "default": false
           }
         },
         "type": "object",
@@ -9766,6 +9837,20 @@
           "created_at"
         ],
         "title": "NoticeOut"
+      },
+      "NoticePublishedOut": {
+        "properties": {
+          "published": {
+            "type": "integer",
+            "title": "Published"
+          }
+        },
+        "type": "object",
+        "required": [
+          "published"
+        ],
+        "title": "NoticePublishedOut",
+        "description": "「배포 안내 초안 모두 발행」 의 결과 — 발행한 수."
       },
       "NoticeWriteRequest": {
         "properties": {

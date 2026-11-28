@@ -8,6 +8,7 @@
 import { useState } from 'react'
 
 import { noticeApi } from '@/modules/notices/api'
+import { NoticeBody } from '@/modules/notices/NoticeBody'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
@@ -30,14 +31,17 @@ import { shownDateTime } from '@/shared/lib/datetime'
 
 export default function NoticesPage() {
   const { user } = useAuth()
-  const list = useResource(() => noticeApi.list(), [])
+  const admin = isSystemAdmin(user)
+  // **관리자는 초안까지 본다** — 배포가 판마다의 업데이트 안내를 초안으로 넣는다(읽고 발행한다).
+  const list = useResource(() => noticeApi.list(admin), [admin])
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [level, setLevel] = useState('info')
   const [isPopup, setIsPopup] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
-  const admin = isSystemAdmin(user)
+  // 일괄 발행은 **배포 안내 초안만** — 손으로 쓰다 둔 초안은 하나씩 「발행」 한다.
+  const drafts = (list.data ?? []).filter((one) => !one.published_at && one.from_release)
 
   async function submit() {
     setError(null)
@@ -47,6 +51,17 @@ export default function NoticesPage() {
       setBody('')
       setLevel('info')
       setIsPopup(false)
+      list.reload()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    }
+  }
+
+  async function publish(id?: string) {
+    setError(null)
+    try {
+      if (id) await noticeApi.publish(id)
+      else await noticeApi.publishDrafts()
       list.reload()
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -111,6 +126,18 @@ export default function NoticesPage() {
 
       <ErrorNotice error={error ?? list.error} />
 
+      {admin && drafts.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed p-3 text-sm">
+          <p className="text-muted-foreground">
+            배포 안내 초안 {drafts.length}건 — 읽어 보고 발행하면 그 판의 날짜에 섭니다. 손으로 쓴 초안은 하나씩
+            발행합니다.
+          </p>
+          <Button size="sm" onClick={() => publish()}>
+            배포 안내 초안 {drafts.length}건 모두 발행
+          </Button>
+        </div>
+      )}
+
       {list.data && list.data.length === 0 ? (
         <EmptyState
           title="공지가 없습니다"
@@ -133,16 +160,23 @@ export default function NoticesPage() {
                   {shownDateTime(one.published_at ?? one.created_at)}
                 </span>
               </div>
-              <p className="mt-2 text-sm whitespace-pre-wrap">{one.body}</p>
+              <NoticeBody text={one.body} className="mt-2" />
               <div className="mt-2 flex items-center justify-between">
                 <p className="text-muted-foreground text-xs">
-                  {one.author_name ?? '시스템'}
+                  {one.from_release ? '배포 안내' : (one.author_name ?? '시스템')}
                   {one.published_at ? '' : ' · 초안'}
                 </p>
                 {admin && (
-                  <Button variant="ghost" size="sm" onClick={() => remove(one.id)}>
-                    삭제
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {!one.published_at && (
+                      <Button variant="outline" size="sm" onClick={() => publish(one.id)}>
+                        발행
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="sm" onClick={() => remove(one.id)}>
+                      삭제
+                    </Button>
+                  </div>
                 )}
               </div>
             </li>

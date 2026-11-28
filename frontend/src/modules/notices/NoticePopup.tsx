@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from '@/shared/components/ui/dialog'
 import { noticeApi } from '@/modules/notices/api'
+import { NoticeBody } from '@/modules/notices/NoticeBody'
 import type { Notice } from '@/modules/notices/api'
 
 export function NoticePopup() {
@@ -57,7 +58,7 @@ export function NoticePopup() {
         <DialogHeader>
           <DialogTitle>{current.title}</DialogTitle>
           <DialogDescription asChild>
-            <div className="text-foreground text-sm whitespace-pre-wrap">{current.body}</div>
+            <NoticeBody text={current.body} className="text-foreground" />
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

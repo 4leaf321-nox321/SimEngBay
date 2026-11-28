@@ -22,6 +22,15 @@ class NoticeOut(BaseModel):
     read: bool
     """내가 읽었나. **서버가 든다** — 브라우저에만 두면 다른 PC 에서 또 뜬다."""
     created_at: datetime
+    from_release: bool = False
+    """배포에 실려 온 업데이트 안내인가(`seed_key` 가 있다) — 화면은 쓴 사람 자리에
+    「배포 안내」 를 보인다."""
+
+
+class NoticePublishedOut(BaseModel):
+    """「배포 안내 초안 모두 발행」 의 결과 — 발행한 수."""
+
+    published: int
 
 
 class NoticeWriteRequest(BaseModel):

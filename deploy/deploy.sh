@@ -592,6 +592,16 @@ run_migrations() {
     in_container sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python -m alembic upgrade head'
 }
 
+# 판마다의 업데이트 안내(`backend/seeds/notices`)를 공지 **초안**으로 넣는다 — 시스템 관리자가 공지
+# 화면에서 읽고 발행한다. 같은 판은 두 번 안 들어오고 지운 초안도 안 되살아난다. **실패해도 배포를
+# 세우지 않는다** — 안내가 비는 것은 불편이지 장애가 아니다. 이중화(A · B)면 주 DB 로 가므로 두 번째
+# 서버에서는 넣을 것이 없다고 나온다.
+run_notices() {
+    info "업데이트 안내를 공지 초안으로 (이미 넣은 판은 건너뜀)"
+    in_container sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python scripts/import_notices.py' \
+        || warn "업데이트 안내를 넣지 못했습니다 — 배포는 계속합니다(나중에 같은 스크립트를 다시 돌리면 됩니다)"
+}
+
 run_seed() {
     # 뿌리 부서와 관리자 계정. **이것 없이는 아무도 로그인할 수 없다** —
     # 가입은 승인이 필요한데 승인할 사람이 없기 때문이다. 멱등하다.
@@ -971,6 +981,7 @@ cmd_install() {
     place_sif
     run_migrations
     run_seed
+    run_notices
     render_service_unit
 
     systemctl enable "$SERVICE_NAME"
@@ -1023,6 +1034,7 @@ cmd_update() {
     fi
     place_sif
     run_migrations
+    run_notices
     # 템플릿(경로·하드닝)이 바뀌었을 수 있으므로 다시 렌더한다.
     render_service_unit
 
@@ -1075,6 +1087,7 @@ SQL
 
     run_migrations
     run_seed
+    run_notices
     systemctl start "$SERVICE_NAME"
     health_check || true
     echo

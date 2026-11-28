@@ -404,6 +404,15 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
 - **줄바꿈은 `.gitattributes` 가 정한다.** CRLF 셸 스크립트는 리눅스에서
   `bad interpreter: /usr/bin/env bash^M` 로 죽는데 눈으로 보면 멀쩡하다. 같은 시험이 검사한다.
 - **릴리스는 태그에서 나온다**(`.github/workflows/release.yml`). 검증(`ci.yml`)을 통과해야 게시된다.
+- **판마다 업데이트 안내를 싣는다** — `backend/seeds/notices/<태그 커밋 날짜>-v<판>.md` 하나를 **버전 커밋에
+  함께** 넣는다(2026-11-28, CompCore · MatNexus 와 같은 길). 배포가 마이그레이션 뒤 공지 **초안**으로 넣고
+  (`scripts/import_notices.py`, `deploy.sh` 의 `run_notices` — 실패해도 배포는 계속), 시스템 관리자가 공지
+  화면에서 읽고 발행한다(배포 안내는 그 판의 날짜에 선다 — 일괄 발행은 배포 안내 초안만, 손 글 초안은 하나씩). 첫 줄은 `# vX.Y.Z 업데이트 — <요약>`, 본문은
+  「■ 새로 생긴 것 · ■ 바뀐 것 · ■ 확인해 주십시오」 머리와 「- 」 목록, 화면에 보이는 말로(해시 · 시험 · CI ·
+  파일 경로 같은 안쪽 말은 뺀다 — `**굵게**` · `` `코드` `` 만 화면이 그린다). 운영 메모(갱신 순서 · 다시 돌릴
+  작업 · 앞 판과 달라진 동작)는 「확인해 주십시오」 에 넣는다. 같은 키는 두 번 안 들어오고(`notice_seed_keys`),
+  지운 초안도 되살아나지 않는다. CI 에서 게시되지 못한 태그는 이은 패치의 글에 합친다. `test_notice_seeds.py`
+  가 지금 판(`pyproject.toml`)의 안내가 있는지 본다.
 - **번들에 담기는 것은 `build_bundle.sh` 가 정본이다.** `README_OPERATOR.md` 가 번들 안에서
   시키는 명령은 번들 안에 있어야 한다.
 - **문서 · 안내 문구에서 env 는 `sudo` 뒤에 쓴다** — `sudo X=… ./deploy.sh`. `X=… sudo ./deploy.sh` 는

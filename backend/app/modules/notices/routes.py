@@ -1,4 +1,9 @@
-"""공지 라우터 — 읽기는 누구나, 쓰기는 시스템 관리자."""
+"""공지 라우터 — 읽기는 누구나, 쓰기는 시스템 관리자.
+
+판마다 업데이트 안내가 배포에 실려 와 **초안**으로 들어온다(`scripts/import_notices.py`).
+관리자가 읽고 발행한다(`publish` · 「배포 안내 초안 모두 발행」). **배포 안내의 발행 시각은
+그 판의 날짜다** — 첫 배포에 수십 판이 한꺼번에 들어와도 판 순서대로 선다(CompCore 와 같다).
+"""
 
 from __future__ import annotations
 
@@ -6,13 +11,13 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.notices.models import Notice, NoticeRead
-from app.modules.notices.schemas import NoticeOut, NoticeWriteRequest
+from app.modules.notices.schemas import NoticeOut, NoticePublishedOut, NoticeWriteRequest
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import NotFound, code
 
@@ -37,7 +42,15 @@ def _out(db: Session, notice: Notice, user: User) -> NoticeOut:
         author_name=author.display_name if author else None,
         read=read is not None,
         created_at=notice.created_at,
+        from_release=notice.seed_key is not None,
     )
+
+
+def _publish(notice: Notice) -> None:
+    """발행한다 — 배포 안내(`seed_key`)는 그 판의 날짜(`created_at`, 씨앗의 날짜)로, 손으로 쓴
+    초안은 지금으로. 버전 안내를 발행한 날로 세우면 「언제 이 판이 나왔나」 를 잃는다."""
+    if notice.published_at is None:
+        notice.published_at = notice.created_at if notice.seed_key else datetime.now(UTC)
 
 
 @router.get("", response_model=list[NoticeOut])
@@ -50,7 +63,13 @@ def list_notices(
     if not include_drafts or not user.is_system_admin:
         # 초안은 쓴 사람만 본다. 반쯤 쓴 글이 전사에 보이면 그 자체가 사고다.
         stmt = stmt.where(Notice.published_at.is_not(None))
-    rows = db.scalars(stmt.order_by(Notice.created_at.desc()).limit(100))
+    # 게시 시각이 먼저(초안은 만든 시각) — 배포 안내는 판의 날짜에 선다.
+    rows = db.scalars(
+        stmt.order_by(
+            func.coalesce(Notice.published_at, Notice.created_at).desc(),
+            Notice.created_at.desc(),
+        ).limit(200)
+    )
     return [_out(db, row, user) for row in rows]
 
 
@@ -91,6 +110,40 @@ def create_notice(
         author_id=admin.id,
     )
     db.add(notice)
+    db.commit()
+    db.refresh(notice)
+    return _out(db, notice, admin)
+
+
+@router.post("/publish-drafts", response_model=NoticePublishedOut)
+def publish_drafts(
+    _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> NoticePublishedOut:
+    """**배포 안내 초안** 모두 발행 — 배포가 넣은 업데이트 안내(`seed_key`)만 한 번에. 손으로
+    쓰다 둔 초안(다음 주 점검 안내처럼 일부러 둔 글)은 하나씩 「발행」 한다 — 함께 나가면
+    되돌리기 어렵다. 발행 시각은 `_publish` 의 규칙(그 판의 날짜)."""
+    drafts = list(
+        db.scalars(
+            select(Notice).where(Notice.published_at.is_(None), Notice.seed_key.is_not(None))
+        )
+    )
+    for one in drafts:
+        _publish(one)
+    db.commit()
+    return NoticePublishedOut(published=len(drafts))
+
+
+@router.post("/{notice_id}/publish", response_model=NoticeOut)
+def publish_notice(
+    notice_id: uuid.UUID,
+    admin: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> NoticeOut:
+    """초안 하나를 발행한다(이미 발행했으면 그대로)."""
+    notice = db.get(Notice, notice_id)
+    if notice is None:
+        raise NotFound(code("NOTICES", 1), "공지를 찾을 수 없습니다.")
+    _publish(notice)
     db.commit()
     db.refresh(notice)
     return _out(db, notice, admin)

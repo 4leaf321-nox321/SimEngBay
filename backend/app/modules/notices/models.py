@@ -59,6 +59,27 @@ class Notice(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    seed_key: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
+    """**배포에 실려 온 업데이트 안내**면 그 씨앗 파일 이름(`seeds/notices/<날짜>-v<판>.md`,
+    2026-11-28 — CompCore · MatNexus 와 같은 길). 새 기능은 코드와 함께 오는데 알리는 글은
+    사람이 따로 써야 해서 아무도 안 썼다. 배포가 초안으로 넣고(`scripts/import_notices.py`)
+    관리자가 읽고 발행한다. 같은 키는 두 번 안 들어온다 — 운영에서 고친 글을 덮지 않는다."""
+
+
+class NoticeSeedKey(Base):
+    """**넣은 적이 있는 씨앗 키** — 공지를 지워도 남는다(CompCore 와 같다).
+
+    「넣었나」 를 `notices.seed_key` 로만 보면 관리자가 초안을 지울 때마다 다음 배포가 그
+    씨앗을 또 초안으로 넣는다(CompCore 에서 씨앗 약 100개가 배포마다 되살아났다). 넣을 때 키를
+    여기 적고, 넣을지는 여기를 본다. 공지 행과 묶지 않는다(FK 없음) — 공지가 사라져도
+    「넣었다」 는 사실은 남아야 한다."""
+
+    __tablename__ = "notice_seed_keys"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class NoticeRead(Base):

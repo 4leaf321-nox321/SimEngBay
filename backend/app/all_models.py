@@ -17,7 +17,7 @@ from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth.models import PersonalAccessToken, PortalLaunchJti, RefreshToken
 from app.modules.files.models import Attachment
-from app.modules.notices.models import Notice, NoticeRead
+from app.modules.notices.models import Notice, NoticeRead, NoticeSeedKey
 from app.modules.notifications.models import Notification
 from app.modules.ontology.models import (
     OntologyObject,
@@ -42,6 +42,7 @@ __all__ = [
     "Base",
     "Notice",
     "NoticeRead",
+    "NoticeSeedKey",
     "Notification",
     "OntologyObject",
     "OntologyRelation",

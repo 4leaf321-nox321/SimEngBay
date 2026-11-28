@@ -335,6 +335,7 @@ def build(
             if isinstance(spec, StaticSpec) and len(given_conditions.static_cases()) > 1
             else None,
             steps=_step_rows(given_conditions) if isinstance(spec, StaticSpec) else None,
+            plastic=isinstance(spec, StaticSpec) and materials.plastic_line(given) is not None,
         )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -2112,6 +2113,7 @@ def _write_boundary(
     shaking: random_model.RandomPlan | None = None,
     cases: list[dict[str, Any]] | None = None,
     steps: list[dict[str, Any]] | None = None,
+    plastic: bool = False,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
@@ -2154,6 +2156,11 @@ def _write_boundary(
     if steps:
         # 하중 단계(CompCore ②)마다 끝 단계 · 끝 시각 — 추출이 단계 끝마다 고른다.
         payload["steps"] = steps
+    if plastic:
+        # 소성 재료로 풀었다 — 추출이 「읽혔고 모두 0 → 항복하지 않았다(0)」 와 「못
+        # 읽었다(비움)」 를 가른다(`dpf.static._plastic`). CalculiX 는 소성이면 PE 블록이 늘
+        # 있어 0 을 적는다.
+        payload["plastic"] = True
     if plan is not None:
         payload["damping_ratio"] = plan.damping_ratio
         payload["frequency_range_hz"] = [plan.low, plan.high]

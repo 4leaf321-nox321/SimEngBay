@@ -205,7 +205,11 @@ describe('「해석」 목록', () => {
       ],
     })
     show()
-    fireEvent.click(await screen.findByLabelText('이 페이지 전체 선택'))
+    // 줄이 다 그려진 뒤에 전체를 고른다 — 머리의 상자가 줄보다 먼저 서면 0개를 고르고, 그러면
+    // 아무리 기다려도 「2개 선택됨」 이 안 나온다(2026-11-28, 다 함께 돌릴 때 깨졌다).
+    await screen.findByLabelText('측면가진 단품 선택')
+    await screen.findByLabelText('ISO178 두께 훑기 선택')
+    fireEvent.click(screen.getByLabelText('이 페이지 전체 선택'))
     // 고를 수 있는 줄(내 것)만 골랐다.
     expect(await screen.findByText('2개 선택됨', undefined, { timeout: 5000 })).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '게시' }))
@@ -224,7 +228,9 @@ describe('「해석」 목록', () => {
       '/simulations/j1/publish',
       '/simulations/studies/st1/publish',
     ])
-  })
+    // 안에서 5 초까지 두 번 기다린다 — 시험 전체의 기본 제한(5 초)이면 그 기다림을 다 쓰기 전에
+    // 끊긴다.
+  }, 15_000)
 
   it('골라서 폴더로 옮기면 항목 열쇠(job: · doe:)로 한 번에 보낸다', async () => {
     const calls = serve({ 'GET /simulations/items': items, 'POST /simulations/items/move': { moved: 2 } })

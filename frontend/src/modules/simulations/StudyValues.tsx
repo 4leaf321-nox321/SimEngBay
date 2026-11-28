@@ -22,7 +22,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { Study, StudyPoint } from '@/modules/simulations/api'
-import { magnitudeOf, shownForce, shownMass, shownValue } from '@/modules/simulations/format'
+import { magnitudeOf, shownForce, shownMass, shownValue, withUnit } from '@/modules/simulations/format'
 import { AxisPicker, useAxis } from '@/modules/simulations/StudyAxis'
 import { ChoiceMark, ChoicePanel, useChoice } from '@/modules/simulations/StudyChoice'
 import { FactorSummary } from '@/modules/simulations/StudySummary'
@@ -112,6 +112,17 @@ export function metricsOf(recipe: string, points: StudyPoint[]): Metric[] {
   return [
     { key: 'max_mm', label: '최대 변형', unit: 'mm', pick: (one) => one.max_displacement_mm ?? null },
     { key: 'max_mpa', label: '최대 상당응력', unit: 'MPa', pick: (one) => one.max_von_mises_mpa ?? null },
+    // 소성 재료로 푼 점이 하나라도 있을 때만(무차원) — 탄성 스터디에 빈 지표를 두지 않는다.
+    ...(points.some((one) => one.max_equivalent_plastic_strain != null)
+      ? [
+          {
+            key: 'max_peeq',
+            label: '최대 등가 소성 변형률',
+            unit: '',
+            pick: (one: StudyPoint) => one.max_equivalent_plastic_strain ?? null,
+          },
+        ]
+      : []),
     ...names(points, (one) => one.reactions_n).map(
       (region): Metric => ({
         key: `reaction:${region}`,
@@ -234,7 +245,7 @@ export function StudyValues({ study }: { study: Study }) {
             <SelectContent>
               {metrics.map((one) => (
                 <SelectItem key={one.key} value={one.key}>
-                  {one.label} ({one.unit})
+                  {withUnit(one.label, one.unit)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -295,7 +306,7 @@ export function StudyValues({ study }: { study: Study }) {
             }
             stems={false}
             xLabel={x}
-            yLabel={`${metric.label} (${metric.unit})`}
+            yLabel={withUnit(metric.label, metric.unit)}
             height={320}
             title={`${x} 대 ${metric.label}`}
             emptyText="아직 그릴 결과가 없습니다. 설계점이 끝나면 여기에 표시됩니다."
@@ -340,7 +351,7 @@ export function StudyValues({ study }: { study: Study }) {
                 <TableHead>상태</TableHead>
                 {metrics.map((one) => (
                   <TableHead key={one.key} className="text-right">
-                    {one.label} ({one.unit})
+                    {withUnit(one.label, one.unit)}
                   </TableHead>
                 ))}
               </TableRow>

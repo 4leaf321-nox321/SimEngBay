@@ -857,6 +857,7 @@ def values_of(db: Session, *, user: User, simulation_id: uuid.UUID) -> ValuesOut
         frequencies=found.frequencies,
         max_displacement_mm=found.max_displacement_mm,
         max_von_mises_mpa=found.max_von_mises_mpa,
+        max_equivalent_plastic_strain=found.max_equivalent_plastic_strain,
         reactions_n=found.reactions_n,
         bolts_n=found.bolts_n,
         probe_vectors_mm=found.probe_vectors_mm,
@@ -2504,6 +2505,7 @@ def _study_point(simulation: Simulation, loaded: dict[str, Any]) -> StudyPointOu
         **_mode_participation(loaded),
         max_displacement_mm=found.max_displacement_mm if found else None,
         max_von_mises_mpa=found.max_von_mises_mpa if found else None,
+        max_equivalent_plastic_strain=found.max_equivalent_plastic_strain if found else None,
         peak_hz=found.peak_hz if found else None,
         peak_displacement_mm=found.peak_displacement_mm if found else None,
         reactions_n=found.reactions_n if found else {},
@@ -2663,6 +2665,10 @@ def study_table(study: StudyOut) -> tuple[list[str], list[list[str]]]:
     if study.recipe == "static":
         head += ["최대 변형 (mm)", "최대 상당응력 (MPa)"]
         picks += [lambda one: one.max_displacement_mm, lambda one: one.max_von_mises_mpa]
+        # 소성 재료로 푼 점이 하나라도 있을 때만 — 탄성 스터디에 빈 열을 두지 않는다.
+        if any(one.max_equivalent_plastic_strain is not None for one in points):
+            head.append("최대 등가 소성 변형률")
+            picks.append(lambda one: one.max_equivalent_plastic_strain)
         for region in _keys_in(points, lambda one: one.reactions_n):
             for axis, label in enumerate(("Fx", "Fy", "Fz")):
                 head.append(f"반력 {region} {label} (N)")
@@ -3455,6 +3461,10 @@ def _convergence_metrics(
             True,
         ),
     ]
+    plastic = take(lambda one: one.max_equivalent_plastic_strain)
+    if any(value is not None for value in plastic):
+        # 응력처럼 모서리 · 하중점에 몰리면 메시를 줄일수록 커진다(특이점일 수 있음).
+        made.append(("max_peeq", "최대 등가 소성 변형률", "", SIZE_TOLERANCE, plastic, True))
     for region in names(lambda one: one.reactions_n):
         made.append(
             (
@@ -3484,6 +3494,40 @@ def _convergence_metrics(
             )
         )
     return made
+
+
+#: 최대 등가 소성 변형률이 모든 수준에서 이 아래면(0.01 %) 수렴으로 본다 — 항복 문턱 언저리.
+PLASTIC_FLOOR = 1e-4
+PLASTIC_FLOOR_NOTE = (
+    "최대 등가 소성 변형률이 모든 수준에서 0.01 % 아래라(항복 문턱 언저리) 수렴으로 봅니다 — "
+    "이만큼 작은 값끼리의 상대 변화는 셈하지 않습니다."
+)
+
+
+def _singular_note(key: str) -> str:
+    """특이점일 수 있는 값(응력 · 소성 변형률)이 수렴하지 않을 때의 말."""
+    subject = "최대 소성 변형률은" if key == "max_peeq" else "첨두응력은"
+    return (
+        f"{subject} 구속 모서리 · 날카로운 모서리의 특이점에 있으면 메시를 줄일수록 "
+        "커집니다 — 이 값으로 판단하지 말고 측정점 · 변형을 봅니다."
+    )
+
+
+def _judged(
+    key: str, pairs: list[tuple[int, float]], *, tolerance: float, singular: bool
+) -> tuple[core_convergence.Verdict, str]:
+    """값 하나의 판정과 알림. 최대 등가 소성 변형률이 모든 수준(둘 이상)에서 0.01 % 아래면
+    수렴으로 본다 — 0 과 1e-6 의 상대 변화는 무한대라 「발산」 으로 읽힌다."""
+    if (
+        key == "max_peeq"
+        and len(pairs) >= 2
+        and max(value for _nodes, value in pairs) < PLASTIC_FLOOR
+    ):
+        return core_convergence.Verdict("converged"), PLASTIC_FLOOR_NOTE
+    verdict = core_convergence.judge(pairs, tolerance=tolerance)
+    if singular and verdict.status in ("diverging", "not_converged", "oscillating"):
+        return verdict, _singular_note(key)
+    return verdict, ""
 
 
 def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> ConvergenceOut:
@@ -3560,13 +3604,7 @@ def convergence(db: Session, *, user: User, simulation_id: uuid.UUID) -> Converg
             for level, value in zip(levels, values, strict=True)
             if level.nodes and value is not None
         ]
-        verdict = core_convergence.judge(pairs, tolerance=tolerance)
-        note = ""
-        if singular and verdict.status in ("diverging", "not_converged", "oscillating"):
-            note = (
-                "첨두응력은 구속 모서리 · 날카로운 모서리의 특이점에 있으면 메시를 줄일수록 "
-                "커집니다 — 이 값으로 판단하지 말고 측정점 · 변형을 봅니다."
-            )
+        verdict, note = _judged(key, pairs, tolerance=tolerance, singular=singular)
         metrics.append(
             ConvergenceMetricOut(
                 key=key,

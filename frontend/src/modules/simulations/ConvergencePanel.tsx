@@ -23,7 +23,7 @@ import { Link } from 'react-router-dom'
 
 import { simulationApi } from '@/modules/simulations/api'
 import type { Convergence, ConvergenceLocalSize, ConvergenceMetric } from '@/modules/simulations/api'
-import { shownValue } from '@/modules/simulations/format'
+import { shownValue, withUnit } from '@/modules/simulations/format'
 import { SOLVER_LABELS } from '@/modules/simulations/labels'
 import { SolverSelect } from '@/modules/simulations/SolverSelect'
 import type { Solver } from '@/modules/simulations/SolverSelect'
@@ -219,7 +219,7 @@ function ConvergenceTable({ data }: { data: Convergence }) {
               <TableHead>상태</TableHead>
               {data.metrics.map((one) => (
                 <TableHead key={one.key} className="text-right">
-                  {one.label} ({one.unit})
+                  {withUnit(one.label, one.unit)}
                 </TableHead>
               ))}
             </TableRow>
@@ -300,7 +300,7 @@ function ConvergenceTable({ data }: { data: Convergence }) {
               <SelectContent>
                 {data.metrics.map((one) => (
                   <SelectItem key={one.key} value={one.key}>
-                    {one.label} ({one.unit})
+                    {withUnit(one.label, one.unit)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -310,7 +310,7 @@ function ConvergenceTable({ data }: { data: Convergence }) {
             lines={lines}
             stems={false}
             xLabel="절점 수"
-            yLabel={`${metric.label} (${metric.unit})`}
+            yLabel={withUnit(metric.label, metric.unit)}
             height={260}
             title={`절점 수 대 ${metric.label}`}
             emptyText="끝난 수준이 둘 이상이어야 그립니다."

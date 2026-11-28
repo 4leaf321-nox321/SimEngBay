@@ -274,6 +274,19 @@ def _results(study: StudyOut, rows: list[StudyPointOut]) -> list[Column]:
             lambda one: one.max_von_mises_mpa,
         ),
     ]
+    # 소성 재료로 푼 점이 하나라도 있을 때만(무차원은 빈 단위) — 탄성 스터디에 빈 열을
+    # 두지 않는다.
+    if any(one.max_equivalent_plastic_strain is not None for one in rows):
+        made.append(
+            Column(
+                "max_peeq",
+                "최대 등가 소성 변형률",
+                "",
+                "result",
+                True,
+                lambda one: one.max_equivalent_plastic_strain,
+            )
+        )
     for region in _names(rows, lambda one: dict(one.reactions_n)):
         made.append(
             Column(

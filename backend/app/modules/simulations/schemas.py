@@ -247,6 +247,10 @@ class ValuesOut(BaseModel):
     # --- 정적
     max_displacement_mm: float | None = None
     max_von_mises_mpa: float | None = None
+    max_equivalent_plastic_strain: float | None = None
+    """최대 등가 소성 변형률(무차원) — 소성 재료로 푼 정적에만 있다(항복하지 않았으면 0).
+    탄성 재료이거나 못 읽었으면 비어 있다. `max_von_mises_mpa` 처럼 끝 상태(마지막 단계 ·
+    케이스 끝)의 값이다(`app/core/values.py`)."""
     reactions_n: dict[str, list[float]] = Field(default_factory=dict)
     """변위를 준 영역 → 반력 합 `[Fx, Fy, Fz]`(N)."""
     bolts_n: dict[str, float] = Field(default_factory=dict)
@@ -546,6 +550,9 @@ class StudyPointOut(BaseModel):
     # 숫자로만 보인다.
     max_displacement_mm: float | None = None
     max_von_mises_mpa: float | None = None
+    max_equivalent_plastic_strain: float | None = None
+    """정적 — 최대 등가 소성 변형률(무차원). 소성 재료로 푼 점에만 있다(항복하지 않았으면
+    0)."""
     peak_hz: float | None = None
     peak_displacement_mm: float | None = None
     reactions_n: dict[str, list[float]] = Field(default_factory=dict)

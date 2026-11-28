@@ -8,6 +8,11 @@ export function shownValue(value: number | null | undefined, unit?: string): str
   return `${Number(value.toPrecision(digits))}${unit ? ` ${unit}` : ''}`
 }
 
+/** 이름에 단위를 붙인다 — 「최대 상당응력 (MPa)」. **무차원(빈 단위)이면 이름만** — 빈 괄호를 두지 않는다. */
+export function withUnit(label: string, unit?: string): string {
+  return unit ? `${label} (${unit})` : label
+}
+
 /** 질량을 적는 단위 — 표의 열 · 그래프 축처럼 **여러 값을 한 단위로** 적을 때 쓴다. */
 export interface MassScale {
   unit: 'kg' | 'g' | 'mg'

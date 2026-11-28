@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { massScale, shownMass } from '@/modules/simulations/format'
+import { massScale, shownMass, withUnit } from '@/modules/simulations/format'
 import { shownNumber } from '@/shared/charts/palette'
 
 describe('shownMass', () => {
@@ -34,5 +34,12 @@ describe('shownNumber(눈금)', () => {
     expect(shownNumber(2.9e-7)).toBe('2.9e-7')
     expect(shownNumber(1234.567)).toBe('1234.57')
     expect(shownNumber(1200)).toBe('1,200')
+  })
+})
+
+describe('withUnit', () => {
+  it('무차원(빈 단위)이면 이름만 — 빈 괄호를 두지 않는다', () => {
+    expect(withUnit('최대 상당응력', 'MPa')).toBe('최대 상당응력 (MPa)')
+    expect(withUnit('최대 등가 소성 변형률', '')).toBe('최대 등가 소성 변형률')
   })
 })

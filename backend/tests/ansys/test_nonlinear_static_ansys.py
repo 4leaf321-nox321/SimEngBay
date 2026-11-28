@@ -88,6 +88,22 @@ def test_봉의_항복은_손셈과_같다_Ansys(workdir: Path, folder: str) -> 
     assert "tb,biso" in deck or "tb,plas" in deck
 
 
+def test_항복하지_않은_소성_재료는_소성_변형률_0_을_적는다_Ansys(workdir: Path) -> None:
+    """10 kN(100 MPa < 항복 250 MPa) — EPPL 이 모두 0 이다. 소성으로 풀었으니
+    (`boundary.json` 의 `plastic`) **0 을 적는다**(앞 판은 칸을 비웠다 — CalculiX 는 0 을 적어
+    두 솔버가 갈렸다). 못 읽은 것이 아니므로 알림이 없다."""
+    payload = _point("조건_봉_항복_이선형")
+    payload["conditions"]["cases"][0]["loads"][0]["magnitude"] = 10000.0
+    result = _solve("조건_봉_항복_이선형", workdir, payload)
+    written = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+    assert written["plastic"] is True
+    [step] = result["steps"]
+    assert result["max_von_mises"] == pytest.approx(100, rel=1e-2)
+    assert result["max_equivalent_plastic_strain"] == 0.0
+    assert step["max_equivalent_plastic_strain"] == 0.0
+    assert "읽지 못했습니다" not in (result.get("warning") or "")
+
+
 def test_당겼다_풀면_소성_변형이_남는다_Ansys(workdir: Path) -> None:
     result = _solve("조건_봉_당겼다풀기", workdir)
     pulled, released = result["steps"]

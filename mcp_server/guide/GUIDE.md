@@ -195,6 +195,10 @@ CAD 는 점 파일에 조건 한 벌을 보낸다(구속 7종 · 하중 8종 · 
 ### 정적
 
 - `max_displacement_mm` · `max_von_mises_mpa`.
+- `max_equivalent_plastic_strain` — **최대 등가 소성 변형률**(무차원). 소성 재료로 푼 작업에만 있고
+  (항복하지 않았으면 0), 탄성 재료이거나 못 읽었으면 없다(0 이 아니다 — 조건으로 고를 때 빠진다).
+  상당응력처럼 끝 상태(하중 단계 · 사슬이면 마지막 단계 끝)의 값이다. CalculiX 는 PEEQ, Ansys 는
+  EPPL 등가라 두 솔버의 최댓값이 조금 갈릴 수 있고, 모서리 · 하중점에 몰리면 메시 수렴으로 본다.
 - `reactions_n` — 영역 → `[Fx, Fy, Fz]`(N). 하중과 반력의 합이 맞는지 볼 수 있다.
 - 측정점(CAD 의 점 그룹 — 센서 자리): `probes_mm`(변위 크기) · `probe_vectors_mm`(성분) ·
   `probe_strains`(`[εxx, εyy, εzz]`, 무차원) · `relative_mm`(같은 자리 두 바디의 차 — 전단 이음의

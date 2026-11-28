@@ -69,6 +69,19 @@ describe('정적 · 조화 DOE', () => {
     ])
   })
 
+  it('소성으로 푼 점이 있을 때만 최대 등가 소성 변형률(무차원)을 견줄 값에 넣는다', () => {
+    // 두꺼운 점은 탄성으로 남아 값이 없다 — 0 이 아니라 빈 값이다.
+    const points = [
+      { ...point(1, 0.15, 0, 0), max_equivalent_plastic_strain: 0.0148535 },
+      { ...point(2, 0.3, 0, 0), max_equivalent_plastic_strain: null },
+    ]
+    const plastic = metricsOf('static', points).find((one) => one.key === 'max_peeq')
+    expect(plastic?.label).toBe('최대 등가 소성 변형률')
+    expect(plastic?.unit).toBe('')
+    expect(points.map((one) => plastic?.pick(one))).toEqual([0.0148535, null])
+    expect(metricsOf('static', SHEAR.points).some((one) => one.key === 'max_peeq')).toBe(false)
+  })
+
   it('조화면 봉우리 주파수를 잇지 않는 값으로 표시한다', () => {
     // **봉우리가 다른 공진으로 옮겨 탈 수 있다** — 선으로 이으면 순번으로 이은 모드와 같다.
     const metrics = metricsOf('harmonic', [

@@ -99,7 +99,7 @@ def _only_bolts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dpf_static, "_body_nodes", lambda mesh: None)
     monkeypatch.setattr(dpf_static, "_peak", lambda field, nodes=None: (0.0, "mm"))
     monkeypatch.setattr(dpf_static, "_von_mises", lambda model, step=None: (None, ""))
-    monkeypatch.setattr(dpf_static, "_plastic", lambda model, step=None: None)
+    monkeypatch.setattr(dpf_static, "_plastic", lambda model, step=None, **_: None)
     monkeypatch.setattr(dpf_static, "_peak_components", lambda field, nodes: [0.0, 0.0, 0.0])
     monkeypatch.setattr(dpf_static, "_reactions", lambda *args: {})
 

@@ -900,7 +900,8 @@ async def job_result(ctx: Context, job_id: str, detail: bool = False) -> Any:
       방향과 유효질량비 — 어느 방향으로 떠는 모드인가).
     - 정적: `max_displacement_mm` · `max_von_mises_mpa` · `reactions_n`(영역 → [Fx, Fy, Fz]) ·
       측정점 `probes_mm` · `probe_vectors_mm` · `probe_strains` · `relative_mm`(같은 자리 두
-      바디의 미끄럼).
+      바디의 미끄럼) · `max_equivalent_plastic_strain`(최대 등가 소성 변형률, 무차원 — 소성
+      재료로 푼 작업에만, 항복하지 않았으면 0, 끝 상태).
     - 조화: `peak_hz` · `peak_displacement_mm` · `max_von_mises_mpa`(봉우리의 최대
       상당응력) · 측정점별 봉우리(`probes_mm` · `probe_peaks_hz`).
     - 랜덤 진동(모두 1σ — 3σ 는 세 배): `probe_grms`(측정점 절대 가속도, g) ·

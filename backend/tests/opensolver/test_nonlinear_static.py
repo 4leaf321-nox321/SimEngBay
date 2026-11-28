@@ -99,6 +99,20 @@ def test_봉의_항복은_손셈과_같다(ready: None, tmp_path: Path, folder: 
     assert "*PLASTIC" in deck and "NLGEOM" not in deck, "대변형은 끈 채 소성만"
 
 
+def test_항복하지_않은_소성_재료는_소성_변형률_0_을_적는다(
+    ready: None, tmp_path: Path
+) -> None:
+    """10 kN(100 MPa < 항복 250 MPa) — 소성이면 PE 블록이 늘 있어 0 을 적는다(Ansys 쪽
+    `test_항복하지_않은_소성_재료는_소성_변형률_0_을_적는다_Ansys` 와 같은 답)."""
+    payload = _point("조건_봉_항복_이선형")
+    payload["conditions"]["cases"][0]["loads"][0]["magnitude"] = 10000.0
+    result = _solve("조건_봉_항복_이선형", tmp_path, 2.5, payload)
+    [step] = result["steps"]
+    assert result["max_von_mises"] == pytest.approx(100, rel=1e-2)
+    assert result["max_equivalent_plastic_strain"] == 0.0
+    assert step["max_equivalent_plastic_strain"] == 0.0
+
+
 def test_당겼다_풀면_소성_변형이_남는다(ready: None, tmp_path: Path) -> None:
     result = _solve("조건_봉_당겼다풀기", tmp_path, 2.5)
     pulled, released = result["steps"]

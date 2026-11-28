@@ -13261,6 +13261,17 @@
             ],
             "title": "Max Von Mises Mpa"
           },
+          "max_equivalent_plastic_strain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Equivalent Plastic Strain"
+          },
           "peak_hz": {
             "anyOf": [
               {
@@ -13807,6 +13818,17 @@
               }
             ],
             "title": "Max Von Mises Mpa"
+          },
+          "max_equivalent_plastic_strain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Equivalent Plastic Strain"
           },
           "reactions_n": {
             "additionalProperties": {

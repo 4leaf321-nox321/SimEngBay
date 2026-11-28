@@ -84,7 +84,8 @@ def extract(
         )
         staged = _cases(model, mesh, topology, workdir, displacement_unit)
         stepped = _cases(model, mesh, topology, workdir, displacement_unit, key="steps")
-        plastic = _plastic(model)
+        solved_plastic = bool(boundary.read(workdir).get("plastic"))
+        plastic = _plastic(model, plastic=solved_plastic)
     except StageFailure:
         raise
     except Exception as failure:
@@ -114,6 +115,10 @@ def extract(
         # **0 인 결과는 「해석이 됐다」 처럼 보인다.** 그림도 표도 멀쩡하다.
         result["warning"] = (
             "변형이 0 입니다 — 하중이 걸리지 않았거나 걸린 자리가 구속면과 같습니다."
+        )
+    if solved_plastic and plastic is None:
+        result["warning"] = " ".join(
+            one for one in (result.get("warning"), UNREAD_PLASTIC) if one
         )
 
     # **그림을 먼저 그린다** — 그려 보고 나서 그 사실까지 담아 한 번에 쓴다.
@@ -480,6 +485,7 @@ def _cases(
     except (OSError, ValueError):
         return []
     rows = written.get(key) or []
+    solved_plastic = bool(written.get("plastic"))
     # 하중 단계의 볼트는 첫 단계에서 조인다 — 그 단계 **끝 시각**의 세트(1.0 이 아닐 수 있다).
     loading = _loading_set(model, workdir) if key == "steps" else None
     out: list[dict[str, Any]] = []
@@ -496,7 +502,7 @@ def _cases(
             "max_von_mises": stress,
         }
         # 소성 변형률 · 성분 최대는 케이스마다 · 단계마다 둘 다(CalculiX 쪽과 같다).
-        plastic = _plastic(model, final)
+        plastic = _plastic(model, final, plastic=solved_plastic)
         if plastic is not None:
             case["max_equivalent_plastic_strain"] = plastic
         case["displacement_peak"] = _peak_components(moved, _body_nodes(mesh))
@@ -531,10 +537,24 @@ def _loading_set(model: Any, workdir: Path) -> int | None:
     return _set_at(model, float(rows[0].get("time") or rows[0].get("step") or 1))
 
 
-def _plastic(model: Any, time_set: int | None = None) -> float | None:
-    """**등가 소성 변형률의 최대**(MAPDL EPPL — CompCore ② 의 `equivalent_plastic_strain`).
-    소성 재료가 없으면(결과에 그 값이 없거나 모두 0) `None` — CalculiX 쪽
-    (`static_read._peak_plastic`)과 같은 열쇠."""
+UNREAD_PLASTIC = (
+    "소성 재료로 풀었지만 등가 소성 변형률을 읽지 못했습니다 — 최대 등가 소성 변형률은 비워 "
+    "둡니다(0 으로 적지 않습니다)."
+)
+
+
+def _plastic(
+    model: Any, time_set: int | None = None, *, plastic: bool = False
+) -> float | None:
+    """**등가 소성 변형률의 최대**(MAPDL EPPL — CompCore ② 의 `equivalent_plastic_strain`),
+    CalculiX 쪽(`static_read._peak_plastic`)과 같은 열쇠.
+
+    - 소성 재료로 풀었고(`plastic`, `boundary.json`) 읽혔는데 모두 0 이면 **0** — 항복하지
+      않았다. CalculiX 는 소성이면 PE 블록이 늘 있어 0 을 적는다 — 두 솔버가 같은 답을 낸다.
+    - **못 읽었으면 `None`(모름)** — 0 으로 지어내면 「소성 변형률 ≤ …」 조건에서 위험한
+      설계점이 가장 좋은 후보로 올라간다. 부르는 쪽이 결과에 알림을 단다(`UNREAD_PLASTIC`).
+    - 탄성 재료면 `None`(결과에 그 값이 없거나 모두 0).
+    """
     from ansys.dpf import core as dpf
 
     try:
@@ -546,8 +566,10 @@ def _plastic(model: Any, time_set: int | None = None) -> float | None:
     except Exception:  # pragma: no cover - 결과 파일에 따라 없을 수 있다
         logger.info("등가 소성 변형률이 결과에 없습니다", exc_info=True)
         return None
-    if not values or max(values) <= 0:
+    if not values:
         return None
+    if max(values) <= 0:
+        return 0.0 if plastic else None
     return significant(max(values))
 
 

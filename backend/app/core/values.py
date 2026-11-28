@@ -65,6 +65,17 @@ class Values:
     """탄성 모드 주파수(앞에서부터, Hz)."""
     max_displacement_mm: float | None = None
     max_von_mises_mpa: float | None = None
+    max_equivalent_plastic_strain: float | None = None
+    """정적 — 최대 등가 소성 변형률(무차원, CompCore 의 `equivalent_plastic_strain`).
+    **소성 재료로 푼 정적에만 있다** — 항복하지 않았으면 0(두 솔버가 결과에 0 을 적는다),
+    탄성 재료이거나 **못 읽었으면 비운다**(모름 — 0 으로 지어내면 「소성 변형률 ≤ …」
+    조건에서 위험한 설계점이 좋은 후보로 올라간다).
+
+    `max_von_mises_mpa` 와 같은 규칙으로 **끝 상태**의 값이다: 하중 단계 · 사슬이면 마지막 단계
+    (케이스) 끝. 등가 소성 변형률은 줄지 않으니 보통 단계 전체의 최대와 같다. CalculiX 는 PEEQ
+    (`.frd` 의 PE, 마지막 증분), Ansys 는 EPPL 등가(DPF `plastic_strain_eqv`, 마지막 세트)다 —
+    적분점 값을 절점으로 옮기는 방식이 달라 두 솔버의 최댓값은 조금 갈릴 수 있고, 상당응력처럼
+    모서리 · 하중점에 몰리면 메시를 줄일수록 커진다."""
     peak_hz: float | None = None
     peak_displacement_mm: float | None = None
     reactions_n: dict[str, list[float]] = field(default_factory=dict)
@@ -118,6 +129,10 @@ def read(result: dict[str, Any]) -> Values:
         made.max_displacement_mm = _scaled(result.get("max_displacement"), length)
         made.max_von_mises_mpa = _scaled(
             result.get("max_von_mises"), to_mpa(units.get("stress"))
+        )
+        # 무차원이라 옮길 단위가 없다. 탄성 · 못 읽은 결과에는 이 칸이 없다(0 이 아니라 비움).
+        made.max_equivalent_plastic_strain = _scaled(
+            result.get("max_equivalent_plastic_strain"), 1.0
         )
         for region, vector in (result.get("reactions") or {}).items():
             if isinstance(vector, list) and len(vector) == 3:

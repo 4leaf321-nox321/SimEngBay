@@ -49,6 +49,21 @@ EIGEN = ("modal", "random")
 GRAVITY = "standard_earth_gravity"
 BOLT = "bolt_pretension"
 
+#: 하중 이력 칸(CompCore ②) — 앞 케이스가 있는 사슬에서는 아직 받지 않는다(`problem`).
+HISTORY_ANALYSIS = ("load_steps",)
+HISTORY_LOADS = ("time_table", "active_steps", "bolt_steps")
+#: 소성 재료 모델(`materials.PLASTIC_MODELS` 와 같은 이름 — 여기서는 점 파일의 글자로 본다).
+PLASTIC_MODELS = ("bilinear_isotropic", "multilinear_isotropic")
+HISTORY_IN_CHAIN = (
+    "하중 단계 · 하중 이력(시간별 배율 · 적용 단계 · 볼트 단계)은 앞 케이스가 없는 정적"
+    " 케이스에서만 받습니다. 앞 케이스 없이 케이스 하나의 \u2018하중 단계\u2019로 적으십시오."
+)
+#: 작업 만들 때의 오류는 CompCore · MCP 로도 보이므로 그쪽 문구 규칙(줄표 없음)을 따른다.
+PLASTIC_EIGEN = (
+    "소성 재료가 있는 정적 뒤의 모드 해석(선응력 모달 · 랜덤)은 아직 받지 않습니다. 섭동"
+    " 단계의 강성이 두 솔버에서 갈릴 수 있습니다(모달 · 랜덤 혼자면 탄성으로 풉니다)."
+)
+
 #: 케이스 안의 선응력 칸 — v2 에서는 앞 케이스가 선응력을 말한다(CompCore 도 저장에서 막는다).
 PRESTRESS_IN_CASE = (
     "케이스에서는 앞 케이스(정적)를 지정해 선응력을 적습니다 — 이 케이스의 「선응력 반영」 · "
@@ -195,9 +210,16 @@ def chains(payload: Any) -> tuple[list[Chain], str]:
     return out, ""
 
 
-def problem(chain: Chain) -> str:
-    """이 사슬을 작업으로 걸 수 없는 까닭(비면 걸 수 있다) — 받는 쪽 첫 판의 규칙."""
+def problem(chain: Chain, payload: Any = None) -> str:
+    """이 사슬을 작업으로 걸 수 없는 까닭(비면 걸 수 있다) — 받는 쪽 첫 판의 규칙. `payload`
+    (점 파일)를 주면 공유 칸(재료)까지 본다 — 작업을 만드는 자리는 늘 준다."""
     where = f"케이스 「{chain.name}」"
+    if chain.leads:
+        timed = next((one for one in chain.cases if _history(one)), None)
+        if timed is not None:
+            return f"케이스 「{timed.name}」: {HISTORY_IN_CHAIN}"
+        if chain.kind in EIGEN and _plastic(payload):
+            return f"{where}: {PLASTIC_EIGEN}"
     for one in chain.cases:
         analysis = one.analysis
         if analysis.get("prestressed") or any(
@@ -376,6 +398,24 @@ def _fold(chain: Chain) -> dict[str, Any] | None:
     shaking = [copy.deepcopy(row) for row in end.rows("loads") if _kind(row) != GRAVITY]
     folded["loads"] = loads + shaking
     return folded
+
+
+def _history(case: Case) -> bool:
+    """하중 이력 칸(CompCore ②)을 쓰나 — 빈 칸은 안 쓴 것이다."""
+    if any(case.analysis.get(key) for key in HISTORY_ANALYSIS):
+        return True
+    return any(row.get(key) is not None for row in case.rows("loads") for key in HISTORY_LOADS)
+
+
+def _plastic(payload: Any) -> bool:
+    """공유 칸의 재료에 소성 모델이 있나(붙이지 않은 재료 — `apply_to: []` — 는 뺀다)."""
+    rows = _block(payload).get("materials")
+    return any(
+        isinstance(row, dict)
+        and str(row.get("model") or "") in PLASTIC_MODELS
+        and row.get("apply_to") != []
+        for row in (rows if isinstance(rows, list) else [])
+    )
 
 
 def _settings(case: Case | None) -> tuple[Any, Any]:

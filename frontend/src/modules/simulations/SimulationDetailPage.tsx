@@ -104,6 +104,11 @@ const SUMMARY_LABELS: Record<string, string> = {
   material_from: '물성 출처',
   // 탄성계수를 어느 온도의 값으로 썼나 — 온도 표에서 22 °C 에 가장 가까운 점(CompCore v0.29.0 부터 온도가 실린다).
   material_temperature: '물성 온도',
+  // 소성(CompCore ②) — 이선형 · 다선형, 표가 MatNexus 카드에서 왔으면 그 출처와 두 E(풀이는 물성 E).
+  material_model: '재료 모델',
+  material_card: '소성 카드',
+  material_warning: '물성 경고',
+  load_steps: '하중 단계',
   // **단위가 어긋났나** — 덱에 실제로 쓴 물성, 솔버가 셈한 질량(`.dat`), 형상 부피를 CAD 와 견준 경고.
   // 고유진동수가 오류 없이 10³ 배 틀리는 사고를 숫자로 가린다(운영 2026-11-17).
   deck_materials: '덱 물성',
@@ -163,12 +168,15 @@ const SUMMARY_LABELS: Record<string, string> = {
 }
 
 /** 작업 상세 맨 위에 띠로 보이는 요약 경고 — 단위가 어긋나면 결과 숫자 전체가 틀린다. */
-const UNIT_WARNINGS = ['size_warning', 'mass_warning'] as const
+const UNIT_WARNINGS = ['size_warning', 'mass_warning', 'material_warning'] as const
 
 /** 한 줄을 다 쓰고 접어 보이는 요약 칸 — 바디마다 늘어서는 값. */
 const WIDE_SUMMARY = new Set([
   'mass_by_body',
   'deck_materials',
+  'material_model',
+  'material_card',
+  'material_warning',
   'size_warning',
   'mass_warning',
   'mesh_repairs',
@@ -211,6 +219,9 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'material',
       'material_from',
       'material_temperature',
+      'material_model',
+      'material_card',
+      'material_warning',
       'deck_materials',
       'solver_mass_kg',
       'size_warning',
@@ -232,6 +243,7 @@ const SUMMARY_GROUPS: [string, string[]][] = [
       'recipe',
       'large_deflection',
       'large_deflection_from',
+      'load_steps',
       'settings_from',
       'modes',
       'modes_requested',

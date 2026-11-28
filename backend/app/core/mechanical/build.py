@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import contract, excitation, materials, unit_checks, units
+from app.core import contract, excitation, history, materials, unit_checks, units
 from app.core import random_vibration as random_model
 from app.core import touching as touch
 from app.core.bodies import BodyRecord, match_bodies, place_settings, without
@@ -192,6 +192,10 @@ def build(
             _mesh(app, spec, given_conditions, system, {}, view or {}, modelled)
             _save_cache(app, cached)
         used = _apply_material(spec, active, system, given, kept)
+        if not isinstance(spec, StaticSpec) and materials.plastic(given):
+            given_conditions.skipped.append(
+                condition_model.Note("재료 모델(소성)", materials.ELASTIC_IN_EIGEN)
+            )
         sheet_materials = _apply_sheet_materials(spec, sheet_of, given, system)
         _rigid_mass(active, used, rigid_ids, system)
         # 질량은 메시와 상관없다 — 경계 파일(`boundary.json`)에 남겨 솔브가 MAPDL 의 전체
@@ -250,17 +254,30 @@ def build(
             # (`statics.static_plan`). 초기 부단계 수는 비선형일 때만 건다 — 선형 모델에
             # 걸면 같은 답을 그 수만큼 다시 푼다.
             statics = static_plan(spec, given_conditions)
-            nonlinear = statics.large_deflection or any(
-                one.kind in NONLINEAR_CONTACT_KINDS for one in given_conditions.contacts
+            # **소성은 증분으로 푼다**(CompCore ②) — Mechanical 은 명령 조각의 `TB` 를 모르므로
+            # 부단계를 우리가 건다(비우면 열 걸음).
+            plastic = materials.plastic(given)
+            nonlinear = (
+                statics.large_deflection
+                or plastic
+                or any(
+                    one.kind in NONLINEAR_CONTACT_KINDS for one in given_conditions.contacts
+                )
             )
             analysis = _add_static(
                 app,
                 large_deflection=statics.large_deflection,
-                substeps=statics.substeps if nonlinear else None,
+                substeps=(
+                    statics.substeps or (history.DEFAULT_SUBSTEPS if plastic else None)
+                    if nonlinear
+                    else None
+                ),
                 steps=_static_steps(given_conditions),
                 nodal_forces=any(
                     one.kind == "elastic_support" for one in given_conditions.constraints
                 ),
+                timeline=_timeline(given_conditions),
+                incremental=nonlinear,
             )
             upstream = analysis
         else:
@@ -317,6 +334,7 @@ def build(
             cases=staged_plan(given_conditions)[2]
             if isinstance(spec, StaticSpec) and len(given_conditions.static_cases()) > 1
             else None,
+            steps=_step_rows(given_conditions) if isinstance(spec, StaticSpec) else None,
         )
         _guard_solver_units(analysis, system)
         places: dict[str, Any] = {}
@@ -473,6 +491,34 @@ def build(
                 **(
                     {"large_deflection": True, "large_deflection_from": statics.source}
                     if statics is not None and statics.large_deflection
+                    else {}
+                ),
+                # 재료 모델(소성, CompCore ②) — 정적에서만 쓴다. 카드에서 온 표면 출처와 두
+                # E(풀이는 물성 E), 5 % 넘게 다르면 경고(사용자 결정 2026-11-28).
+                **(
+                    {"material_model": line}
+                    if isinstance(spec, StaticSpec) and (line := materials.plastic_line(given))
+                    else {}
+                ),
+                **(
+                    {"material_card": line}
+                    if isinstance(spec, StaticSpec) and (line := materials.card_line(given))
+                    else {}
+                ),
+                **(
+                    {"material_warning": line}
+                    if isinstance(spec, StaticSpec) and (line := materials.card_warning(given))
+                    else {}
+                ),
+                # 하중 단계(CompCore ②) — 이름 · 끝 시각.
+                **(
+                    {
+                        "load_steps": " · ".join(
+                            f"{one['name']} {one['time']:g} s"
+                            for one in _step_rows(given_conditions)
+                        )
+                    }
+                    if isinstance(spec, StaticSpec) and _step_rows(given_conditions)
                     else {}
                 ),
                 **(
@@ -850,6 +896,26 @@ def _import_geometry(app: Any, step: Path) -> list[Any]:
     return bodies
 
 
+def plastic_commands(material: materials.Material, system: units.UnitSystem) -> str:
+    """소성(CompCore ②)의 명령 조각 — 이선형은 `TB,BISO`(항복 · 접선 계수 그대로), 다선형은
+    `TB,PLAS,,,,MISO`(진소성변형률 · 진응력 표). 응력은 세션의 계로 적는다. 탄성이면 빈 글.
+    CalculiX 는 같은 것을 `*PLASTIC` 로 쓴다(`calculix.deck._plastic_lines`)."""
+    found = material.plastic
+    if found is None:
+        return ""
+    if found.model == materials.BILINEAR:
+        return (
+            "TB,BISO,matid,1,2\n"
+            f"TBDATA,1,{system.stress(found.yield_stress_pa):.8g},"
+            f"{system.stress(found.tangent_modulus_pa):.8g}\n"
+        )
+    rows = "".join(
+        f"TBPT,DEFI,{strain:.8g},{system.stress(stress):.8g}\n"
+        for strain, stress in found.table
+    )
+    return f"TB,PLAS,matid,1,{len(found.table)},MISO\n{rows}"
+
+
 def material_commands(material: MaterialSpec, system: units.UnitSystem) -> str:
     """물성 명령 조각의 글. **숫자를 세션의 계로 환산해서 적는다.**
 
@@ -907,11 +973,19 @@ def _apply_material(
         # 위(`build`)에서 이미 막았다 — 둘 다 없으면 Mechanical 을 띄우기 전에 멈춘다.
         assert spec.material is not None
         return _uniform(bodies, spec.material, system, source="spec")
+    # **소성은 정적에서만**(CompCore ②) — 모드 · 주파수 해석은 탄성으로 푼다.
+    plastic = isinstance(spec, StaticSpec)
     if len(given) == 1 and (given[0].every_body or len(bodies) == 1):
         picked = given[0]
         if picked.notes:
             logger.info("물성 %s — %s", picked.name, " · ".join(picked.notes))
-        return _uniform(bodies, picked.spec(), system, source="cad")
+        return _uniform(
+            bodies,
+            picked.spec(),
+            system,
+            source="cad",
+            extra=plastic_commands(picked, system) if plastic else "",
+        )
 
     # **파트마다 다른 물성** — 부피 · 무게중심으로 짝짓는다.
     matched = match_bodies(topology or {}, _body_records(bodies, system))
@@ -940,17 +1014,25 @@ def _apply_material(
                 },
             )
         snippet = body.AddCommandSnippet()
-        snippet.AppendText(material_commands(chosen.spec(), system))
+        snippet.AppendText(
+            material_commands(chosen.spec(), system)
+            + (plastic_commands(chosen, system) if plastic else "")
+        )
         made.append((index, name, chosen.spec()))
         logger.info("물성 %s ← 파트 %s (바디 %d)", chosen.name, name, index + 1)
     return Applied(per_body=made, source="cad")
 
 
 def _uniform(
-    bodies: list[Any], material: MaterialSpec, system: units.UnitSystem, *, source: str
+    bodies: list[Any],
+    material: MaterialSpec,
+    system: units.UnitSystem,
+    *,
+    source: str,
+    extra: str = "",
 ) -> Applied:
-    """한 물성을 모든 바디에."""
-    text = material_commands(material, system)
+    """한 물성을 모든 바디에. `extra` 는 덧붙일 명령(소성)."""
+    text = material_commands(material, system) + extra
     made: list[tuple[int, str, MaterialSpec]] = []
     for index, body in enumerate(bodies):
         snippet = body.AddCommandSnippet()
@@ -1199,7 +1281,29 @@ def _static_steps(given: condition_model.Conditions) -> int:
     적용합니다」. CalculiX 덱도 같은 두 단계다(`calculix.deck._bolt_blocks`)."""
     if given.stages:
         return staged_plan(given)[0]
+    timeline = _timeline(given)
+    if timeline is not None:
+        return len(timeline.steps)
     return 2 if any(one.kind == "bolt_pretension" for one in given.loads) else 1
+
+
+def _timeline(given: condition_model.Conditions) -> history.History | None:
+    """하중 단계(CompCore ②) — 케이스 하나의 정적일 때만(사슬은 `cases.problem` 이 막는다)."""
+    if given.stages:
+        return None
+    return history.of(given)
+
+
+def _step_rows(given: condition_model.Conditions) -> list[dict[str, Any]]:
+    """`boundary.json` 의 `steps` — 단계마다 이름 · 차례 · 끝 시각(추출이 그 시각까지의 마지막
+    세트를 읽는다, `dpf.static._cases`). 하중 단계가 없으면 빈 목록."""
+    timeline = _timeline(given)
+    if timeline is None:
+        return []
+    return [
+        {"name": one.name, "step": number, "time": one.end_time}
+        for number, one in enumerate(timeline.steps, start=1)
+    ]
 
 
 def _lead_plan(given: condition_model.Conditions) -> StaticPlan | None:
@@ -1224,6 +1328,8 @@ def _add_static(
     steps: int = 1,
     nodal_forces: bool = False,
     restart: bool = False,
+    timeline: history.History | None = None,
+    incremental: bool = False,
 ) -> Any:
     """정적 해석. 구속과 하중이 여기 걸린다.
 
@@ -1257,6 +1363,9 @@ def _add_static(
     if nodal_forces:
         enums = _global("Ansys").Mechanical.DataModel.Enums
         settings.NodalForces = enums.OutputControlsNodalForcesType.Yes
+    if timeline is not None:
+        _timed_steps(settings, timeline, incremental=incremental)
+        return static
     if substeps:
         enums = _global("Ansys").Mechanical.DataModel.Enums
         for step in range(1, steps + 1):
@@ -1268,6 +1377,29 @@ def _add_static(
             settings.MinimumSubsteps = 1
         logger.info("초기 부단계 %s (CAD) · 단계 %s", substeps, steps)
     return static
+
+
+def _timed_steps(settings: Any, timeline: history.History, *, incremental: bool) -> None:
+    """하중 단계(CompCore ②) — 단계마다 끝 시각, 비선형이면 부단계(처음 · 최소 · 최대). 비운
+    수는 처음 열 · 최소 하나 · 최대는 처음의 열 배와 1000 중 큰 것(v1 의 초기 부단계 규칙).
+    최대를 먼저 넣어야 처음 값이 범위를 넘지 않는다. CalculiX 는 같은 수를 증분 길이로 쓴다
+    (`history.increments`)."""
+    quantity = _global("Quantity")
+    enums = _global("Ansys").Mechanical.DataModel.Enums
+    for number, step in enumerate(timeline.steps, start=1):
+        settings.CurrentStepNumber = number
+        settings.StepEndTime = quantity(f"{step.end_time} [s]")
+        if not incremental:
+            continue
+        first = step.initial or history.DEFAULT_SUBSTEPS
+        settings.AutomaticTimeStepping = enums.AutomaticTimeStepping.On
+        settings.DefineBy = enums.TimeStepDefineByType.Substeps
+        settings.MaximumSubsteps = step.maximum or max(first * 10, 1000)
+        settings.InitialSubsteps = first
+        settings.MinimumSubsteps = step.minimum or 1
+    logger.info(
+        "하중 단계 %s", " · ".join(f"{one.name} {one.end_time:g} s" for one in timeline.steps)
+    )
 
 
 def _add_modal(
@@ -1344,6 +1476,10 @@ def _apply_loads(
     if given.stages:
         _apply_staged(app, given, system, places, static, flipped, steps)
         return
+    timeline = _timeline(given)
+    if timeline is not None:
+        _apply_history(app, given, system, places, static, flipped, timeline)
+        return
     bolted = steps > 1
     for load in given.loads:
         try:
@@ -1376,10 +1512,11 @@ def _make_load(
     places: dict[str, Any],
     flipped: set[str] | None,
     steps: int,
+    scale: history.Table | None = None,
 ) -> Any:
     """하중 하나를 정적 해석에 만든다 — 자리 · 크기 · 방향(단계마다 같은 값). 단계마다 켜고
-    끄기 ·
-    볼트의 Define By 는 부른 쪽이 정한다."""
+    끄기 · 볼트의 Define By 는 부른 쪽이 정한다. `scale` 이 있으면 크기가 시각마다 그 배율이다
+    (하중 단계 — `history`)."""
     maker = _LOAD_MAKERS.get(load.kind)
     if maker is None:  # pragma: no cover - 조건 층이 먼저 막는다
         raise StageFailure("internal", f"못 거는 하중입니다: {load.kind}")
@@ -1393,7 +1530,7 @@ def _make_load(
             )
         made.Location = place
     if load.kind == "rotational_velocity":
-        _spin(made, load, given.frames, system, quantity)
+        _spin(made, load, given.frames, system, quantity, scale)
     else:
         # **방향 성분은 그 좌표계의 것이다** — 전역으로 옮겨 건다(CalculiX 와 같은
         # `conditions.in_global`). 전에는 `cs` 를 안 보고 전역으로 읽었다.
@@ -1403,11 +1540,65 @@ def _make_load(
         if load.kind == "pressure" and load.region in (flipped or set()):
             # 법선이 뒤집힌 쉘 면 — 부호를 크기에 실어 표(주파수별 배율)와 함께 간다.
             moved = replace(moved, magnitude=-(moved.magnitude or 0.0))
-        _load_magnitude(made, moved, system, quantity, steps)
+        _load_magnitude(made, moved, system, quantity, steps, scale)
     if load.kind == "bolt_pretension" and load.cs not in condition_model.GLOBAL_FRAMES:
         # **바디에 건 예압은 좌표계가 단면이다** — Z 축이 볼트 축, 원점이 단면 자리.
         made.CoordinateSystem = _frame_named(app, load.cs)
     return made
+
+
+def _apply_history(
+    app: Any,
+    given: condition_model.Conditions,
+    system: units.UnitSystem,
+    places: dict[str, Any],
+    static: Any,
+    flipped: set[str] | None,
+    timeline: history.History,
+) -> None:
+    """하중 단계(CompCore ② — `history`) — 시간별 배율 · 적용 단계가 있는 하중은 크기를 Tabular
+    Data(시각 → 크기 x 배율)로 건다. 없으면 값 하나(첫 단계에서 오르고 유지 — Mechanical 의
+    기본). 볼트는 첫 단계에서 조이고(힘이면 Load · 길이면 Adjustment) 뒤로 잠근다(Lock). 중력은
+    모든 단계다(단계마다 끄지 못한다 — 적용 단계는 CompCore 가 막는다)."""
+    quantity = _global("Quantity")
+    by = _global("Ansys").Mechanical.DataModel.Enums.BoltLoadDefineBy
+    total = len(timeline.steps)
+    for load in given.loads:
+        timed = load.time_table is not None or load.active_steps is not None
+        try:
+            made = _make_load(
+                app,
+                static,
+                load,
+                given,
+                system,
+                quantity,
+                places,
+                flipped,
+                total,
+                scale=timeline.scale(load) if timed else None,
+            )
+            if load.kind == "bolt_pretension":
+                length = (
+                    condition_model.preload_unit(load) in condition_model.PRELOAD_LENGTH_UNITS
+                )
+                made.SetDefineBy(1, by.Adjustment if length else by.Load)
+                for number in range(2, total + 1):
+                    made.SetDefineBy(number, by.Lock)
+            made.Name = load.name
+            logger.info(
+                "하중 %s(%s) ← %s · %s",
+                load.name,
+                load.kind,
+                load.region or "전체",
+                "시간별 배율" if timed else "첫 단계에서 오르고 유지",
+            )
+        except StageFailure:
+            raise
+        except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+            raise _translated(
+                failure, "internal", f"하중 「{load.name}」({load.kind})을 걸지 못했습니다"
+            ) from failure
 
 
 def staged_plan(
@@ -1495,6 +1686,7 @@ def _load_magnitude(
     system: units.UnitSystem,
     quantity: Any,
     steps: int = 1,
+    scale: history.Table | None = None,
 ) -> None:
     """크기와 방향 — **단위를 값에서 떼지 않는다**(CAD 가 `unit` 을 함께 보낸다)."""
     unit = load.unit or system.length_label
@@ -1516,20 +1708,28 @@ def _load_magnitude(
         for axis, part in zip(
             ("XComponent", "YComponent", "ZComponent"), load.direction, strict=True
         ):
-            _profiled(getattr(made, axis), size * part / length, load, unit, quantity)
+            _profiled(getattr(made, axis), size * part / length, load, unit, quantity, scale)
         _phase(made, load, quantity, ("XPhaseAngle", "YPhaseAngle", "ZPhaseAngle"))
         return
     if load.magnitude is not None and hasattr(made, "Magnitude"):
-        _profiled(made.Magnitude, load.magnitude, load, unit, quantity)
+        _profiled(made.Magnitude, load.magnitude, load, unit, quantity, scale)
         _phase(made, load, quantity, ("PhaseAngle",))
 
 
 def _profiled(
-    field: Any, size: float, load: condition_model.Load, unit: str, quantity: Any
+    field: Any,
+    size: float,
+    load: condition_model.Load,
+    unit: str,
+    quantity: Any,
+    scale: history.Table | None = None,
 ) -> None:
     """크기 한 칸 — **주파수별 배율**(조화 응답의 가진 프로파일)이 있으면 Tabular Data(주파수 →
     크기 x 배율)로, 없으면 값 하나. ⚠️ Ansys 가 없는 곳에서 짠 길이다(2026-11-17) — 표를 못
     걸면 조용히 상수로 풀지 않고 멈춘다."""
+    if scale is not None:
+        _timed(field, size, unit, quantity, scale, load)
+        return
     table = load.frequency_table
     if not table:
         field.Output.DiscreteValues = [quantity(f"{size} [{unit}]")]
@@ -1542,6 +1742,26 @@ def _profiled(
             "internal",
             f"하중 「{load.name}」 의 주파수별 배율을 Ansys 에 걸지 못했습니다 — CalculiX 로 "
             f"돌리세요({failure})",
+        ) from failure
+
+
+def _timed(
+    field: Any,
+    size: float,
+    unit: str,
+    quantity: Any,
+    scale: history.Table,
+    load: condition_model.Load,
+) -> None:
+    """크기 한 칸을 **시각 → 크기 x 배율** Tabular Data 로(하중 단계 — `history`). 못 걸면
+    조용히 상수로 풀지 않고 멈춘다."""
+    try:
+        field.Inputs[0].DiscreteValues = [quantity(f"{time} [s]") for time, _ in scale]
+        field.Output.DiscreteValues = [quantity(f"{size * k} [{unit}]") for _, k in scale]
+    except Exception as failure:  # pragma: no cover - Ansys 없이는 안 돈다
+        raise StageFailure(
+            "internal",
+            f"하중 「{load.name}」 의 시간별 배율을 Ansys 에 걸지 못했습니다({failure})",
         ) from failure
 
 
@@ -1609,8 +1829,10 @@ def _spin(
     frames: list[condition_model.Frame],
     system: units.UnitSystem,
     quantity: Any,
+    scale: history.Table | None = None,
 ) -> None:
     """회전 속도 — **성분과 회전 중심으로** 건다(`conditions.spin_axis`, CalculiX 와 같은 축).
+    `scale` 이 있으면 ω 에 시각마다 곱한다(하중 단계 — Mechanical 이 원심력을 ω² 로 셈한다).
 
     크기만 주면 축이 없어 Mechanical 이 `cglo` 만 쓰고 원심력을 빼먹는다(실측 2026-10-26 —
     변위가 0 으로 나왔다). 성분은 전역으로 풀어 주고, 중심은 좌표계 원점이다.
@@ -1620,6 +1842,9 @@ def _spin(
         raise StageFailure("internal", f"회전 속도 「{load.name}」: {spin}")
     made.DefineBy = _global("Ansys").Mechanical.DataModel.Enums.LoadDefineBy.Components
     for name, part in zip(("XComponent", "YComponent", "ZComponent"), spin.axis, strict=True):
+        if scale is not None:
+            _timed(getattr(made, name), spin.omega * part, "rad s^-1", quantity, scale, load)
+            continue
         getattr(made, name).Output.DiscreteValues = [
             quantity(f"{spin.omega * part} [rad s^-1]")
         ]
@@ -1886,6 +2111,7 @@ def _write_boundary(
     unit_system: str | None = None,
     shaking: random_model.RandomPlan | None = None,
     cases: list[dict[str, Any]] | None = None,
+    steps: list[dict[str, Any]] | None = None,
 ) -> None:
     """뒤 단계(결과 추출)가 읽을 한 줄 — **무엇으로 돌았나.**
 
@@ -1925,6 +2151,9 @@ def _write_boundary(
         # 정적 다단(판 2)의 케이스마다 끝 단계 · 볼트를 조인 단계 — 추출이 케이스마다 고른다
         # (`dpf.static._cases`, CalculiX 와 같은 열쇠).
         payload["cases"] = cases
+    if steps:
+        # 하중 단계(CompCore ②)마다 끝 단계 · 끝 시각 — 추출이 단계 끝마다 고른다.
+        payload["steps"] = steps
     if plan is not None:
         payload["damping_ratio"] = plan.damping_ratio
         payload["frequency_range_hz"] = [plan.low, plan.high]

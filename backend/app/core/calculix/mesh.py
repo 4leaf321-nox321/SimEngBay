@@ -1491,11 +1491,14 @@ def element_faces(mesh: Mesh) -> dict[frozenset[int], tuple[int, str]]:
 
 
 def tributary_areas(mesh: Mesh, faces: list[int]) -> dict[int, float]:
-    """그 면들의 절점마다 **분담 면적** — 힘을 나눌 때 쓴다.
+    """그 면들의 절점마다 **분담 면적** — 힘을 나눌 때 쓴다. **고른 견인력의 일관 하중**이다:
+    1차 삼각형은 꼭짓점마다 1/3, 2차(여섯 절점)는 꼭짓점 0 · 중간 절점마다 1/3.
 
-    고르게 나누면 모서리 절점이 과하게 받는다(2차 요소에서는 더 심하다). 삼각형 면적을 그
-    절점들에 나눠 더하면, 적어도 **합력과 분포가 함께** 맞는다. 하중면 바로 아래의 응력은
-    근사이므로(2차 요소의 일관 하중은 모서리에 0 을 준다) 그 자리를 보려면 Ansys 로 돌린다.
+    전에는 2차 면도 여섯 절점에 1/6 씩 나눴다. 합력은 맞지만 꼭짓점이 과하게 당겨져 하중면 바로
+    아래에 응력이 솟는다 — 탄성이면 그 자리의 응력만 틀리지만, **소성이면 그 자리가 크게
+    항복한다**(2026-11-28, CompCore 「조건_봉_항복_이선형」: 28000 N 끝 힘에 국부 ε_p 0.215 ·
+    δz 1.855 mm — 손셈 0.0149 · 1.62195 mm, 다선형은 표 끝 뒤에서 증분이 최소보다 작아져
+    멈췄다). Ansys 는 면 하중을 요소면 하중으로 건다(일관 하중과 같다).
     """
     shares: dict[int, float] = {}
     for face in faces:
@@ -1511,9 +1514,12 @@ def tributary_areas(mesh: Mesh, faces: list[int]) -> dict[int, float]:
             area = math.sqrt(sum(one * one for one in cross)) / 2
             if area <= 0:
                 continue
-            # **그 요소면의 절점 전부에 나눈다**(2차면 여섯) — 모서리만 주면 분포가 거꾸로다.
-            for node in ring:
-                shares[node] = shares.get(node, 0.0) + area / len(ring)
+            # 2차면은 중간 절점(넷째 ~ 여섯째)에만 — 꼭짓점에 주면 분포가 거꾸로다.
+            carriers = ring[3:6] if len(ring) >= 6 else ring[:3]
+            for node in carriers:
+                shares[node] = shares.get(node, 0.0) + area / 3
+            for node in ring[:3]:
+                shares.setdefault(node, 0.0)
     return shares
 
 

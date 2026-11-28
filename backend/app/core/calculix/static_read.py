@@ -93,6 +93,12 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     staged = _cases(workdir, blocks)
     if staged:
         result["cases"] = staged
+    stepped = _cases(workdir, blocks, key="steps")
+    if stepped:
+        result["steps"] = stepped
+    plastic = _peak_plastic(blocks)
+    if plastic is not None:
+        result["max_equivalent_plastic_strain"] = plastic
     if mesh_counts:
         result["mesh"] = mesh_counts
     if max_displacement <= 0:
@@ -120,15 +126,18 @@ def extract(spec: StaticSpec, workdir: Path, **_ignored: object) -> StageResult:
     )
 
 
-def _cases(workdir: Path, blocks: list[frd_reader.Block]) -> list[dict[str, Any]]:
+def _cases(
+    workdir: Path, blocks: list[frd_reader.Block], key: str = "cases"
+) -> list[dict[str, Any]]:
     """**정적 다단(판 2)의 케이스마다 끝 상태** — 최대 변위 · 응력, 반력, 볼트 힘. 케이스의 끝
     단계(`boundary.json` 의 `cases`)의 마지막 증분을 읽는다. 끝 케이스의 값은 맨 위의 값과
-    같다."""
+    같다. `key` 가 `steps` 면 **하중 단계(CompCore ②)의 단계 끝마다**다 — 끝 시각(`time`)까지의
+    마지막 것을 읽고 등가 소성 변형률도 싣는다."""
     try:
         written = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    rows = written.get("cases") or []
+    rows = written.get(key) or []
     out: list[dict[str, Any]] = []
     for row in rows:
         step = int(row.get("step") or 0)
@@ -141,6 +150,7 @@ def _cases(workdir: Path, blocks: list[frd_reader.Block]) -> list[dict[str, Any]
         )
         case: dict[str, Any] = {
             "name": str(row.get("name") or ""),
+            **({"end_time": row["time"]} if "time" in row else {}),
             "max_displacement": significant(
                 max(frd_reader.magnitudes(moved).values(), default=0.0)
             )
@@ -152,16 +162,41 @@ def _cases(workdir: Path, blocks: list[frd_reader.Block]) -> list[dict[str, Any]
             if stressed is not None
             else None,
         }
-        forces = _reactions(
-            workdir, until=float(step), offsets=row.get("reaction_offsets") or {}
-        )
+        until = float(row.get("time") or step)
+        forces = _reactions(workdir, until=until, offsets=row.get("reaction_offsets") or {})
         if forces:
             case["reactions"] = forces
-        bolts = _bolts(workdir, until=float(step))
+        bolts = _bolts(workdir, until=until)
         if bolts:
             case["bolts"] = bolts
+        plastic = _peak_plastic([one for one in blocks if one.stage == step])
+        if plastic is not None:
+            case["max_equivalent_plastic_strain"] = plastic
+        if moved is not None:
+            case["displacement_peak"] = _peak_components(moved)
         out.append(case)
     return out
+
+
+def _peak_plastic(blocks: list[frd_reader.Block]) -> float | None:
+    """**등가 소성 변형률의 최대**(ccx PEEQ — `.frd` 의 `PE` 블록, 마지막 증분). 소성 재료가
+    없으면 그 블록이 없어 `None`."""
+    found = next((one for one in reversed(blocks) if one.kind == "PE"), None)
+    if found is None:
+        return None
+    values = [row[0] for row in found.values.values() if row]
+    return significant(max(values, default=0.0))
+
+
+def _peak_components(block: frd_reader.Block) -> list[float]:
+    """변위 성분마다 절댓값이 가장 큰 값(부호를 지킨다) — 단계 끝의 처짐 · 잔류 변위를
+    견준다."""
+    out = [0.0, 0.0, 0.0]
+    for row in block.values.values():
+        for axis in range(min(3, len(row))):
+            if abs(row[axis]) > abs(out[axis]):
+                out[axis] = row[axis]
+    return [significant(one) for one in out]
 
 
 def _probe(

@@ -424,6 +424,18 @@ def solve(
     )
 
 
+def _moment_hint(workdir: Path) -> str:
+    """큰 변형의 면 모멘트를 강체 면으로 걸었으면 — 면이 약 40° 넘게 돌면 ccx 가 풀지 못한다
+    (`deck.MOMENT_RIGID_NOTE`). 그 덱이 아니면 빈 글."""
+    from app.core.calculix import deck as deck_writer
+
+    try:
+        text = (workdir / "model.inp").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return f". {deck_writer.MOMENT_RIGID_NOTE}" if "NSET=MOMENT" in text else ""
+
+
 def _judged(workdir: Path, done: Any) -> None:
     """ccx 한 번의 끝 — 로그를 남기고 **실패면 까닭을 달아 올린다**(종료 코드만 믿지
     않는다)."""
@@ -437,7 +449,9 @@ def _judged(workdir: Path, done: Any) -> None:
             (one.strip() for one in log.splitlines() if ERROR_MARK.search(one)),
             found.group(0),
         )
-        raise StageFailure("solver_failed", f"CalculiX 가 실패했습니다: {line[:200]}")
+        raise StageFailure(
+            "solver_failed", f"CalculiX 가 실패했습니다: {line[:200]}" + _moment_hint(workdir)
+        )
     if done.returncode != 0:
         raise StageFailure(
             "solver_failed",

@@ -241,6 +241,28 @@ CompCore 의 「내 작업 · 등록」 과 같은 꼴). 보는 것은 건 사�
   부단계는 사슬에 하나(다르면 막는다). 결과는 케이스마다 끝 상태(`result.json` 의 `cases` — 끝 단계 = 총 시각, 두 솔버가
   `boundary.json` 의 `cases` 로 고른다). 케이스가 하나면 지금의 길 그대로다(v1 덱이 안 바뀐다). 스터디는 한 케이스씩
   견준다(`_study_points(case=…)`, 비우면 첫 사슬).
+- **하중 단계 · 하중 이력은 총 시각 위의 배율표 하나로 푼다**(`app/core/history.py`, CompCore ②, 2026-11-28) — 케이스
+  하나의 정적에서만(`analysis.load_steps`, 하중의 `time_table` · `active_steps` · `bolt_steps`). 배율이 없는 하중은 첫 단계에서
+  오르고 유지, 적용 단계는 단계 끝마다 1 · 0 인 표, 시간별 배율은 그대로(회전 속도는 ω 에 — ccx 는 제곱한 표), 볼트는 첫
+  단계에서 조이고 뒤로 잠근다, 중력은 모든 단계. CalculiX 는 `*AMPLITUDE, TIME=TOTAL TIME` 을 하중마다 달고 **단계마다
+  `OP=NEW` 로 거둔 뒤 다시 쓴다**(이어진 하중이 단계 사이에서 넘어가는 방식에 기대지 않는다), Ansys 는 크기의 Tabular
+  Data(시각 → 값)와 단계마다 끝 시각 · 부단계(`_timed_steps`). 결과는 단계 끝마다(`result.json` 의 `steps`, 반력 보정도
+  배율을 곱해 단계마다). 앞 케이스가 있는 사슬에서는 막는다(`cases.problem`) — ② 칸이 없으면 덱이 한 글자도 안 바뀐다.
+- **소성은 정적에서만, 증분으로 푼다**(`materials.Plastic`, 2026-11-28) — 이선형(`bilinear_isotropic`: 항복 · 전체 변형률
+  기준 접선 계수)과 다선형(`multilinear_isotropic`: [진소성변형률, 진응력] 표)을 `stress_unit` 으로 읽고, 틀린 표 · 모르는
+  모델은 막는다. CalculiX 는 `*PLASTIC`(**응력이 먼저**, 이선형은 둘째 행을 ε_p 10 에), Ansys 는 바디 명령 조각에
+  `TB,BISO` · `TB,PLAS,…,MISO` — Mechanical 은 그 `TB` 를 모르므로 부단계를 우리가 건다. 기하 비선형은 큰 변형이 정한다
+  (소성만으로 NLGEOM 을 켜지 않는다 — 정적 다단의 단계 머리도 같다, `deck._static_head`). 표 끝 뒤는 **두 솔버 다
+  평평**(실측). 소성 재료의 「정적 → 정적」 사슬은 받고 ε_p 가 이어진다(두 솔버 다 사슬이 해석 하나다). 모드 · 주파수 해석은 탄성으로 풀고 알린다
+  (`materials.elastic_only`), 소성 정적 → 모달 · 랜덤 사슬은 막는다. 출력에 등가 소성 변형률(ccx PEEQ · Ansys EPPL).
+  표가 MatNexus 카드에서 왔으면(`plastic.card`) **해석은 늘 물성의 E** 로 풀고, 카드 E 가 5 % 넘게 다르면 요약
+  `material_warning` 에 사실만 적는다(막지 않는다 — 사용자 결정 2026-11-28, 문구는 CompCore 와 정함).
+- **CalculiX 의 큰 변형 면 모멘트는 그 면을 강체로 묶는다**(`calculix.deck._moment_bodies`, 사용자 결정 2026-11-28) —
+  고정 방향 힘 짝 · `*DISTRIBUTING` 은 면이 돌면 M·cos θ 로 조용히 준다. 강체 면은 약 42° 까지 엘라스티카와 0.15 %
+  안이고 그 뒤로는 반드시 멈춘다(ccx 2.21 의 강체 구속식) — 실패 문구가 Ansys 를 고르라고 말한다. 큰 변형이 아니면
+  지금의 힘 짝 그대로다. 작업 오류 문구는 CompCore 화면에도 실리므로 그쪽 규칙(줄표 없음 · 칸 이름표 ‘’)을 따른다.
+- **CalculiX 의 면 힘은 일관 하중으로 나눈다**(`mesh.tributary_areas`, 2026-11-28) — 2차 삼각형은 꼭짓점 0 · 중간 절점
+  1/3. 여섯 절점에 고르게 나누면 꼭짓점이 과하게 당겨져 하중면 바로 아래가 솟고, 소성이면 그 자리가 크게 항복한다.
 - **모르는 조건 판은 읽지 않고 막는다**(`app/core/contract.py`, 2026-11-25) — CompCore 의 v2(`cases[]`)가 오면 구속 0 ·
   하중 0 · modal 로 조용히 읽혔다. `schema_version` · `version` 이 1 이 아니거나 `cases` 가 있으면 폴더의 설계점 · 작업
   만들기(SIMULATIONS-0043) · 두 솔버의 모델링 · 조건 읽기가 막는다. 「CAD 조건 사용」 을 꺼도 막는다 — 같은 블록의 물성 ·

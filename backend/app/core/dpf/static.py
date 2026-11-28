@@ -81,6 +81,8 @@ def extract(
         forces = _reactions(model, mesh, topology, workdir)
         bolts = _bolts(model, mesh, topology, displacement_unit)
         staged = _cases(model, mesh, topology, workdir, displacement_unit)
+        stepped = _cases(model, mesh, topology, workdir, displacement_unit, key="steps")
+        plastic = _plastic(model)
     except StageFailure:
         raise
     except Exception as failure:
@@ -101,6 +103,8 @@ def extract(
         **({"reactions": forces} if forces else {}),
         **({"bolts": bolts} if bolts else {}),
         **({"cases": staged} if staged else {}),
+        **({"steps": stepped} if stepped else {}),
+        **({"max_equivalent_plastic_strain": plastic} if plastic is not None else {}),
         "max_von_mises": stress,
         "material": boundary.used_material(workdir, spec),
     }
@@ -354,9 +358,20 @@ def _bolts(
             else (BOLT_FORCE_SIGN * early[0] if early else None)
         )
         final = final_forces.get(node)
+        # 힘으로 조이는 단계(Load)에서는 예압 절점이 묶이지 않아 반력이 없다 — 그 단계 끝의
+        # 볼트 힘은 준 예압 그대로다(하중 단계의 첫 단계, CompCore ②).
+        force = (
+            BOLT_FORCE_SIGN * final[0]
+            if final
+            else tightened
+            if force_unit is not None
+            else None
+        )
         out[load.name] = {
             "tightened_n": significant(tightened) if tightened is not None else None,
-            "force_n": significant(BOLT_FORCE_SIGN * final[0]) if final else None,
+            "force_n": significant(force) if force is not None else None,
+            # 잰 힘이 아니라 준 예압이면 표시한다(화면이 「준 예압」 으로 보인다).
+            **({"force_given": True} if not final and force is not None else {}),
             "adjustment_mm": significant(moved[node][0] * to_mm) if node in moved else None,
         }
     return out
@@ -425,9 +440,10 @@ def _von_mises(model: Any, time_set: int | None = None) -> tuple[float | None, s
     return None, ""
 
 
-def _set_at(model: Any, step: int) -> int:
-    """단계 `step` 의 끝 세트 — 단계의 끝 시각은 단계 번호다(Mechanical 의 기본). 그 시각까지의
-    마지막 세트(부단계마다 세트가 있을 수 있다)."""
+def _set_at(model: Any, step: float) -> int:
+    """단계 `step` 의 끝 세트 — 단계의 끝 시각은 단계 번호다(Mechanical 의 기본 — 하중
+    단계(CompCore ②)면 부른 쪽이 끝 시각을 준다). 그 시각까지의 마지막 세트(부단계마다 세트가
+    있을 수 있다)."""
     times = list(model.metadata.time_freq_support.time_frequencies.data)
     chosen = 0
     for index, time in enumerate(times):
@@ -437,28 +453,40 @@ def _set_at(model: Any, step: int) -> int:
 
 
 def _cases(
-    model: Any, mesh: Any, topology: dict[str, Any], workdir: Path, displacement_unit: str
+    model: Any,
+    mesh: Any,
+    topology: dict[str, Any],
+    workdir: Path,
+    displacement_unit: str,
+    key: str = "cases",
 ) -> list[dict[str, Any]]:
     """**정적 다단(판 2)의 케이스마다 끝 상태** — CalculiX 쪽과 같은 열쇠
     (`calculix.static_read._cases`). 케이스의 끝 단계 · 볼트를 조인 단계는 모델링이 남겼다
-    (`boundary.json` 의 `cases`)."""
+    (`boundary.json` 의 `cases`). `key` 가 `steps` 면 하중 단계(CompCore ②)의 단계 끝마다다 —
+    끝 시각(`time`)까지의 마지막 세트, 볼트는 첫 단계에서 조인다."""
     try:
         written = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    rows = written.get("cases") or []
+    rows = written.get(key) or []
     out: list[dict[str, Any]] = []
     for row in rows:
-        final = _set_at(model, int(row.get("step") or 0))
-        tightened = row.get("tightened")
+        final = _set_at(model, float(row.get("time") or row.get("step") or 0))
+        tightened = row.get("tightened") or (1 if key == "steps" else None)
         moved = probes.at_set(model.results.displacement, final)
         peak, _unit = _peak(moved, _body_nodes(mesh))
         stress, _stress_unit = _von_mises(model, final)
         case: dict[str, Any] = {
             "name": str(row.get("name") or ""),
+            **({"end_time": row["time"]} if "time" in row else {}),
             "max_displacement": peak,
             "max_von_mises": stress,
         }
+        # 소성 변형률 · 성분 최대는 케이스마다 · 단계마다 둘 다(CalculiX 쪽과 같다).
+        plastic = _plastic(model, final)
+        if plastic is not None:
+            case["max_equivalent_plastic_strain"] = plastic
+        case["displacement_peak"] = _peak_components(moved, _body_nodes(mesh))
         forces = _reactions(model, mesh, topology, workdir, final)
         if forces:
             case["reactions"] = forces
@@ -474,6 +502,45 @@ def _cases(
             case["bolts"] = bolts
         out.append(case)
     return out
+
+
+def _plastic(model: Any, time_set: int | None = None) -> float | None:
+    """**등가 소성 변형률의 최대**(MAPDL EPPL — CompCore ② 의 `equivalent_plastic_strain`).
+    소성 재료가 없으면(결과에 그 값이 없거나 모두 0) `None` — CalculiX 쪽
+    (`static_read._peak_plastic`)과 같은 열쇠."""
+    from ansys.dpf import core as dpf
+
+    try:
+        found = dpf.operators.result.plastic_strain_eqv(
+            data_sources=model.metadata.data_sources,
+            time_scoping=[time_set] if time_set is not None else None,
+        ).eval()
+        values = [float(one) for field in found for one in field.data.ravel()]
+    except Exception:  # pragma: no cover - 결과 파일에 따라 없을 수 있다
+        logger.info("등가 소성 변형률이 결과에 없습니다", exc_info=True)
+        return None
+    if not values or max(values) <= 0:
+        return None
+    return significant(max(values))
+
+
+def _peak_components(field: Any, nodes: Any = None) -> list[float]:
+    """변위 성분마다 절댓값이 가장 큰 값(부호를 지킨다) — CalculiX 쪽과 같은 열쇠."""
+    out = [0.0, 0.0, 0.0]
+    try:
+        data = field.data
+        ids = list(field.scoping.ids)
+    except Exception:  # pragma: no cover - 결과 파일에 따라
+        return out
+    # 몸의 절점은 numpy 배열이다(`_body_nodes`) — 참거짓으로 묻지 않는다.
+    keep = {int(one) for one in nodes} if nodes is not None else None
+    for node, row in zip(ids, data, strict=False):
+        if keep is not None and node not in keep:
+            continue
+        for axis in range(min(3, len(row))):
+            if abs(float(row[axis])) > abs(out[axis]):
+                out[axis] = float(row[axis])
+    return [significant(one) for one in out]
 
 
 def _write(workdir: Path, result: dict[str, Any]) -> Path:

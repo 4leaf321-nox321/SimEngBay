@@ -177,7 +177,10 @@ export function BoltTable({ bolts }: { bolts: Record<string, BoltRow> }) {
             <TableRow key={name}>
               <TableCell className="font-medium">{name}</TableCell>
               <TableCell className="text-right font-mono">{force(row.tightened_n)}</TableCell>
-              <TableCell className="text-right font-mono">{force(row.force_n)}</TableCell>
+              <TableCell className="text-right font-mono">
+                {force(row.force_n)}
+                {row.force_given && <span className="text-muted-foreground ml-1 font-sans text-xs">(준 예압)</span>}
+              </TableCell>
               <TableCell className="text-right font-mono">
                 {row.adjustment_mm == null ? '—' : `${row.adjustment_mm.toPrecision(4)} mm`}
               </TableCell>

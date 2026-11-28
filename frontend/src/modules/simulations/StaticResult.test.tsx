@@ -173,3 +173,44 @@ describe('케이스마다 끝 상태(해석 케이스의 사슬)', () => {
   })
 })
 
+
+describe('하중 단계 끝마다(CompCore ②)', () => {
+  it('단계마다 끝 시각 · 잔류 변형 · 등가 소성 변형률을 보이고, 준 예압은 그렇다고 적는다', () => {
+    // CompCore 「조건_봉_당겼다풀기」 를 CalculiX 로 푼 값(2026-11-28) + 볼트 줄은 「단계둘」 의 Ansys 값.
+    const bar: StaticResultData = {
+      recipe: 'static',
+      units: { displacement: 'mm', stress: 'MPa', force: 'N' },
+      max_displacement: 1.48723,
+      max_von_mises: 0.000265,
+      max_equivalent_plastic_strain: 0.0148535,
+      steps: [
+        {
+          name: '당기기',
+          end_time: 1,
+          max_displacement: 1.62383,
+          max_von_mises: 279.997,
+          max_equivalent_plastic_strain: 0.0148535,
+          reactions: { 바닥: [0, 0, -28000] },
+          bolts: { '볼트 예압': { tightened_n: 1000, force_n: 1000, adjustment_mm: 0.00247, force_given: true } },
+        },
+        {
+          name: '풀기',
+          end_time: 2,
+          max_displacement: 1.48723,
+          max_von_mises: 0.000265,
+          max_equivalent_plastic_strain: 0.0148535,
+          reactions: { 바닥: [0, 0, 0] },
+          bolts: { '볼트 예압': { tightened_n: 1000, force_n: 1067.83, adjustment_mm: 0.00247 } },
+        },
+      ],
+    }
+    render(<StaticResult simulationId="s1" result={bar} artifacts={[]} />)
+    const table = screen.getByRole('table', { name: '하중 단계마다 끝 상태' })
+    const rows = [...table.querySelectorAll('tbody tr')]
+    expect(rows.map((row) => row.querySelector('td')?.textContent)).toEqual(['당기기(1 s)', '풀기(2 s)'])
+    expect(table.textContent).toContain('등가 소성 변형률')
+    expect(rows[0]?.textContent).toContain('(준 예압)')
+    expect(rows[1]?.textContent).not.toContain('(준 예압)')
+    expect(screen.getByText('최대 등가 소성 변형률')).toBeTruthy()
+  })
+})

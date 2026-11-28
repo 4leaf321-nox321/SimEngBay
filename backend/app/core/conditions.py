@@ -44,6 +44,7 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass, field, replace
+from itertools import pairwise
 from typing import Any, Literal
 
 from app.core import cases, contract
@@ -223,6 +224,15 @@ class Load:
     막는다)."""
     phase: float | None = None
     """조화 응답의 위상각(도). `None` · 0 이면 실수부만."""
+    time_table: tuple[tuple[float, float], ...] | None = None
+    """**정적의 시간별 배율**(CompCore ②, 2026-11-27) — `((시각, 배율), …)` 총 시각 기준, 양
+    끝은 0 과 마지막 단계의 끝 시각, 사이는 선형. 회전 속도는 ω 에 곱한다. `None` 이면 아래
+    규칙(`history.scale`)."""
+    active_steps: tuple[int, ...] | None = None
+    """**적용 단계**(1 부터) — 켜지는 단계 안에서 0 → 크기, 꺼지는 단계 안에서 0 으로 선형.
+    `None` 이면 모든 단계(첫 단계에서 오르고 유지)."""
+    bolt_steps: tuple[str, ...] | None = None
+    """볼트의 단계마다 동작 — `load`(첫 단계) 뒤 `lock`. `None` 이면 같은 뜻이다."""
 
 
 @dataclass(frozen=True)
@@ -335,6 +345,21 @@ class Analysis:
     #: 정적의 **초기 부단계 수** — 비선형(큰 변형 · 접촉)을 몇 걸음으로 나눠 시작하나. 비면
     #: 받는 쪽이 정한다.
     substeps: int | None = None
+    #: 정적의 **하중 단계**(CompCore ②) — 비면 한 단계(v1 그대로).
+    load_steps: tuple[LoadStep, ...] = ()
+
+
+@dataclass(frozen=True)
+class LoadStep:
+    """하중 단계 하나(CompCore ② `analysis.load_steps[i]`) — 끝 시각(총 시각)과 부단계 수.
+
+    부단계는 최소 ≤ 처음 ≤ 최대이고, 비면 받는 쪽이 정한다(`history.increments`)."""
+
+    name: str
+    end_time: float
+    initial: int | None = None
+    minimum: int | None = None
+    maximum: int | None = None
 
 
 @dataclass(frozen=True)
@@ -515,6 +540,9 @@ def read(payload: Any, *, recipe: str = "modal") -> Conditions:
     regions = set(_dict(payload).get("regions") or {})
     # **해석 설정을 먼저 읽는다** — 선응력인지에 따라 하중을 걸지 넘길지가 갈린다.
     made.analysis = _analysis(_dict(block.get("analysis")))
+    broken_steps = steps_problem(_dict(block.get("analysis")))
+    if broken_steps:
+        made.refused.append(Note("해석 설정 (하중 단계)", broken_steps))
     if recipe == "harmonic" and made.analysis.prestressed:
         # 모달로 적은 점 파일을 조화로 돌려도 같다 — 선응력을 빼고 풀면 CAD 가 적은 것과 다른
         # 해석이다.
@@ -1264,6 +1292,12 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
     if broken:
         made.refused.append(Note(f"하중 「{name}」 의 주파수별 배율", broken))
         return
+    timed, active, bolt_steps, why = (
+        _history(row, kind, made.analysis) if recipe == "static" else (None, None, None, "")
+    )
+    if why:
+        made.refused.append(Note(f"하중 「{name}」({kind})", why))
+        return
     made.loads.append(
         Load(
             name=name,
@@ -1277,8 +1311,105 @@ def _load(row: dict[str, Any], recipe: str, made: Conditions) -> None:
             preload=_number(row.get("preload")) if kind == "bolt_pretension" else None,
             frequency_table=table,
             phase=_number(row.get("phase")) if recipe == "harmonic" else None,
+            time_table=timed,
+            active_steps=active,
+            bolt_steps=bolt_steps,
         )
     )
+
+
+#: 시간별 배율을 받는 하중(CompCore ② — 중력 · 볼트는 못 쓴다).
+TIMED_LOADS = (
+    "force",
+    "pressure",
+    "moment",
+    "bearing",
+    "acceleration",
+    "rotational_velocity",
+)
+BOLT_STEP_ACTIONS = ("load", "lock")
+
+
+def _history(
+    row: dict[str, Any], kind: str, analysis: Analysis
+) -> tuple[
+    tuple[tuple[float, float], ...] | None, tuple[int, ...] | None, tuple[str, ...] | None, str
+]:
+    """정적 하중의 하중 이력 칸(시간별 배율 · 적용 단계 · 볼트 단계) — 틀리면 까닭.
+
+    단계는 해석 설정의 `load_steps`(비면 끝 시각 1 의 한 단계)다. 규칙은 CompCore 가 저장할 때
+    막는 것과 같다 — 시간별 배율은 양 끝(0 · 마지막 끝 시각)을 적고 시각이 늘며, 적용 단계와
+    함께 쓰지 않는다. 적용 단계는 늘어나는 단계 번호, 볼트 단계는 단계 수만큼 `load` 뒤 `lock`.
+    """
+    steps = analysis.load_steps or (LoadStep(name="", end_time=1.0),)
+    end = steps[-1].end_time
+    raw_table, raw_active, raw_bolt = (
+        row.get(key) for key in ("time_table", "active_steps", "bolt_steps")
+    )
+    table: tuple[tuple[float, float], ...] | None = None
+    if raw_table is not None:
+        if kind not in TIMED_LOADS:
+            return None, None, None, "시간별 배율(time_table)은 이 하중에 쓸 수 없습니다"
+        if raw_active is not None:
+            return None, None, None, "시간별 배율과 적용 단계는 함께 쓰지 않습니다"
+        if not isinstance(raw_table, list) or len(raw_table) < 2:
+            return None, None, None, "시간별 배율은 [시각, 배율] 두 줄 이상입니다"
+        rows: list[tuple[float, float]] = []
+        for one in raw_table:
+            pair = (
+                (_number(one[0]), _number(one[1]))
+                if isinstance(one, list | tuple) and len(one) == 2
+                else (None, None)
+            )
+            if pair[0] is None or pair[1] is None:
+                return None, None, None, "시간별 배율의 줄이 [시각, 배율]이 아닙니다"
+            rows.append((pair[0], pair[1]))
+        times = [one[0] for one in rows]
+        if any(after <= before for before, after in pairwise(times)):
+            return None, None, None, "시간별 배율의 시각은 줄마다 늘어야 합니다"
+        if times[0] != 0 or abs(times[-1] - end) > 1e-9 * max(1.0, abs(end)):
+            return (
+                None,
+                None,
+                None,
+                (
+                    f"시간별 배율은 시각 0 과 마지막 단계의 끝 시각({end:g})을 양 끝으로"
+                    " 적습니다"
+                ),
+            )
+        table = tuple(rows)
+    active: tuple[int, ...] | None = None
+    if raw_active is not None:
+        if kind in ("standard_earth_gravity", "bolt_pretension"):
+            return None, None, None, "적용 단계(active_steps)는 중력 · 볼트에 쓸 수 없습니다"
+        numbers = raw_active if isinstance(raw_active, list) else None
+        if (
+            not numbers
+            or any(_count(one) is None for one in numbers)
+            or numbers != sorted(set(numbers))
+            or numbers[-1] > len(steps)
+        ):
+            return (
+                None,
+                None,
+                None,
+                (f"적용 단계는 1 ~ {len(steps)} 의 단계 번호를 늘어나는 차례로 적습니다"),
+            )
+        active = tuple(int(one) for one in numbers)
+    bolt: tuple[str, ...] | None = None
+    if raw_bolt is not None:
+        if kind != "bolt_pretension":
+            return None, None, None, "볼트 단계(bolt_steps)는 볼트 예압에만 씁니다"
+        actions = [str(one) for one in raw_bolt] if isinstance(raw_bolt, list) else []
+        if actions != ["load", *["lock"] * (len(steps) - 1)]:
+            return (
+                None,
+                None,
+                None,
+                ("볼트 단계는 단계 수만큼 적고 첫 단계에서 조인(load) 뒤 잠급니다(lock)"),
+            )
+        bolt = tuple(actions)
+    return table, active, bolt, ""
 
 
 #: PSD 단위 — CompCore 는 늘 `g^2/Hz` 로 보낸다(2026-11-17). 다른 단위는 막는다(g 와 m/s² 를
@@ -1415,14 +1546,19 @@ LOAD_FIELD_ORDER = (
     "phase",
     "psd_table",
     "grms",
+    "time_table",
+    "active_steps",
+    "bolt_steps",
 )
 _STATIC_LOAD_FIELDS = ("name", "type", "on", "cs", "magnitude", "unit", "direction", "preload")
+#: 정적에서만 읽는 하중 이력 칸(CompCore ②, `_history`).
+HISTORY_LOAD_FIELDS = ("time_table", "active_steps", "bolt_steps")
 #: 해석마다 **읽는** 하중 칸 — 능력표의 `fields.loads`(그 해석에서 그 묶음의 읽는 칸 전부).
 #: 모달 · 랜덤은 선응력의 앞 정적에 걸 때의 칸이다(솔버가 선응력을 안 받으면 빠진다).
 #: 볼트 예압의 `preload` 는 볼트에서만, 조화의 배율 · 위상은 조화에서만 읽는다.
 LOAD_FIELDS: dict[str, tuple[str, ...]] = {
     "modal": _STATIC_LOAD_FIELDS,
-    "static": _STATIC_LOAD_FIELDS,
+    "static": (*_STATIC_LOAD_FIELDS, *HISTORY_LOAD_FIELDS),
     "harmonic": (
         *(one for one in _STATIC_LOAD_FIELDS if one != "preload"),
         "frequency_table",
@@ -1435,7 +1571,7 @@ PSD_FIELDS = ("name", "type", "on", "cs", "unit", "direction", "psd_table", "grm
 
 ANALYSIS_FIELDS: dict[str, tuple[str, ...]] = {
     "modal": ("modes", "frequency_range", "prestressed"),
-    "static": ("large_deflection", "substeps"),
+    "static": ("large_deflection", "substeps", "load_steps"),
     "harmonic": ("modes", "frequency_range", "solution_intervals", "damping_ratio"),
     "random": ("modes", "frequency_range", "prestressed", "damping_ratio"),
 }
@@ -1465,7 +1601,70 @@ def _analysis(block: dict[str, Any]) -> Analysis:
             if isinstance(substeps, int) and not isinstance(substeps, bool) and substeps > 0
             else None
         ),
+        load_steps=_load_steps(block.get("load_steps")),
     )
+
+
+def _count(value: Any) -> int | None:
+    """양의 정수 칸 — 아니면 `None`(받는 쪽이 정한다)."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _load_steps(value: Any) -> tuple[LoadStep, ...]:
+    """`analysis.load_steps` — 끝 시각이 비면 단계 번호(CompCore 와 같은 규칙). 틀린 값은
+    `steps_problem` 이 까닭을 말한다(읽기는 너그럽게)."""
+    if not isinstance(value, list):
+        return ()
+    out: list[LoadStep] = []
+    for index, row in enumerate(value, start=1):
+        row = _dict(row)
+        sub = _dict(row.get("substeps"))
+        end = _number(row.get("end_time"))
+        out.append(
+            LoadStep(
+                name=str(row.get("name") or f"단계 {index}"),
+                end_time=float(index) if end is None else end,
+                initial=_count(sub.get("initial")),
+                minimum=_count(sub.get("minimum")),
+                maximum=_count(sub.get("maximum")),
+            )
+        )
+    return tuple(out)
+
+
+def steps_problem(block: dict[str, Any]) -> str:
+    """하중 단계(`analysis.load_steps`)를 받을 수 없는 까닭 — 비면 받는다. CompCore 가 저장할
+    때 막는 규칙과 같다(끝 시각은 늘고, 부단계는 최소 ≤ 처음 ≤ 최대, v1 의 `steps` ·
+    `substeps` 는 기본값)."""
+    rows = block.get("load_steps")
+    if rows is None or rows == []:
+        return ""
+    if not isinstance(rows, list):
+        return "하중 단계(load_steps)가 목록이 아닙니다"
+    before = 0.0
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            return f"하중 단계 {index} 가 단계가 아닙니다"
+        end = row.get("end_time")
+        when = float(index) if end is None else _number(end)
+        if when is None or when <= before:
+            return f"하중 단계 {index} 의 끝 시각이 앞 단계보다 커야 합니다"
+        before = when
+        sub = _dict(row.get("substeps"))
+        counts = [sub.get(key) for key in ("minimum", "initial", "maximum")]
+        if any(one is not None and _count(one) is None for one in counts):
+            return f"하중 단계 {index} 의 부단계 수는 양의 정수입니다"
+        given = [one for one in counts if one is not None]
+        if given != sorted(given):
+            return f"하중 단계 {index} 의 부단계 수는 최소 ≤ 처음 ≤ 최대여야 합니다"
+    if block.get("steps") not in (None, 1) or block.get("substeps") is not None:
+        return (
+            "하중 단계(load_steps)를 쓰면 「하중 단계 수」(steps) · 「초기 부단계 수」"
+            "(substeps)는 비웁니다"
+        )
+    return ""
 
 
 # --- 잔손 ---------------------------------------------------------------------

@@ -39,7 +39,8 @@ CompCore 는 물성마다 MatNexus 원본(`payload`)과 **그 계로 환산한 �
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from itertools import pairwise
 from typing import Any
 
 from app.core import units
@@ -51,10 +52,21 @@ MODULUS_KEY = "mechanical.youngs_modulus"
 POISSON_KEY = "mechanical.poisson_ratio"
 DENSITY_KEY = "physical.density"
 
-#: 받는 재료 모델 — **선형 등방 탄성 하나**(탄성계수 · 푸아송비 · 밀도). 소성 칸이 와도 아직
-#: 선형으로 푼다(CompCore ②의 재료 모델 — 이름이 정해지면 그것을 따르고, 모르는 모델은 막는다).
-#: 능력표의 `materials` 다(`capabilities`).
-MODELS = ("linear_elastic",)
+#: 받는 재료 모델 — 선형 등방 탄성과 **등방 경화 소성 둘**(이선형 · 다선형, von Mises · 속도
+#: 무관 — CompCore ② 와 정함 2026-11-27). 이름은 능력표의 `materials` 와 같다(`capabilities`).
+#: 소성은 **정적에서만** 쓴다 — 모드 · 주파수 해석은 탄성으로 푼다(`elastic_only`). 모르는
+#: 모델은 막는다(`MaterialProblem`).
+LINEAR_ELASTIC = "linear_elastic"
+BILINEAR = "bilinear_isotropic"
+MULTILINEAR = "multilinear_isotropic"
+MODELS = (LINEAR_ELASTIC, BILINEAR, MULTILINEAR)
+PLASTIC_MODELS = (BILINEAR, MULTILINEAR)
+#: 다선형 표의 행 수 — MatNexus 카드와 같은 규칙(CompCore `materials.Plastic`).
+TABLE_ROWS = (2, 5000)
+#: 이선형을 표(CalculiX `*PLASTIC`)로 옮길 때 **둘째 행의 소성 변형률**. 표 끝 뒤를 어떻게
+#: 잇는지는 솔버마다 다를 수 있어(「조건_봉_표끝넘어」 로 잰다) 끝을 실제로 닿지 않을 만큼
+#: 멀리 둔다 — Ansys `TB,BISO` 는 끝없이 같은 기울기다.
+BILINEAR_REACH = 10.0
 
 #: 온도 표에서 고를 기준 온도의 기본값. 여러 점이 오면 기준에 가장 가까운 것을 고르고 **고른
 #: 온도를 적어 둔다**(요약 `material_temperature`). 기준은 CAD 초기조건의 「환경 온도」
@@ -64,6 +76,81 @@ REFERENCE_C = 22.0
 
 #: CompCore 가 「모든 바디」 를 가리키는 이름. `apply_to: ["전체"]` 가 그 뜻이다.
 ALL_BODIES = "전체"
+
+
+#: 카드 E 와 물성 E 가 이보다 더 다르면 경고한다(사용자 결정 2026-11-28 — 작업은 막지 않는다).
+CARD_MODULUS_TOLERANCE = 0.05
+
+
+@dataclass(frozen=True)
+class PlasticCard:
+    """소성 표가 온 **MatNexus 물성 카드**(CompCore `plastic.card`, 2026-11-28) — 출처를 적고
+    카드의 E 를 물성 E 와 견준다. 해석은 늘 **물성의 E** 로 푼다(같은 재료의 정적 · 모달이 같은
+    E 로 — 사용자 결정)."""
+
+    id: str = ""
+    code: str = ""
+    label: str = ""
+    test_type: str = ""
+    orientation: str = ""
+    status: str = ""
+    fetched_at: str = ""
+    youngs_modulus_pa: float | None = None
+
+    def describe(self) -> str:
+        parts = [
+            one
+            for one in (self.code, self.label, self.test_type, self.orientation, self.status)
+            if one
+        ]
+        return (
+            "MatNexus 카드 "
+            + " · ".join(parts)
+            + (f"(받은 때 {self.fetched_at})" if self.fetched_at else "")
+        )
+
+
+@dataclass(frozen=True)
+class Plastic:
+    """등방 경화 소성 — **진응력 · 진소성변형률**, 응력은 Pa.
+
+    이선형은 항복 응력과 **전체 변형률 기준 접선 계수** `Et`(CompCore 가 받은 그대로 —
+    Ansys `TB,BISO` 의 칸)를 든다. 소성 변형률 기준 경화 기울기는 H = E·Et/(E - Et) 다
+    (`hardening_pa`). 다선형은 (ε_p, σ) 표 — 첫 행 ε_p 0(항복점), ε_p 는 늘고 σ 는 줄지
+    않는다."""
+
+    model: str
+    yield_stress_pa: float = 0.0
+    tangent_modulus_pa: float = 0.0
+    table: tuple[tuple[float, float], ...] = ()
+    #: 표의 출처 — `manual`(손으로 적음) · `matnexus`(카드).
+    source: str = "manual"
+    card: PlasticCard | None = None
+
+    def hardening_pa(self, modulus_pa: float) -> float:
+        """이선형의 소성 변형률 기준 경화 기울기 H(Pa) — E 는 그 재료의 탄성계수."""
+        return modulus_pa * self.tangent_modulus_pa / (modulus_pa - self.tangent_modulus_pa)
+
+    def rows(self, modulus_pa: float) -> tuple[tuple[float, float], ...]:
+        """(ε_p, σ Pa) 표 — 다선형은 받은 그대로, 이선형은 두 행(끝은 `BILINEAR_REACH`)."""
+        if self.model == MULTILINEAR:
+            return self.table
+        rise = self.hardening_pa(modulus_pa) * BILINEAR_REACH
+        return ((0.0, self.yield_stress_pa), (BILINEAR_REACH, self.yield_stress_pa + rise))
+
+    def describe(self, modulus_pa: float) -> str:
+        """모델링 요약의 한 줄(MPa) — 무엇으로 풀었나."""
+        if self.model == BILINEAR:
+            return (
+                f"이선형 등방 경화 — 항복 {self.yield_stress_pa / 1e6:.6g} MPa · 접선 계수"
+                f" {self.tangent_modulus_pa / 1e6:.6g} MPa(소성 기울기"
+                f" {self.hardening_pa(modulus_pa) / 1e6:.6g} MPa)"
+            )
+        first, last = self.table[0], self.table[-1]
+        return (
+            f"다선형 등방 경화 — {len(self.table)}점, 항복 {first[1] / 1e6:.6g} MPa ·"
+            f" 끝 ε_p {last[0]:.6g} · {last[1] / 1e6:.6g} MPa"
+        )
 
 
 @dataclass(frozen=True)
@@ -86,10 +173,16 @@ class Material:
     """사람에게 전할 말 — 못 바꾼 항목, 문헌 등급 등."""
     commands: str = ""
     """솔버 덱(있으면 그대로 쓴다). **아직 채우지 않는다** — 자리만."""
+    plastic: Plastic | None = None
+    """등방 경화 소성(CompCore ②) — 선형 탄성이면 `None`. 정적에서만 쓴다."""
 
     @property
     def every_body(self) -> bool:
         return not self.bodies
+
+    @property
+    def model(self) -> str:
+        return self.plastic.model if self.plastic is not None else LINEAR_ELASTIC
 
     def spec(self) -> MaterialSpec:
         """사람이 읽는 단위의 스펙으로 — 화면 · 명령 조각이 쓰는 모양."""
@@ -99,6 +192,68 @@ class Material:
             poisson_ratio=self.poisson_ratio,
             density_kg_m3=self.density_kg_m3,
         )
+
+
+def plastic(found: Sequence[Material]) -> bool:
+    """소성 재료가 하나라도 있나 — 정적이면 증분으로 푼다."""
+    return any(one.plastic is not None for one in found)
+
+
+def elastic_only(found: Sequence[Material]) -> list[Material]:
+    """소성을 뗀 목록 — **모드 · 주파수 해석은 탄성으로 푼다**(CompCore ② 와 정함)."""
+    return [replace(one, plastic=None) if one.plastic is not None else one for one in found]
+
+
+def plastic_line(found: Sequence[Material]) -> str | None:
+    """모델링 요약의 「재료 모델」 — 소성 재료마다 한 줄, 없으면 None."""
+    shown = [
+        f"{one.name}: {one.plastic.describe(one.youngs_modulus_pa)}"
+        for one in found
+        if one.plastic is not None
+    ]
+    return " · ".join(dict.fromkeys(shown)) or None
+
+
+def card_line(found: Sequence[Material]) -> str | None:
+    """모델링 요약의 「소성 카드」 — 카드에서 온 표마다 출처와 **두 E**(풀이는 물성 E)."""
+    shown: list[str] = []
+    for one in found:
+        card = one.plastic.card if one.plastic is not None else None
+        if card is None:
+            continue
+        modulus = one.youngs_modulus_pa / 1e9
+        line = f"{one.name}: {card.describe()} · 물성 E {modulus:.4g} GPa(풀이)"
+        if card.youngs_modulus_pa is not None:
+            line += f" · 카드 E {card.youngs_modulus_pa / 1e9:.4g} GPa"
+        shown.append(line)
+    return " · ".join(dict.fromkeys(shown)) or None
+
+
+def card_warning(found: Sequence[Material]) -> str | None:
+    """카드 E 가 물성 E 와 5 % 넘게 다르면 경고 — 표는 (σ, ε_p) 짝이라 항복 응력 · 소성 곡선은
+    그대로지만 탄성 기울기와 항복까지의 변형률(σy/E)이 카드를 잰 시편과 달라진다. 막지
+    않는다."""
+    shown: list[str] = []
+    for one in found:
+        card = one.plastic.card if one.plastic is not None else None
+        if card is None or card.youngs_modulus_pa is None:
+            continue
+        gap = abs(card.youngs_modulus_pa - one.youngs_modulus_pa) / one.youngs_modulus_pa
+        if gap > CARD_MODULUS_TOLERANCE:
+            # 사실만 적는다 — 카드의 E 는 시험기 컴플라이언스가 섞인 겉보기 기울기일 수 있어
+            # 「틀렸다」 로 읽히면 안 된다(CompCore 와 정한 문구, 2026-11-28).
+            shown.append(
+                f"재료 「{one.name}」: 소성 표를 가져온 카드({card.code or card.id})의 E"
+                f"({card.youngs_modulus_pa / 1e6:,.0f} MPa)가 물성 E"
+                f"({one.youngs_modulus_pa / 1e6:,.0f} MPa)와 {gap * 100:.0f} % 다릅니다."
+                " 해석은 물성 E 로 풉니다."
+            )
+    return " · ".join(dict.fromkeys(shown)) or None
+
+
+ELASTIC_IN_EIGEN = (
+    "재료 모델(소성)은 정적 해석에서만 씁니다 — 모드 · 주파수 해석은 탄성으로 풀었습니다"
+)
 
 
 def temperature_line(found: Sequence[Material]) -> str | None:
@@ -253,12 +408,117 @@ def _material(
 ) -> Material:
     converted = row.get("converted")
     if isinstance(converted, dict) and converted:
-        return _from_converted(name, bodies, converted, system, reference)
-    source = row.get("payload")
-    if isinstance(source, dict) and source:
-        return _from_payload(name, bodies, source, reference)
-    raise MaterialProblem(
-        name, "CAD 가 값을 보내지 않았습니다(payload · converted 둘 다 없음)"
+        made = _from_converted(name, bodies, converted, system, reference)
+    else:
+        source = row.get("payload")
+        if not (isinstance(source, dict) and source):
+            raise MaterialProblem(
+                name, "CAD 가 값을 보내지 않았습니다(payload · converted 둘 다 없음)"
+            )
+        made = _from_payload(name, bodies, source, reference)
+    found = _plastic(name, row, made.youngs_modulus_pa)
+    return replace(made, plastic=found) if found is not None else made
+
+
+def _plastic(name: str, row: dict[str, Any], modulus_pa: float) -> Plastic | None:
+    """재료 모델(`model`)과 소성 칸(`plastic`) — CompCore ② 의 꼴(2026-11-27 정함).
+
+    선형 탄성이면 두 칸이 안 실린다(실려도 소성 칸은 읽지 않는다). **모르는 모델은 막는다** —
+    선형으로 풀면 항복을 넘는 하중에서 응력이 그럴듯하게 틀린다. 값은 `stress_unit` 을 곁에
+    두고 읽는다(이름이 없거나 모르면 막는다)."""
+    model = str(row.get("model") or LINEAR_ELASTIC).strip()
+    if model == LINEAR_ELASTIC:
+        return None
+    if model not in PLASTIC_MODELS:
+        raise MaterialProblem(
+            name, f"모르는 재료 모델입니다: {model} — 받는 것: {' · '.join(MODELS)}"
+        )
+    given = _dict(row.get("plastic"))
+    unit = given.get("stress_unit")
+
+    def stress(value: Any, what: str) -> float:
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            raise MaterialProblem(name, f"소성 칸의 {what}이 숫자가 아닙니다")
+        try:
+            return units.stress_from(float(value), unit)
+        except units.UnknownStressUnit as failure:
+            raise MaterialProblem(name, f"소성 칸의 응력 단위 — {failure}") from failure
+
+    if model == BILINEAR:
+        yielded = stress(given.get("yield_stress"), "항복 응력(yield_stress)")
+        tangent = stress(given.get("tangent_modulus"), "접선 계수(tangent_modulus)")
+        if yielded <= 0:
+            raise MaterialProblem(name, "이선형의 항복 응력이 0 보다 커야 합니다")
+        if not 0 <= tangent < modulus_pa:
+            raise MaterialProblem(
+                name,
+                f"이선형의 접선 계수({tangent / 1e6:.6g} MPa)는 0 이상, 탄성계수"
+                f"({modulus_pa / 1e6:.6g} MPa)보다 작아야 합니다",
+            )
+        return Plastic(
+            model=model,
+            yield_stress_pa=yielded,
+            tangent_modulus_pa=tangent,
+            source=str(given.get("source") or "manual"),
+            card=_card(name, given, stress),
+        )
+    raw = given.get("table")
+    if not isinstance(raw, list):
+        raise MaterialProblem(name, "다선형의 표(plastic.table)가 없습니다")
+    low, high = TABLE_ROWS
+    if not low <= len(raw) <= high:
+        raise MaterialProblem(
+            name, f"다선형의 표는 {low} ~ {high} 행입니다(받은 것 {len(raw)})"
+        )
+    table: list[tuple[float, float]] = []
+    for index, one in enumerate(raw):
+        if not (isinstance(one, list | tuple) and len(one) == 2):
+            raise MaterialProblem(
+                name, f"다선형 표 {index + 1} 행이 [소성 변형률, 응력]이 아닙니다"
+            )
+        strain = one[0]
+        if not isinstance(strain, int | float) or isinstance(strain, bool):
+            raise MaterialProblem(
+                name, f"다선형 표 {index + 1} 행의 소성 변형률이 숫자가 아닙니다"
+            )
+        table.append((float(strain), stress(one[1], f"표 {index + 1} 행의 응력")))
+    if table[0][0] != 0:
+        raise MaterialProblem(name, "다선형 표의 첫 행은 소성 변형률 0(항복점)이어야 합니다")
+    if table[0][1] <= 0:
+        raise MaterialProblem(name, "다선형 표의 항복 응력이 0 보다 커야 합니다")
+    for before, after in pairwise(table):
+        if after[0] <= before[0]:
+            raise MaterialProblem(name, "다선형 표의 소성 변형률은 행마다 늘어야 합니다")
+        if after[1] < before[1]:
+            raise MaterialProblem(
+                name, "다선형 표의 응력은 줄지 않아야 합니다(연화는 받지 않습니다)"
+            )
+    return Plastic(
+        model=model,
+        table=tuple(table),
+        source=str(given.get("source") or "manual"),
+        card=_card(name, given, stress),
+    )
+
+
+def _card(name: str, given: dict[str, Any], stress: Any) -> PlasticCard | None:
+    """`plastic.card`(MatNexus 카드에서 온 표) — 없으면 `None`(손으로 적은 표). 카드의 E 는
+    소성 칸의 `stress_unit` 으로 읽는다(내보내기 단위계)."""
+    raw = given.get("card")
+    if not isinstance(raw, dict):
+        return None
+    modulus = raw.get("youngs_modulus")
+    return PlasticCard(
+        id=str(raw.get("id") or ""),
+        code=str(raw.get("code") or ""),
+        label=str(raw.get("label") or ""),
+        test_type=str(raw.get("test_type") or ""),
+        orientation=str(raw.get("orientation") or ""),
+        status=str(raw.get("status") or ""),
+        fetched_at=str(raw.get("fetched_at") or ""),
+        youngs_modulus_pa=stress(modulus, "카드의 탄성계수(card.youngs_modulus)")
+        if modulus is not None
+        else None,
     )
 
 

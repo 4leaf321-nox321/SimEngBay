@@ -58,9 +58,17 @@ PRESTRESS_LOAD = (
     f" 조건에서는 {_tag('선응력 반영')}을 켤 때만 앞 정적에 겁니다(끄면 고유진동수를"
     " 바꾸지 않아 쓰지 않습니다)."
 )
+LOAD_STEPS = _tag("하중 단계")
 TWO_STEP_BOLT = (
-    "한 해석 안에서는 먼저 조이고, 그 길이를 잠근 채 나머지 하중을 겁니다(두 단계)."
+    f"{LOAD_STEPS}를 나누지 않으면 먼저 조이고, 그 길이를 잠근 채 나머지 하중을 겁니다"
+    f"(두 단계). {LOAD_STEPS}를 나누면 첫 단계에서 조이고 다음 단계부터 그 길이로 잠급니다."
     " 앞 케이스에서 조인 볼트는 뒤 케이스에서 그 길이로 잠긴 채 이어집니다."
+)
+#: CalculiX 정적의 면 모멘트 — 큰 변형이면 면을 강체로 묶는다(`calculix.deck._moment_bodies`,
+#: 사용자 결정 2026-11-28).
+RIGID_MOMENT = (
+    f"{_tag('대변형')}을 켜면 면을 강체로 묶어 모멘트를 겁니다. 면이 약 40° 넘게 돌면"
+    " CalculiX는 풀지 못하므로 Ansys를 대상 솔버로 지정하십시오."
 )
 LINEAR_BONDED = "모드 · 주파수 해석에서는 붙은 것으로 풉니다"
 LINEAR_SLIDING = "모드 · 주파수 해석에서는 법선만 묶어 미끄러지게 풉니다"
@@ -108,9 +116,18 @@ def _analysis(solver: str, recipe: str) -> dict[str, Any]:
             ],
             "loads": _load_fields(recipe, prestress=prestress),
         },
-        "materials": list(materials.MODELS),
+        "materials": _materials(recipe),
         "follows": follows(solver, recipe),
     }
+
+
+def _materials(recipe: str) -> list[str]:
+    """받는 재료 모델(이름만 — CompCore 와 정함) — 소성(CompCore ②)은 정적에서만 읽는다. 모드 ·
+    주파수 해석은 선형 탄성만 싣는다: 소성 재료가 와도 탄성으로 풀고(`materials.elastic_only`)
+    그 알림은 CompCore 가 계약대로 낸다."""
+    if recipe == "static":
+        return list(materials.MODELS)
+    return [materials.LINEAR_ELASTIC]
 
 
 def follows(solver: str, recipe: str) -> list[str]:
@@ -145,9 +162,10 @@ def prestress_recipes(solver: str) -> tuple[str, ...]:
 def _loads(solver: str, recipe: str, *, prestress: bool) -> list[str | dict[str, str]]:
     supported = [one for one in condition_model.LOAD_KINDS if one in _load_kinds(solver)]
     if recipe == "static":
-        return [
-            _noted(one, TWO_STEP_BOLT if one == "bolt_pretension" else "") for one in supported
-        ]
+        notes = {"bolt_pretension": TWO_STEP_BOLT}
+        if solver == "calculix":
+            notes["moment"] = RIGID_MOMENT
+        return [_noted(one, notes.get(one, "")) for one in supported]
     if recipe == "harmonic":
         return [one for one in supported if one not in condition_model.HARMONIC_REFUSED]
     quiet = [_noted(one, PRESTRESS_LOAD) for one in supported] if prestress else []

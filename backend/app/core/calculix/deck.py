@@ -23,7 +23,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.core import conditions as condition_model
-from app.core import excitation, units
+from app.core import excitation, history, units
 from app.core.harmonic import HarmonicPlan
 from app.core.materials import Material
 from app.core.regions.match import axis_point
@@ -137,6 +137,12 @@ class Plan:
     #: 정적 다단(판 2)의 케이스마다 — 이름 · 끝 단계(ccx `*STEP` 차례 = 총 시각) · 반력에 더할
     #: 몫. `boundary.json` 의 `cases` 이고, 추출이 케이스마다 결과를 이것으로 고른다.
     cases: list[dict[str, Any]] = field(default_factory=list)
+    #: 하중 단계(CompCore ②, `history`)마다 — 이름 · ccx `*STEP` 차례 · 끝 시각(총 시각) ·
+    #: 반력에 더할 몫. `boundary.json` 의 `steps` 이고 추출이 단계 끝마다 결과를 고른다.
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    #: 큰 변형의 면 모멘트 — (하중 이름, 영역) → 그 면을 묶은 강체의 회전 절점
+    #: (`_moment_bodies`).
+    moment_rotators: dict[tuple[str, str], int] = field(default_factory=dict)
     #: 정적 다단의 **맨 단계들**(출력 요청 없이, NLGEOM 한 증분 — v1 선응력의 앞 정적과 같은
     #: 꼴)
     #: — 선응력 모달 · 랜덤이 그대로 앞에 둔다(`write_modal` 의 `static_steps`). 마지막 단계만
@@ -637,8 +643,25 @@ def _material_lines(name: str, material: Material) -> list[str]:
         f"*MATERIAL, NAME={name}",
         "*ELASTIC",
         f"{modulus_mpa:.8g}, {material.poisson_ratio:.6g}",
+        *_plastic_lines(material),
         "*DENSITY",
         f"{density_tonne_mm3:.8g}",
+    ]
+
+
+def _plastic_lines(material: Material) -> list[str]:
+    """`*PLASTIC`(등방 경화, von Mises) — 한 줄에 (진응력 MPa, 진소성변형률). **ccx 는 응력이
+    먼저다**(CompCore 표는 [ε_p, σ]). 이선형은 두 행(`Plastic.rows` — 끝을 멀리 둔다). 탄성이면
+    빈 목록."""
+    if material.plastic is None:
+        return []
+    scale = units.STRESS_UNITS["mpa"]
+    return [
+        "*PLASTIC",
+        *(
+            f"{stress / scale:.8g}, {strain:.8g}"
+            for strain, stress in material.plastic.rows(material.youngs_modulus_pa)
+        ),
     ]
 
 
@@ -650,14 +673,8 @@ def _material_block(entity: int, material: Material) -> list[str]:
     틀리면 오류가 아니라 **그럴듯한 주파수**가 나온다(10³ 배씩 갈린다).
     """
     name = f"M{entity}"
-    modulus_mpa = material.youngs_modulus_pa / units.STRESS_UNITS["mpa"]
-    density_tonne_mm3 = material.density_kg_m3 / units.DENSITY_UNITS["tonne/mm3"]
     return [
-        f"*MATERIAL, NAME={name}",
-        "*ELASTIC",
-        f"{modulus_mpa:.8g}, {material.poisson_ratio:.6g}",
-        "*DENSITY",
-        f"{density_tonne_mm3:.8g}",
+        *_material_lines(name, material),
         f"*SOLID SECTION, ELSET=E{entity}, MATERIAL={name}",
     ]
 
@@ -777,10 +794,15 @@ def write_static(
     )
     lines += _separate_reactions(plan)
     lines += _bolt_blocks(given, bolts, plan, nodes, rigid)
+    if large_deflection:
+        lines += _moment_bodies(given, load_nodes, held_nodes, nodes, rigid, centers, plan)
     # 압축 전용 지지의 간극은 열리고 닫힌다 — 접촉처럼 증분으로 푼다.
     nonlinear = large_deflection or any(
         one.startswith("compression_only:") for one in plan.applied
     )
+    # **소성은 증분으로 푼다**(CompCore ②) — 한 증분이면 항복을 넘는 하중을 한 번에 건다.
+    # 기하 비선형(NLGEOM)은 지금처럼 큰 변형 · 접촉 · 압축 전용이 정한다.
+    plastic = any(one.plastic is not None for one in materials)
     if contact_faces is not None:
         nonlinear = nonlinear or any(one.kind in NONLINEAR_CONTACTS for one in given.contacts)
         lines += contact_block(
@@ -811,6 +833,47 @@ def write_static(
             )
 
     cases = given.static_cases()
+    timeline = history.of(given) if len(cases) == 1 else None
+    if timeline is not None:
+        # **하중 단계(CompCore ②)** — 케이스 하나 안의 단계 · 하중 이력.
+        lines += _history_steps(
+            timeline,
+            given.loads,
+            plan,
+            geometric=nonlinear,
+            incremental=nonlinear or plastic,
+            average_force=average_force,
+            plastic=plastic,
+            load=lambda one: _load_rows(
+                one,
+                load_faces,
+                load_areas,
+                load_nodes,
+                nodes,
+                shapes,
+                plan.local_frames,
+                _elsets(body_of, shells),
+                given.frames,
+                length_mm,
+                rotators=plan.moment_rotators,
+            ),
+            rigid_refusal=lambda one: _on_rigid(one, load_nodes, rigid),
+            offsets=lambda pull, spins, rows: _case_offsets(
+                plan, pull, spins, rows, nodes, solids, body_of, materials, shells
+            ),
+        )
+        if not any(one.kind != "bolt_pretension" for one in given.loads) and not (
+            given.drives or plan.bolt_rows
+        ):
+            plan.refused.append(
+                condition_model.Note(
+                    "정적 해석", "하중도 강제 변위도 없습니다 — 전부 0 이 나옵니다."
+                )
+            )
+        plan.text = _finish(
+            lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
+        )
+        return plan
     if len(cases) > 1:
         # **정적 다단**(판 2 의 사슬 — 볼트가 아닌 앞 정적). 케이스가 하나면 아래의 길 그대로다
         # (v1 덱이 한 글자도 안 바뀐다).
@@ -818,6 +881,7 @@ def write_static(
             cases,
             plan,
             nonlinear=nonlinear,
+            plastic=plastic,
             substeps=substeps,
             average_force=average_force,
             load=lambda one: _load_rows(
@@ -831,6 +895,7 @@ def write_static(
                 _elsets(body_of, shells),
                 given.frames,
                 length_mm,
+                rotators=plan.moment_rotators,
             ),
             rigid_refusal=lambda one: _on_rigid(one, load_nodes, rigid),
             offsets=lambda pull, spins, rows: _case_offsets(
@@ -851,7 +916,7 @@ def write_static(
     # **비선형(접촉 · 큰 변형)은 증분으로 푼다** — 한 번에 걸면 접촉이 열린 채 수렴하지
     # 못한다.
     step = ["*STEP, NLGEOM" if nonlinear else "*STEP", "*STATIC"]
-    if nonlinear:
+    if nonlinear or plastic:
         step.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
         if average_force:
             # R_n · C_n · q_0 · **q_u** · R_p · ε · C_ε · R_l — 넷째만 바꾸고 나머지는 ccx 의
@@ -884,6 +949,7 @@ def write_static(
             _elsets(body_of, shells),
             given.frames,
             length_mm,
+            rotators=plan.moment_rotators,
         )
         if why is not None:
             plan.refused.append(why)
@@ -958,13 +1024,123 @@ def write_static(
         # 응력 · 변형률은 요소에서 나와 절점으로 외삽된다 — `.frd` 의 STRESS · TOSTRAIN
         # 블록이 그것이다. 변형률은 **측정점에서 스트레인 게이지와 견주는 값**이다.
         "*EL FILE",
-        "S, E",
+        "S, E, PEEQ" if plastic else "S, E",
         "*END STEP",
     ]
     plan.text = _finish(
         lines, rigid, shells, points=bool(plan.remote_points or plan.extra_nodes)
     )
     return plan
+
+
+def _history_steps(
+    timeline: history.History,
+    loads: list[condition_model.Load],
+    plan: Plan,
+    *,
+    geometric: bool,
+    incremental: bool,
+    average_force: float | None,
+    plastic: bool,
+    load: Any,
+    rigid_refusal: Any,
+    offsets: Any,
+) -> list[str]:
+    """**하중 단계**(CompCore ② — `history`) — 단계마다 `*STEP`, 하중은 모두 총 시각 배율표
+    (`*AMPLITUDE, TIME=TOTAL TIME`)를 따른다.
+
+    단계마다 `*CLOAD, OP=NEW` · `*DLOAD, OP=NEW` 로 거둔 뒤 같은 하중을 배율표와 함께 다시
+    쓴다 — 배율표가 값을 정하므로 이어진 하중이 단계 사이에서 어떻게 넘어가는지에 기대지
+    않는다. 볼트는 첫 단계에서 조이고 둘째 단계부터 그 길이로 잠근다(`*BOUNDARY, FIXED` 는
+    다음 단계로 넘어간다). 강제 변위는 모델 줄이라 첫 단계에서 오르고 유지한다(Ansys 와
+    같다). 단계 끝마다 반력 · 볼트 힘 · 변위 · 응력을 찍는다(`plan.steps`)."""
+    amplitudes: list[str] = []
+    entries: list[tuple[list[str], history.Table, dict[str, list[float]]]] = []
+    for index, one in enumerate(loads, start=1):
+        if one.kind == "bolt_pretension":
+            continue  # 단면 · 조임 · 잠금은 위에서 세웠다(`_bolt_blocks`).
+        refused = rigid_refusal(one)
+        if refused is not None:
+            plan.refused.append(refused)
+            continue
+        rows, why = load(one)
+        if why is not None:
+            plan.refused.append(why)
+            continue
+        table = timeline.scale(one)
+        if one.kind == "rotational_velocity":
+            table = timeline.squared(table)  # ccx 의 원심력은 ω² 다
+        name = f"H{index}"
+        amplitudes += _amplitude_lines(name, table, total=True)
+        pull = _gravity_of(rows) if one.kind in INERTIAL_LOADS else [0.0, 0.0, 0.0]
+        spin = _spin_of(rows) if one.kind == "rotational_velocity" else None
+        pushed = [] if one.kind in INERTIAL_LOADS or spin else rows
+        entries.append(
+            (
+                _keyed(rows, [f"AMPLITUDE={name}"]),
+                table,
+                offsets(pull, [spin] if spin else [], pushed),
+            )
+        )
+        plan.applied.append(f"{one.kind}:{one.region}")
+        plan.load_rows += rows
+    lines = list(amplitudes)
+    start = 0.0
+    for number, step in enumerate(timeline.steps, start=1):
+        steps = history.increments(step, start, incremental=incremental)
+        head = "*STEP, NLGEOM" if geometric else "*STEP"
+        if steps.count:
+            head += f", INC={steps.count}"
+        data = [f"{steps.initial:.6g}", f"{steps.period:.6g}"]
+        if steps.minimum is not None or steps.maximum is not None:
+            data += [
+                f"{steps.minimum:.6g}" if steps.minimum is not None else "",
+                f"{steps.maximum:.6g}" if steps.maximum is not None else "",
+            ]
+        lines += [head, "*STATIC", ", ".join(data)]
+        if incremental and average_force:
+            lines[-2:-2] = [
+                "*CONTROLS, PARAMETERS=FIELD",
+                f"0.005, 0.01, , {average_force:.6g}, 0.02, 1e-5, 1e-3, 1e-8",
+            ]
+        if number == 1:
+            lines += plan.bolt_rows
+        else:
+            lines += ["*CLOAD, OP=NEW", "*DLOAD, OP=NEW"]
+            if number == 2:
+                lines += plan.bolt_locks
+        for rows, _table, _shift in entries:
+            lines += rows
+        for nset in plan.printed_sets:
+            lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY, GLOBAL=YES", "RF"]
+        if number == 1 and plan.bolt_rows:
+            lines += _bolt_prints(plan, "A")
+        lines += _bolt_prints(plan, "")
+        lines += [
+            "*NODE FILE",
+            "U",
+            "*EL FILE",
+            "S, E, PEEQ" if plastic else "S, E",
+            "*END STEP",
+        ]
+        shifted: dict[str, list[float]] = {}
+        for _rows, table, shift in entries:
+            factor = history.at(table, step.end_time)
+            for region, vector in shift.items():
+                total = shifted.setdefault(region, [0.0, 0.0, 0.0])
+                for axis in range(3):
+                    total[axis] += vector[axis] * factor
+        plan.steps.append(
+            {
+                "name": step.name,
+                "step": number,
+                "time": step.end_time,
+                "reaction_offsets": shifted,
+            }
+        )
+        plan.reaction_offsets = shifted
+        start = step.end_time
+    return lines
 
 
 def _bearing_shares(
@@ -1718,11 +1894,16 @@ def _bolt_blocks(
 
 
 def _static_head(
-    nonlinear: bool, substeps: int | None, average_force: float | None
+    nonlinear: bool,
+    substeps: int | None,
+    average_force: float | None,
+    plastic: bool = False,
 ) -> list[str]:
-    """정적 단계의 머리 — 비선형(접촉 · 큰 변형)이면 증분으로(`write_static` 과 같은 규칙)."""
+    """정적 단계의 머리 — 비선형(접촉 · 큰 변형)이면 NLGEOM 과 증분으로, 소성만이면 NLGEOM 없이
+    증분으로(`write_static` 과 같은 규칙 — 소성이 NLGEOM 을 켜면 대변형을 끈 봉이 현재 단면으로
+    풀려 응력이 F/A0 보다 커진다)."""
     head = ["*STEP, NLGEOM" if nonlinear else "*STEP", "*STATIC"]
-    if nonlinear:
+    if nonlinear or plastic:
         head.append(f"{1 / substeps:.6g}, 1.0" if substeps else "0.1, 1.0")
         if average_force:
             head[1:1] = [
@@ -1742,6 +1923,7 @@ def _staged_steps(
     load: Any,
     rigid_refusal: Any,
     offsets: Any,
+    plastic: bool = False,
 ) -> list[str]:
     """**정적 다단** — 케이스마다 단계(새로 조이는 볼트가 있으면 「조임 → 잠그고 나머지」 둘).
 
@@ -1758,7 +1940,9 @@ def _staged_steps(
         last = index == len(cases) - 1
         # 초기 부단계는 사슬 안에서 하나다(`cases.problem`) — 끝 케이스의 것(스펙이 덮을 수
         # 있다).
-        head = _static_head(nonlinear, substeps or case.analysis.substeps, average_force)
+        head = _static_head(
+            nonlinear, substeps or case.analysis.substeps, average_force, plastic
+        )
         clear = ["*CLOAD, OP=NEW", "*DLOAD, OP=NEW"] if index else []
         gravity: list[str] = []
         main: list[str] = []
@@ -1822,7 +2006,13 @@ def _staged_steps(
         for nset in plan.printed_sets:
             lines += [f"*NODE PRINT, NSET={nset}, TOTALS=ONLY, GLOBAL=YES", "RF"]
         lines += _bolt_prints(plan, "")
-        lines += ["*NODE FILE", "U", "*EL FILE", "S, E", "*END STEP"]
+        lines += [
+            "*NODE FILE",
+            "U",
+            "*EL FILE",
+            "S, E, PEEQ" if plastic else "S, E",
+            "*END STEP",
+        ]
         shifted = offsets(pull, spins, pushed)
         plan.cases.append({"name": case.name, "step": stage, "reaction_offsets": shifted})
         if last:
@@ -2433,12 +2623,14 @@ def write_harmonic(
 RESIDUAL_HZ = 1e-3
 
 
-def _amplitude_lines(name: str, table: tuple[tuple[float, float], ...]) -> list[str]:
-    """`*AMPLITUDE` — 한 줄에 (주파수, 배율) 넷까지(ccx 의 줄 길이)."""
+def _amplitude_lines(
+    name: str, table: tuple[tuple[float, float], ...], *, total: bool = False
+) -> list[str]:
+    """`*AMPLITUDE` — 한 줄에 (주파수 · 시각, 배율) 넷까지(ccx 의 줄 길이). `total` 이면
+    가로축이 총 시각이다(하중 단계, `history`)."""
     pairs = [f"{hz:.9g}, {factor:.9g}" for hz, factor in table]
-    return [f"*AMPLITUDE, NAME={name}"] + [
-        ", ".join(pairs[at : at + 4]) for at in range(0, len(pairs), 4)
-    ]
+    head = f"*AMPLITUDE, NAME={name}" + (", TIME=TOTAL TIME" if total else "")
+    return [head] + [", ".join(pairs[at : at + 4]) for at in range(0, len(pairs), 4)]
 
 
 def _phased(load: condition_model.Load) -> list[tuple[condition_model.Load, str]]:
@@ -2490,10 +2682,13 @@ def _load_rows(
     elsets: list[str] | None = None,
     axes: list[condition_model.Frame] | None = None,
     length_mm: float = 1.0,
+    *,
+    rotators: dict[tuple[str, str], int] | None = None,
 ) -> tuple[list[str], condition_model.Note | None]:
     """하중 한 줄 뭉치 — 압력은 요소면, 힘 · 베어링 · 모멘트는 절점, 가속도 · 중력 · 원심력은
     요소 묶음 전부(`elsets`). 못 걸면 까닭을 돌려준다. `axes` 는 CAD 의 좌표계들(회전 축이
-    그 원점을 지난다), `length_mm` 은 그 원점의 길이 단위다."""
+    그 원점을 지난다), `length_mm` 은 그 원점의 길이 단위다. `rotators` 에 있는 모멘트는 그
+    면을 묶은 강체의 회전 절점에 건다(큰 변형 — `_moment_bodies`)."""
     if load.kind not in SUPPORTED_LOADS:
         return [], condition_model.Note(
             f"하중 「{load.name}」({load.kind})",
@@ -2517,6 +2712,9 @@ def _load_rows(
         )
     if load.magnitude is None:
         return [], condition_model.Note(f"하중 「{load.name}」", "크기가 없습니다.")
+    rotator = (rotators or {}).get((load.name, load.region))
+    if load.kind == "moment" and rotator is not None:
+        return _rotator_rows(load, rotator)
     if load.kind == "moment":
         return _moment_rows(load, load_nodes, nodes, frames)
     if load.kind == "pressure":
@@ -2916,17 +3114,9 @@ def _moment_rows(
         return [], condition_model.Note(
             f"하중 「{load.name}」", f"영역 「{load.region}」 의 절점을 못 찾았습니다."
         )
-    scale = MOMENT_UNITS.get((load.unit or "N*mm").replace(" ", "").lower())
-    if scale is None:
-        return [], condition_model.Note(
-            what, f"모멘트 단위 「{load.unit}」 를 모릅니다 — N*mm · N*m."
-        )
-    if load.direction is None or load.magnitude is None:
-        return [], condition_model.Note(what, "크기 · 회전축이 있어야 합니다.")
-    length = math.sqrt(sum(one * one for one in load.direction))
-    if length == 0:
-        return [], condition_model.Note(what, "회전축이 0 입니다.")
-    moment = [load.magnitude * scale * one / length for one in load.direction]
+    moment = _moment_vector(load)
+    if isinstance(moment, str):
+        return [], condition_model.Note(what, moment)
     center = [sum(nodes[node][axis] for node in members) / len(members) for axis in range(3)]
     offsets = [[nodes[node][axis] - center[axis] for axis in range(3)] for node in members]
     inertia = [[0.0] * 3 for _ in range(3)]
@@ -2956,6 +3146,102 @@ def _moment_rows(
             if component:
                 rows.append(f"{node}, {axis}, {component:.8g}")
     return rows, None
+
+
+def _moment_vector(load: condition_model.Load) -> list[float] | str:
+    """모멘트(N·mm, 전역 성분) — 못 읽으면 까닭."""
+    scale = MOMENT_UNITS.get((load.unit or "N*mm").replace(" ", "").lower())
+    if scale is None:
+        return f"모멘트 단위 「{load.unit}」 를 모릅니다 — N*mm · N*m."
+    if load.direction is None or load.magnitude is None:
+        return "크기 · 회전축이 있어야 합니다."
+    length = math.sqrt(sum(one * one for one in load.direction))
+    if length == 0:
+        return "회전축이 0 입니다."
+    return [load.magnitude * scale * one / length for one in load.direction]
+
+
+def _rotator_rows(
+    load: condition_model.Load, rotator: int
+) -> tuple[list[str], condition_model.Note | None]:
+    """강체 면의 회전 절점에 건 모멘트 — 회전 절점의 1 · 2 · 3 번 자유도가 X · Y · Z 축 둘레의
+    모멘트다(`*RIGID BODY` 의 `ROT NODE`)."""
+    moment = _moment_vector(load)
+    if isinstance(moment, str):
+        return [], condition_model.Note(f"하중 「{load.name}」({load.kind})", moment)
+    rows = ["*CLOAD"]
+    for axis, component in enumerate(moment, start=1):
+        if component:
+            rows.append(f"{rotator}, {axis}, {component:.8g}")
+    return rows, None
+
+
+#: 큰 변형의 면 모멘트를 강체 면으로 걸 때 — 모델링 요약 · 실패 문구의 말.
+#: 작업 오류로 CompCore 화면 · DOE 결과에 실릴 수 있어 그쪽 문구 규칙(줄표 없음, 칸 이름표는
+#: 작은 꺾쇠 따옴표)을 따른다.
+MOMENT_RIGID_NOTE = (
+    "\u2018대변형\u2019을 켠 정적의 면 모멘트는 면을 강체로 묶어 겁니다. 면이 약 40° 넘게 돌면"
+    " CalculiX는 풀지 못합니다(ccx 2.21 강체 구속식의 한계). Ansys를 대상 솔버로 지정하십시오."
+)
+
+
+def _moment_bodies(
+    given: condition_model.Conditions,
+    load_nodes: dict[str, set[int]],
+    held_nodes: dict[str, set[int]],
+    nodes: dict[int, tuple[float, float, float]],
+    rigid: tuple[RigidBody, ...] | list[RigidBody],
+    centers: dict[str, tuple[float, float, float]] | None,
+    plan: Plan,
+) -> list[str]:
+    """**큰 변형의 면 모멘트 → 그 면을 강체로**(사용자 결정 2026-11-28) — 기준점 · 회전 절점을
+    면적 중심에 세우고 면의 절점을 `*RIGID BODY` 로 묶는다. 모멘트는 회전 절점에 건다
+    (`_rotator_rows`).
+
+    고정 방향 힘 짝(`_moment_rows`)은 면이 돌면 모멘트가 M·cos θ 로 준다 — CompCore 「조건_띠_
+    끝모멘트_대변형」(90°)에서 끝 ux 43.6 mm(엘라스티카 63.662). 분산 커플링(`*DISTRIBUTING`
+    1-6)도 같았다. 강체 면은 약 42° 까지 엘라스티카와 0.1 % 안이고 그 뒤로는 반드시 멈춘다
+    (회전각을 직접 줘도 — ccx 2.21 강체 구속식의 한계, 2026-11-28 실측). 조용히 틀리는 대신
+    멈춘다. 하중면이 강체라 그 면 바로 근처 응력은 Ansys(변형체 원격점)와 조금 다르다.
+
+    다른 구속 · 강체가 쥔 절점은 빼고 묶는다(한 절점을 두 번 묶으면 ccx 가 거절한다). 남는
+    절점이 셋보다 적으면 힘 짝 그대로 둔다(그 까닭을 알린다)."""
+    lines: list[str] = []
+    taken = _bound(rigid) | {node for members in held_nodes.values() for node in members}
+    for load in given.all_loads:
+        if load.kind != "moment" or (load.name, load.region) in plan.moment_rotators:
+            continue
+        free = (load_nodes.get(load.region) or set()) - taken
+        if len(free) < 3:
+            plan.skipped.append(
+                condition_model.Note(
+                    f"하중 「{load.name}」(moment)",
+                    "면의 절점이 다른 구속에 묶여 강체 면을 세우지 못했습니다 — 고정 방향 힘"
+                    " 짝으로 걸었습니다(면이 크게 돌면 모멘트가 M·cos θ 로 줍니다).",
+                )
+            )
+            continue
+        taken |= free
+        point = (centers or {}).get(load.region) or tuple(
+            sum(nodes[node][axis] for node in free) / len(free) for axis in range(3)
+        )
+        top = _top_node(nodes, rigid, [], plan)
+        ref, rot = top + 1, top + 2
+        name = f"MOMENT{len(plan.moment_rotators) + 1}"
+        x, y, z = point
+        lines += [
+            "*NODE",
+            f"{ref}, {x:.6f}, {y:.6f}, {z:.6f}",
+            f"{rot}, {x:.6f}, {y:.6f}, {z:.6f}",
+            *_nset(name, free),
+            f"*RIGID BODY, NSET={name}, REF NODE={ref}, ROT NODE={rot}",
+        ]
+        plan.remote_points += [ref, rot]
+        plan.moment_rotators[(load.name, load.region)] = rot
+        plan.skipped.append(
+            condition_model.Note(f"하중 「{load.name}」(moment)", MOMENT_RIGID_NOTE)
+        )
+    return lines
 
 
 def _cylinder_basis(

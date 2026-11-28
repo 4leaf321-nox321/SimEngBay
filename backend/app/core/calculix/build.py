@@ -239,6 +239,10 @@ def build(
     # 뺀 파트는 메시에 없다 — 짝짓기 · 물성은 **남은 파트로만** 본다.
     kept = without(topology, given.suppressed | set(given.shells))
     body_of, materials, material_from = _materials(spec, kept, system, mesh)
+    softened = not isinstance(spec, StaticSpec) and material_model.plastic(materials)
+    if softened:
+        # **소성은 정적에서만**(CompCore ②) — 모드 · 주파수 해석은 탄성으로 푼다.
+        materials = material_model.elastic_only(materials)
     mesh = _with_face_parts(mesh, body_of, layout.shell_parts)
     rigid = _rigid(kept, given, mesh)
     # **강체 파트의 접촉면은 독립(master) 쪽에 둔다**(`deck.contact_block`).
@@ -518,6 +522,10 @@ def build(
             bolt_stage=bolt_stage,
         )
     plan.skipped += layout.skipped
+    if softened:
+        plan.skipped.append(
+            condition_model.Note("재료 모델(소성)", material_model.ELASTIC_IN_EIGEN)
+        )
     plan.refused += refused_loads
     plan.refused += random_refused
     plan.skipped += random_notes
@@ -567,6 +575,9 @@ def build(
     if plan.cases:
         # **정적 다단의 케이스마다 끝 단계와 반력에 더할 몫** — 추출이 케이스마다 고른다.
         boundary["cases"] = plan.cases
+    if plan.steps:
+        # **하중 단계(CompCore ②)마다 끝 시각과 반력에 더할 몫** — 추출이 단계 끝마다 고른다.
+        boundary["steps"] = plan.steps
     if plan.reaction_sets:
         # **반력을 읽을 자리** — 추출 단계가 `.dat` 의 합에서 영역 이름으로 되찾는다.
         boundary["reaction_sets"] = plan.reaction_sets
@@ -740,6 +751,33 @@ def build(
             **(
                 {"large_deflection": True, "large_deflection_from": statics.source}
                 if large and statics is not None
+                else {}
+            ),
+            # 재료 모델(소성) — 무엇으로 풀었나(이선형 · 다선형, CompCore ②). 카드에서 온 표면
+            # 출처와 두 E(풀이는 물성 E), 5 % 넘게 다르면 경고(사용자 결정 2026-11-28).
+            **(
+                {"material_model": line}
+                if (line := material_model.plastic_line(materials))
+                else {}
+            ),
+            **(
+                {"material_card": line}
+                if (line := material_model.card_line(materials))
+                else {}
+            ),
+            **(
+                {"material_warning": line}
+                if (line := material_model.card_warning(materials))
+                else {}
+            ),
+            # 하중 단계(CompCore ②) — 이름 · 끝 시각.
+            **(
+                {
+                    "load_steps": " · ".join(
+                        f"{one['name']} {one['time']:g} s" for one in plan.steps
+                    )
+                }
+                if plan.steps
                 else {}
             ),
             "constrained_regions": plan.applied,

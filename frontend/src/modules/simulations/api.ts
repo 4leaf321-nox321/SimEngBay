@@ -251,17 +251,28 @@ export interface StaticResult {
    * 하중은 케이스 사이에 이어지지 않는다(조인 볼트만 그 길이로 잠긴 채 이어진다).
    */
   cases?: StaticCaseResult[]
+  /**
+   * 하중 단계(CompCore ②)를 쓴 정적이면 **단계 끝마다** — 차례대로, 마지막이 맨 위의 값과 같다. 하중은
+   * 시간별 배율 · 적용 단계를 따른다(당겼다 풀면 마지막 단계에 잔류 변형만 남는다).
+   */
+  steps?: StaticCaseResult[]
+  /** 등가 소성 변형률의 최대(ccx PEEQ · Ansys EPPL) — 소성 재료가 있을 때만. */
+  max_equivalent_plastic_strain?: number
   warning?: string
   fake?: boolean
 }
 
-/** 정적 다단의 케이스 하나 — 그 케이스 끝의 값(단위는 결과의 `units`). */
+/** 정적 다단의 케이스 하나(또는 하중 단계 하나) — 그 끝의 값(단위는 결과의 `units`). */
 export interface StaticCaseResult {
   name: string
   max_displacement: number | null
   max_von_mises: number | null
   reactions?: Record<string, [number, number, number]>
   bolts?: Record<string, BoltRow>
+  /** 하중 단계의 끝 시각(총 시각, s) — 단계에만. */
+  end_time?: number
+  /** 그 단계 끝의 등가 소성 변형률 최대 — 소성 재료가 있을 때만. */
+  max_equivalent_plastic_strain?: number
 }
 
 /**
@@ -271,6 +282,8 @@ export interface StaticCaseResult {
 export interface BoltRow {
   tightened_n: number | null
   force_n: number | null
+  /** 끝의 힘이 잰 값이 아니라 **준 예압**이다(Ansys 의 힘으로 조이는 단계 — 예압 절점에 반력이 없다). */
+  force_given?: boolean
   adjustment_mm: number | null
 }
 

@@ -52,7 +52,16 @@ COMPCORE_ITEMS = {
 #: CompCore 등록부가 해석마다 내는 해석 설정 칸(`ANALYSES[*].fields`).
 COMPCORE_FIELDS = {
     "modal": ("modes", "frequency_range", "prestressed", "solver"),
-    "static": ("large_deflection", "steps", "substeps", "solver"),
+    "static": (
+        "large_deflection",
+        "steps",
+        "substeps",
+        "solver",
+        # ② 비선형 정적(CompCore 2026-11-27) — 수렴 제어 · 출력 요청은 아직 받지 않는다.
+        "load_steps",
+        "convergence",
+        "outputs",
+    ),
     "harmonic": (
         "modes",
         "frequency_range",
@@ -264,7 +273,16 @@ def test_솔버마다_갈리는_곳() -> None:
             "bearing": "",
             "acceleration": "",
         }
-        assert table["static"]["materials"] == ["linear_elastic"]
+        # 소성(CompCore ②)은 정적에서만 — 모드 · 주파수 해석은 선형 탄성만 싣는다(이름만).
+        assert table["static"]["materials"] == [
+            "linear_elastic",
+            "bilinear_isotropic",
+            "multilinear_isotropic",
+        ]
+        for recipe in ("modal", "harmonic", "random"):
+            assert table[recipe]["materials"] == ["linear_elastic"]
+        assert "convergence" not in table["static"]["fields"]["analysis"]
+        assert "outputs" not in table["static"]["fields"]["analysis"]
 
 
 def test_모르는_솔버는_표를_내지_않는다() -> None:

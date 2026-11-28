@@ -1083,7 +1083,9 @@ def case_view(
             status=400,
             details={"cases": names},
         )
-    why = core_cases.problem(chain) or _chain_mismatch(spec.recipe, spec.solver, chain)
+    why = core_cases.problem(chain, payload) or _chain_mismatch(
+        spec.recipe, spec.solver, chain
+    )
     if why:
         raise AppError(code("SIMULATIONS", 46), why, status=400, details={"case": chain.name})
     return core_cases.view(payload, chain), chain
@@ -1143,7 +1145,7 @@ def _doe_cases(
             and isinstance(modes, int)
         ):
             raw["modes"] = modes
-        why = core_cases.problem(chain)
+        why = core_cases.problem(chain, payload)
         out.append((chain.name, raw, None if why else core_cases.view(payload, chain), why))
     if wanted and not out:
         return [(str(wanted), spec_raw, None, f"케이스 「{wanted}」 가 이 점에 없습니다")]
@@ -1595,7 +1597,7 @@ def cases_out(payload: dict[str, Any] | None) -> list[CaseOut]:
             kind=one.kind,
             solver=one.solver,
             chain=[case.name for case in one.cases],
-            problem=core_cases.problem(one),
+            problem=core_cases.problem(one, payload),
         )
         for one in found
     ]
@@ -1611,7 +1613,7 @@ def picked_view(
         return payload, None
     found, _broken = core_cases.chains(payload)
     for one in found:
-        if case not in (None, one.name) or core_cases.problem(one):
+        if case not in (None, one.name) or core_cases.problem(one, payload):
             continue
         return core_cases.view(payload, one), one.name
     return payload, case

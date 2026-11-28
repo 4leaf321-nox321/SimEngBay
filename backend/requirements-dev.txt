@@ -1,4 +1,6 @@
 # 개발·검증 전용. 배포 패키지에는 들어가지 않는다 (wheel 번들은 requirements.txt만 본다).
 mypy==2.3.0
+# Ansys 추출(app/core/dpf)의 단위 시험용 — 운영에서는 DPF 가 함께 깔아 requirements.txt 에 없다.
+numpy==2.5.3
 pytest==9.1.1
 ruff==0.16.3

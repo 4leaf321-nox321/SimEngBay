@@ -5,6 +5,10 @@
 케이스에서 조이는 볼트가 앞 케이스에서 「1000 N (준 예압)」 으로 보인다(v0.37.0 의 사슬에서
 생긴 회귀). DPF 는 이 기계에 없다 — 결과 파일은 세트마다 절점 값을 돌려주는 가짜다. 끝까지
 도는 것은 `tests/ansys/test_cases_ansys.py` · `test_nonlinear_static_ansys.py` 가 본다.
+
+`_bolts` 는 numpy 로 읽는다(운영에서는 DPF 가 함께 깐다). 운영 의존성(requirements.txt)에는
+numpy 가 없어 — CalculiX 워커는 순수 파이썬이다 — 시험용으로 requirements-dev.txt 에 둔다.
+없으면 `_bolts` 가 빈 표를 돌려 이 시험이 KeyError 로 깨진다(v0.38.0 CI).
 """
 
 from __future__ import annotations

@@ -71,6 +71,8 @@ from app.core.spec import (
     SPEC_MODELS,
     AnySpec,
     ModalSpec,
+    Need,
+    StaticSpec,
     parse_spec,
 )
 from app.core.stages import (
@@ -1214,6 +1216,7 @@ def create(
     if unknown:
         raise AppError(code("SIMULATIONS", 43), unknown, status=400)
     payload, chain = case_view(spec, payload)
+    spec = _with_needs(spec, payload)
     if chain is not None:
         # **작업에는 사슬 하나의 v1 보기를 담는다** — 모델링 · 추출은 v1 을 읽던 그대로다.
         topology = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1706,6 +1709,30 @@ def _volume_of(payload: dict[str, Any], name: str) -> float | None:
     return None
 
 
+def _with_needs(spec: AnySpec, payload: dict[str, Any] | None) -> AnySpec:
+    """정적 작업의 `needs` 를 점 파일(사슬이면 그 보기)에서 채운다 — 소성 재료가 붙었으면
+    `plastic`, 하중 이력 칸(하중 단계 · 시간별 배율 · 적용 단계 · 볼트 단계)이 있으면
+    `load_history`. 사람이 적은 값은 쓰지 않는다(서버가 본 것이 정본이다). 옛 워커를 크게
+    실패시키는 칸이다(`StaticSpec.needs`)."""
+    if not isinstance(spec, StaticSpec):
+        return spec
+    found: list[Need] = []
+    if spec.conditions_from == "cad" or spec.material_from == "cad":
+        raw = payload.get("conditions") if isinstance(payload, dict) else None
+        block: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        if spec.material_from == "cad" and core_cases._plastic(payload):
+            found.append("plastic")
+        given = block.get("analysis")
+        analysis: dict[str, Any] = given if isinstance(given, dict) else {}
+        loads = [one for one in block.get("loads") or [] if isinstance(one, dict)]
+        timed = bool(analysis.get("load_steps")) or any(
+            one.get(key) is not None for one in loads for key in core_cases.HISTORY_LOADS
+        )
+        if spec.conditions_from == "cad" and timed:
+            found.append("load_history")
+    return spec.model_copy(update={"needs": found})
+
+
 def _stored_spec(spec: AnySpec) -> dict[str, Any]:
     """저장할 스펙 — **새 칸이 기본값이면 적지 않는다.** 스펙은 모르는 칸을 거절하므로
     (`extra="forbid"`), 무중단 갱신(B 먼저 그다음 A — README_OPERATOR) 중 새 서버가 만든 작업을
@@ -1723,6 +1750,9 @@ def _stored_spec(spec: AnySpec) -> dict[str, Any]:
     # 해석 케이스(판 2)의 사슬 — 판 1 작업에는 없다. 옛 워커(v0.36.0)는 이 칸을 모른다.
     if stored.get("case") is None:
         stored.pop("case", None)
+    # 워커가 알아야 할 것(CompCore ②) — 비면 적지 않는다(옛 워커가 판 1 · 일반 작업을 읽는다).
+    if not stored.get("needs"):
+        stored.pop("needs", None)
     return stored
 
 

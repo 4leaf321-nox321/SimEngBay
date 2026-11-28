@@ -401,3 +401,47 @@ def test_손으로_적은_표에는_카드가_없다() -> None:
     found = _materials(_point("조건_봉_표끝넘어"))
     assert found[0].plastic is not None and found[0].plastic.card is None
     assert materials.card_line(found) is None and materials.card_warning(found) is None
+
+
+# --- 무중단 갱신 중의 옛 워커 ----------------------------------------------------
+
+
+def test_소성_하중_이력_작업은_needs_를_저장해_옛_워커가_거절한다() -> None:
+    """v0.37.0 워커는 재료 모델 · 하중 단계 칸을 말없이 버리고 탄성으로 풀어 정상 결과처럼
+    끝낸다 — 스펙의 `needs` 가 그 워커의 `extra="forbid"` 에 걸려 크게 실패하게 한다."""
+    from app.core.spec import StaticSpec, parse_spec
+    from app.modules.simulations import services
+
+    spec = parse_spec({"recipe": "static"})
+    plastic = services._with_needs(spec, _view("조건_봉_당겼다풀기"))
+    assert isinstance(plastic, StaticSpec)
+    assert plastic.needs == ["plastic", "load_history"]
+    assert services._stored_spec(plastic)["needs"] == ["plastic", "load_history"]
+    assert StaticSpec.model_config.get("extra") == "forbid"
+    timed = services._with_needs(spec, _view("조건_외팔보_켜고끄기"))
+    assert isinstance(timed, StaticSpec) and timed.needs == ["load_history"]
+    plain = services._with_needs(spec, _view("조건_외팔보_두케이스", _single_case()))
+    assert "needs" not in services._stored_spec(plain)
+    # CAD 조건 · 물성을 안 쓰면 그 칸도 안 읽는다.
+    own = parse_spec(
+        {
+            "recipe": "static",
+            "conditions_from": "spec",
+            "material_from": "spec",
+            "material": {
+                "name": "강",
+                "youngs_modulus_gpa": 205,
+                "poisson_ratio": 0.29,
+                "density_kg_m3": 7850,
+            },
+            "constraints": [{"region": "바닥", "kind": "fixed"}],
+        }
+    )
+    assert services._with_needs(own, _view("조건_봉_당겼다풀기")).needs == []  # type: ignore[union-attr]
+
+
+def _single_case() -> dict[str, Any]:
+    """「외팔보_두케이스」 의 첫 케이스 하나만(사슬 없음)."""
+    payload = copy.deepcopy(_point("조건_외팔보_두케이스"))
+    payload["conditions"]["cases"] = payload["conditions"]["cases"][:1]
+    return payload

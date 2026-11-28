@@ -135,7 +135,7 @@ def test_반력_절점은_축마다_더_많이_막는_구속이_갖고_같으면
 
 
 #: v0.36.0 뒤에 스펙에 생긴 칸 — 기본값이면 저장하지 않아야 옛 워커(무중단 갱신 중)가 읽는다.
-NEW_SINCE_V036 = {"case"}
+NEW_SINCE_V036 = {"case", "needs"}
 
 
 @pytest.mark.parametrize("recipe", ["modal", "static", "harmonic", "random"])

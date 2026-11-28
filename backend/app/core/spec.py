@@ -167,6 +167,11 @@ class ModalSpec(BaseModel):
         return self.modes + (RIGID_BODY_MODES if self.is_free_free else 0)
 
 
+#: 작업 조건이 쓰는 것 중 워커가 알아야 할 것(`StaticSpec.needs`) — 소성 재료 · 하중 이력(하중
+#: 단계 · 시간별 배율 · 적용 단계 · 볼트 단계).
+Need = Literal["plastic", "load_history"]
+
+
 class StaticSpec(BaseModel):
     """정적 해석 — 하중을 걸고 **변형과 응력**을 본다.
 
@@ -195,6 +200,14 @@ class StaticSpec(BaseModel):
     """변형이 커서 모양이 바뀌면 켠다 — 비선형이라 느리다. **비우면 CAD 가 적은 대로**
     (`analysis.large_deflection`, 없으면 끈다 — `statics.static_plan`). 새 작업 창은 CAD 값을
     미리 채워 늘 적어 보낸다."""
+    needs: list[Need] = Field(default_factory=list)
+    """이 작업의 조건이 쓰는 **워커가 알아야 할 것**(CompCore ② — 소성 · 하중 이력). 작업을
+    만들 때 서버가 점 파일에서 채운다(`services._with_needs`) — 사람이 적지 않는다. 비면
+    저장하지 않는다.
+
+    **옛 워커를 크게 실패시키려고 둔다**: 무중단 갱신(B 먼저 그다음 A) 중 새 서버가 만든 소성
+    작업을 v0.37.0 워커가 집으면 모르는 조건 칸(재료 모델 · 하중 단계)을 말없이 버리고 탄성으로
+    풀어 정상 결과처럼 끝낸다. 이 칸이 있으면 그 워커의 스펙(`extra="forbid"`)이 거절한다."""
 
     @model_validator(mode="after")
     def _own_material(self) -> Self:

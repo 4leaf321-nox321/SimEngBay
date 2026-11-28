@@ -79,7 +79,9 @@ def extract(
         )
         # **반력** — 변위로 당긴 자리가 버틴 힘. 미끄러지는 이음이면 μN 에서 멈춘다.
         forces = _reactions(model, mesh, topology, workdir)
-        bolts = _bolts(model, mesh, topology, displacement_unit)
+        bolts = _bolts(
+            model, mesh, topology, displacement_unit, first_set=_loading_set(model, workdir)
+        )
         staged = _cases(model, mesh, topology, workdir, displacement_unit)
         stepped = _cases(model, mesh, topology, workdir, displacement_unit, key="steps")
         plastic = _plastic(model)
@@ -304,6 +306,13 @@ def _bolts(
     힘으로 조였으면 1단계의 예압 절점은 묶이지 않아 반력이 없다 — 조인 힘은 준 예압 그대로다.
     예압 절점은 볼트를 만든 차례로 번호가 붙는다고 본다(조건의 볼트 하중 차례 — 작은 번호가
     앞의 볼트).
+
+    `first_set` 은 볼트를 조이는 단계의 끝 세트, `final_set` 은 읽는 끝(없으면 마지막
+    세트)이다. **끝이 곧 조이는 단계일 때만** 반력 없는 볼트 힘을 준 예압으로 채운다
+    (`force_given`). 조이기 앞(Open)도 반력이 없지만 그때는 볼트에 힘이 없다 — 뒤 케이스에서
+    조이는 볼트의 앞 케이스는 v0.37.0 처럼 `None` 이다(2026-11-28 검토). 사슬의 케이스 끝은 늘
+    잠근 단계라(`staged_plan`) 준 예압으로 채우는 것은 하중 단계(CompCore ②)의 첫 단계 끝 ·
+    단계가 하나인 하중 단계뿐이다.
     """
     from app.core import conditions as condition_model
 
@@ -340,12 +349,14 @@ def _bolts(
                 if int(node) in nodes
             }
 
+        end = final_set or last
         first_forces = at(model.results.reaction_force, first_set or 1)
-        final_forces = at(model.results.reaction_force, final_set or last)
-        moved = at(model.results.displacement, final_set or last)
+        final_forces = at(model.results.reaction_force, end)
+        moved = at(model.results.displacement, end)
     except Exception:  # pragma: no cover - DPF 없이는 안 돈다
         logger.warning("볼트 힘을 못 읽었습니다 — 없이 갑니다", exc_info=True)
         return {}
+    loading = first_set is not None and end == first_set
     to_mm = probes.scale_for(displacement_unit)
     out: dict[str, dict[str, float | None]] = {}
     for load, node in zip(bolts, nodes, strict=False):
@@ -359,12 +370,12 @@ def _bolts(
         )
         final = final_forces.get(node)
         # 힘으로 조이는 단계(Load)에서는 예압 절점이 묶이지 않아 반력이 없다 — 그 단계 끝의
-        # 볼트 힘은 준 예압 그대로다(하중 단계의 첫 단계, CompCore ②).
+        # 볼트 힘은 준 예압 그대로다(하중 단계의 첫 단계, CompCore ②). 조이기 앞(Open)은 없다.
         force = (
             BOLT_FORCE_SIGN * final[0]
             if final
             else tightened
-            if force_unit is not None
+            if loading and force_unit is not None
             else None
         )
         out[load.name] = {
@@ -469,10 +480,12 @@ def _cases(
     except (OSError, ValueError):
         return []
     rows = written.get(key) or []
+    # 하중 단계의 볼트는 첫 단계에서 조인다 — 그 단계 **끝 시각**의 세트(1.0 이 아닐 수 있다).
+    loading = _loading_set(model, workdir) if key == "steps" else None
     out: list[dict[str, Any]] = []
     for row in rows:
         final = _set_at(model, float(row.get("time") or row.get("step") or 0))
-        tightened = row.get("tightened") or (1 if key == "steps" else None)
+        tightened = row.get("tightened")
         moved = probes.at_set(model.results.displacement, final)
         peak, _unit = _peak(moved, _body_nodes(mesh))
         stress, _stress_unit = _von_mises(model, final)
@@ -495,13 +508,27 @@ def _cases(
             mesh,
             topology,
             displacement_unit,
-            first_set=_set_at(model, int(tightened)) if tightened else None,
+            first_set=_set_at(model, int(tightened)) if tightened else loading,
             final_set=final,
         )
         if bolts:
             case["bolts"] = bolts
         out.append(case)
     return out
+
+
+def _loading_set(model: Any, workdir: Path) -> int | None:
+    """**하중 단계(CompCore ②)에서 볼트를 조이는 단계의 끝 세트** — 첫 단계의 끝 시각까지의
+    마지막 세트(`mechanical.build._apply_history` 는 볼트를 첫 단계에서 조이고 뒤로 잠근다).
+    하중 단계가 없으면 `None`."""
+    try:
+        written = json.loads((workdir / "boundary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rows = written.get("steps") or []
+    if not rows:
+        return None
+    return _set_at(model, float(rows[0].get("time") or rows[0].get("step") or 1))
 
 
 def _plastic(model: Any, time_set: int | None = None) -> float | None:
